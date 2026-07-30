@@ -1,3 +1,4 @@
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -257,7 +258,10 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
                         "session": seed_canonical["research_calendar"][0],
                         "instrument_id": "equity:600000.SH",
                         "field": "open_raw",
-                        "value": historical_open["open_raw"],
+                        "value": str(
+                            Decimal(str(historical_open["open_raw"]))
+                            + Decimal("0.0100")
+                        ),
                     }
                 ],
             },
@@ -343,6 +347,33 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
             objects.read_json(prior_correction_head["manifest_sha256"])
             == prior_correction_manifest
         )
+        object_paths_before_verification = sorted(
+            path.relative_to(settings.object_root)
+            for path in settings.object_root.rglob("*")
+            if path.is_file()
+        )
+        cache_files_before_verification = {
+            path.relative_to(tracking.cache.root): path.read_bytes()
+            for path in tracking.cache.root.rglob("*")
+            if path.is_file()
+        }
+        head_before_verification = tracking.get_track(track_id)["head"]
+        correction_verification = client.post(
+            f"/api/v1/daily-tracks/{track_id}/verify-equivalence"
+        )
+        assert correction_verification.status_code == 200
+        assert correction_verification.json()["release_sequence"][-1] == correction["id"]
+        assert tracking.get_track(track_id)["head"] == head_before_verification
+        assert sorted(
+            path.relative_to(settings.object_root)
+            for path in settings.object_root.rglob("*")
+            if path.is_file()
+        ) == object_paths_before_verification
+        assert {
+            path.relative_to(tracking.cache.root): path.read_bytes()
+            for path in tracking.cache.root.rglob("*")
+            if path.is_file()
+        } == cache_files_before_verification
 
         generation_count = len(corrected["generations"])
         irrelevant_correction = client.post(
@@ -404,6 +435,12 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert runtime_replay is not None
         assert runtime_replay["status"] == "succeeded"
         assert tracking.get_track(track_id)["generations"][-1]["calculation_kernel"] == "kernel-v2"
+        assert (
+            client.post(
+                f"/api/v1/daily-tracks/{track_id}/verify-equivalence"
+            ).json()["status"]
+            == "equivalent"
+        )
 
         for sequence in (1, 2):
             daily_release = client.post(

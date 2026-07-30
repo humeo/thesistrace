@@ -15,7 +15,11 @@ from thesistrace.definitions import DefinitionValidationError, ResearchDefinitio
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import DatasetPublicationConflict, MetadataStore
-from thesistrace.tracking import DailyTrackingError, DailyTrackingService
+from thesistrace.tracking import (
+    DailyTrackingError,
+    DailyTrackingService,
+    EquivalenceError,
+)
 from thesistrace.tushare_source import (
     HttpTushareTransport,
     TushareAdapter,
@@ -410,6 +414,11 @@ def create_app(
             raise HTTPException(
                 status_code=404,
                 detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
+            ) from error
+        except EquivalenceError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail("EQUIVALENCE_MISMATCH", str(error)),
             ) from error
         except DailyTrackingError as error:
             raise HTTPException(

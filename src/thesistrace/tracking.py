@@ -15,7 +15,7 @@ from thesistrace.factor import (
     factor_day,
     mean_or_none,
 )
-from thesistrace.numeric import canonical_binary64_bytes
+from thesistrace.numeric import canonical_binary64_bytes, canonical_decimal
 from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
 from thesistrace.research_runs import RUNTIME_BUILD
 from thesistrace.result_objects import (
@@ -35,6 +35,9 @@ from thesistrace.result_objects import (
 )
 from thesistrace.result_objects import (
     factor_summary as compact_factor_summary,
+)
+from thesistrace.result_objects import (
+    terminal_strategy_state as compact_terminal_strategy_state,
 )
 from thesistrace.storage import MetadataStore
 from thesistrace.strategy import run_strategy, strategy_metrics
@@ -656,13 +659,14 @@ class DailyTrackingService:
     def _compact_tracking_projection(
         self,
         track: dict[str, object],
+        checkpoint_id: str | None = None,
     ) -> dict[str, object]:
         checkpoint_rows = {
             str(item["id"]): item
             for item in track["checkpoints"]
             if isinstance(item, dict)
         }
-        head_id = str(track["head_checkpoint_id"])
+        head_id = checkpoint_id or str(track["head_checkpoint_id"])
         manifests: list[dict[str, object]] = []
         cursor: str | None = head_id
         while cursor is not None:
@@ -1238,74 +1242,245 @@ class DailyTrackingService:
         head = track["head"]
         if not isinstance(head, dict):
             raise DailyTrackingError("DailyTrack has no Head")
-        checkpoint = self._checkpoint_manifest(str(head["manifest_sha256"]))
-        oracle = self._batch_oracle(
-            track,
-            str(head["target_dataset_release_id"]),
-            kernel=self._generation_kernel(track, str(head["generation_id"])),
+        oracle = self._ordered_release_oracle(track)
+        return {
+            "status": "equivalent",
+            "daily_track_id": track_id,
+            "generation_id": head["generation_id"],
+            "target_dataset_release_id": head["target_dataset_release_id"],
+            "checkpoint_id": head["id"],
+            "release_sequence": oracle["release_sequence"],
+            "trace_checksums": oracle["trace_checksums"],
+        }
+
+    def _ordered_release_oracle(
+        self,
+        track: dict[str, object],
+    ) -> dict[str, object]:
+        checkpoint_rows = {
+            str(item["id"]): item
+            for item in track["checkpoints"]
+            if isinstance(item, dict)
+        }
+        cursor: str | None = str(track["head_checkpoint_id"])
+        manifests: list[dict[str, object]] = []
+        while cursor is not None:
+            row = checkpoint_rows.get(cursor)
+            if row is None:
+                raise EquivalenceError(
+                    f"EQUIVALENCE_MISMATCH at $.checkpoints.{cursor}"
+                )
+            manifest = self._checkpoint_manifest(str(row["manifest_sha256"]))
+            manifests.append(manifest)
+            predecessor = manifest.get("predecessor_checkpoint_id")
+            cursor = str(predecessor) if predecessor is not None else None
+        manifests.reverse()
+        if not manifests or manifests[0].get("kind") not in {
+            "activation",
+            "replay",
+        }:
+            raise EquivalenceError("EQUIVALENCE_MISMATCH at $.checkpoints.root")
+
+        frozen = self.metadata.frozen_research_definition(
+            str(track["definition_version_id"])
         )
-        objects = checkpoint.get("objects")
-        if not isinstance(objects, dict):
-            raise EquivalenceError("Checkpoint object index is invalid")
-        if {
-            "factor_summary",
-            "strategy_summary",
-            "strategy_daily_observations",
-            "terminal_strategy_state",
-        } <= set(objects):
-            target = self.metadata.dataset_release(
-                str(head["target_dataset_release_id"])
+        if frozen is None or not isinstance(frozen["content"], dict):
+            raise DailyTrackingError("equivalence Definition is missing")
+        definition = frozen["content"]
+        generation_id = str(manifests[0]["generation_id"])
+        kernel = self._generation_kernel(track, generation_id)
+        if any(
+            str(manifest["generation_id"]) != generation_id
+            for manifest in manifests
+        ):
+            raise EquivalenceError("EQUIVALENCE_MISMATCH at $.generation_id")
+
+        root_release = self.metadata.dataset_release(
+            str(manifests[0]["target_dataset_release_id"])
+        )
+        if root_release is None:
+            raise DailyTrackingError("equivalence root Release is missing")
+        root_canonical = self.datasets.materialize_canonical(root_release)
+        root_alpha = self._alpha(root_canonical, definition, kernel=kernel)
+        root_labels = build_forward_labels(
+            root_canonical,
+            root_alpha,
+            report_sessions=504,
+        )
+        root_factor = evaluate_factor(root_labels)
+        root_batch = self._batch_oracle(
+            track,
+            str(root_release["id"]),
+            alpha=root_alpha,
+            labels=root_labels,
+            factor=root_factor,
+            kernel=kernel,
+        )
+        projection = self._projection_from_batch(
+            root_batch,
+            definition,
+        )
+        self._assert_equivalent(
+            self._compact_tracking_projection(
+                track,
+                str(manifests[0]["id"]),
+            ),
+            projection,
+            f"$.checkpoints.{manifests[0]['id']}",
+        )
+
+        pending = {
+            str(item["session"]): [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "value": float(row["value"]),
+                }
+                for row in item["values"]
+            ]
+            for item in root_alpha["sessions"][-21:]
+        }
+        rolling = factor_artifact_to_rolling_rows(root_factor)
+        prior_release = root_release
+        release_sequence = [str(root_release["id"])]
+        trace_checksums = [
+            hashlib.sha256(
+                equivalence_bytes(
+                    {
+                        "alpha": root_alpha,
+                        "labels": root_labels,
+                        "factor": root_factor,
+                        "strategy": {
+                            key: root_batch["strategy_backtest"][key]
+                            for key in (
+                                "orders",
+                                "child_orders",
+                                "fills",
+                                "rejections",
+                            )
+                        },
+                    }
+                )
+            ).hexdigest()
+        ]
+
+        for manifest in manifests[1:]:
+            release = self.metadata.dataset_release(
+                str(manifest["target_dataset_release_id"])
             )
-            if target is None:
-                raise EquivalenceError("Target Dataset Release is missing")
-            canonical = self.datasets.materialize_canonical(target)
-            summary_labels = build_forward_labels(
-                canonical,
-                oracle["alpha_matrix"],
-                report_sessions=504,
-            )
-            expected_factor = compact_factor_summary(
-                evaluate_factor(summary_labels)
-            )
-            actual_projection = self._compact_tracking_projection(track)
-            actual_factor = actual_projection["factor_summary"]
-            for horizon in ("1", "5", "20"):
-                for key in ("summary", "diagnostics"):
-                    actual = actual_factor["horizons"][horizon][key]
-                    expected = expected_factor["horizons"][horizon][key]
-                    if equivalence_bytes(actual) != equivalence_bytes(expected):
-                        coordinate = first_divergence(actual, expected)
-                        raise EquivalenceError(
-                            f"factor_summary diverged at {horizon}.{key}{coordinate}"
-                        )
-            actual_strategy = actual_projection["strategy"]
-            expected_strategy = oracle["strategy_backtest"]
-            for key, actual, expected in (
-                (
-                    "daily",
-                    [
-                        {name: row[name] for name in STRATEGY_DAILY_CONTRACT.schema.names}
-                        for row in actual_strategy["daily"]
-                    ],
-                    strategy_daily_rows(expected_strategy),
+            if release is None:
+                raise DailyTrackingError("equivalence Release is missing")
+            transition = self._tracking_transition(
+                canonical=self.datasets.materialize_canonical(release),
+                definition=definition,
+                kernel=kernel,
+                origin_session=str(track["origin_session"]),
+                prior_session=str(
+                    prior_release["appended_session_range"]["end"]
                 ),
-                (
-                    "metrics",
-                    actual_strategy["metrics"],
-                    expected_strategy["metrics"],
-                ),
+                pending_alpha=pending,
+                rolling_factor=rolling,
+                prior_projection=projection,
+            )
+            if transition["processed_sessions"] != manifest.get(
+                "processed_sessions"
             ):
-                if equivalence_bytes(actual) != equivalence_bytes(expected):
-                    coordinate = first_divergence(actual, expected)
-                    raise EquivalenceError(f"strategy_{key} diverged at {coordinate}")
-            return {
-                "status": "equivalent",
-                "daily_track_id": track_id,
-                "generation_id": head["generation_id"],
-                "target_dataset_release_id": head["target_dataset_release_id"],
-                "checkpoint_id": head["id"],
-            }
-        raise EquivalenceError("Tracking Checkpoint does not use the compact contract")
+                raise EquivalenceError(
+                    "EQUIVALENCE_MISMATCH at "
+                    f"$.checkpoints.{manifest['id']}.processed_sessions"
+                )
+            expected_projection = transition["projection"]
+            if not isinstance(expected_projection, dict):
+                raise DailyTrackingError("equivalence projection is invalid")
+            self._assert_equivalent(
+                self._compact_tracking_projection(
+                    track,
+                    str(manifest["id"]),
+                ),
+                expected_projection,
+                f"$.checkpoints.{manifest['id']}",
+            )
+            pending_value = transition["pending_alpha"]
+            rolling_value = transition["rolling_factor"]
+            if not isinstance(pending_value, dict) or not isinstance(
+                rolling_value, list
+            ):
+                raise DailyTrackingError("equivalence rolling state is invalid")
+            pending = pending_value
+            rolling = rolling_value
+            projection = expected_projection
+            prior_release = release
+            release_sequence.append(str(release["id"]))
+            trace_checksums.append(
+                hashlib.sha256(
+                    equivalence_bytes(transition["trace"])
+                ).hexdigest()
+            )
+        return {
+            "projection": projection,
+            "release_sequence": release_sequence,
+            "trace_checksums": trace_checksums,
+        }
+
+    @staticmethod
+    def _assert_equivalent(
+        actual: object,
+        expected: object,
+        coordinate: str,
+    ) -> None:
+        if equivalence_bytes(actual) == equivalence_bytes(expected):
+            return
+        divergence = first_divergence(actual, expected)
+        suffix = divergence[1:] if divergence.startswith("$") else divergence
+        raise EquivalenceError(
+            f"EQUIVALENCE_MISMATCH at {coordinate}{suffix}"
+        )
+
+    @staticmethod
+    def _projection_from_batch(
+        oracle: dict[str, dict[str, object]],
+        definition: dict[str, object],
+    ) -> dict[str, object]:
+        strategy = oracle["strategy_backtest"]
+        factor = oracle["factor_evaluation"]
+        daily_rows = strategy_daily_rows(strategy)
+        rebalance_rows = rebalance_aggregate_rows(strategy)
+        execution_rows = execution_aggregate_rows(strategy)
+        strategy_summary_value = strategy_summary(strategy)
+        terminal = compact_terminal_strategy_state(strategy, definition)
+        terminal["positions"] = [
+            dict(row) for row in strategy["positions"]
+        ]
+        return {
+            "factor_summary": compact_factor_summary(factor),
+            "strategy": {
+                "alpha_checksum": strategy_summary_value["alpha_checksum"],
+                "initial_cash_cny": strategy_summary_value[
+                    "initial_cash_cny"
+                ],
+                "daily": [
+                    {
+                        **row,
+                        "cash_ratio": (
+                            float(
+                                Decimal(str(row["net_cash"]))
+                                / Decimal(str(row["net_nav"]))
+                            )
+                            if Decimal(str(row["net_nav"])) != 0
+                            else 0.0
+                        ),
+                    }
+                    for row in daily_rows
+                ],
+                "metrics": reconstruct_strategy_metrics(
+                    strategy_summary_value,
+                    daily_rows,
+                    rebalance_rows,
+                ),
+                "rebalance_aggregates": rebalance_rows,
+                "execution_aggregates": execution_rows,
+            },
+            "terminal_strategy_state": terminal,
+        }
 
     def _calculate_advance(
         self,
@@ -1533,207 +1708,50 @@ class DailyTrackingService:
         prior_release = self.metadata.dataset_release(str(head["target_dataset_release_id"]))
         if prior_release is None:
             raise DailyTrackingError("Head Release is missing")
-        prior_session = str(prior_release["appended_session_range"]["end"])
-        calendar = [str(session) for session in canonical["research_calendar"]]
-        prior_index = calendar.index(prior_session)
-        processed_sessions = calendar[prior_index + 1 :]
-        if not processed_sessions:
-            raise DailyTrackingError("Advance has no new Research Sessions")
-
-        alpha_definition = definition.get("alpha")
-        if not isinstance(alpha_definition, dict):
-            raise DailyTrackingError("Alpha Definition is invalid")
-        parsed_alpha = validate_alpha(str(alpha_definition["expression"]))
-        window_start = max(0, prior_index + 1 - parsed_alpha.effective_lookback)
-        alpha_window = slice_canonical_range(canonical, calendar[window_start])
-        evaluated = self._alpha(
-            alpha_window,
-            definition,
-            kernel=str(generation["calculation_kernel"]),
-        )
-        new_session_set = set(processed_sessions)
-        new_alpha_items = [
-            item
-            for item in evaluated["sessions"]
-            if str(item["session"]) in new_session_set
-        ]
-        if len(new_alpha_items) != len(processed_sessions):
-            raise DailyTrackingError("incremental Alpha calculation is incomplete")
-
         cached_pending = self.cache.read_pending_alpha(str(track["id"]))
-        pending: dict[str, list[dict[str, object]]] = {
-            session: [
-                {
-                    "instrument_id": str(row["instrument_id"]),
-                    "value": float(row["alpha"]),
-                }
-                for row in rows
-            ]
-            for session, rows in cached_pending.items()
-        }
-        rolling = {
-            (str(row["session"]), int(row["horizon"])): dict(row)
-            for row in self.cache.read_rolling_factor(str(track["id"]))
-        }
-        new_alpha_by_session = {
-            str(item["session"]): [dict(row) for row in item["values"]]
-            for item in new_alpha_items
-        }
-        for session in processed_sessions:
-            pending[session] = new_alpha_by_session[session]
-            for horizon in HORIZONS:
-                rolling[(session, horizon)] = rolling_factor_row(
-                    session,
-                    horizon,
-                    factor_day([]),
-                    sample_count=0,
-                )
-                signal_index = calendar.index(session) - horizon - 1
-                if signal_index < 0:
-                    continue
-                signal_session = calendar[signal_index]
-                alpha_values = pending.get(signal_session)
-                if alpha_values is None:
-                    raise DailyTrackingError(
-                        f"Pending Alpha is missing for {signal_session}"
-                    )
-                alpha_for_label = alpha_matrix_from_pending(
-                    definition,
-                    {signal_session: alpha_values},
-                )
-                labels = build_forward_labels(
-                    canonical,
-                    alpha_for_label,
-                    signal_sessions=[signal_session],
-                    horizons=(horizon,),
-                )
-                factor = evaluate_factor(labels)
-                factor_row = factor["horizons"][str(horizon)]["daily"][0]
-                rolling[(signal_session, horizon)] = rolling_factor_row(
-                    signal_session,
-                    horizon,
-                    factor_row,
-                    sample_count=int(factor_row["sample_count"]),
-                )
-
-        final_index = calendar.index(processed_sessions[-1])
-        pending_sessions = set(calendar[max(0, final_index - 20) : final_index + 1])
-        pending = {
-            session: rows
-            for session, rows in pending.items()
-            if session in pending_sessions
-        }
-        rolling_sessions = set(calendar[max(0, final_index - 503) : final_index + 1])
-        rolling_rows = [
-            row
-            for (session, _horizon), row in sorted(rolling.items())
-            if session in rolling_sessions
-        ]
-        if len(rolling_rows) > 1_512:
-            raise DailyTrackingError("rolling Factor window exceeds 1,512 rows")
-        factor_summary_value = rolling_factor_summary(rolling_rows)
-
-        alpha_for_strategy = alpha_matrix_from_pending(definition, pending)
         prior_projection = self._compact_tracking_projection(track)
-        prior_strategy = prior_projection["strategy"]
-        terminal = prior_projection["terminal_strategy_state"]
-        if not isinstance(prior_strategy, dict) or not isinstance(terminal, dict):
-            raise DailyTrackingError("compact Strategy continuation is invalid")
-        prior_daily = prior_strategy["daily"]
-        if not isinstance(prior_daily, list) or not prior_daily:
-            raise DailyTrackingError("compact Strategy history is empty")
-        continuation_daily = {
-            **prior_daily[-1],
-            "gross_cash": terminal["gross_cash"],
-            "cumulative_transaction_cost": terminal[
-                "cumulative_transaction_cost"
-            ],
-        }
-        strategy = run_strategy(
-            canonical,
-            alpha_for_strategy,
-            definition,
+        transition = self._tracking_transition(
+            canonical=canonical,
+            definition=definition,
+            kernel=str(generation["calculation_kernel"]),
             origin_session=str(track["origin_session"]),
-            terminal_cutoff=False,
-            continuation={
-                "daily": [continuation_daily],
-                "positions": terminal["positions"],
+            prior_session=str(prior_release["appended_session_range"]["end"]),
+            pending_alpha={
+                session: [
+                    {
+                        "instrument_id": str(row["instrument_id"]),
+                        "value": float(row["alpha"]),
+                    }
+                    for row in rows
+                ]
+                for session, rows in cached_pending.items()
             },
+            rolling_factor=self.cache.read_rolling_factor(str(track["id"])),
+            prior_projection=prior_projection,
         )
-        delta_daily = [
-            row for row in strategy["daily"] if str(row["session"]) in new_session_set
-        ]
-        if len(delta_daily) != len(processed_sessions):
-            raise DailyTrackingError("incremental Strategy calculation is incomplete")
-        projected_daily = [
-            row
-            for row in strategy_daily_rows(strategy)
-            if str(row["session"]) in new_session_set
-        ]
-        projected_rebalances = [
-            row
-            for row in rebalance_aggregate_rows(strategy)
-            if str(row["session"]) in new_session_set
-        ]
-        projected_executions = [
-            row
-            for row in execution_aggregate_rows(strategy)
-            if str(row["session"]) in new_session_set
-        ]
-        complete_daily = [
-            *prior_daily,
-            *[
-                {
-                    **row,
-                    "cash_ratio": (
-                        float(
-                            Decimal(str(row["net_cash"]))
-                            / Decimal(str(row["net_nav"]))
-                        )
-                        if Decimal(str(row["net_nav"])) != 0
-                        else 0.0
-                    ),
-                }
-                for row in projected_daily
-            ],
-        ]
-        complete_rebalances = [
-            *prior_strategy["rebalance_aggregates"],
-            *projected_rebalances,
-        ]
-        complete_executions = [
-            *prior_strategy["execution_aggregates"],
-            *projected_executions,
-        ]
-        rejection_events = [
-            {"reason": reason}
-            for row in complete_executions
-            for reason, count in (
-                ("upper_limit_buy", int(row["upper_limit_buy_rejections"])),
-                ("lower_limit_sell", int(row["lower_limit_sell_rejections"])),
-                ("suspension", int(row["suspension_rejections"])),
+        processed_sessions = transition["processed_sessions"]
+        pending = transition["pending_alpha"]
+        rolling_rows = transition["rolling_factor"]
+        factor_summary_value = transition["factor_summary"]
+        strategy_summary_value = transition["strategy_summary"]
+        strategy = transition["strategy"]
+        projected_daily = transition["projected_daily"]
+        projected_rebalances = transition["projected_rebalances"]
+        projected_executions = transition["projected_executions"]
+        if not all(
+            isinstance(value, list)
+            for value in (
+                processed_sessions,
+                rolling_rows,
+                projected_daily,
+                projected_rebalances,
+                projected_executions,
             )
-            for _ in range(count)
-        ]
-        metrics = strategy_metrics(
-            daily=complete_daily,
-            turnover_events=[
-                {"session": row["session"], "value": row["turnover"]}
-                for row in complete_rebalances
-            ],
-            cumulative_cost=Decimal(
-                str(delta_daily[-1]["cumulative_transaction_cost"])
-            ),
-            rejections=rejection_events,
-        )
-        strategy_summary_value = strategy_summary(
-            {
-                "alpha_checksum": alpha_for_strategy["checksum"],
-                "initial_cash_cny": strategy["initial_cash_cny"],
-                "checksum": strategy["checksum"],
-                "metrics": metrics,
-            }
-        )
+        ) or not isinstance(pending, dict):
+            raise DailyTrackingError("Tracking transition result is invalid")
+        terminal = prior_projection["terminal_strategy_state"]
+        if not isinstance(terminal, dict):
+            raise DailyTrackingError("Tracking terminal state is invalid")
 
         entries = {
             "strategy_daily_observations": {
@@ -1809,7 +1827,9 @@ class DailyTrackingService:
             },
             "alpha_calculation": {
                 "calculated_sessions": len(processed_sessions),
-                "maximum_lookback_sessions": parsed_alpha.effective_lookback,
+                "maximum_lookback_sessions": transition[
+                    "maximum_lookback_sessions"
+                ],
             },
             "numeric_execution_contract": track["numeric_execution_contract"],
             "calculation_kernel": generation["calculation_kernel"],
@@ -1910,6 +1930,262 @@ class DailyTrackingService:
             "forward_labels": labels,
             "factor_evaluation": factor,
             "strategy_backtest": strategy,
+        }
+
+    def _tracking_transition(
+        self,
+        *,
+        canonical: dict[str, object],
+        definition: dict[str, object],
+        kernel: str,
+        origin_session: str,
+        prior_session: str,
+        pending_alpha: dict[str, list[dict[str, object]]],
+        rolling_factor: list[dict[str, object]],
+        prior_projection: dict[str, object],
+    ) -> dict[str, object]:
+        calendar = [str(session) for session in canonical["research_calendar"]]
+        prior_index = calendar.index(prior_session)
+        processed_sessions = calendar[prior_index + 1 :]
+        if not processed_sessions:
+            raise DailyTrackingError("Advance has no new Research Sessions")
+
+        alpha_definition = definition.get("alpha")
+        if not isinstance(alpha_definition, dict):
+            raise DailyTrackingError("Alpha Definition is invalid")
+        parsed_alpha = validate_alpha(str(alpha_definition["expression"]))
+        window_start = max(0, prior_index + 1 - parsed_alpha.effective_lookback)
+        evaluated = self._alpha(
+            slice_canonical_range(canonical, calendar[window_start]),
+            definition,
+            kernel=kernel,
+        )
+        new_session_set = set(processed_sessions)
+        new_alpha_items = [
+            item
+            for item in evaluated["sessions"]
+            if str(item["session"]) in new_session_set
+        ]
+        if len(new_alpha_items) != len(processed_sessions):
+            raise DailyTrackingError("incremental Alpha calculation is incomplete")
+
+        pending = {
+            session: [dict(row) for row in rows]
+            for session, rows in pending_alpha.items()
+        }
+        rolling = {
+            (str(row["session"]), int(row["horizon"])): dict(row)
+            for row in rolling_factor
+        }
+        new_alpha_by_session = {
+            str(item["session"]): [dict(row) for row in item["values"]]
+            for item in new_alpha_items
+        }
+        matured_labels: list[dict[str, object]] = []
+        factor_observations: list[dict[str, object]] = []
+        for session in processed_sessions:
+            pending[session] = new_alpha_by_session[session]
+            for horizon in HORIZONS:
+                empty = rolling_factor_row(
+                    session,
+                    horizon,
+                    factor_day([]),
+                    sample_count=0,
+                )
+                rolling[(session, horizon)] = empty
+                signal_index = calendar.index(session) - horizon - 1
+                if signal_index < 0:
+                    continue
+                signal_session = calendar[signal_index]
+                alpha_values = pending.get(signal_session)
+                if alpha_values is None:
+                    raise DailyTrackingError(
+                        f"Pending Alpha is missing for {signal_session}"
+                    )
+                labels = build_forward_labels(
+                    canonical,
+                    alpha_matrix_from_pending(
+                        definition,
+                        {signal_session: alpha_values},
+                    ),
+                    signal_sessions=[signal_session],
+                    horizons=(horizon,),
+                )
+                factor = evaluate_factor(labels)
+                factor_row = factor["horizons"][str(horizon)]["daily"][0]
+                observation = rolling_factor_row(
+                    signal_session,
+                    horizon,
+                    factor_row,
+                    sample_count=int(factor_row["sample_count"]),
+                )
+                rolling[(signal_session, horizon)] = observation
+                matured_labels.append(labels)
+                factor_observations.append(observation)
+
+        final_index = calendar.index(processed_sessions[-1])
+        pending_sessions = set(calendar[max(0, final_index - 20) : final_index + 1])
+        pending = {
+            session: rows
+            for session, rows in pending.items()
+            if session in pending_sessions
+        }
+        rolling_sessions = set(calendar[max(0, final_index - 503) : final_index + 1])
+        rolling_rows = [
+            row
+            for (session, _horizon), row in sorted(rolling.items())
+            if session in rolling_sessions
+        ]
+        if len(rolling_rows) > 1_512:
+            raise DailyTrackingError("rolling Factor window exceeds 1,512 rows")
+
+        prior_strategy = prior_projection["strategy"]
+        terminal = prior_projection["terminal_strategy_state"]
+        if not isinstance(prior_strategy, dict) or not isinstance(terminal, dict):
+            raise DailyTrackingError("compact Strategy continuation is invalid")
+        prior_daily = prior_strategy["daily"]
+        if not isinstance(prior_daily, list) or not prior_daily:
+            raise DailyTrackingError("compact Strategy history is empty")
+        alpha_for_strategy = alpha_matrix_from_pending(definition, pending)
+        strategy = run_strategy(
+            canonical,
+            alpha_for_strategy,
+            definition,
+            origin_session=origin_session,
+            terminal_cutoff=False,
+            continuation={
+                "daily": [
+                    {
+                        **prior_daily[-1],
+                        "gross_cash": terminal["gross_cash"],
+                        "cumulative_transaction_cost": terminal[
+                            "cumulative_transaction_cost"
+                        ],
+                    }
+                ],
+                "positions": terminal["positions"],
+            },
+        )
+        delta_daily = [
+            row for row in strategy["daily"] if str(row["session"]) in new_session_set
+        ]
+        if len(delta_daily) != len(processed_sessions):
+            raise DailyTrackingError("incremental Strategy calculation is incomplete")
+        projected_daily = [
+            row
+            for row in strategy_daily_rows(strategy)
+            if str(row["session"]) in new_session_set
+        ]
+        projected_rebalances = [
+            row
+            for row in rebalance_aggregate_rows(strategy)
+            if str(row["session"]) in new_session_set
+        ]
+        projected_executions = [
+            row
+            for row in execution_aggregate_rows(strategy)
+            if str(row["session"]) in new_session_set
+        ]
+        complete_daily = [
+            *prior_daily,
+            *[
+                {
+                    **row,
+                    "cash_ratio": (
+                        float(
+                            Decimal(str(row["net_cash"]))
+                            / Decimal(str(row["net_nav"]))
+                        )
+                        if Decimal(str(row["net_nav"])) != 0
+                        else 0.0
+                    ),
+                }
+                for row in projected_daily
+            ],
+        ]
+        complete_rebalances = [
+            *prior_strategy["rebalance_aggregates"],
+            *projected_rebalances,
+        ]
+        complete_executions = [
+            *prior_strategy["execution_aggregates"],
+            *projected_executions,
+        ]
+        rejection_events = [
+            {"reason": reason}
+            for row in complete_executions
+            for reason, count in (
+                ("upper_limit_buy", int(row["upper_limit_buy_rejections"])),
+                ("lower_limit_sell", int(row["lower_limit_sell_rejections"])),
+                ("suspension", int(row["suspension_rejections"])),
+            )
+            for _ in range(count)
+        ]
+        metrics = strategy_metrics(
+            daily=complete_daily,
+            turnover_events=[
+                {"session": row["session"], "value": row["turnover"]}
+                for row in complete_rebalances
+            ],
+            cumulative_cost=Decimal(
+                str(delta_daily[-1]["cumulative_transaction_cost"])
+            ),
+            rejections=rejection_events,
+        )
+        summary = strategy_summary(
+            {
+                "alpha_checksum": alpha_for_strategy["checksum"],
+                "initial_cash_cny": strategy["initial_cash_cny"],
+                "checksum": strategy["checksum"],
+                "metrics": metrics,
+            }
+        )
+        terminal_state = incremental_terminal_state(
+            strategy,
+            terminal,
+            definition,
+            len(processed_sessions),
+            {
+                "sha256": "0" * 64,
+                "bytes": 0,
+                "writer_contract_id": TERMINAL_POSITION_CONTRACT.identifier,
+            },
+        )
+        terminal_state.pop("positions_object")
+        terminal_state["positions"] = [dict(row) for row in strategy["positions"]]
+        factor_summary_value = rolling_factor_summary(rolling_rows)
+        return {
+            "processed_sessions": processed_sessions,
+            "maximum_lookback_sessions": parsed_alpha.effective_lookback,
+            "pending_alpha": pending,
+            "rolling_factor": rolling_rows,
+            "factor_summary": factor_summary_value,
+            "strategy_summary": summary,
+            "strategy": strategy,
+            "projected_daily": projected_daily,
+            "projected_rebalances": projected_rebalances,
+            "projected_executions": projected_executions,
+            "projection": {
+                "factor_summary": factor_summary_value,
+                "strategy": {
+                    "alpha_checksum": summary["alpha_checksum"],
+                    "initial_cash_cny": summary["initial_cash_cny"],
+                    "daily": complete_daily,
+                    "metrics": metrics,
+                    "rebalance_aggregates": complete_rebalances,
+                    "execution_aggregates": complete_executions,
+                },
+                "terminal_strategy_state": terminal_state,
+            },
+            "trace": {
+                "alpha": new_alpha_items,
+                "labels": matured_labels,
+                "factor": factor_observations,
+                "orders": strategy["orders"],
+                "child_orders": strategy["child_orders"],
+                "fills": strategy["fills"],
+                "rejections": strategy["rejections"],
+            },
         }
 
     def _alpha(
@@ -2764,13 +3040,19 @@ def first_divergence(actual: object, expected: object, path: str = "$") -> str:
             if divergence:
                 return divergence
         return ""
-    return "" if actual == expected else path
+    return (
+        ""
+        if equivalence_bytes(actual) == equivalence_bytes(expected)
+        else path
+    )
 
 
 def equivalence_bytes(value: object) -> bytes:
     def normalize(item: object) -> object:
         if isinstance(item, float):
             return {"$binary64": canonical_binary64_bytes(item).hex()}
+        if isinstance(item, Decimal):
+            return {"$decimal": canonical_decimal(item)}
         if isinstance(item, dict):
             return {
                 str(key): normalize(child)
