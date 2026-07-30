@@ -1,0 +1,21 @@
+---
+status: accepted
+---
+
+# Preserve source financial versions without inventing history
+
+ThesisTrace V1 does not build an independent financial-revision engine. Dataset
+Publication immutably retains the Tushare responses it actually accepts and
+preserves source version metadata such as announcement dates, report type, and
+update marker.
+
+When Tushare exposes both original and adjusted rows, Canonical Market Data
+uses those source-provided versions with the derived point-in-time availability
+rules. When a later pull changes previously observed data, the new Dataset
+Release references new Physical Data Objects while older releases retain their
+original response.
+
+When Tushare does not expose a complete historical revision chain, ThesisTrace
+does not infer or fabricate one. Field Catalog and research results report the
+resulting revision-coverage limitation and must not claim complete
+point-in-time history for those fields. This decision supersedes ADR-0017.
