@@ -59,12 +59,7 @@ def test_activation_publishes_compact_checkpoint_and_seeds_bounded_cache(
         "factor_evaluation",
         "strategy_backtest",
     }
-    assert set(checkpoint["migration_seed_objects"]) == {
-        "alpha_matrix",
-        "factor_evaluation",
-        "forward_labels",
-        "strategy_backtest",
-    }
+    assert "migration_seed_objects" not in checkpoint
 
     cache = WorkingCacheStore(settings.working_cache_root)
     basis = cache.read_basis(track["id"])

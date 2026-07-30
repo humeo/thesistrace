@@ -16,6 +16,7 @@ from thesistrace.storage import MetadataStore
 from thesistrace.strategy import run_strategy
 
 RUNTIME_BUILD = {"package": "thesistrace", "version": "0.1.0"}
+MAX_RESULT_BUNDLE_BYTES = 1_048_576
 Calculator = Callable[
     [dict[str, object], dict[str, object]],
     dict[str, dict[str, object]],
@@ -85,6 +86,7 @@ class ResearchRunService:
                 if latest is None:
                     raise KeyError(run_id)
                 return latest
+            self.objects.put_manifest(str(manifest["id"]), manifest)
         except TransientResearchRunError as error:
             return self.metadata.finish_research_run_attempt(
                 run_id=run_id,
@@ -129,13 +131,6 @@ class ResearchRunService:
         }
         if set(artifacts) != required:
             raise RuntimeError("calculation did not produce the complete Result Bundle")
-        compatibility_entries = {
-            kind: {
-                "kind": kind,
-                **self.objects.put_json(artifacts[kind]),
-            }
-            for kind in sorted(required)
-        }
         content = frozen["content"]
         if not isinstance(content, dict):
             raise RuntimeError("frozen Research Definition is invalid")
@@ -163,7 +158,6 @@ class ResearchRunService:
             "runtime_build": RUNTIME_BUILD,
             "input_sessions": {"total": 756, "warmup": 252, "report": 504},
             "objects": object_entries,
-            "compatibility_objects": compatibility_entries,
             "created_at": datetime.now(UTC).isoformat(),
         }
         digest = hashlib.sha256(canonical_json_bytes(manifest_core)).hexdigest()
@@ -172,8 +166,33 @@ class ResearchRunService:
             **manifest_core,
             "manifest_sha256": digest,
         }
+        payload_bytes = sum(int(entry["bytes"]) for entry in object_entries.values())
+        logical_bytes: dict[str, int] = {
+            "payloads": payload_bytes,
+            "manifest": 0,
+            "total": payload_bytes,
+            "limit": MAX_RESULT_BUNDLE_BYTES,
+        }
+        for _ in range(10):
+            manifest["logical_bytes"] = logical_bytes
+            manifest_bytes = len(canonical_json_bytes(manifest))
+            next_logical_bytes = {
+                "payloads": payload_bytes,
+                "manifest": manifest_bytes,
+                "total": payload_bytes + manifest_bytes,
+                "limit": MAX_RESULT_BUNDLE_BYTES,
+            }
+            if next_logical_bytes == logical_bytes:
+                break
+            logical_bytes = next_logical_bytes
+        manifest["logical_bytes"] = logical_bytes
+        if len(canonical_json_bytes(manifest)) != logical_bytes["manifest"]:
+            raise RuntimeError("Result Bundle byte accounting did not converge")
+        if logical_bytes["total"] > MAX_RESULT_BUNDLE_BYTES:
+            raise RuntimeError(
+                "complete Result Bundle exceeds the 1,048,576 byte limit"
+            )
         manifest_object = self.objects.put_json(manifest)
-        self.objects.put_manifest(str(manifest["id"]), manifest)
         return manifest, manifest_object
 
     def result_view(self, run_id: str) -> dict[str, object] | None:
@@ -191,30 +210,10 @@ class ResearchRunService:
         entries = manifest.get("objects")
         if not isinstance(entries, dict):
             raise RuntimeError("Result Manifest object index is invalid")
-        if "factor_summary" not in entries:
-            return self._legacy_result_view(manifest, entries)
         try:
             return reconstruct_result_view(self.objects, manifest)
         except CompactResultError as error:
             raise RuntimeError(str(error)) from error
-
-    def _legacy_result_view(
-        self,
-        manifest: dict[str, object],
-        entries: dict[str, object],
-    ) -> dict[str, object]:
-        def read(kind: str) -> object:
-            entry = entries.get(kind)
-            if not isinstance(entry, dict) or not isinstance(entry.get("sha256"), str):
-                raise RuntimeError(f"Result Manifest is missing {kind}")
-            return self.objects.read_json(str(entry["sha256"]))
-
-        return {
-            "manifest": manifest,
-            "factor_evaluation": read("factor_evaluation"),
-            "strategy_backtest": read("strategy_backtest"),
-            "diagnostics": read("diagnostics"),
-        }
 
 
 def calculate_research(

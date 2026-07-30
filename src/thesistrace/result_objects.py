@@ -450,7 +450,6 @@ def reconstruct_result_view(
     terminal_state.pop("positions_object", None)
     terminal_state["positions"] = positions
     public_manifest = copy.deepcopy(dict(manifest))
-    public_manifest.pop("compatibility_objects", None)
     return {
         "manifest": public_manifest,
         "factor_evaluation": factor,

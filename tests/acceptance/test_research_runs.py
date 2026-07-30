@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -8,8 +9,10 @@ from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import (
+    MAX_RESULT_BUNDLE_BYTES,
     ResearchRunService,
     TransientResearchRunError,
+    calculate_research,
 )
 from thesistrace.storage import MetadataStore
 
@@ -72,8 +75,17 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
     with TestClient(create_app(settings)) as client:
         requested = setup_run(client)
         run_id = requested["run"]["id"]
+        captured: dict[str, dict[str, object]] = {}
 
-        completed = service(settings).execute(run_id)
+        def capture_artifacts(
+            canonical: dict[str, object],
+            frozen: dict[str, object],
+        ) -> dict[str, dict[str, object]]:
+            artifacts = calculate_research(canonical, frozen)
+            captured.update(artifacts)
+            return artifacts
+
+        completed = service(settings, calculator=capture_artifacts).execute(run_id)
 
         assert completed["status"] == "succeeded"
         assert completed["result_bundle_id"].startswith("result_")
@@ -116,6 +128,21 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
             "terminal_strategy_state",
         }
         assert "compatibility_objects" not in manifest
+        assert manifest["logical_bytes"]["total"] <= MAX_RESULT_BUNDLE_BYTES
+        assert manifest["logical_bytes"]["payloads"] == sum(
+            entry["bytes"] for entry in manifest["objects"].values()
+        )
+        manifest_payload = (
+            settings.object_root
+            / "sha256"
+            / completed["result_manifest_sha256"][:2]
+            / f"{completed['result_manifest_sha256']}.json"
+        ).read_bytes()
+        assert manifest["logical_bytes"]["manifest"] == len(manifest_payload)
+        assert manifest["logical_bytes"]["total"] == (
+            len(manifest_payload)
+            + sum(entry["bytes"] for entry in manifest["objects"].values())
+        )
         parquet_kinds = {
             "execution_aggregates",
             "rebalance_aggregates",
@@ -174,34 +201,21 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
             completed["result_manifest_sha256"]
         )
         assert isinstance(raw_manifest, dict)
-        compatibility = raw_manifest["compatibility_objects"]
-        assert set(compatibility) == {
-            "alpha_matrix",
-            "diagnostics",
-            "factor_evaluation",
-            "forward_labels",
-            "strategy_backtest",
-            "strategy_events",
-            "strategy_time_series",
-        }
-        legacy_factor = service(settings).objects.read_json(
-            compatibility["factor_evaluation"]["sha256"]
-        )
-        legacy_strategy = service(settings).objects.read_json(
-            compatibility["strategy_backtest"]["sha256"]
-        )
-        assert payload["strategy_backtest"]["metrics"] == legacy_strategy["metrics"]
+        assert "compatibility_objects" not in raw_manifest
+        assert payload["strategy_backtest"]["metrics"] == captured[
+            "strategy_backtest"
+        ]["metrics"]
         assert all(
             payload["factor_evaluation"]["horizons"][horizon]["summary"]
-            == legacy_factor["horizons"][horizon]["summary"]
+            == captured["factor_evaluation"]["horizons"][horizon]["summary"]
             for horizon in ("1", "5", "20")
         )
         assert payload["terminal_strategy_state"]["session"] == payload[
             "strategy_backtest"
         ]["daily"][-1]["session"]
-        assert payload["terminal_strategy_state"]["positions"] == legacy_strategy[
-            "positions"
-        ]
+        assert payload["terminal_strategy_state"]["positions"] == captured[
+            "strategy_backtest"
+        ]["positions"]
         missing_attempt = client.get(f"/api/v1/research-runs/{run_id}/attempts/99")
         assert missing_attempt.status_code == 404
         assert missing_attempt.json()["detail"]["reason_code"] == (
@@ -262,20 +276,14 @@ def test_attempt_retry_cancel_fence_and_rerun_preserve_inputs(tmp_path: Path) ->
         ).json()
         metadata = MetadataStore(settings.metadata_path)
 
-        def cancel_before_publication(*_args):
+        manifests_before_fence = set(
+            (settings.object_root / "manifests").glob("result_*.json")
+        )
+
+        def cancel_before_publication(canonical, frozen_definition):
+            artifacts = calculate_research(canonical, frozen_definition)
             metadata.cancel_research_run(fenced["id"])
-            return {
-                kind: {}
-                for kind in {
-                    "alpha_matrix",
-                    "forward_labels",
-                    "factor_evaluation",
-                    "strategy_backtest",
-                    "strategy_time_series",
-                    "strategy_events",
-                    "diagnostics",
-                }
-            }
+            return artifacts
 
         fenced_result = service(
             settings,
@@ -283,6 +291,9 @@ def test_attempt_retry_cancel_fence_and_rerun_preserve_inputs(tmp_path: Path) ->
         ).execute(fenced["id"])
         assert fenced_result["status"] == "cancelled"
         assert fenced_result["result_bundle_id"] is None
+        assert set(
+            (settings.object_root / "manifests").glob("result_*.json")
+        ) == manifests_before_fence
 
         abandoned = client.post(
             f"/api/v1/research-runs/{run_id}/rerun",
@@ -305,3 +316,43 @@ def test_attempt_retry_cancel_fence_and_rerun_preserve_inputs(tmp_path: Path) ->
             "reason_code": "ABANDONED_ATTEMPT",
             "message": "worker heartbeat expired before publication",
         }
+
+
+def test_oversized_complete_result_fails_without_publishing_a_bundle(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        metadata_path=tmp_path / "metadata.sqlite3",
+        object_root=tmp_path / "objects",
+    )
+    with TestClient(create_app(settings)) as client:
+        requested = setup_run(client, key="oversized-run")
+
+    def oversized_result(
+        canonical: dict[str, object],
+        frozen: dict[str, object],
+    ) -> dict[str, dict[str, object]]:
+        artifacts = calculate_research(canonical, frozen)
+        strategy = artifacts["strategy_backtest"]
+        strategy["positions"] = [
+            {
+                "instrument_id": f"equity:{hashlib.sha256(str(index).encode()).hexdigest()}",
+                "execution_shares": 100,
+                "adjusted_units": "100",
+                "last_adjusted_price": "10",
+            }
+            for index in range(50_000)
+        ]
+        return artifacts
+
+    completed = service(settings, calculator=oversized_result).execute(
+        requested["run"]["id"]
+    )
+    assert completed["status"] == "failed"
+    assert completed["result_bundle_id"] is None
+    assert completed["result_manifest_sha256"] is None
+    assert completed["attempts"][-1]["diagnostic"]["reason_code"] == (
+        "CALCULATION_FAILED"
+    )
+    manifest_root = settings.object_root / "manifests"
+    assert not manifest_root.exists() or not list(manifest_root.glob("result_*.json"))

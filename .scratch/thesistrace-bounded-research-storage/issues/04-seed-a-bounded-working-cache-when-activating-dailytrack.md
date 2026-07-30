@@ -28,8 +28,8 @@ continuation.
   rename makes the initial namespace publication atomic.
 - Activation recalculates the cache from the immutable Dataset Release and
   frozen Definition. Its authoritative Checkpoint references only the eight
-  compact Result objects; four legacy objects remain under the explicitly
-  temporary `migration_seed_objects` index for ticket 05.
+  compact Result objects. The temporary migration seed index used during
+  rollout was removed by the one-MiB contract.
 - Admission uses `BEGIN IMMEDIATE` and repeats the idempotency check while
   holding the write lock. A concurrent acceptance test proves that two
   activations competing for the tenth slot yield exactly one active Track and

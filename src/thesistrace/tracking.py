@@ -24,6 +24,7 @@ from thesistrace.result_objects import (
     STRATEGY_DAILY_CONTRACT,
     TERMINAL_POSITION_CONTRACT,
     execution_aggregate_rows,
+    publish_compact_result_objects,
     read_json_object,
     read_table_object,
     rebalance_aggregate_rows,
@@ -119,9 +120,6 @@ class DailyTrackingService:
             or set(public_entries) != COMPACT_RESULT_OBJECTS
         ):
             raise DailyTrackingError("DailyTrack requires a complete compact Result Bundle")
-        compatibility_entries = manifest.get("compatibility_objects")
-        if not isinstance(compatibility_entries, dict):
-            raise DailyTrackingError("seed Result migration evidence is incomplete")
         result_view = reconstruct_result_view(self.objects, manifest)
         strategy = result_view["strategy_backtest"]
         if not isinstance(strategy, dict):
@@ -164,15 +162,6 @@ class DailyTrackingService:
                 "manifest_sha256": run["result_manifest_sha256"],
             },
             "objects": public_entries,
-            "migration_seed_objects": {
-                kind: compatibility_entries[kind]
-                for kind in (
-                    "alpha_matrix",
-                    "factor_evaluation",
-                    "forward_labels",
-                    "strategy_backtest",
-                )
-            },
             "pending_strategy_signal": pending_signal,
             "numeric_execution_contract": content["numeric_execution_contract"],
             "calculation_kernel": manifest["calculation_kernel"],
@@ -482,28 +471,7 @@ class DailyTrackingService:
                 "strategy": projection["strategy"],
                 "recent_label_maturation": {"events": []},
             }
-        factor_kind = (
-            "factor_summary"
-            if isinstance(objects, dict) and "factor_summary" in objects
-            else "factor_evaluation"
-        )
-        label_maturation = (
-            self._read_result_object(objects, "label_maturation")
-            if isinstance(objects, dict) and "label_maturation" in objects
-            else {"events": []}
-        )
-        return {
-            "daily_track": {
-                "id": track["id"],
-                "status": track["status"],
-                "generation_id": track["current_generation_id"],
-                "head_checkpoint_id": track["head_checkpoint_id"],
-            },
-            "checkpoint": manifest,
-            "factor_summary": self._read_result_object(objects, factor_kind),
-            "strategy": self._read_result_object(objects, "strategy_backtest"),
-            "recent_label_maturation": label_maturation,
-        }
+        raise DailyTrackingError("Tracking Head does not use the compact contract")
 
     def _compact_tracking_projection(
         self,
@@ -526,8 +494,11 @@ class DailyTrackingService:
             predecessor = manifest.get("predecessor_checkpoint_id")
             cursor = str(predecessor) if predecessor is not None else None
         manifests.reverse()
-        if not manifests or manifests[0].get("kind") != "activation":
-            raise DailyTrackingError("Tracking Activation Checkpoint is missing")
+        if not manifests or manifests[0].get("kind") not in {
+            "activation",
+            "replay",
+        }:
+            raise DailyTrackingError("Tracking basis Checkpoint is missing")
 
         daily: list[dict[str, object]] = []
         rebalances: list[dict[str, object]] = []
@@ -963,12 +934,6 @@ class DailyTrackingService:
             str(head["target_dataset_release_id"]),
             kernel=self._generation_kernel(track, str(head["generation_id"])),
         )
-        comparisons = {
-            "alpha_matrix": oracle["alpha_matrix"],
-            "forward_labels": oracle["forward_labels"],
-            "factor_evaluation": oracle["factor_evaluation"],
-            "strategy_backtest": oracle["strategy_backtest"],
-        }
         objects = checkpoint.get("objects")
         if not isinstance(objects, dict):
             raise EquivalenceError("Checkpoint object index is invalid")
@@ -1030,21 +995,7 @@ class DailyTrackingService:
                 "target_dataset_release_id": head["target_dataset_release_id"],
                 "checkpoint_id": head["id"],
             }
-        for kind, expected in comparisons.items():
-            entry = objects.get(kind)
-            if not isinstance(entry, dict):
-                raise EquivalenceError(f"missing checkpoint object: {kind}")
-            actual = self.objects.read_json(str(entry["sha256"]))
-            if equivalence_bytes(actual) != equivalence_bytes(expected):
-                coordinate = first_divergence(actual, expected)
-                raise EquivalenceError(f"{kind} diverged at {coordinate}")
-        return {
-            "status": "equivalent",
-            "daily_track_id": track_id,
-            "generation_id": head["generation_id"],
-            "target_dataset_release_id": head["target_dataset_release_id"],
-            "checkpoint_id": head["id"],
-        }
+        raise EquivalenceError("Tracking Checkpoint does not use the compact contract")
 
     def _calculate_advance(
         self,
@@ -1086,7 +1037,17 @@ class DailyTrackingService:
             "strategy_daily_observations",
             "terminal_strategy_state",
         } <= set(current_objects)
-        if not replay and compact_head:
+        if replay:
+            return self._calculate_compact_replay(
+                track=track,
+                target=target,
+                frozen=frozen,
+                definition=definition,
+                canonical=canonical,
+                generation=generation,
+                kernel=kernel,
+            )
+        if compact_head:
             return self._calculate_incremental_advance(
                 advance=advance,
                 track=track,
@@ -1096,111 +1057,75 @@ class DailyTrackingService:
                 canonical=canonical,
                 generation=generation,
             )
-        activation_release = self.metadata.dataset_release(str(track["activation_release_id"]))
-        if activation_release is None:
-            raise DailyTrackingError("Activation Release is missing")
-        activation_session = str(activation_release["appended_session_range"]["end"])
-        prior_manifest: dict[str, object] | None = None
-        prior_strategy: dict[str, object] | None = None
-        if replay:
-            alpha = self._alpha(canonical, definition, kernel=kernel)
-            predecessor_id = None
-            prior_session = str(track["origin_session"])
-        else:
-            head = track["head"]
-            if not isinstance(head, dict):
-                raise DailyTrackingError("DailyTrack has no Head")
-            prior_manifest = self._checkpoint_manifest(str(head["manifest_sha256"]))
-            prior_entries = prior_manifest.get(
-                "migration_seed_objects",
-                prior_manifest.get("objects"),
-            )
-            prior_alpha = self._read_result_object(
-                prior_entries,
-                "alpha_matrix",
-            )
-            prior_strategy = self._read_result_object(
-                prior_entries,
-                "strategy_backtest",
-            )
-            prior_release = self.metadata.dataset_release(str(head["target_dataset_release_id"]))
-            if prior_release is None:
-                raise DailyTrackingError("Head Release is missing")
-            prior_session = str(prior_release["appended_session_range"]["end"])
-            alpha = append_alpha_matrix(
-                canonical,
-                definition,
-                prior_alpha,
-                prior_session,
-                kernel=kernel,
-            )
-            predecessor_id = str(head["id"])
-        origin_index = canonical["research_calendar"].index(track["origin_session"])
-        report_sessions = len(canonical["research_calendar"]) - origin_index
-        labels = build_forward_labels(
+        raise DailyTrackingError("Tracking Head does not use the compact contract")
+
+    def _calculate_compact_replay(
+        self,
+        *,
+        track: dict[str, object],
+        target: dict[str, object],
+        frozen: dict[str, object],
+        definition: dict[str, object],
+        canonical: dict[str, object],
+        generation: dict[str, object],
+        kernel: str,
+    ) -> dict[str, object]:
+        alpha = self._alpha(canonical, definition, kernel=kernel)
+        summary_labels = build_forward_labels(
             canonical,
             alpha,
-            report_sessions=report_sessions,
+            report_sessions=504,
         )
-        factor = evaluate_factor(labels)
-        summary_labels = build_forward_labels(canonical, alpha, report_sessions=504)
-        factor_summary = evaluate_factor(summary_labels)
-        if replay:
-            strategy = self._batch_oracle(
-                track,
-                str(target["id"]),
-                alpha=alpha,
-                labels=labels,
-                factor=factor,
-                kernel=kernel,
-            )["strategy_backtest"]
-        else:
-            assert prior_strategy is not None
-            strategy = run_strategy(
-                canonical,
-                alpha,
-                definition,
-                origin_session=str(track["origin_session"]),
-                terminal_cutoff=False,
-                continuation=prior_strategy,
-            )
-        calendar = [str(item) for item in canonical["research_calendar"]]
-        processed_sessions = (
-            calendar[origin_index:] if replay else calendar[calendar.index(prior_session) + 1 :]
-        )
-        checkpoint_id = f"checkpoint_{uuid4().hex[:20]}"
-        maturation = label_maturation_events(
-            labels,
-            calendar,
-            processed_sessions,
-            generation_id=str(generation["id"]),
-            basis_release_id=str(target["id"]),
-            checkpoint_id=checkpoint_id,
-        )
+        factor = evaluate_factor(summary_labels)
+        strategy = self._batch_oracle(
+            track,
+            str(target["id"]),
+            alpha=alpha,
+            kernel=kernel,
+        )["strategy_backtest"]
         artifacts = {
             "alpha_matrix": alpha,
-            "forward_labels": labels,
+            "forward_labels": summary_labels,
             "factor_evaluation": factor,
-            "factor_summary": factor_summary,
             "strategy_backtest": strategy,
-            "label_maturation": {"events": maturation},
+            "diagnostics": {
+                "alpha_coverage": [
+                    {
+                        "session": item["session"],
+                        "coverage_loss": item["coverage_loss"],
+                    }
+                    for item in alpha["sessions"]
+                ],
+                "strategy": strategy["diagnostics"],
+            },
         }
-        entries = {
-            kind: {"kind": kind, **self.objects.put_json(value)}
-            for kind, value in sorted(artifacts.items())
-        }
+        entries = publish_compact_result_objects(
+            self.objects,
+            artifacts,
+            definition,
+        )
+        activation_release = self.metadata.dataset_release(
+            str(track["activation_release_id"])
+        )
+        if activation_release is None:
+            raise DailyTrackingError("Activation Release is missing")
+        calendar = [str(session) for session in canonical["research_calendar"]]
+        origin_index = calendar.index(str(track["origin_session"]))
+        checkpoint_id = f"checkpoint_{uuid4().hex[:20]}"
         now = datetime.now(UTC).isoformat()
         manifest = {
             "id": checkpoint_id,
-            "kind": "replay" if replay else "advance",
+            "kind": "replay",
             "daily_track_id": track["id"],
             "generation_id": generation["id"],
-            "predecessor_checkpoint_id": predecessor_id,
+            "predecessor_checkpoint_id": None,
             "target_dataset_release_id": target["id"],
-            "processed_sessions": processed_sessions,
+            "processed_sessions": calendar[origin_index:],
             "tracking_origin": {
                 "session": track["origin_session"],
-                "activation_session": activation_session,
+                "activation_session": activation_release[
+                    "appended_session_range"
+                ]["end"],
             },
             "definition": {
                 "id": frozen["id"],
@@ -1210,13 +1135,49 @@ class DailyTrackingService:
             "calculation_kernel": generation["calculation_kernel"],
             "runtime_build": RUNTIME_BUILD,
             "basis_dataset_release_id": target["id"],
-            "supersedes_generation_id": generation["supersedes_generation_id"],
-            "supersedes_head_checkpoint_id": generation["supersedes_head_checkpoint_id"],
+            "supersedes_generation_id": generation[
+                "supersedes_generation_id"
+            ],
+            "supersedes_head_checkpoint_id": generation[
+                "supersedes_head_checkpoint_id"
+            ],
             "objects": entries,
             "created_at": now,
         }
         manifest_object = self.objects.put_json(manifest)
         self.objects.put_manifest(checkpoint_id, manifest)
+
+        pending_items = alpha["sessions"][-21:]
+        pending = {
+            str(item["session"]): [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "alpha": float(row["value"]),
+                }
+                for row in item["values"]
+            ]
+            for item in pending_items
+        }
+        rolling_rows = factor_artifact_to_rolling_rows(factor)
+        prior_basis = self.cache.read_basis(str(track["id"]))
+        self.cache.commit_advance(
+            {
+                "daily_track_id": track["id"],
+                "generation_id": generation["id"],
+                "basis_checkpoint_id": checkpoint_id,
+                "basis_checkpoint_sha256": manifest_object["sha256"],
+                "definition_content_hash": frozen["content_hash"],
+                "calculation_kernel": generation["calculation_kernel"],
+                "numeric_execution_contract": track[
+                    "numeric_execution_contract"
+                ],
+                "basis_dataset_release_id": target["id"],
+                "fencing_token": int(prior_basis["fencing_token"]) + 1,
+            },
+            retained_pending_sessions=[],
+            new_pending_alpha=pending,
+            rolling_factor=rolling_rows,
+        )
         return {
             "id": checkpoint_id,
             "manifest_sha256": manifest_object["sha256"],
@@ -2086,21 +2047,6 @@ class DailyTrackingService:
             raise DailyTrackingError("Tracking Checkpoint is invalid")
         return value
 
-    def _read_result_object(
-        self,
-        entries: object,
-        kind: str,
-    ) -> dict[str, object]:
-        if not isinstance(entries, dict):
-            raise DailyTrackingError("object index is invalid")
-        entry = entries.get(kind)
-        if not isinstance(entry, dict) or not isinstance(entry.get("sha256"), str):
-            raise DailyTrackingError(f"object index is missing {kind}")
-        value = self.objects.read_json(str(entry["sha256"]))
-        if not isinstance(value, dict):
-            raise DailyTrackingError(f"{kind} object is invalid")
-        return value
-
     def _release_chain(
         self,
         ancestor_id: str,
@@ -2117,58 +2063,6 @@ class DailyTrackingService:
         if current is None:
             return []
         return list(reversed(chain))
-
-
-def label_maturation_events(
-    labels: dict[str, object],
-    calendar: list[str],
-    processed_sessions: list[str],
-    *,
-    generation_id: str,
-    basis_release_id: str,
-    checkpoint_id: str,
-) -> list[dict[str, object]]:
-    processed = set(processed_sessions)
-    events: list[dict[str, object]] = []
-    for horizon_text, artifact in labels["horizons"].items():
-        horizon = int(horizon_text)
-        by_signal = {str(item["signal_session"]): item for item in artifact["sessions"]}
-        for maturity_index, maturity_session in enumerate(calendar):
-            if maturity_session not in processed:
-                continue
-            signal_index = maturity_index - 1 - horizon
-            if signal_index < 0:
-                continue
-            signal_session = calendar[signal_index]
-            item = by_signal.get(signal_session)
-            if item is None:
-                continue
-            for resolution in item["resolutions"]:
-                if resolution["reason"] == "right_censored_by_release_end":
-                    continue
-                events.append(
-                    {
-                        "generation_id": generation_id,
-                        "signal_session": signal_session,
-                        "horizon": horizon,
-                        "maturity_session": maturity_session,
-                        "instrument_id": resolution["instrument_id"],
-                        "alpha": resolution["alpha"],
-                        "label": resolution["label"],
-                        "reason": resolution["reason"],
-                        "basis_dataset_release_id": basis_release_id,
-                        "publishing_checkpoint_id": checkpoint_id,
-                    }
-                )
-    events.sort(
-        key=lambda item: (
-            item["maturity_session"],
-            item["horizon"],
-            item["signal_session"],
-            item["instrument_id"],
-        )
-    )
-    return events
 
 
 def slice_canonical_through(
@@ -2203,53 +2097,6 @@ def slice_canonical_through(
         for name, rows in copied["liquidity_universes"].items()
     }
     return copied
-
-
-def append_alpha_matrix(
-    canonical: dict[str, object],
-    definition: dict[str, object],
-    prior: dict[str, object],
-    prior_session: str,
-    *,
-    kernel: str,
-) -> dict[str, object]:
-    calendar = [str(item) for item in canonical["research_calendar"]]
-    next_index = calendar.index(prior_session) + 1
-    if next_index >= len(calendar):
-        return prior
-    lookback = int(prior["effective_lookback"])
-    window_start = max(0, next_index - lookback)
-    window = slice_canonical_range(canonical, calendar[window_start])
-    alpha_definition = definition["alpha"]
-    if not isinstance(alpha_definition, dict):
-        raise DailyTrackingError("Alpha Definition is invalid")
-    evaluated = evaluate_alpha_matrix(
-        window,
-        expression=str(alpha_definition["expression"]),
-        universe_name=str(definition["universe"]),
-        neutralization=str(definition["neutralization"]),
-    )
-    evaluated = apply_calculation_kernel(evaluated, kernel)
-    new_sessions = set(calendar[next_index:])
-    merged_sessions = [
-        *prior["sessions"],
-        *[item for item in evaluated["sessions"] if item["session"] in new_sessions],
-    ]
-    checksum = hashlib.sha256()
-    for item in merged_sessions:
-        checksum.update(str(item["session"]).encode())
-        checksum.update(b"\0")
-        for row in item["values"]:
-            checksum.update(str(row["instrument_id"]).encode())
-            checksum.update(b"\0")
-            checksum.update(canonical_binary64_bytes(float(row["value"])))
-    return {
-        "expression": prior["expression"],
-        "effective_lookback": lookback,
-        "neutralization": prior["neutralization"],
-        "sessions": merged_sessions,
-        "checksum": checksum.hexdigest(),
-    }
 
 
 def apply_calculation_kernel(
@@ -2437,6 +2284,28 @@ def rolling_factor_summary(
             },
         }
     return {"horizons": horizons}
+
+
+def factor_artifact_to_rolling_rows(
+    factor: dict[str, object],
+) -> list[dict[str, object]]:
+    horizons = factor.get("horizons")
+    if not isinstance(horizons, dict):
+        raise DailyTrackingError("Factor Evaluation is invalid")
+    rows: list[dict[str, object]] = []
+    for horizon, value in sorted(horizons.items(), key=lambda item: int(item[0])):
+        if not isinstance(value, dict) or not isinstance(value.get("daily"), list):
+            raise DailyTrackingError("Factor horizon is invalid")
+        for row in value["daily"]:
+            rows.append(
+                rolling_factor_row(
+                    str(row["session"]),
+                    int(horizon),
+                    row,
+                    sample_count=int(row["sample_count"]),
+                )
+            )
+    return rows
 
 
 def incremental_terminal_state(
