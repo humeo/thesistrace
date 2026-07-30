@@ -1,17 +1,42 @@
 import hashlib
 import json
+from collections import Counter
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import uuid4
 
 from thesistrace.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.datasets import DatasetPublisher
-from thesistrace.factor import build_forward_labels, evaluate_factor
+from thesistrace.factor import (
+    HORIZONS,
+    build_forward_labels,
+    correlation_summary,
+    evaluate_factor,
+    factor_day,
+    mean_or_none,
+)
 from thesistrace.numeric import canonical_binary64_bytes
 from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
 from thesistrace.research_runs import RUNTIME_BUILD
-from thesistrace.result_objects import reconstruct_result_view
+from thesistrace.result_objects import (
+    EXECUTION_AGGREGATE_CONTRACT,
+    REBALANCE_AGGREGATE_CONTRACT,
+    STRATEGY_DAILY_CONTRACT,
+    TERMINAL_POSITION_CONTRACT,
+    execution_aggregate_rows,
+    read_json_object,
+    read_table_object,
+    rebalance_aggregate_rows,
+    reconstruct_result_view,
+    reconstruct_strategy_metrics,
+    strategy_daily_rows,
+    strategy_summary,
+)
+from thesistrace.result_objects import (
+    factor_summary as compact_factor_summary,
+)
 from thesistrace.storage import MetadataStore
-from thesistrace.strategy import run_strategy
+from thesistrace.strategy import run_strategy, strategy_metrics
 from thesistrace.working_cache import WorkingCacheStore
 
 
@@ -438,18 +463,13 @@ class DailyTrackingService:
             raise DailyTrackingError("DailyTrack has no Head")
         manifest = self._checkpoint_manifest(str(head["manifest_sha256"]))
         objects = manifest.get("objects")
-        if (
-            manifest.get("kind") == "activation"
-            and isinstance(objects, dict)
-            and set(objects) == COMPACT_RESULT_OBJECTS
-        ):
-            result_view = reconstruct_result_view(
-                self.objects,
-                {
-                    "objects": objects,
-                    "calculation_kernel": manifest["calculation_kernel"],
-                },
-            )
+        if isinstance(objects, dict) and {
+            "factor_summary",
+            "strategy_summary",
+            "strategy_daily_observations",
+            "terminal_strategy_state",
+        } <= set(objects):
+            projection = self._compact_tracking_projection(track)
             return {
                 "daily_track": {
                     "id": track["id"],
@@ -458,8 +478,8 @@ class DailyTrackingService:
                     "head_checkpoint_id": track["head_checkpoint_id"],
                 },
                 "checkpoint": manifest,
-                "factor_summary": result_view["factor_evaluation"],
-                "strategy": result_view["strategy_backtest"],
+                "factor_summary": projection["factor_summary"],
+                "strategy": projection["strategy"],
                 "recent_label_maturation": {"events": []},
             }
         factor_kind = (
@@ -483,6 +503,96 @@ class DailyTrackingService:
             "factor_summary": self._read_result_object(objects, factor_kind),
             "strategy": self._read_result_object(objects, "strategy_backtest"),
             "recent_label_maturation": label_maturation,
+        }
+
+    def _compact_tracking_projection(
+        self,
+        track: dict[str, object],
+    ) -> dict[str, object]:
+        checkpoint_rows = {
+            str(item["id"]): item
+            for item in track["checkpoints"]
+            if isinstance(item, dict)
+        }
+        head_id = str(track["head_checkpoint_id"])
+        manifests: list[dict[str, object]] = []
+        cursor: str | None = head_id
+        while cursor is not None:
+            row = checkpoint_rows.get(cursor)
+            if row is None:
+                raise DailyTrackingError("Tracking Checkpoint chain is incomplete")
+            manifest = self._checkpoint_manifest(str(row["manifest_sha256"]))
+            manifests.append(manifest)
+            predecessor = manifest.get("predecessor_checkpoint_id")
+            cursor = str(predecessor) if predecessor is not None else None
+        manifests.reverse()
+        if not manifests or manifests[0].get("kind") != "activation":
+            raise DailyTrackingError("Tracking Activation Checkpoint is missing")
+
+        daily: list[dict[str, object]] = []
+        rebalances: list[dict[str, object]] = []
+        executions: list[dict[str, object]] = []
+        for manifest in manifests:
+            entries = manifest.get("objects")
+            if not isinstance(entries, dict):
+                raise DailyTrackingError("compact Checkpoint object index is invalid")
+            daily.extend(
+                read_table_object(
+                    self.objects,
+                    entries,
+                    "strategy_daily_observations",
+                )
+            )
+            rebalances.extend(
+                read_table_object(self.objects, entries, "rebalance_aggregates")
+            )
+            executions.extend(
+                read_table_object(self.objects, entries, "execution_aggregates")
+            )
+        latest_entries = manifests[-1]["objects"]
+        if not isinstance(latest_entries, dict):
+            raise DailyTrackingError("compact Head object index is invalid")
+        factor = read_json_object(self.objects, latest_entries, "factor_summary")
+        strategy_summary_value = read_json_object(
+            self.objects,
+            latest_entries,
+            "strategy_summary",
+        )
+        terminal = read_json_object(
+            self.objects,
+            latest_entries,
+            "terminal_strategy_state",
+        )
+        positions = read_table_object(self.objects, latest_entries, "terminal_positions")
+        terminal.pop("positions_object", None)
+        terminal["positions"] = positions
+        metrics = reconstruct_strategy_metrics(
+            strategy_summary_value,
+            daily,
+            rebalances,
+        )
+        projected_daily = [
+            {
+                **row,
+                "cash_ratio": (
+                    float(Decimal(str(row["net_cash"])) / Decimal(str(row["net_nav"])))
+                    if Decimal(str(row["net_nav"])) != 0
+                    else 0.0
+                ),
+            }
+            for row in daily
+        ]
+        return {
+            "factor_summary": factor,
+            "strategy": {
+                "alpha_checksum": strategy_summary_value["alpha_checksum"],
+                "initial_cash_cny": strategy_summary_value["initial_cash_cny"],
+                "daily": projected_daily,
+                "metrics": metrics,
+                "rebalance_aggregates": rebalances,
+                "execution_aggregates": executions,
+            },
+            "terminal_strategy_state": terminal,
         }
 
     def stop(self, track_id: str) -> dict[str, object] | None:
@@ -862,6 +972,64 @@ class DailyTrackingService:
         objects = checkpoint.get("objects")
         if not isinstance(objects, dict):
             raise EquivalenceError("Checkpoint object index is invalid")
+        if {
+            "factor_summary",
+            "strategy_summary",
+            "strategy_daily_observations",
+            "terminal_strategy_state",
+        } <= set(objects):
+            target = self.metadata.dataset_release(
+                str(head["target_dataset_release_id"])
+            )
+            if target is None:
+                raise EquivalenceError("Target Dataset Release is missing")
+            canonical = self.datasets.materialize_canonical(target)
+            summary_labels = build_forward_labels(
+                canonical,
+                oracle["alpha_matrix"],
+                report_sessions=504,
+            )
+            expected_factor = compact_factor_summary(
+                evaluate_factor(summary_labels)
+            )
+            actual_projection = self._compact_tracking_projection(track)
+            actual_factor = actual_projection["factor_summary"]
+            for horizon in ("1", "5", "20"):
+                for key in ("summary", "diagnostics"):
+                    actual = actual_factor["horizons"][horizon][key]
+                    expected = expected_factor["horizons"][horizon][key]
+                    if equivalence_bytes(actual) != equivalence_bytes(expected):
+                        coordinate = first_divergence(actual, expected)
+                        raise EquivalenceError(
+                            f"factor_summary diverged at {horizon}.{key}{coordinate}"
+                        )
+            actual_strategy = actual_projection["strategy"]
+            expected_strategy = oracle["strategy_backtest"]
+            for key, actual, expected in (
+                (
+                    "daily",
+                    [
+                        {name: row[name] for name in STRATEGY_DAILY_CONTRACT.schema.names}
+                        for row in actual_strategy["daily"]
+                    ],
+                    strategy_daily_rows(expected_strategy),
+                ),
+                (
+                    "metrics",
+                    actual_strategy["metrics"],
+                    expected_strategy["metrics"],
+                ),
+            ):
+                if equivalence_bytes(actual) != equivalence_bytes(expected):
+                    coordinate = first_divergence(actual, expected)
+                    raise EquivalenceError(f"strategy_{key} diverged at {coordinate}")
+            return {
+                "status": "equivalent",
+                "daily_track_id": track_id,
+                "generation_id": head["generation_id"],
+                "target_dataset_release_id": head["target_dataset_release_id"],
+                "checkpoint_id": head["id"],
+            }
         for kind, expected in comparisons.items():
             entry = objects.get(kind)
             if not isinstance(entry, dict):
@@ -901,6 +1069,33 @@ class DailyTrackingService:
             generation["reason"] != "activation"
             and generation["id"] != track["current_generation_id"]
         )
+        current_head = track.get("head")
+        current_head_manifest = (
+            self._checkpoint_manifest(str(current_head["manifest_sha256"]))
+            if isinstance(current_head, dict)
+            else None
+        )
+        current_objects = (
+            current_head_manifest.get("objects")
+            if isinstance(current_head_manifest, dict)
+            else None
+        )
+        compact_head = isinstance(current_objects, dict) and {
+            "factor_summary",
+            "strategy_summary",
+            "strategy_daily_observations",
+            "terminal_strategy_state",
+        } <= set(current_objects)
+        if not replay and compact_head:
+            return self._calculate_incremental_advance(
+                advance=advance,
+                track=track,
+                target=target,
+                frozen=frozen,
+                definition=definition,
+                canonical=canonical,
+                generation=generation,
+            )
         activation_release = self.metadata.dataset_release(str(track["activation_release_id"]))
         if activation_release is None:
             raise DailyTrackingError("Activation Release is missing")
@@ -1022,6 +1217,362 @@ class DailyTrackingService:
         }
         manifest_object = self.objects.put_json(manifest)
         self.objects.put_manifest(checkpoint_id, manifest)
+        return {
+            "id": checkpoint_id,
+            "manifest_sha256": manifest_object["sha256"],
+            "manifest": manifest,
+        }
+
+    def _calculate_incremental_advance(
+        self,
+        *,
+        advance: dict[str, object],
+        track: dict[str, object],
+        target: dict[str, object],
+        frozen: dict[str, object],
+        definition: dict[str, object],
+        canonical: dict[str, object],
+        generation: dict[str, object],
+    ) -> dict[str, object]:
+        head = track["head"]
+        if not isinstance(head, dict):
+            raise DailyTrackingError("DailyTrack has no Head")
+        basis = self.cache.read_basis(str(track["id"]))
+        expected_basis = {
+            "daily_track_id": track["id"],
+            "generation_id": track["current_generation_id"],
+            "basis_checkpoint_id": head["id"],
+            "basis_checkpoint_sha256": head["manifest_sha256"],
+            "definition_content_hash": track["definition_content_hash"],
+            "calculation_kernel": generation["calculation_kernel"],
+            "numeric_execution_contract": track["numeric_execution_contract"],
+            "basis_dataset_release_id": head["target_dataset_release_id"],
+        }
+        for key, expected in expected_basis.items():
+            if basis.get(key) != expected:
+                raise DailyTrackingError(f"Working Cache basis mismatch: {key}")
+
+        prior_release = self.metadata.dataset_release(str(head["target_dataset_release_id"]))
+        if prior_release is None:
+            raise DailyTrackingError("Head Release is missing")
+        prior_session = str(prior_release["appended_session_range"]["end"])
+        calendar = [str(session) for session in canonical["research_calendar"]]
+        prior_index = calendar.index(prior_session)
+        processed_sessions = calendar[prior_index + 1 :]
+        if not processed_sessions:
+            raise DailyTrackingError("Advance has no new Research Sessions")
+
+        alpha_definition = definition.get("alpha")
+        if not isinstance(alpha_definition, dict):
+            raise DailyTrackingError("Alpha Definition is invalid")
+        parsed_alpha = validate_alpha(str(alpha_definition["expression"]))
+        window_start = max(0, prior_index + 1 - parsed_alpha.effective_lookback)
+        alpha_window = slice_canonical_range(canonical, calendar[window_start])
+        evaluated = self._alpha(
+            alpha_window,
+            definition,
+            kernel=str(generation["calculation_kernel"]),
+        )
+        new_session_set = set(processed_sessions)
+        new_alpha_items = [
+            item
+            for item in evaluated["sessions"]
+            if str(item["session"]) in new_session_set
+        ]
+        if len(new_alpha_items) != len(processed_sessions):
+            raise DailyTrackingError("incremental Alpha calculation is incomplete")
+
+        cached_pending = self.cache.read_pending_alpha(str(track["id"]))
+        pending: dict[str, list[dict[str, object]]] = {
+            session: [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "value": float(row["alpha"]),
+                }
+                for row in rows
+            ]
+            for session, rows in cached_pending.items()
+        }
+        rolling = {
+            (str(row["session"]), int(row["horizon"])): dict(row)
+            for row in self.cache.read_rolling_factor(str(track["id"]))
+        }
+        new_alpha_by_session = {
+            str(item["session"]): [dict(row) for row in item["values"]]
+            for item in new_alpha_items
+        }
+        for session in processed_sessions:
+            pending[session] = new_alpha_by_session[session]
+            for horizon in HORIZONS:
+                rolling[(session, horizon)] = rolling_factor_row(
+                    session,
+                    horizon,
+                    factor_day([]),
+                    sample_count=0,
+                )
+                signal_index = calendar.index(session) - horizon - 1
+                if signal_index < 0:
+                    continue
+                signal_session = calendar[signal_index]
+                alpha_values = pending.get(signal_session)
+                if alpha_values is None:
+                    raise DailyTrackingError(
+                        f"Pending Alpha is missing for {signal_session}"
+                    )
+                alpha_for_label = alpha_matrix_from_pending(
+                    definition,
+                    {signal_session: alpha_values},
+                )
+                labels = build_forward_labels(
+                    canonical,
+                    alpha_for_label,
+                    signal_sessions=[signal_session],
+                    horizons=(horizon,),
+                )
+                factor = evaluate_factor(labels)
+                factor_row = factor["horizons"][str(horizon)]["daily"][0]
+                rolling[(signal_session, horizon)] = rolling_factor_row(
+                    signal_session,
+                    horizon,
+                    factor_row,
+                    sample_count=int(factor_row["sample_count"]),
+                )
+
+        final_index = calendar.index(processed_sessions[-1])
+        pending_sessions = set(calendar[max(0, final_index - 20) : final_index + 1])
+        pending = {
+            session: rows
+            for session, rows in pending.items()
+            if session in pending_sessions
+        }
+        rolling_sessions = set(calendar[max(0, final_index - 503) : final_index + 1])
+        rolling_rows = [
+            row
+            for (session, _horizon), row in sorted(rolling.items())
+            if session in rolling_sessions
+        ]
+        if len(rolling_rows) > 1_512:
+            raise DailyTrackingError("rolling Factor window exceeds 1,512 rows")
+        factor_summary_value = rolling_factor_summary(rolling_rows)
+
+        alpha_for_strategy = alpha_matrix_from_pending(definition, pending)
+        prior_projection = self._compact_tracking_projection(track)
+        prior_strategy = prior_projection["strategy"]
+        terminal = prior_projection["terminal_strategy_state"]
+        if not isinstance(prior_strategy, dict) or not isinstance(terminal, dict):
+            raise DailyTrackingError("compact Strategy continuation is invalid")
+        prior_daily = prior_strategy["daily"]
+        if not isinstance(prior_daily, list) or not prior_daily:
+            raise DailyTrackingError("compact Strategy history is empty")
+        continuation_daily = {
+            **prior_daily[-1],
+            "gross_cash": terminal["gross_cash"],
+            "cumulative_transaction_cost": terminal[
+                "cumulative_transaction_cost"
+            ],
+        }
+        strategy = run_strategy(
+            canonical,
+            alpha_for_strategy,
+            definition,
+            origin_session=str(track["origin_session"]),
+            terminal_cutoff=False,
+            continuation={
+                "daily": [continuation_daily],
+                "positions": terminal["positions"],
+            },
+        )
+        delta_daily = [
+            row for row in strategy["daily"] if str(row["session"]) in new_session_set
+        ]
+        if len(delta_daily) != len(processed_sessions):
+            raise DailyTrackingError("incremental Strategy calculation is incomplete")
+        projected_daily = [
+            row
+            for row in strategy_daily_rows(strategy)
+            if str(row["session"]) in new_session_set
+        ]
+        projected_rebalances = [
+            row
+            for row in rebalance_aggregate_rows(strategy)
+            if str(row["session"]) in new_session_set
+        ]
+        projected_executions = [
+            row
+            for row in execution_aggregate_rows(strategy)
+            if str(row["session"]) in new_session_set
+        ]
+        complete_daily = [
+            *prior_daily,
+            *[
+                {
+                    **row,
+                    "cash_ratio": (
+                        float(
+                            Decimal(str(row["net_cash"]))
+                            / Decimal(str(row["net_nav"]))
+                        )
+                        if Decimal(str(row["net_nav"])) != 0
+                        else 0.0
+                    ),
+                }
+                for row in projected_daily
+            ],
+        ]
+        complete_rebalances = [
+            *prior_strategy["rebalance_aggregates"],
+            *projected_rebalances,
+        ]
+        complete_executions = [
+            *prior_strategy["execution_aggregates"],
+            *projected_executions,
+        ]
+        rejection_events = [
+            {"reason": reason}
+            for row in complete_executions
+            for reason, count in (
+                ("upper_limit_buy", int(row["upper_limit_buy_rejections"])),
+                ("lower_limit_sell", int(row["lower_limit_sell_rejections"])),
+                ("suspension", int(row["suspension_rejections"])),
+            )
+            for _ in range(count)
+        ]
+        metrics = strategy_metrics(
+            daily=complete_daily,
+            turnover_events=[
+                {"session": row["session"], "value": row["turnover"]}
+                for row in complete_rebalances
+            ],
+            cumulative_cost=Decimal(
+                str(delta_daily[-1]["cumulative_transaction_cost"])
+            ),
+            rejections=rejection_events,
+        )
+        strategy_summary_value = strategy_summary(
+            {
+                "alpha_checksum": alpha_for_strategy["checksum"],
+                "initial_cash_cny": strategy["initial_cash_cny"],
+                "checksum": strategy["checksum"],
+                "metrics": metrics,
+            }
+        )
+
+        entries = {
+            "strategy_daily_observations": {
+                "kind": "strategy_daily_observations",
+                **self.objects.put_parquet_rows(
+                    projected_daily,
+                    STRATEGY_DAILY_CONTRACT,
+                ),
+            },
+            "rebalance_aggregates": {
+                "kind": "rebalance_aggregates",
+                **self.objects.put_parquet_rows(
+                    projected_rebalances,
+                    REBALANCE_AGGREGATE_CONTRACT,
+                ),
+            },
+            "execution_aggregates": {
+                "kind": "execution_aggregates",
+                **self.objects.put_parquet_rows(
+                    projected_executions,
+                    EXECUTION_AGGREGATE_CONTRACT,
+                ),
+            },
+            "terminal_positions": {
+                "kind": "terminal_positions",
+                **self.objects.put_parquet_rows(
+                    strategy["positions"],
+                    TERMINAL_POSITION_CONTRACT,
+                ),
+            },
+        }
+        terminal_state = incremental_terminal_state(
+            strategy,
+            terminal,
+            definition,
+            len(processed_sessions),
+            entries["terminal_positions"],
+        )
+        for kind, value in (
+            ("factor_summary", factor_summary_value),
+            ("strategy_summary", strategy_summary_value),
+            ("terminal_strategy_state", terminal_state),
+        ):
+            entries[kind] = {
+                "kind": kind,
+                "format": "json",
+                **self.objects.put_json(value),
+            }
+        entries = {kind: entries[kind] for kind in sorted(entries)}
+
+        checkpoint_id = f"checkpoint_{uuid4().hex[:20]}"
+        now = datetime.now(UTC).isoformat()
+        manifest = {
+            "id": checkpoint_id,
+            "kind": "advance",
+            "daily_track_id": track["id"],
+            "generation_id": generation["id"],
+            "predecessor_checkpoint_id": head["id"],
+            "target_dataset_release_id": target["id"],
+            "processed_sessions": processed_sessions,
+            "tracking_origin": {
+                "session": track["origin_session"],
+                "activation_session": str(
+                    self.metadata.dataset_release(
+                        str(track["activation_release_id"])
+                    )["appended_session_range"]["end"]
+                ),
+            },
+            "definition": {
+                "id": frozen["id"],
+                "content_hash": frozen["content_hash"],
+            },
+            "alpha_calculation": {
+                "calculated_sessions": len(processed_sessions),
+                "maximum_lookback_sessions": parsed_alpha.effective_lookback,
+            },
+            "numeric_execution_contract": track["numeric_execution_contract"],
+            "calculation_kernel": generation["calculation_kernel"],
+            "runtime_build": RUNTIME_BUILD,
+            "basis_dataset_release_id": target["id"],
+            "supersedes_generation_id": None,
+            "supersedes_head_checkpoint_id": None,
+            "objects": entries,
+            "created_at": now,
+        }
+        manifest_object = self.objects.put_json(manifest)
+        self.objects.put_manifest(checkpoint_id, manifest)
+
+        retained = sorted(set(cached_pending) & set(pending))
+        newly_retained = {
+            session: [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "alpha": float(row["value"]),
+                }
+                for row in pending[session]
+            ]
+            for session in sorted(set(pending) - set(retained))
+        }
+        self.cache.commit_advance(
+            {
+                "daily_track_id": track["id"],
+                "generation_id": generation["id"],
+                "basis_checkpoint_id": checkpoint_id,
+                "basis_checkpoint_sha256": manifest_object["sha256"],
+                "definition_content_hash": frozen["content_hash"],
+                "calculation_kernel": generation["calculation_kernel"],
+                "numeric_execution_contract": track[
+                    "numeric_execution_contract"
+                ],
+                "basis_dataset_release_id": target["id"],
+                "fencing_token": int(basis["fencing_token"]) + 1,
+            },
+            retained_pending_sessions=retained,
+            new_pending_alpha=newly_retained,
+            rolling_factor=rolling_rows,
+        )
         return {
             "id": checkpoint_id,
             "manifest_sha256": manifest_object["sha256"],
@@ -1761,6 +2312,185 @@ def slice_canonical_range(
         for name, rows in copied["liquidity_universes"].items()
     }
     return copied
+
+
+def alpha_matrix_from_pending(
+    definition: dict[str, object],
+    pending: dict[str, list[dict[str, object]]],
+) -> dict[str, object]:
+    alpha = definition.get("alpha")
+    if not isinstance(alpha, dict):
+        raise DailyTrackingError("Alpha Definition is invalid")
+    matrix = {
+        "expression": str(alpha["expression"]),
+        "effective_lookback": validate_alpha(
+            str(alpha["expression"])
+        ).effective_lookback,
+        "neutralization": definition["neutralization"],
+        "sessions": [
+            {
+                "session": session,
+                "values": [
+                    {
+                        "instrument_id": str(row["instrument_id"]),
+                        "value": float(row["value"]),
+                    }
+                    for row in sorted(
+                        rows,
+                        key=lambda value: str(value["instrument_id"]),
+                    )
+                ],
+                "coverage_loss": {},
+            }
+            for session, rows in sorted(pending.items())
+        ],
+    }
+    matrix["checksum"] = alpha_matrix_checksum(matrix)
+    return matrix
+
+
+def rolling_factor_row(
+    session: str,
+    horizon: int,
+    metrics: dict[str, object],
+    *,
+    sample_count: int,
+) -> dict[str, object]:
+    quantiles = metrics["quantile_returns"]
+    if not isinstance(quantiles, dict):
+        raise DailyTrackingError("Factor quantile result is invalid")
+    return {
+        "session": session,
+        "horizon": horizon,
+        "sample_count": sample_count,
+        "ic": metrics["ic"],
+        "rank_ic": metrics["rank_ic"],
+        "q1": quantiles["q1"],
+        "q2": quantiles["q2"],
+        "q3": quantiles["q3"],
+        "q4": quantiles["q4"],
+        "q5": quantiles["q5"],
+        "top_bottom_return": metrics["top_bottom_return"],
+        "correlation_reason": metrics["correlation_reason"],
+        "quantile_reason": metrics["quantile_reason"],
+    }
+
+
+def rolling_factor_summary(
+    rolling_rows: list[dict[str, object]],
+) -> dict[str, object]:
+    horizons: dict[str, object] = {}
+    for horizon in HORIZONS:
+        daily = [
+            row for row in rolling_rows if int(row["horizon"]) == horizon
+        ]
+        daily.sort(key=lambda row: str(row["session"]))
+        correlation_reasons = Counter(
+            str(row["correlation_reason"])
+            for row in daily
+            if row["correlation_reason"] is not None
+        )
+        quantile_reasons = Counter(
+            str(row["quantile_reason"])
+            for row in daily
+            if row["quantile_reason"] is not None
+        )
+        summary = {
+            "ic": correlation_summary(daily, "ic"),
+            "rank_ic": correlation_summary(daily, "rank_ic"),
+            "quantile_returns": {
+                name: mean_or_none(
+                    [
+                        float(row[name])
+                        for row in daily
+                        if row[name] is not None
+                    ]
+                )
+                for name in ("q1", "q2", "q3", "q4", "q5")
+            },
+            "top_bottom_return": mean_or_none(
+                [
+                    float(row["top_bottom_return"])
+                    for row in daily
+                    if row["top_bottom_return"] is not None
+                ]
+            ),
+        }
+        source_checksum = hashlib.sha256(canonical_json_bytes(daily)).hexdigest()
+        horizons[str(horizon)] = {
+            "horizon": horizon,
+            "alpha_checksum": source_checksum,
+            "label_checksum": source_checksum,
+            "source_checksum": source_checksum,
+            "summary": summary,
+            "diagnostics": {
+                "session_count": len(daily),
+                "missing_session_count": sum(
+                    row["correlation_reason"] is not None
+                    or row["quantile_reason"] is not None
+                    for row in daily
+                ),
+                "correlation_reason_counts": dict(
+                    sorted(correlation_reasons.items())
+                ),
+                "quantile_reason_counts": dict(sorted(quantile_reasons.items())),
+            },
+        }
+    return {"horizons": horizons}
+
+
+def incremental_terminal_state(
+    strategy: dict[str, object],
+    prior_terminal: dict[str, object],
+    definition: dict[str, object],
+    processed_session_count: int,
+    positions_entry: dict[str, object],
+) -> dict[str, object]:
+    daily = strategy.get("daily")
+    if not isinstance(daily, list) or not daily:
+        raise DailyTrackingError("incremental Strategy state is empty")
+    terminal = daily[-1]
+    prior_phase = prior_terminal.get("rebalance_phase")
+    strategy_definition = definition.get("strategy")
+    if not isinstance(prior_phase, dict) or not isinstance(
+        strategy_definition,
+        dict,
+    ):
+        raise DailyTrackingError("Strategy Rebalance phase is invalid")
+    report_session_count = int(prior_phase["report_session_count"]) + (
+        processed_session_count
+    )
+    rebalance_interval = int(strategy_definition["rebalance_interval"])
+    pending_signal = (
+        {
+            "signal_session": str(terminal["session"]),
+            "execution": "next_research_session_open",
+        }
+        if (report_session_count - 1) % rebalance_interval == 0
+        else None
+    )
+    return {
+        "session": str(terminal["session"]),
+        "gross_cash": str(terminal["gross_cash"]),
+        "net_cash": str(terminal["net_cash"]),
+        "gross_nav": str(terminal["gross_nav"]),
+        "net_nav": str(terminal["net_nav"]),
+        "benchmark_nav": str(terminal["benchmark_nav"]),
+        "cumulative_transaction_cost": str(
+            terminal["cumulative_transaction_cost"]
+        ),
+        "rebalance_phase": {
+            "origin_session": prior_phase["origin_session"],
+            "report_session_count": report_session_count,
+            "rebalance_interval": rebalance_interval,
+            "completed_intervals": report_session_count - 1,
+        },
+        "pending_signal": pending_signal,
+        "positions_object": {
+            key: positions_entry[key]
+            for key in ("sha256", "bytes", "writer_contract_id")
+        },
+    }
 
 
 def first_divergence(actual: object, expected: object, path: str = "$") -> str:

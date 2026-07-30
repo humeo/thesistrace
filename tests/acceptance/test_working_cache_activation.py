@@ -141,6 +141,63 @@ def test_top3000_seed_shape_stays_below_the_cache_byte_limit(tmp_path: Path) -> 
     assert basis["rolling_factor"]["rows"] == 1_512
     assert cache.namespace_bytes("track_capacity") <= MAX_CACHE_BYTES
 
+    retained_entries = {
+        entry["session"]: entry for entry in basis["pending_alpha"][1:]
+    }
+    retained_inodes = {
+        session: (
+            tmp_path
+            / "working-cache"
+            / "tracks"
+            / "track_capacity"
+            / str(entry["path"])
+        ).stat().st_ino
+        for session, entry in retained_entries.items()
+    }
+    next_session_rows = [
+        {
+            "instrument_id": f"equity:{instrument:06d}.SZ",
+            "alpha": (instrument - 1_500) / 1_000,
+        }
+        for instrument in range(3_000)
+    ]
+    advanced_basis = cache.commit_advance(
+        {
+            "daily_track_id": "track_capacity",
+            "generation_id": "generation_capacity",
+            "basis_checkpoint_id": "checkpoint_capacity_next",
+            "basis_checkpoint_sha256": "3" * 64,
+            "definition_content_hash": "2" * 64,
+            "calculation_kernel": "kernel-v1",
+            "numeric_execution_contract": "thesistrace-numeric-v1",
+            "basis_dataset_release_id": "dsr_capacity_next",
+            "fencing_token": 2,
+        },
+        retained_pending_sessions=sorted(retained_entries),
+        new_pending_alpha={"2026-07-22": next_session_rows},
+        rolling_factor=rolling,
+    )
+    advanced_entries = {
+        entry["session"]: entry for entry in advanced_basis["pending_alpha"]
+    }
+    assert len(advanced_entries) == 21
+    assert cache.namespace_bytes("track_capacity") <= MAX_CACHE_BYTES
+    assert all(
+        advanced_entries[session]["sha256"] == retained_entries[session]["sha256"]
+        for session in retained_entries
+    )
+    assert all(
+        (
+            tmp_path
+            / "working-cache"
+            / "tracks"
+            / "track_capacity"
+            / str(advanced_entries[session]["path"])
+        ).stat().st_ino
+        == retained_inodes[session]
+        for session in retained_entries
+    )
+
 
 def test_concurrent_activation_atomically_enforces_ten_active_tracks(
     tmp_path: Path,

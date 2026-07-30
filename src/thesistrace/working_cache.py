@@ -139,6 +139,92 @@ class WorkingCacheStore:
             raise WorkingCacheError("Working Cache basis is invalid")
         return value
 
+    def commit_advance(
+        self,
+        coordinates: Mapping[str, object],
+        *,
+        retained_pending_sessions: Sequence[str],
+        new_pending_alpha: Mapping[str, Sequence[Mapping[str, object]]],
+        rolling_factor: Sequence[Mapping[str, object]],
+    ) -> dict[str, object]:
+        track_id = required_coordinate(coordinates, "daily_track_id")
+        current_basis = self.read_basis(track_id)
+        current_entries = current_basis.get("pending_alpha")
+        if not isinstance(current_entries, list):
+            raise WorkingCacheError("pending Alpha index is invalid")
+        retained = set(retained_pending_sessions)
+        if len(retained) + len(new_pending_alpha) > MAX_PENDING_ALPHA_SESSIONS:
+            raise WorkingCacheError("pending Alpha exceeds 21 sessions")
+        if len(rolling_factor) > MAX_ROLLING_FACTOR_ROWS:
+            raise WorkingCacheError("rolling Factor exceeds 1,512 rows")
+        indexed = {
+            str(entry["session"]): entry
+            for entry in current_entries
+            if isinstance(entry, dict)
+        }
+        if not retained <= set(indexed):
+            raise WorkingCacheError("retained Pending Alpha is missing from current cache")
+
+        destination = self._track_path(track_id)
+        staging = self.root / ".staging" / f"{track_id}-{uuid4().hex}"
+        backup = self.root / ".staging" / f"{track_id}-old-{uuid4().hex}"
+        staging.mkdir(parents=True, exist_ok=False)
+        replaced = False
+        try:
+            pending_entries: list[dict[str, object]] = []
+            for session in sorted(retained):
+                entry = dict(indexed[session])
+                source = destination / str(entry["path"])
+                target = staging / str(entry["path"])
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.link(source, target)
+                pending_entries.append(entry)
+            for session, rows in sorted(new_pending_alpha.items()):
+                if session in retained:
+                    raise WorkingCacheError("new Pending Alpha duplicates a retained session")
+                entry = self._write_parquet(
+                    staging,
+                    f"pending/{session}",
+                    rows,
+                    PENDING_ALPHA_CONTRACT,
+                )
+                pending_entries.append({"session": session, **entry})
+            pending_entries.sort(key=lambda entry: str(entry["session"]))
+            rolling_entry = self._write_parquet(
+                staging,
+                "rolling-factor",
+                rolling_factor,
+                ROLLING_FACTOR_CONTRACT,
+            )
+            basis = self._basis(
+                coordinates,
+                pending_entries,
+                rolling_entry,
+            )
+            (staging / "basis.json").write_bytes(canonical_json_bytes(basis))
+            total_bytes = directory_bytes(staging)
+            if total_bytes > MAX_CACHE_BYTES:
+                raise WorkingCacheError(
+                    f"Working Cache advance is {total_bytes} bytes; limit is {MAX_CACHE_BYTES}"
+                )
+            os.replace(destination, backup)
+            replaced = True
+            try:
+                os.replace(staging, destination)
+            except Exception:
+                os.replace(backup, destination)
+                replaced = False
+                raise
+            shutil.rmtree(backup, ignore_errors=True)
+            replaced = False
+            return basis
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            if replaced and backup.exists() and not destination.exists():
+                os.replace(backup, destination)
+            shutil.rmtree(backup, ignore_errors=True)
+            raise
+
     def read_pending_alpha(
         self,
         track_id: str,
@@ -182,6 +268,33 @@ class WorkingCacheStore:
         if not track_id or "/" in track_id or track_id in {".", ".."}:
             raise WorkingCacheError("DailyTrack id is not path-safe")
         return self.root / "tracks" / track_id
+
+    @staticmethod
+    def _basis(
+        coordinates: Mapping[str, object],
+        pending_entries: Sequence[Mapping[str, object]],
+        rolling_entry: Mapping[str, object],
+    ) -> dict[str, object]:
+        basis = {
+            key: coordinates[key]
+            for key in (
+                "daily_track_id",
+                "generation_id",
+                "basis_checkpoint_id",
+                "basis_checkpoint_sha256",
+                "definition_content_hash",
+                "calculation_kernel",
+                "numeric_execution_contract",
+                "basis_dataset_release_id",
+                "fencing_token",
+            )
+        }
+        basis["pending_alpha"] = [dict(entry) for entry in pending_entries]
+        basis["rolling_factor"] = dict(rolling_entry)
+        basis["payload_bytes"] = sum(
+            int(entry["bytes"]) for entry in pending_entries
+        ) + int(rolling_entry["bytes"])
+        return basis
 
     @staticmethod
     def _write_parquet(
@@ -228,3 +341,7 @@ def required_coordinate(coordinates: Mapping[str, object], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise WorkingCacheError(f"Working Cache coordinate is missing {key}")
     return value
+
+
+def directory_bytes(path: Path) -> int:
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())

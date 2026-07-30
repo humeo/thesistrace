@@ -8,6 +8,7 @@ from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
+from thesistrace.result_objects import STRATEGY_DAILY_CONTRACT
 from thesistrace.storage import MetadataStore
 from thesistrace.tracking import DailyTrackingError, DailyTrackingService
 
@@ -204,8 +205,14 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
             ).json()["id"]
             == current["head"]["id"]
         )
-        assert len(current_view["factor_summary"]["horizons"]["1"]["daily"]) == 504
-        assert current_view["recent_label_maturation"]["events"]
+        assert (
+            current_view["factor_summary"]["horizons"]["1"]["diagnostics"][
+                "session_count"
+            ]
+            == 504
+        )
+        assert "daily" not in current_view["factor_summary"]["horizons"]["1"]
+        assert current_view["recent_label_maturation"]["events"] == []
         head_manifest = objects.read_json(current["head"]["manifest_sha256"])
         assert head_manifest["processed_sessions"] == [
             "2026-07-30",
@@ -213,29 +220,14 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
             "2026-08-03",
         ]
         assert head_manifest["predecessor_checkpoint_id"] == track["head"]["id"]
-        strategy = objects.read_json(head_manifest["objects"]["strategy_backtest"]["sha256"])
-        assert len(strategy["daily"]) == 507
-        maturations = objects.read_json(head_manifest["objects"]["label_maturation"]["sha256"])
-        assert maturations["events"]
-        assert {event["horizon"] for event in maturations["events"]} == {1, 5, 20}
-        assert all(
-            event["basis_dataset_release_id"] == catchup_release["id"]
-            for event in maturations["events"]
-        )
-        canonical = DatasetPublisher(
-            MetadataStore(settings.metadata_path),
-            objects,
-        ).materialize_canonical(catchup_release)
-        calendar = canonical["research_calendar"]
-        assert all(
-            calendar.index(event["maturity_session"]) - calendar.index(event["signal_session"])
-            == event["horizon"] + 1
-            for event in maturations["events"]
-        )
-        factor_history = objects.read_json(head_manifest["objects"]["factor_evaluation"]["sha256"])
-        factor_summary = objects.read_json(head_manifest["objects"]["factor_summary"]["sha256"])
-        assert len(factor_history["horizons"]["1"]["daily"]) == 507
-        assert len(factor_summary["horizons"]["1"]["daily"]) == 504
+        strategy_delta = objects.read_parquet(
+            head_manifest["objects"]["strategy_daily_observations"]["sha256"],
+            STRATEGY_DAILY_CONTRACT,
+        ).to_pylist()
+        assert len(strategy_delta) == 3
+        assert len(current_view["strategy"]["daily"]) == 507
+        assert "forward_labels" not in head_manifest["objects"]
+        assert "factor_evaluation" not in head_manifest["objects"]
         assert (
             client.post(f"/api/v1/daily-tracks/{track_id}/verify-equivalence").json()["status"]
             == "equivalent"

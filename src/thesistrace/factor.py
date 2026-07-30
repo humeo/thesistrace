@@ -1,6 +1,7 @@
 import hashlib
 import math
 from collections import Counter
+from collections.abc import Sequence
 from statistics import stdev
 
 from thesistrace.objects import canonical_json_bytes
@@ -17,6 +18,8 @@ def build_forward_labels(
     alpha_matrix: dict[str, object],
     *,
     report_sessions: int = 504,
+    signal_sessions: Sequence[str] | None = None,
+    horizons: Sequence[int] = HORIZONS,
 ) -> dict[str, object]:
     calendar = [str(value) for value in canonical["research_calendar"]]
     prices = {(str(row["session"]), str(row["instrument_id"])): row for row in canonical["prices"]}
@@ -26,12 +29,16 @@ def build_forward_labels(
     }
     instruments = {str(row["instrument_id"]): row for row in canonical["instruments"]}
     alpha_by_session = {str(item["session"]): item for item in alpha_matrix["sessions"]}
-    report_start = max(0, len(calendar) - report_sessions)
-    horizons: dict[str, object] = {}
-    for horizon in HORIZONS:
+    selected_sessions = (
+        calendar[max(0, len(calendar) - report_sessions) :]
+        if signal_sessions is None
+        else [str(session) for session in signal_sessions]
+    )
+    horizon_results: dict[str, object] = {}
+    for horizon in horizons:
         sessions: list[dict[str, object]] = []
-        for signal_index in range(report_start, len(calendar)):
-            signal_session = calendar[signal_index]
+        for signal_session in selected_sessions:
+            signal_index = calendar.index(signal_session)
             alpha_values = list(alpha_by_session[signal_session]["values"])
             samples: list[dict[str, object]] = []
             resolutions: list[dict[str, object]] = []
@@ -136,14 +143,14 @@ def build_forward_labels(
                 }
             )
         horizon_payload = {"horizon": horizon, "sessions": sessions}
-        horizons[str(horizon)] = {
+        horizon_results[str(horizon)] = {
             **horizon_payload,
             "checksum": hashlib.sha256(canonical_json_bytes(horizon_payload)).hexdigest(),
         }
     return {
         "alpha_checksum": alpha_matrix["checksum"],
-        "report_session_count": min(report_sessions, len(calendar)),
-        "horizons": horizons,
+        "report_session_count": len(selected_sessions),
+        "horizons": horizon_results,
     }
 
 
