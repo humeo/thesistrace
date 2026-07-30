@@ -1,5 +1,3 @@
-from collections.abc import Sequence
-
 import psycopg
 from psycopg import sql
 
@@ -46,7 +44,7 @@ class PostgresExecutionOutbox:
         return bool(row and row["marked"])
 
 
-def require_research_entry(entry: dict[str, str]) -> Sequence[str]:
-    if entry["resource_kind"] != "research_run":
+def require_research_entry(entry: dict[str, str]) -> tuple[str, str, str]:
+    if entry["resource_kind"] not in {"research_run", "research_run_cancel"}:
         raise ValueError(f"unsupported execution resource: {entry['resource_kind']}")
-    return entry["workspace_id"], entry["resource_id"]
+    return entry["resource_kind"], entry["workspace_id"], entry["resource_id"]

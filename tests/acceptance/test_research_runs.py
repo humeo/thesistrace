@@ -1,7 +1,9 @@
 import hashlib
+from contextlib import contextmanager
 from pathlib import Path
 
 import pyarrow.parquet as pq
+import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
@@ -245,7 +247,8 @@ def test_attempt_retry_cancel_fence_and_rerun_preserve_inputs(tmp_path: Path) ->
         assert failed_attempt["status"] == "failed"
         assert failed_attempt["diagnostic"] == {
             "reason_code": "TRANSIENT_FAILURE",
-            "message": "temporary worker failure",
+            "message": "temporary research infrastructure failure",
+            "correlation_id": failed_attempt["id"],
         }
 
         completed = service(settings).execute(run_id)
@@ -294,6 +297,7 @@ def test_attempt_retry_cancel_fence_and_rerun_preserve_inputs(tmp_path: Path) ->
         assert set(
             (settings.object_root / "manifests").glob("result_*.json")
         ) == manifests_before_fence
+        assert not (settings.object_root / "staging" / fenced["id"]).exists()
 
         abandoned = client.post(
             f"/api/v1/research-runs/{run_id}/rerun",
@@ -327,6 +331,7 @@ def test_oversized_complete_result_fails_without_publishing_a_bundle(
     )
     with TestClient(create_app(settings)) as client:
         requested = setup_run(client, key="oversized-run")
+    objects_before = set((settings.object_root / "sha256").rglob("*.*"))
 
     def oversized_result(
         canonical: dict[str, object],
@@ -356,3 +361,95 @@ def test_oversized_complete_result_fails_without_publishing_a_bundle(
     )
     manifest_root = settings.object_root / "manifests"
     assert not manifest_root.exists() or not list(manifest_root.glob("result_*.json"))
+    assert set((settings.object_root / "sha256").rglob("*.*")) == objects_before
+
+
+def test_commit_response_loss_keeps_the_committed_result_bundle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        metadata_path=tmp_path / "metadata.sqlite3",
+        object_root=tmp_path / "objects",
+    )
+    with TestClient(create_app(settings)) as client:
+        requested = setup_run(client, key="commit-response-loss")
+    runner = service(settings)
+    publish = runner.metadata.publish_research_run_success
+
+    def commit_then_disconnect(**kwargs) -> bool:
+        assert publish(**kwargs) is True
+        raise ConnectionError("commit response was lost")
+
+    monkeypatch.setattr(
+        runner.metadata,
+        "publish_research_run_success",
+        commit_then_disconnect,
+    )
+
+    completed = runner.execute(requested["run"]["id"])
+
+    assert completed["status"] == "succeeded"
+    assert runner.result_view(requested["run"]["id"]) is not None
+    assert not (
+        settings.object_root / "staging" / requested["run"]["id"]
+    ).exists()
+
+
+def test_recovery_reloads_committed_run_after_acquiring_publication_guard(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = Settings(
+        metadata_path=tmp_path / "metadata.sqlite3",
+        object_root=tmp_path / "objects",
+    )
+    with TestClient(create_app(settings)) as client:
+        requested = setup_run(client, key="commit-before-recovery-lock")
+    runner = service(settings)
+    run_id = str(requested["run"]["id"])
+    claimed = runner.metadata.claim_research_run(run_id)
+    assert claimed is not None
+    attempt_id = str(claimed[1]["id"])
+    result_bundle_id = "result-commit-before-recovery-lock"
+    manifest = {"id": result_bundle_id}
+
+    with pytest.raises(RuntimeError, match="process stopped after install"):
+        with runner.objects.stage(run_id, attempt_id) as staged:
+            manifest_object = staged.put_json(manifest)
+            staged.put_manifest(result_bundle_id, manifest)
+            with staged.publication(
+                manifest_sha256=str(manifest_object["sha256"])
+            ):
+                raise RuntimeError("process stopped after install")
+
+    original_guard = runner.objects.publication_guard
+    published = False
+
+    @contextmanager
+    def publish_before_guard(guarded_run_id: str):
+        nonlocal published
+        if not published:
+            published = True
+            assert runner.metadata.publish_research_run_success(
+                run_id=run_id,
+                attempt_id=attempt_id,
+                result_bundle_id=result_bundle_id,
+                result_manifest_sha256=str(manifest_object["sha256"]),
+            )
+        with original_guard(guarded_run_id):
+            yield
+
+    monkeypatch.setattr(
+        runner.objects,
+        "publication_guard",
+        publish_before_guard,
+    )
+
+    completed = runner.execute(run_id)
+
+    assert completed["status"] == "succeeded"
+    assert (
+        settings.object_root / "manifests" / f"{result_bundle_id}.json"
+    ).exists()
+    assert not (settings.object_root / "staging" / run_id).exists()

@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from contextlib import AbstractContextManager
 from typing import Protocol
 
 import pyarrow as pa
@@ -12,7 +13,7 @@ class ControlMetadataPort(Protocol):
     def connect(self): ...
 
 
-class ObjectStorePort(Protocol):
+class ObjectWriterPort(Protocol):
     def put_json(self, value: object) -> dict[str, object]: ...
 
     def put_parquet_rows(
@@ -22,6 +23,27 @@ class ObjectStorePort(Protocol):
     ) -> dict[str, object]: ...
 
     def put_manifest(self, resource_id: str, value: object) -> None: ...
+
+
+class ObjectStoreStagePort(ObjectWriterPort, Protocol):
+    def __enter__(self) -> "ObjectStoreStagePort": ...
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None: ...
+
+    def publication(self, *, manifest_sha256: str) -> AbstractContextManager[None]: ...
+
+
+class ObjectStorePort(ObjectWriterPort, Protocol):
+    def stage(self, run_id: str, attempt_id: str) -> ObjectStoreStagePort: ...
+
+    def publication_guard(self, run_id: str) -> AbstractContextManager[None]: ...
+
+    def recover_staged_publication(
+        self,
+        run_id: str,
+        *,
+        committed_manifest_sha256: str | None,
+    ) -> None: ...
 
     def read_json(self, digest: str) -> object: ...
 

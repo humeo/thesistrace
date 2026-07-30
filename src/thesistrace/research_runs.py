@@ -1,13 +1,20 @@
 import hashlib
 import json
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+from thesistrace.activity_contract import (
+    MAX_AUTOMATIC_ACTIVITY_EXECUTIONS,
+    CooperativeActivityCancellation,
+    is_resource_exhaustion,
+    should_retry_resource_exhaustion,
+)
 from thesistrace.alpha import evaluate_alpha_matrix
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.objects import canonical_json_bytes
-from thesistrace.ports import ControlMetadataPort, ObjectStorePort
+from thesistrace.ports import ControlMetadataPort, ObjectStorePort, ObjectWriterPort
 from thesistrace.result_objects import (
     CompactResultError,
     publish_compact_result_objects,
@@ -17,14 +24,41 @@ from thesistrace.strategy import run_strategy
 
 RUNTIME_BUILD = {"package": "thesistrace", "version": "0.1.0"}
 MAX_RESULT_BUNDLE_BYTES = 1_048_576
+logger = logging.getLogger(__name__)
 Calculator = Callable[
     [dict[str, object], dict[str, object]],
     dict[str, dict[str, object]],
 ]
+Progress = Callable[[str], None]
 
 
 class TransientResearchRunError(RuntimeError):
     pass
+
+
+class ResearchPublicationFenced(RuntimeError):
+    pass
+
+
+def recover_staged_research_run(
+    metadata: ControlMetadataPort,
+    objects: ObjectStorePort,
+    run_id: str,
+) -> dict[str, object]:
+    with objects.publication_guard(run_id):
+        current = metadata.research_run(run_id)
+        if current is None:
+            raise KeyError(run_id)
+        digest = current.get("result_manifest_sha256")
+        objects.recover_staged_publication(
+            run_id,
+            committed_manifest_sha256=(
+                str(digest)
+                if current["status"] == "succeeded" and isinstance(digest, str)
+                else None
+            ),
+        )
+        return current
 
 
 class ResearchRunService:
@@ -35,20 +69,24 @@ class ResearchRunService:
         objects: ObjectStorePort,
         *,
         calculator: Calculator | None = None,
+        progress: Progress | None = None,
     ) -> None:
         self.metadata = metadata
         self.datasets = datasets
         self.objects = objects
         self.calculator = calculator or calculate_research
+        self.progress = progress or (lambda _stage: None)
 
     def execute_next(self) -> dict[str, object] | None:
         run_id = self.metadata.next_queued_research_run_id()
         return None if run_id is None else self.execute(run_id)
 
     def execute(self, run_id: str) -> dict[str, object]:
-        current = self.metadata.research_run(run_id)
-        if current is None:
-            raise KeyError(run_id)
+        current = recover_staged_research_run(
+            self.metadata,
+            self.objects,
+            run_id,
+        )
         if current["status"] in {"succeeded", "failed", "cancelled"}:
             return current
         claimed = self.metadata.claim_research_run(run_id)
@@ -59,62 +97,132 @@ class ResearchRunService:
             return latest
         run, attempt = claimed
         attempt_id = str(attempt["id"])
+        ordinal = int(attempt["ordinal"])
         try:
+            self.progress("claimed")
             frozen = self.metadata.frozen_research_definition(str(run["definition_version_id"]))
             release = self.metadata.dataset_release(str(run["dataset_release_id"]))
             if frozen is None or release is None:
                 raise RuntimeError("ResearchRun input metadata is missing")
             canonical = research_input_history(self.datasets.materialize_canonical(release))
+            self.progress("inputs_loaded")
             content = frozen["content"]
             if not isinstance(content, dict):
                 raise RuntimeError("frozen Research Definition is invalid")
             artifacts = self.calculator(canonical, content)
-            manifest, manifest_object = self.publish_result_objects(
-                run=run,
-                frozen=frozen,
-                release=release,
-                artifacts=artifacts,
-            )
-            published = self.metadata.publish_research_run_success(
-                run_id=run_id,
-                attempt_id=attempt_id,
-                result_bundle_id=str(manifest["id"]),
-                result_manifest_sha256=str(manifest_object["sha256"]),
-            )
-            if not published:
+            self.progress("calculated")
+            with self.objects.publication_guard(run_id):
                 latest = self.metadata.research_run(run_id)
                 if latest is None:
                     raise KeyError(run_id)
-                return latest
-            self.objects.put_manifest(str(manifest["id"]), manifest)
-        except TransientResearchRunError as error:
-            return self.metadata.finish_research_run_attempt(
+                if latest["status"] != "running":
+                    return latest
+                try:
+                    with self.objects.stage(run_id, attempt_id) as staged_objects:
+                        manifest, manifest_object = self.publish_result_objects(
+                            objects=staged_objects,
+                            run=run,
+                            frozen=frozen,
+                            release=release,
+                            artifacts=artifacts,
+                        )
+                        staged_objects.put_manifest(str(manifest["id"]), manifest)
+                        with staged_objects.publication(
+                            manifest_sha256=str(manifest_object["sha256"])
+                        ):
+                            published = self.metadata.publish_research_run_success(
+                                run_id=run_id,
+                                attempt_id=attempt_id,
+                                result_bundle_id=str(manifest["id"]),
+                                result_manifest_sha256=str(
+                                    manifest_object["sha256"]
+                                ),
+                            )
+                            if not published:
+                                raise ResearchPublicationFenced
+                except ResearchPublicationFenced:
+                    self.objects.recover_staged_publication(
+                        run_id,
+                        committed_manifest_sha256=None,
+                    )
+                    latest = self.metadata.research_run(run_id)
+                    if latest is None:
+                        raise KeyError(run_id) from None
+                    return latest
+        except CooperativeActivityCancellation:
+            self.metadata.acknowledge_research_run_cancellation(
                 run_id=run_id,
                 attempt_id=attempt_id,
-                retryable=True,
+            )
+            return self._recover_staged_for_run(run_id)
+        except TransientResearchRunError as error:
+            logger.warning(
+                "Research Activity transient failure run_id=%s attempt_id=%s error_type=%s",
+                run_id,
+                attempt_id,
+                type(error).__name__,
+            )
+            self.metadata.finish_research_run_attempt(
+                run_id=run_id,
+                attempt_id=attempt_id,
+                retryable=ordinal < MAX_AUTOMATIC_ACTIVITY_EXECUTIONS,
                 diagnostic={
                     "reason_code": "TRANSIENT_FAILURE",
-                    "message": str(error),
+                    "message": "temporary research infrastructure failure",
+                    "correlation_id": attempt_id,
                 },
             )
+            return self._recover_staged_for_run(run_id)
         except Exception as error:
-            return self.metadata.finish_research_run_attempt(
+            latest = self.metadata.research_run(run_id)
+            if latest is not None and latest["status"] == "succeeded":
+                return self._recover_staged_for_run(run_id)
+            resource_exhausted = is_resource_exhaustion(error)
+            reason_code = (
+                "RESOURCE_EXHAUSTED"
+                if resource_exhausted
+                else "CALCULATION_FAILED"
+            )
+            retryable = resource_exhausted and should_retry_resource_exhaustion(
+                ordinal
+            )
+            logger.error(
+                "Research Activity failed run_id=%s attempt_id=%s error_type=%s reason_code=%s",
+                run_id,
+                attempt_id,
+                type(error).__name__,
+                reason_code,
+            )
+            self.metadata.finish_research_run_attempt(
                 run_id=run_id,
                 attempt_id=attempt_id,
-                retryable=False,
+                retryable=retryable,
                 diagnostic={
-                    "reason_code": "CALCULATION_FAILED",
-                    "message": str(error),
+                    "reason_code": reason_code,
+                    "message": (
+                        "accepted activity resource envelope was exhausted"
+                        if resource_exhausted
+                        else "research calculation failed"
+                    ),
+                    "correlation_id": attempt_id,
                 },
             )
+            return self._recover_staged_for_run(run_id)
         completed = self.metadata.research_run(run_id)
         if completed is None:
             raise KeyError(run_id)
         return completed
 
+    def _recover_staged_for_run(
+        self,
+        run_id: str,
+    ) -> dict[str, object]:
+        return recover_staged_research_run(self.metadata, self.objects, run_id)
+
     def publish_result_objects(
         self,
         *,
+        objects: ObjectWriterPort,
         run: dict[str, object],
         frozen: dict[str, object],
         release: dict[str, object],
@@ -135,7 +243,7 @@ class ResearchRunService:
         if not isinstance(content, dict):
             raise RuntimeError("frozen Research Definition is invalid")
         object_entries = publish_compact_result_objects(
-            self.objects,
+            objects,
             artifacts,
             content,
         )
@@ -192,16 +300,18 @@ class ResearchRunService:
             raise RuntimeError(
                 "complete Result Bundle exceeds the 1,048,576 byte limit"
             )
-        manifest_object = self.objects.put_json(manifest)
+        manifest_object = objects.put_json(manifest)
         return manifest, manifest_object
 
     def result_view(self, run_id: str) -> dict[str, object] | None:
-        run = self.metadata.research_run(run_id)
-        if run is None:
-            raise KeyError(run_id)
+        run = recover_staged_research_run(
+            self.metadata,
+            self.objects,
+            run_id,
+        )
+        digest = run.get("result_manifest_sha256")
         if run["status"] != "succeeded":
             return None
-        digest = run["result_manifest_sha256"]
         if not isinstance(digest, str):
             raise RuntimeError("successful ResearchRun has no Result Manifest")
         manifest = self.objects.read_json(digest)

@@ -26,7 +26,10 @@ from thesistrace.provisioning import (
     RegistrationService,
     build_registration_service,
 )
-from thesistrace.research_runs import ResearchRunService
+from thesistrace.research_runs import (
+    ResearchRunService,
+    recover_staged_research_run,
+)
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
 from thesistrace.tenancy import authenticated_subject
@@ -585,6 +588,8 @@ def create_app(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
             )
+        if run["status"] == "cancelled":
+            run = recover_staged_research_run(store, objects, run_id)
         return (
             public_research_run_view(run)
             if settings.runtime_mode == "hosted"

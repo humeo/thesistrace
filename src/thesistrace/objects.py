@@ -1,8 +1,11 @@
+import fcntl
 import hashlib
 import json
 import math
 import os
-from collections.abc import Mapping, Sequence
+import shutil
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
@@ -139,8 +142,78 @@ class ImmutableObjectStore:
         if destination.exists():
             return
         temporary = destination.with_name(f".{destination.name}.{uuid4()}.tmp")
-        temporary.write_bytes(canonical_json_bytes(value))
-        os.replace(temporary, destination)
+        try:
+            temporary.write_bytes(canonical_json_bytes(value))
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def stage(self, run_id: str, attempt_id: str) -> "StagedObjectStore":
+        return StagedObjectStore(self, run_id=run_id, attempt_id=attempt_id)
+
+    @contextmanager
+    def publication_guard(self, run_id: str) -> Iterator[None]:
+        staging_root = self.root / "staging"
+        staging_root.mkdir(parents=True, exist_ok=True)
+        lock_bucket = hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:2]
+        with (staging_root / f".run-{lock_bucket}.lock").open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def recover_staged_publication(
+        self,
+        run_id: str,
+        *,
+        committed_manifest_sha256: str | None,
+    ) -> None:
+        staging_root = self.root / "staging"
+        if not staging_root.exists():
+            return
+        lock_path = staging_root / ".publication.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as publication_lock:
+            fcntl.flock(publication_lock.fileno(), fcntl.LOCK_EX)
+            try:
+                run_root = staging_root / run_id
+                for stage_root in sorted(run_root.glob("*")):
+                    stage_lock_path = stage_root / ".stage.lock"
+                    with stage_lock_path.open("a+b") as stage_lock:
+                        try:
+                            fcntl.flock(
+                                stage_lock.fileno(),
+                                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                            )
+                        except BlockingIOError:
+                            continue
+                        journal_path = stage_root / ".publication.json"
+                        if journal_path.exists():
+                            journal = _read_stage_json(journal_path)
+                            if (
+                                journal.get("manifest_sha256")
+                                != committed_manifest_sha256
+                            ):
+                                self._remove_uncommitted_private_paths(journal)
+                        shutil.rmtree(stage_root, ignore_errors=True)
+                if run_root.exists() and not any(run_root.iterdir()):
+                    run_root.rmdir()
+            finally:
+                fcntl.flock(publication_lock.fileno(), fcntl.LOCK_UN)
+
+    def _remove_uncommitted_private_paths(
+        self,
+        journal: dict[str, object],
+    ) -> None:
+        private_paths = journal.get("private_paths")
+        if not isinstance(private_paths, list):
+            raise ParquetContractError("staged publication journal is invalid")
+        for relative in reversed(private_paths):
+            if not isinstance(relative, str):
+                raise ParquetContractError("staged publication path is invalid")
+            destination = self.root / relative
+            destination.unlink(missing_ok=True)
 
     def path_for(self, digest: str) -> Path:
         return self.root / "sha256" / digest[:2] / f"{digest}.json"
@@ -174,9 +247,125 @@ class ImmutableObjectStore:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if not destination.exists():
             temporary = destination.with_name(f".{destination.name}.{uuid4()}.tmp")
-            temporary.write_bytes(payload)
-            os.replace(temporary, destination)
+            try:
+                temporary.write_bytes(payload)
+                os.replace(temporary, destination)
+            finally:
+                temporary.unlink(missing_ok=True)
         return digest
+
+
+class StagedObjectStore:
+    def __init__(
+        self,
+        destination: ImmutableObjectStore,
+        *,
+        run_id: str,
+        attempt_id: str,
+    ) -> None:
+        self.destination = destination
+        self.run_id = run_id
+        self.attempt_id = attempt_id
+        self.stage_lock = None
+        self.promotion_started = False
+        self.promotion_resolved = False
+        self.writer = ImmutableObjectStore(
+            destination.root / "staging" / run_id / attempt_id
+        )
+        self.root = self.writer.root
+
+    def __enter__(self) -> "StagedObjectStore":
+        self.root.mkdir(parents=True, exist_ok=True)
+        _write_stage_json(
+            self.root / ".stage.json",
+            {"run_id": self.run_id, "attempt_id": self.attempt_id},
+        )
+        self.stage_lock = (self.root / ".stage.lock").open("a+b")
+        fcntl.flock(self.stage_lock.fileno(), fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, _type, _value, _traceback) -> None:
+        if not self.promotion_started or self.promotion_resolved:
+            shutil.rmtree(self.root, ignore_errors=True)
+        if self.stage_lock is not None:
+            fcntl.flock(self.stage_lock.fileno(), fcntl.LOCK_UN)
+            self.stage_lock.close()
+            self.stage_lock = None
+
+    def put_json(self, value: object) -> dict[str, object]:
+        return self.writer.put_json(value)
+
+    def put_parquet_rows(
+        self,
+        rows: Sequence[Mapping[str, object]],
+        contract: ParquetWriterContract,
+    ) -> dict[str, object]:
+        return self.writer.put_parquet_rows(rows, contract)
+
+    def put_manifest(self, resource_id: str, value: object) -> None:
+        self.writer.put_manifest(resource_id, value)
+
+    @contextmanager
+    def publication(self, *, manifest_sha256: str) -> Iterator[None]:
+        self.destination.root.mkdir(parents=True, exist_ok=True)
+        lock_path = self.destination.root / "staging" / ".publication.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                sources = sorted(
+                    path
+                    for path in self.root.rglob("*")
+                    if path.is_file() and not path.name.startswith(".")
+                )
+                private_paths = [
+                    str(source.relative_to(self.root))
+                    for source in sources
+                    if source.relative_to(self.root).parts[0] == "manifests"
+                    if not (
+                        self.destination.root / source.relative_to(self.root)
+                    ).exists()
+                ]
+                journal = {
+                    "run_id": self.run_id,
+                    "attempt_id": self.attempt_id,
+                    "manifest_sha256": manifest_sha256,
+                    "private_paths": private_paths,
+                }
+                _write_stage_json(self.root / ".publication.json", journal)
+                self.promotion_started = True
+                for source in sources:
+                    destination = self.destination.root / source.relative_to(self.root)
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    if destination.exists():
+                        continue
+                    os.replace(source, destination)
+                yield
+                self.promotion_resolved = True
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+
+def _read_stage_json(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ParquetContractError("staged publication metadata is invalid") from error
+    if not isinstance(value, dict):
+        raise ParquetContractError("staged publication metadata is invalid")
+    return value
+
+
+def _write_stage_json(path: Path, value: dict[str, object]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("wb") as output:
+            output.write(canonical_json_bytes(value))
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def parquet_bytes(

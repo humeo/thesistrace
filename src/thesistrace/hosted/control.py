@@ -50,6 +50,17 @@ class PostgresConnectionAdapter:
     def rollback(self) -> None:
         self.connection.rollback()
 
+    def lock_research_run(self, run_id: str) -> HybridRow | None:
+        return self.connection.execute(
+            """
+            SELECT status
+            FROM thesistrace_product.research_runs
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (run_id,),
+        ).fetchone()
+
 
 class PostgresControlMetadataStore(MetadataStore):
     def __init__(self, database_url: str, *, database_role: str) -> None:
@@ -100,6 +111,23 @@ class PostgresControlMetadataStore(MetadataStore):
             VALUES (?, 'research_run', ?, 'pending', ?)
             """,
             (f"outbox_{run_id}", run_id, created_at),
+        )
+
+    def _enqueue_research_run_cancellation(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        run_id: str,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO execution_outbox
+                (id, resource_kind, resource_id, status, created_at)
+            VALUES (?, 'research_run_cancel', ?, 'pending', ?)
+            ON CONFLICT (workspace_id, resource_kind, resource_id) DO NOTHING
+            """,
+            (f"cancel_{run_id}", run_id, created_at),
         )
 
 

@@ -718,6 +718,93 @@ class MetadataStore:
         """Hosted stores override this transaction hook to write the execution outbox."""
         del connection, run_id, created_at
 
+    def _enqueue_research_run_cancellation(
+        self,
+        connection,
+        *,
+        run_id: str,
+        created_at: str,
+    ) -> None:
+        """Hosted stores override this transaction hook to deliver cancellation."""
+        del connection, run_id, created_at
+
+    @staticmethod
+    def _lock_research_run(connection, run_id: str):
+        lock_research_run = getattr(connection, "lock_research_run", None)
+        if callable(lock_research_run):
+            return lock_research_run(run_id)
+        return connection.execute(
+            "SELECT status FROM research_runs WHERE id = ?",
+            (run_id,),
+        ).fetchone()
+
+    def _transition_research_run(
+        self,
+        connection,
+        *,
+        run_id: str,
+        allowed_statuses: set[str],
+        next_status: str,
+        attempt_status: str,
+        diagnostic_json: str,
+        now: str,
+        attempt_id: str | None = None,
+    ) -> bool:
+        run = self._lock_research_run(connection, run_id)
+        if run is None:
+            raise KeyError(run_id)
+        current_status = str(run["status"])
+        if attempt_id is not None:
+            attempt = connection.execute(
+                """
+                SELECT id
+                FROM research_run_attempts
+                WHERE id = ? AND run_id = ?
+                """,
+                (attempt_id, run_id),
+            ).fetchone()
+            if attempt is None:
+                raise KeyError(attempt_id)
+        if current_status not in allowed_statuses:
+            return False
+        attempt_filter = "" if attempt_id is None else " AND id = ?"
+        attempt_parameters: tuple[object, ...] = (
+            attempt_status,
+            now,
+            now,
+            diagnostic_json,
+            run_id,
+        )
+        if attempt_id is not None:
+            attempt_parameters += (attempt_id,)
+        connection.execute(
+            f"""
+            UPDATE research_run_attempts
+            SET status = ?, completed_at = ?, heartbeat_at = ?,
+                diagnostic_json = ?
+            WHERE run_id = ? AND status = 'running'
+              {attempt_filter}
+            """,
+            attempt_parameters,
+        )
+        updated = connection.execute(
+            """
+            UPDATE research_runs
+            SET status = ?, updated_at = ?, completed_at = ?
+            WHERE id = ? AND status = ?
+            """,
+            (
+                next_status,
+                now,
+                None if next_status == "queued" else now,
+                run_id,
+                current_status,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError("ResearchRun transition fence failed")
+        return True
+
     def frozen_research_definition(self, version_id: str) -> dict[str, object] | None:
         with self.connect() as connection:
             row = connection.execute(
@@ -857,6 +944,60 @@ class MetadataStore:
                 )
         return run_ids
 
+    def prepare_research_run_redelivery(self, run_id: str) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = json.dumps(
+            {
+                "reason_code": "ACTIVITY_REDELIVERED",
+                "message": "the prior Activity delivery ended before publication",
+                "correlation_id": run_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._transition_research_run(
+                connection,
+                run_id=run_id,
+                allowed_statuses={"running"},
+                next_status="queued",
+                attempt_status="failed",
+                diagnostic_json=diagnostic,
+                now=now,
+            )
+        recovered = self.research_run(run_id)
+        if recovered is None:
+            raise KeyError(run_id)
+        return recovered
+
+    def fail_research_run_delivery(self, run_id: str) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = json.dumps(
+            {
+                "reason_code": "ACTIVITY_DELIVERY_FAILED",
+                "message": "research execution could not be delivered",
+                "correlation_id": run_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._transition_research_run(
+                connection,
+                run_id=run_id,
+                allowed_statuses={"queued", "running"},
+                next_status="failed",
+                attempt_status="failed",
+                diagnostic_json=diagnostic,
+                now=now,
+            )
+        failed = self.research_run(run_id)
+        if failed is None:
+            raise KeyError(run_id)
+        return failed
+
     def claim_research_run(
         self,
         run_id: str,
@@ -864,10 +1005,7 @@ class MetadataStore:
         now = datetime.now(UTC).isoformat()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT status FROM research_runs WHERE id = ?",
-                (run_id,),
-            ).fetchone()
+            row = self._lock_research_run(connection, run_id)
             if row is None:
                 raise KeyError(run_id)
             if row["status"] != "queued":
@@ -926,36 +1064,16 @@ class MetadataStore:
         )
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            attempt = connection.execute(
-                """
-                SELECT status
-                FROM research_run_attempts
-                WHERE id = ? AND run_id = ?
-                """,
-                (attempt_id, run_id),
-            ).fetchone()
-            if attempt is None:
-                raise KeyError(attempt_id)
-            if attempt["status"] == "running":
-                connection.execute(
-                    """
-                    UPDATE research_run_attempts
-                    SET status = 'failed', completed_at = ?, heartbeat_at = ?,
-                        diagnostic_json = ?
-                    WHERE id = ?
-                    """,
-                    (now, now, diagnostic_json, attempt_id),
-                )
-                next_status = "queued" if retryable else "failed"
-                connection.execute(
-                    """
-                    UPDATE research_runs
-                    SET status = ?, updated_at = ?,
-                        completed_at = CASE WHEN ? = 'failed' THEN ? ELSE NULL END
-                    WHERE id = ? AND status = 'running'
-                    """,
-                    (next_status, now, next_status, now, run_id),
-                )
+            self._transition_research_run(
+                connection,
+                run_id=run_id,
+                allowed_statuses={"running"},
+                next_status="queued" if retryable else "failed",
+                attempt_status="failed",
+                diagnostic_json=diagnostic_json,
+                now=now,
+                attempt_id=attempt_id,
+            )
         run = self.research_run(run_id)
         if run is None:
             raise KeyError(run_id)
@@ -972,10 +1090,7 @@ class MetadataStore:
         now = datetime.now(UTC).isoformat()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            run = connection.execute(
-                "SELECT status FROM research_runs WHERE id = ?",
-                (run_id,),
-            ).fetchone()
+            run = self._lock_research_run(connection, run_id)
             attempt = connection.execute(
                 "SELECT status FROM research_run_attempts WHERE id = ? AND run_id = ?",
                 (attempt_id, run_id),
@@ -987,15 +1102,7 @@ class MetadataStore:
                 or attempt["status"] != "running"
             ):
                 return False
-            connection.execute(
-                """
-                UPDATE research_run_attempts
-                SET status = 'succeeded', completed_at = ?, heartbeat_at = ?
-                WHERE id = ?
-                """,
-                (now, now, attempt_id),
-            )
-            connection.execute(
+            run_update = connection.execute(
                 """
                 UPDATE research_runs
                 SET status = 'succeeded', updated_at = ?, completed_at = ?,
@@ -1010,42 +1117,77 @@ class MetadataStore:
                     run_id,
                 ),
             )
+            if run_update.rowcount != 1:
+                return False
+            attempt_update = connection.execute(
+                """
+                UPDATE research_run_attempts
+                SET status = 'succeeded', completed_at = ?, heartbeat_at = ?
+                WHERE id = ? AND run_id = ? AND status = 'running'
+                """,
+                (now, now, attempt_id, run_id),
+            )
+            if attempt_update.rowcount != 1:
+                raise RuntimeError("ResearchRun Attempt publication fence failed")
         return True
 
     def cancel_research_run(self, run_id: str) -> dict[str, object] | None:
         now = datetime.now(UTC).isoformat()
         diagnostic = json.dumps(
-            {"reason_code": "CANCELLED", "message": "cancelled by operator"},
+            {"reason_code": "CANCELLED", "message": "cancelled by user"},
             sort_keys=True,
             separators=(",", ":"),
         )
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                "SELECT status FROM research_runs WHERE id = ?",
-                (run_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            if row["status"] in {"queued", "running"}:
-                connection.execute(
-                    """
-                    UPDATE research_runs
-                    SET status = 'cancelled', updated_at = ?, completed_at = ?
-                    WHERE id = ?
-                    """,
-                    (now, now, run_id),
+            try:
+                transitioned = self._transition_research_run(
+                    connection,
+                    run_id=run_id,
+                    allowed_statuses={"queued", "running"},
+                    next_status="cancelled",
+                    attempt_status="cancelled",
+                    diagnostic_json=diagnostic,
+                    now=now,
                 )
-                connection.execute(
-                    """
-                    UPDATE research_run_attempts
-                    SET status = 'cancelled', completed_at = ?, heartbeat_at = ?,
-                        diagnostic_json = ?
-                    WHERE run_id = ? AND status = 'running'
-                    """,
-                    (now, now, diagnostic, run_id),
+            except KeyError:
+                return None
+            if transitioned:
+                self._enqueue_research_run_cancellation(
+                    connection,
+                    run_id=run_id,
+                    created_at=now,
                 )
         return self.research_run(run_id)
+
+    def acknowledge_research_run_cancellation(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = json.dumps(
+            {"reason_code": "CANCELLED", "message": "execution was cancelled"},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._transition_research_run(
+                connection,
+                run_id=run_id,
+                allowed_statuses={"queued", "running"},
+                next_status="cancelled",
+                attempt_status="cancelled",
+                diagnostic_json=diagnostic,
+                now=now,
+                attempt_id=attempt_id,
+            )
+        cancelled = self.research_run(run_id)
+        if cancelled is None:
+            raise KeyError(run_id)
+        return cancelled
 
     def create_research_rerun(
         self,

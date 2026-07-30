@@ -15,6 +15,66 @@ from thesistrace.objects import (
 )
 
 
+def test_failed_object_install_removes_its_staging_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = ImmutableObjectStore(tmp_path / "objects")
+
+    def fail_install(*_args) -> None:
+        raise OSError("injected install failure")
+
+    monkeypatch.setattr("thesistrace.objects.os.replace", fail_install)
+
+    with pytest.raises(OSError, match="injected install failure"):
+        store.put_json({"result": "partial"})
+
+    assert list((tmp_path / "objects").rglob("*.tmp")) == []
+
+
+def test_hard_crash_stage_recovery_never_deletes_shared_cas(
+    tmp_path: Path,
+) -> None:
+    store = ImmutableObjectStore(tmp_path / "objects")
+
+    abandoned_digest = crash_during_publication(
+        store.root,
+        run_id="run-abandoned",
+        attempt_id="attempt-abandoned",
+    )
+    assert store.path_for(abandoned_digest).exists()
+    committed_digest = crash_during_publication(
+        store.root,
+        run_id="run-committed",
+        attempt_id="attempt-committed",
+    )
+    assert committed_digest == abandoned_digest
+    store.recover_staged_publication(
+        "run-committed",
+        committed_manifest_sha256=committed_digest,
+    )
+    store.recover_staged_publication(
+        "run-abandoned",
+        committed_manifest_sha256=None,
+    )
+    assert store.path_for(committed_digest).exists()
+    assert (store.root / "manifests" / "result-run-committed.json").exists()
+    assert not (store.root / "manifests" / "result-run-abandoned.json").exists()
+    assert not (store.root / "staging" / "run-committed").exists()
+    assert not (store.root / "staging" / "run-abandoned").exists()
+
+
+def test_publication_guards_use_a_bounded_lock_namespace(tmp_path: Path) -> None:
+    store = ImmutableObjectStore(tmp_path / "objects")
+
+    for index in range(1_024):
+        with store.publication_guard(f"run-{index}"):
+            pass
+
+    lock_paths = list((store.root / "staging").glob(".run-*.lock"))
+    assert 1 <= len(lock_paths) <= 256
+
+
 def test_parquet_object_round_trips_with_one_exact_content_identity(tmp_path: Path) -> None:
     store = ImmutableObjectStore(tmp_path / "objects")
     contract = parquet_contract()
@@ -192,3 +252,49 @@ print(json.dumps({"entry": entry, "payload": base64.b64encode(payload).decode("a
     assert isinstance(value, dict)
     assert base64.b64decode(value["payload"])
     return value
+
+
+def crash_during_publication(
+    root: Path,
+    *,
+    run_id: str,
+    attempt_id: str,
+) -> str:
+    digest_path = root.parent / f"{run_id}.digest"
+    script = """
+import os
+import sys
+from pathlib import Path
+
+from thesistrace.objects import ImmutableObjectStore
+
+root = Path(sys.argv[1])
+run_id = sys.argv[2]
+attempt_id = sys.argv[3]
+digest_path = Path(sys.argv[4])
+store = ImmutableObjectStore(root)
+stage = store.stage(run_id, attempt_id)
+stage.__enter__()
+entry = stage.put_json({"result": "complete"})
+stage.put_manifest(f"result-{run_id}", {"sha256": entry["sha256"]})
+publication = stage.publication(manifest_sha256=str(entry["sha256"]))
+publication.__enter__()
+digest_path.write_text(str(entry["sha256"]), encoding="utf-8")
+os._exit(0)
+"""
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            script,
+            str(root),
+            run_id,
+            attempt_id,
+            str(digest_path),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    return digest_path.read_text(encoding="utf-8")

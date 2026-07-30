@@ -28,17 +28,21 @@ async def relay_once(
 ) -> int:
     dispatched = 0
     for entry in outbox.pending(limit=limit):
-        workspace_id, run_id = require_research_entry(entry)
-        try:
-            await client.start_workflow(
-                ResearchWorkflow.run,
-                {"workspace_id": workspace_id, "run_id": run_id},
-                id=research_workflow_id(run_id),
-                task_queue=RESEARCH_TASK_QUEUE,
-                id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
-            )
-        except WorkflowAlreadyStartedError:
-            pass
+        resource_kind, workspace_id, run_id = require_research_entry(entry)
+        if resource_kind == "research_run":
+            try:
+                await client.start_workflow(
+                    ResearchWorkflow.run,
+                    {"workspace_id": workspace_id, "run_id": run_id},
+                    id=research_workflow_id(run_id),
+                    task_queue=RESEARCH_TASK_QUEUE,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                )
+            except WorkflowAlreadyStartedError:
+                pass
+        else:
+            handle = client.get_workflow_handle(research_workflow_id(run_id))
+            await handle.cancel()
         outbox.mark_dispatched(entry["outbox_id"])
         dispatched += 1
     return dispatched
