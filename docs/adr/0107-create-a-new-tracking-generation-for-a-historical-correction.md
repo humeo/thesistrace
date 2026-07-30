@@ -26,17 +26,19 @@ full Advance identity remains
 
 V1 does not attempt a smart partial calculation repair. Unchanged immutable
 Physical Data Objects and generation-and-release-neutral content payloads may
-still be referenced by content hash rather than copied. Checkpoints, Label
-Maturation events, Factor Summary Snapshots, and other provenance-bearing
-artifacts are republished for the new Generation and record its
-`generation_id`, corrected replay basis Release, and original effective session
-or maturity coordinate.
+still be referenced by content hash rather than copied. The full replay
+recomputes runtime Alpha Values, Forward Return Labels, Factor aggregate
+observations, and Strategy execution from Tracking Origin, then publishes the
+new Generation's bounded Factor Summary Snapshots, retained minimal Strategy
+results, and terminal state. Runtime Alpha, Label, daily Factor, raw order, and
+fill observations are not republished as durable artifacts.
 
-The previous as-known Generation, its Checkpoints, and observations remain
-queryable and unchanged. Only after the corrected replay succeeds does the
-DailyTrack's Tracking Head atomically move to the new Generation. Until then,
-the prior Head remains readable and the Track reports that it is behind or
-blocked at the corrected release.
+The previous as-known Generation and its Checkpoint results remain queryable and
+unchanged. Only after the corrected replay succeeds does the DailyTrack's
+Tracking Head atomically move to the new Generation. ADR-0148's latest-only
+Working Cache is then rebuilt for the new Head rather than copied from the
+superseded Generation. Until then, the prior Head remains readable and the
+Track reports that it is behind or blocked at the corrected release.
 
 This rule does not add a historical-correction discovery scan. ADR-0091 still
 uses incremental source ingestion, and ADR-0088 still waits for a normal

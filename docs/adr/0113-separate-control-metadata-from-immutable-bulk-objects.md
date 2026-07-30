@@ -7,8 +7,8 @@ status: accepted
 Hosted Platform V2 stores identity, Personal Workspace ownership, Research
 Definition and lifecycle state, scheduling, quota, idempotency, Dataset Release
 manifests, and object indexes in InsForge PostgreSQL. Canonical Market Data,
-Alpha Matrices, Result Bundles, Tracking Checkpoints, and other large immutable
-payloads remain content-addressed objects outside PostgreSQL.
+Result Bundles, Tracking Checkpoints, retained Strategy tables, and other large
+immutable payloads remain content-addressed objects outside PostgreSQL.
 
 Large tabular objects use partitioned columnar encoding, initially Parquet, so
 the Compute Plane can read only the required dates, fields, and instruments

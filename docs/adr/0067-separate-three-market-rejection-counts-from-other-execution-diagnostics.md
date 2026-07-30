@@ -14,14 +14,15 @@ suspension:       either side blocked by full-session suspension with no open
 ```
 
 One logical order contributes one rejection even when it would have been split
-into multiple Child Orders. The ResearchRun retains date, instrument, side,
-reason, and intended value for each rejection. V1 reports counts and event
-details, not an unfilled-order ratio.
+into multiple Child Orders. The ResearchRun retains one daily count per reason
+and the period totals, not date-instrument-side event details or an
+unfilled-order ratio.
 
 Conditions that prevent an order or target from being created are separate
 Execution Diagnostics, including `insufficient_cash`, `below_board_lot`,
 `insufficient_candidates`, and `ineligible`. They retain reason-specific counts
-and details but do not increment a market-rejection counter.
+as bounded aggregates but no per-order details and do not increment a
+market-rejection counter.
 
 An unexplained missing market observation is neither a rejection nor an
 execution diagnostic. It is a data-quality error that prevents a valid run.

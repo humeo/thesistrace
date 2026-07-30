@@ -29,8 +29,11 @@ liquidation rather than split across partial sells.
 
 An order whose rounded quantity is below its applicable minimum is not created,
 and the corresponding capital remains in its current position or cash.
-ResearchRun retains the unrounded target quantity, legal order quantity, and
-residual position value or cash. Execution Share Quantity is never fractional;
+The unrounded target quantity, legal order quantity, and residual position
+value or cash remain runtime calculation values rather than an order-level
+ResearchRun ledger. Their effects remain visible in retained Strategy
+aggregates and Terminal Positions, and an investigation can regenerate the
+detail deterministically. Execution Share Quantity is never fractional;
 Adjusted Holding Units may be fractional by definition.
 
 ADR-0051 defines maximum single-order quantities and resulting child orders.

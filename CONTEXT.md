@@ -178,7 +178,10 @@ accounting for nested lag and rolling functions. V1 permits at most 252 market
 sessions. A rolling length `n` includes `t-n+1` through `t`, whereas lag `n`
 addresses `t-n`; validation composes those offsets through nested functions.
 Missing observations do not extend the window, and a definition over the limit
-cannot be frozen.
+cannot be frozen. For example, `pct_change($close_adj, 252)` validly reads the
+current and 252-prior Research Sessions. The three-year Research Input History
+therefore supplies approximately 252 warm-up sessions before the 504-session
+Factor report window.
 _Avoid_: Largest individual function argument, last valid observations,
 automatic data-range expansion
 
@@ -191,31 +194,37 @@ that session's Final Alpha Cross-Section and the coverage loss is reported.
 _Avoid_: Zero Alpha Value, forward-filled score, partial-window result
 
 **Alpha Values**:
-The single set of instrument-by-session scores emitted by a ResearchRun. An
-Alpha Value for session `t` is produced after that session closes from data and
-Universe Membership available through `t`. A frozen Research Definition
-selects either no neutralization or industry neutralization. The selected
-option determines the scores produced by that run; it does not create a second
-run type or parallel result branch. V1 does not automatically winsorize,
-clip, rank-transform, or standardize the scores. The same completed Final Alpha
-Cross-Section feeds Strategy Backtest, every Factor Evaluation horizon, and
-Daily Tracking.
+The deterministic instrument-by-session scores calculated inside a
+ResearchRun or Tracking Advance. An Alpha Value for session `t` is produced
+after that session closes from data and Universe Membership available through
+`t`. A frozen Research Definition selects either no neutralization or industry
+neutralization. The selected option determines the one Final Alpha
+Cross-Section consumed by Strategy and every Factor Evaluation horizon; it
+does not create a second run type or parallel result branch. V1 does not
+automatically winsorize, clip, rank-transform, or standardize the scores.
+Alpha Values are calculation intermediates rather than permanent
+ResearchRun results.
 _Avoid_: Alpha, factor definition, trading signal
 
 **Alpha Matrix**:
-The deterministic instrument-by-Research-Session collection of Final Alpha
-Values produced from one research-logic version and Dataset Release. Factor
-Evaluation, Strategy Backtest, and Daily Tracking consume this same result;
-none independently recalculates a differently transformed Alpha.
-_Avoid_: Raw expression output, Strategy signal table, vendor factor table
+The logical collection of Final Alpha Cross-Sections evaluated during one
+execution. Factor Evaluation and Strategy Backtest consume the same
+cross-section for a signal session rather than applying different
+transformations. An Alpha Matrix is transient and is never published in a
+Result Bundle or Tracking Checkpoint.
+_Avoid_: Durable result object, raw expression output, Strategy signal table,
+vendor factor table
 
 **Daily Tracking**:
 The V1 process that incrementally advances an explicitly active DailyTrack
-after each successful Dataset Release. It appends the new Final Alpha
-Cross-Section, matures Labels, and advances the simulated Strategy's orders,
-holdings, cash, costs, and NAV. It does not send notifications or execute real
-trades.
-_Avoid_: Live trading, alerting product, mutable latest-only dashboard
+after each successful Dataset Release. It calculates only the newly required
+Final Alpha Cross-Sections, resolves newly mature Labels, updates the rolling
+Factor summary, and advances the simulated Strategy from its prior terminal
+state through the new Research Sessions. It publishes only immutable summaries,
+retained Strategy observations, and terminal state. It does not send
+notifications or execute real trades.
+_Avoid_: Full daily batch replay, persisted Alpha history, live trading,
+alerting product
 
 **DailyTrack**:
 The stable identity of one continuous, fixed-inception Daily Tracking stream
@@ -225,7 +234,9 @@ Dataset Release is exactly the seed Run's Release, and each Tracking Advance
 separately binds one later Dataset Release. It is `active` from creation until
 an operator terminally marks it `stopped`; a stopped Track retains its Head but
 does not advance or resume in V1. Editing or rerunning research never mutates
-an existing DailyTrack.
+an existing DailyTrack. One Workspace may have at most 10 active DailyTracks;
+an active Track still counts while its frontier Tracking Advance is blocked,
+whereas a stopped Track does not.
 _Avoid_: ResearchRun, rolling backtest, mutable latest Definition
 
 **Tracking Origin**:
@@ -241,10 +252,11 @@ _Avoid_: Activation date only, latest rolling R1, Tracking Head
 **Activation Checkpoint**:
 Generation 0's root immutable DailyTrack state. It has no predecessor, binds
 the seed Run's Dataset Release, references the seed Result Bundle, and carries
-its terminal holdings, units, cash, NAV, Benchmark, costs, Rebalance phase,
-pending Labels, and any scheduled final-session signal whose execution Research
-Session is later than that Release.
-_Avoid_: New all-cash baseline, copied Result Bundle, historical fake Update
+its Terminal Strategy State, Rebalance phase, and any bounded scheduled
+final-session signal whose execution Research Session is later than that
+Release. It carries no Alpha or Label history.
+_Avoid_: New all-cash baseline, copied Result Bundle, pending Label store,
+historical fake Update
 
 **Tracking Advance**:
 One idempotent execution for a `(DailyTrack, Tracking Generation, target
@@ -263,11 +275,13 @@ _Avoid_: New Tracking Advance, ResearchRun Attempt, partial Checkpoint
 **Tracking Checkpoint**:
 The immutable authoritative manifest and state published by a successful
 Tracking Advance. It binds its Generation, same-Generation predecessor or null
-Generation root, target release, processed sessions, new Alpha and Label
-artifacts, Strategy events and state, versions, and checksums. Its predecessor
-chain and each target release form the authoritative ordered Release sequence;
-it identifies a Tracking Correction Boundary when applicable. A mutable
-Tracking Head only points to one Checkpoint.
+Generation root, target release, processed sessions, Factor Summary Snapshot,
+newly retained Strategy observations and aggregates, Terminal Strategy State,
+versions, and checksums. Its predecessor chain and each target release form the
+authoritative ordered Release sequence, and it identifies a Tracking Correction
+Boundary when applicable. It never contains Alpha Values, Forward Return
+Labels, raw orders, or fills. A mutable Tracking Head only points to one
+Checkpoint.
 _Avoid_: Mutable tracker row, attempt log, Result Bundle extension
 
 **Tracking Head**:
@@ -300,11 +314,15 @@ The core V1 correctness invariant that a reference execution and
 session-by-session Daily Tracking from the same Tracking Origin, research
 semantics, ordered Advance Dataset Release sequence, Generation-pinned
 calculation kernel, and DailyTrack-pinned Numeric Execution Contract produce
-canonically exact Alpha Values, matured Labels, orders, costs, holdings, cash,
-NAV, and derived results. After a Tracking Correction Boundary, a calculation
-that applies only the latest corrected Release from the Origin is a
-counterfactual, not the comparator.
-_Avoid_: Latest-Release-only replay, tolerance-only comparison, latest rolling Run
+canonically exact Factor summaries, Strategy Daily Observations, Strategy
+aggregates, and Terminal Strategy State. Intermediate Alpha Values, matured
+Labels, orders, and fills may be regenerated and compared by an explicit
+equivalence test but need not be durable results. After a Tracking Correction
+Boundary, a calculation that applies only the latest corrected Release from the
+Origin is a counterfactual, not the comparator. A standard rolling 504-session
+ResearchRun is not the comparator for a later continuous DailyTrack.
+_Avoid_: Persisted-intermediate requirement, latest-Release-only replay,
+tolerance-only comparison, latest rolling Run, two calculation kernels
 
 **Strategy**:
 Rules that translate Alpha Values into portfolio targets and changes over time.
@@ -357,8 +375,10 @@ _Avoid_: Actual Holdings, guaranteed allocation, Factor quantile
 The positions and cash remaining after applying order eligibility, costs, and
 rounding to a Target Portfolio. Each position has one integer Execution Share
 Quantity for order rules and one Adjusted Holding Units balance for research
-valuation. Strategy Backtest retains both actual and target weights rather than
-presenting blocked or unaffordable orders as filled.
+valuation. Target and actual weights are runtime inputs to execution and
+metrics, not separately retained histories. The Result Bundle keeps daily
+portfolio aggregates and every Terminal Position rather than presenting
+blocked or unaffordable orders as filled.
 _Avoid_: Target Portfolio, pending order, ideal equal weight
 
 **Execution Share Quantity**:
@@ -399,8 +419,9 @@ _Avoid_: Target equal weight, configured cap, largest order weight
 
 **Cash Ratio**:
 Post-trade Net Cash divided by Net NAV on one open. It is a deployment result,
-not a target. V1 retains the daily series and reports its mean, period maximum
-with date, and ending value.
+not a target. V1 derives each daily value from the retained Strategy Daily
+Observation and reports its mean, period maximum with date, and ending value;
+it does not retain a duplicate Cash Ratio series.
 _Avoid_: Cash target, unfilled ratio, Initial Cash
 
 **Valuation Carry**:
@@ -497,9 +518,9 @@ _Avoid_: Pending order, partial fill, next-ranked replacement
 
 **Market Rejection**:
 One created logical order blocked by `upper_limit_buy`, `lower_limit_sell`, or
-confirmed `full_session_suspended` with no daily open. V1 reports
-reason-specific counts and event details, aggregating Child Orders and
-calculating no unfilled ratio.
+confirmed `full_session_suspended` with no daily open. V1 retains daily and
+period reason-specific counts, aggregating Child Orders and calculating no
+unfilled ratio. It does not retain order-level rejection details.
 _Avoid_: Insufficient cash, below-board-lot omission, data-quality error
 
 **Trading State**:
@@ -520,9 +541,11 @@ per instrument.
 _Avoid_: Daily delisting scan, remote runtime lookup, missing-price zero fill
 
 **Execution Diagnostic**:
-A recorded reason why a target or order was not created, such as insufficient
-cash, a below-minimum Board Lot, insufficient candidates, or ineligibility. It
-is distinct from a Market Rejection and from an unexplained-data failure.
+A runtime-classified reason why a target or order was not created, such as
+insufficient cash, a below-minimum Board Lot, insufficient candidates, or
+ineligibility. It is distinct from a Market Rejection and from an
+unexplained-data failure. V1 may retain bounded reason aggregates but no
+per-order diagnostic ledger.
 _Avoid_: Blocked Order, successful fill, silent omission
 
 **Existing-Position Eligibility**:
@@ -568,15 +591,17 @@ not another Attempt.
 _Avoid_: ResearchRun, user rerun, modified run input
 
 **Result Bundle**:
-The immutable structured and authoritative result of one successful
-ResearchRun. Its Result Manifest binds the frozen Research Definition and
-content hash, Dataset Release, research-semantics version, Numeric Execution
-Contract, calculation-kernel semantic version, runtime build identity, and
-checksummed Factor Evaluation, Strategy Backtest, time-series, event, and
-diagnostic objects. UI and reports are derived views. The Run succeeds only
-after the complete bundle is atomically published. A DailyTrack Activation
-Checkpoint may reference the bundle but never extends or mutates it.
-_Avoid_: UI cache, partial report, mutable result, attempt diagnostics
+The immutable minimal and authoritative result of one successful ResearchRun.
+Its Result Manifest binds provenance plus checksummed Factor summaries,
+Strategy summary, Strategy Daily Observations, bounded rebalance and execution
+aggregates, Terminal Positions, and Terminal Strategy State. It excludes Alpha
+Values, Forward Return Labels, daily Factor observations, raw orders and fills,
+and duplicated derived series. UI and reports are derived views. The complete
+ResearchRun-owned bundle is atomically published and must not exceed
+`1,048,576` exact bytes. A DailyTrack Activation Checkpoint may reference the
+bundle but never extends or mutates it.
+_Avoid_: Alpha store, UI cache, partial report, mutable result, attempt
+diagnostics
 
 **Result Manifest**:
 The immutable index and provenance record at the root of a Result Bundle. It
@@ -585,26 +610,28 @@ validated and reproduced.
 _Avoid_: Dataset Release manifest, HTML report, job log
 
 **Factor Evaluation**:
-The result that assesses whether an Alpha has predictive and ranking value
-independently of a Strategy's realized portfolio outcome. V1 evaluates the same
-Alpha Values at fixed 1-, 5-, and 20-market-session horizons.
-_Avoid_: Strategy Backtest, factor return
+The immutable summary that assesses whether an Alpha has predictive and ranking
+value independently of a Strategy's realized portfolio outcome. V1 evaluates
+the same transient Alpha Values at fixed 1-, 5-, and 20-market-session
+horizons and retains summary statistics and coverage counts, but no daily
+Factor observations, Alpha Values, or Forward Return Labels.
+_Avoid_: Factor curve, Alpha Matrix, Strategy Backtest, factor return
 
 **Label Maturation**:
-An immutable Daily Tracking event that resolves one pending signal-session and
-horizon Label when its nominal exit Research Session reaches `t+1+h`, whether
-the governed result is a return, `-100%` terminal loss, or unavailable. It
-records its Generation, effective maturity session, originating Alpha,
-basis Dataset Release, and publishing Checkpoint; it appends current knowledge
-without editing the seed Result Bundle or an earlier Checkpoint.
-_Avoid_: In-place Label update, signal-date rewrite, latest-only value
+The calculation point when one pending signal-session and horizon Label becomes
+resolvable because its nominal exit Research Session `t+1+h` has entered the
+pinned Dataset Release. The governed outcome may be a return, `-100%` terminal
+loss, or unavailable. Daily Tracking uses it to update the Factor Summary
+Snapshot; it is not a persisted Label event or Alpha record.
+_Avoid_: Stored Label row, in-place Label update, signal-date rewrite
 
 **Factor Summary Snapshot**:
 The immutable per-horizon Factor summary published by one Tracking Checkpoint
-over the latest 504 signal sessions using observations mature and valid at that
-Checkpoint. Older observations remain stored after leaving the current summary
-window.
-_Avoid_: Growing lifetime aggregate, mutable ResearchRun report, daily IC
+over the latest 504 signal sessions using observations mature and valid at
+that Checkpoint. It retains no daily observations, Alpha Values, or Forward
+Return Labels.
+_Avoid_: Factor curve, growing observation store, mutable ResearchRun report,
+daily IC result
 
 **Rank IC**:
 The daily cross-sectional standard Spearman correlation between valid final
@@ -686,8 +713,9 @@ coordinate unavailable. After a valid entry Open, explicit terminal delisting
 on or before the exit supplies a synthetic zero terminal value and a `-100%`
 Label. Terminal delisting before the entry leaves the Label unavailable.
 During Daily Tracking, its 1-, 5-, and 20-session horizons mature respectively
-at Research Sessions `t+2`, `t+6`, and `t+21` and append Label Maturation
-events even when the governed outcome is unavailable or terminal loss.
+at Research Sessions `t+2`, `t+6`, and `t+21`. The corresponding aggregate
+Factor observation is calculated without appending a durable stock-level Label
+or Label Maturation event.
 _Avoid_: Same-close return, implicit horizon, close-to-close default,
 Alpha-recalculation input
 
@@ -700,6 +728,23 @@ uses dual-unit synthetic research settlement rather than reconstructing
 company-action cash and share events. It reports Gross and Net NAV from one
 actual fill path, with Net NAV as the primary result.
 _Avoid_: Factor Evaluation, Alpha, broker account statement
+
+**Strategy Daily Observation**:
+The retained minimal Strategy result for one Research Session. It records Gross
+NAV, Net NAV, Benchmark NAV, Net Cash, session Transaction Costs, Actual
+Holdings Count, Maximum Single-Name Weight, and the three Market Rejection
+counts needed to render the confirmed return, risk, deployment, cost, and
+execution metrics. Cash Ratio and Drawdown are derived from these retained
+coordinates rather than stored as duplicate daily series.
+_Avoid_: Position history, target-weight history, order ledger, fill ledger
+
+**Terminal Strategy State**:
+The bounded ending account state required to seed or continue a DailyTrack:
+all Terminal Positions with Execution Share Quantities and Adjusted Holding
+Units, Net and Gross Cash and NAV, cumulative costs, Rebalance phase, and any
+bounded pending execution signal. It is current account state rather than a
+historical order, fill, target-weight, or per-position ledger.
+_Avoid_: Strategy Daily Observation, Result Bundle history, broker account
 
 **Gross NAV**:
 Gross Cash plus every Actual Holding's Adjusted Holding Units multiplied by its
@@ -782,11 +827,12 @@ _Avoid_: Warm-up position, pre-cost starting NAV, first holding return
 
 **Terminal Valuation**:
 The final Research Window open, when V1 values carried Actual Holdings and
-records ending NAV, cash, weights, and diagnostics without a Rebalance. The
-Strategy does not use a signal that would execute at this open, because no
-reported holding interval would follow, and it does not force liquidation or
-deduct hypothetical exit costs. This is a finite ResearchRun boundary; an
-active DailyTrack continues beyond it under its Activation Checkpoint.
+records the final Strategy Daily Observation and Terminal Strategy State
+without a Rebalance. The Strategy does not use a signal that would execute at
+this open, because no reported holding interval would follow, and it does not
+force liquidation or deduct hypothetical exit costs. This is a finite
+ResearchRun boundary; an active DailyTrack continues beyond it under its
+Activation Checkpoint.
 _Avoid_: Final Rebalance, forced liquidation, post-window valuation
 
 **Strategy Benchmark**:

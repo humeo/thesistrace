@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0147
 ---
 
 # Summarize but retain daily Factor IC series

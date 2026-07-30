@@ -32,9 +32,10 @@ eligibility and catch-up.
 Workflow code only orchestrates deterministic state transitions. Side effects
 and heavy calculation run as Activities in role-specific workers. Workflow and
 Activity payloads contain only opaque resource identities, hashes, and small
-control values; Tushare payloads, Dataset partitions, Alpha Matrices, Result
-Bundles, and Tracking Checkpoints remain in PostgreSQL or object storage
-according to their existing boundaries.
+control values; Tushare payloads, Dataset partitions, Result Bundles, Tracking
+Checkpoints, and DailyTrack cache payloads remain within their existing data
+and storage boundaries. Alpha Matrices exist only as transient Activity
+calculation state.
 
 Compute Activities share one fair Task Queue, use Personal Workspace identity
 as an equal-weight fairness key, and consume the deployment-configured worker

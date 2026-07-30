@@ -14,8 +14,8 @@ Alpha Value and a valid label. It calculates:
 - IC: the Pearson correlation between Alpha Values and Forward Return Labels,
   as a secondary metric.
 
-The two-year evaluation aggregates the resulting daily IC series. It never
-pools all instrument-session observations into one correlation, because that
-would mix cross-sectional prediction with market and time effects. ADR-0035
-defines the aggregate summary statistics, and ADR-0036 defines daily sample
-validity.
+The two-year evaluation aggregates the resulting runtime daily IC observations.
+It never pools all instrument-session observations into one correlation,
+because that would mix cross-sectional prediction with market and time effects.
+ADR-0147 defines the bounded persistent aggregate summary, and ADR-0036 defines
+daily sample validity.

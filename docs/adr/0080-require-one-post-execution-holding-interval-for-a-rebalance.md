@@ -17,8 +17,9 @@ open. A signal at `R503` does not execute at `R504`, because no reported
 post-execution holding interval remains. It is skipped rather than queued.
 
 At `R504`, V1 performs Terminal Valuation without a Rebalance and records the
-ending NAV, holdings, cash, weights, and diagnostics. It does not force
-liquidation or add hypothetical exit costs.
+final Strategy Daily Observation plus Terminal Strategy State. It does not
+retain target-weight or diagnostic-event histories, force liquidation, or add
+hypothetical exit costs.
 
 This Strategy cutoff does not remove Alpha Values from Factor Evaluation.
 Factor Evaluation retains every signal session in the Research Window and

@@ -32,7 +32,7 @@ platform-level P1-before-P3 ordering. Increasing Task Queue partitions later
 requires new ordering and capacity evidence.
 
 P1 prevents a User's admitted ResearchRun backlog from delaying Daily Tracking
-freshness. The high-priority burst is bounded by at most three active
+freshness. The high-priority burst is bounded by at most 10 active
 DailyTracks per Personal Workspace and by Dataset Publication cadence. P3 work
 still receives work-conserving capacity whenever no P1 Activity is waiting.
 

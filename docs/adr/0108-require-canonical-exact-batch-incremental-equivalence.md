@@ -23,9 +23,20 @@ Tracking Generation. Display formatting is not part of equivalence.
 Batch and incremental execution use the same calculation kernel, canonical
 input ordering, and deterministic tie rules. A newly appended Alpha uses its
 complete ordered input window instead of an error-accumulating online
-recurrence. Factor and Strategy aggregates are recomputed from their retained
-ordered observation series rather than through a differently ordered online
-statistic.
+recurrence. After inserting newly mature observations and evicting observations
+outside the latest 504 signal sessions, Factor summaries are recomputed in one
+canonical order from ADR-0148's bounded Rolling Factor Observation Cache.
+Strategy aggregates are recomputed from the retained ordered Strategy series;
+neither path uses a differently ordered online statistic.
+
+Runtime Alpha Values, Forward Return Labels, daily Factor observations, orders,
+and fills may be instrumented and compared during equivalence verification
+without becoming durable Result or Checkpoint artifacts. A missing operational
+Working Cache is rebuilt over its bounded window from immutable Dataset
+Releases and pinned research semantics, following the exact Release sequence
+bound by the Checkpoint chain. Ordinary Advances, including ADR-0144
+correction-boundary Advances, do not full-replay from Tracking Origin. ADR-0109
+separately governs a result-changing calculation-kernel correction.
 
 The reference oracle applies each Dataset Release to the same Research Sessions
 processed by the corresponding Advance and carries forward the same committed

@@ -14,10 +14,12 @@ running work or delete immutable history. Assignments, overrides, and effective
 limits remain auditable. Future commercial plans may select different Quota
 Profiles without changing resource ownership or isolation.
 
-The initial default sets `max_active_daily_tracks` to three. Only active
-DailyTracks count; stopped Tracks do not. Reaching the limit blocks new
-activation with `QUOTA_EXCEEDED`. Lowering the limit does not stop existing
-Tracks, and ResearchRuns do not consume this dimension.
+The initial default and product hard maximum set `max_active_daily_tracks` to
+10. A Workspace override may lower but not raise this limit. Only active
+DailyTracks count; a Track still counts while its frontier Advance is blocked,
+and stopped Tracks do not. Reaching the limit blocks new activation with
+`QUOTA_EXCEEDED`. Lowering the limit does not stop existing Tracks, and
+ResearchRuns do not consume this dimension.
 
 The initial default also sets `max_nonterminal_user_compute_jobs` to eight.
 It counts queued or running user-requested Compute work, including
@@ -33,12 +35,12 @@ reject admission. Public registration, billing, or later capacity pressure may
 reopen this decision.
 
 The initial default sets `max_private_storage_bytes` to 10 GiB. It counts the
-stored compressed bytes of Workspace-owned immutable objects, including Alpha
-Matrices, Result Bundles, and Tracking Checkpoints. Platform-owned Dataset
-Releases, platform logs, PostgreSQL overhead, and Resource Tombstones do not
-consume this dimension. A result that cannot commit within the remaining quota
-fails atomically and removes its temporary objects; deletion releases quota
-when physical cleanup succeeds.
+stored compressed bytes of Workspace-owned immutable objects, including Result
+Bundles and Tracking Checkpoints. Platform-owned Dataset Releases, platform
+logs, PostgreSQL overhead, and Resource Tombstones do not consume this
+dimension. A result that cannot commit within the remaining quota fails
+atomically and removes its temporary objects; deletion releases quota when
+physical cleanup succeeds.
 
 These are the only Quota Profile dimensions in the first hosted release. Daily
 Run count, CPU duration, peak memory, request rate, per-result size, and Compute

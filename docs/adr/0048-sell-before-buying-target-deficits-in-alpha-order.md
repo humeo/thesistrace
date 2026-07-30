@@ -27,5 +27,8 @@ still maps to Execution Shares through Raw Market Price.
 A blocked selected buy is skipped without adding an instrument outside the
 Top-N set. Other selected targets may still buy up to their ideal values, and
 unused capital remains cash. Execution constraints, costs, and rounding can
-make actual weights differ from ideal target weights; Strategy Backtest retains
-both target and actual weights. ADR-0049 defines board-specific share rounding.
+make actual weights differ from ideal target weights. Target and actual weight
+maps are runtime calculation inputs rather than retained histories. The
+ResearchRun retains the resulting daily Maximum Single-Name Weight and
+Terminal Positions under ADR-0147. ADR-0049 defines board-specific share
+rounding.
