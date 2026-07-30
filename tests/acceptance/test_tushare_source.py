@@ -385,7 +385,7 @@ def test_live_normalizer_feeds_the_same_atomic_publication_boundary(tmp_path: Pa
     assert release["session_count"] == 756
     assert {item["kind"] for item in release["objects"]} == {
         "source_tushare",
-        "canonical_fixture",
+        "canonical_partition",
     }
     assert metadata.latest_dataset_release()["id"] == release["id"]
 

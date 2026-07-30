@@ -102,6 +102,21 @@ def test_contract_upgrade_keeps_prior_objects_readable(tmp_path: Path) -> None:
     assert store.read_parquet(str(changed_entry["sha256"]), changed).num_rows == 1
 
 
+def test_parquet_read_rejects_bytes_that_do_not_match_the_content_identity(
+    tmp_path: Path,
+) -> None:
+    store = ImmutableObjectStore(tmp_path / "objects")
+    entry = store.put_parquet_rows(
+        [{"instrument_id": "equity:000001.SZ", "session": "2026-07-30", "value": 1.0}],
+        parquet_contract(),
+    )
+    path = store.parquet_path_for(str(entry["sha256"]))
+    path.write_bytes(path.read_bytes() + b"corrupt")
+
+    with pytest.raises(ParquetContractError, match="checksum"):
+        store.read_parquet(str(entry["sha256"]), parquet_contract())
+
+
 def parquet_contract() -> ParquetWriterContract:
     return ParquetWriterContract(
         name="test.equity_observation",

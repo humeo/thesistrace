@@ -5,6 +5,9 @@ from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
 from thesistrace.config import Settings
+from thesistrace.datasets import DatasetPublisher
+from thesistrace.objects import ImmutableObjectStore
+from thesistrace.storage import MetadataStore
 
 
 def test_release_exposes_complete_canonical_market_and_research_contract(tmp_path: Path) -> None:
@@ -45,7 +48,10 @@ def test_release_exposes_complete_canonical_market_and_research_contract(tmp_pat
 
         objects = {item["kind"]: item for item in release["objects"]}
         source = client.get(f"/api/v1/objects/{objects['source_fixture']['sha256']}").json()
-        canonical = client.get(f"/api/v1/objects/{objects['canonical_fixture']['sha256']}").json()
+        canonical = DatasetPublisher(
+            MetadataStore(settings.metadata_path),
+            ImmutableObjectStore(settings.object_root),
+        ).materialize_canonical(release)
 
     assert canonical["research_calendar"] == sorted(
         set(source["sse_open_days"]) & set(source["szse_open_days"])

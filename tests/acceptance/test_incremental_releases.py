@@ -41,7 +41,7 @@ def test_incremental_catchup_and_correction_releases_form_one_immutable_chain(
         assert root_hashes < daily_hashes
         assert {item["kind"] for item in daily["objects"]} >= {
             "source_delta",
-            "canonical_delta",
+            "canonical_partition",
         }
 
         invalid = client.post(

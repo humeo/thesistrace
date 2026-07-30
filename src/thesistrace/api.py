@@ -708,15 +708,22 @@ def create_app(
                 status_code=404,
                 detail=error_detail("IMMUTABLE_OBJECT_NOT_FOUND", "object not found"),
             )
-        path = objects.path_for(digest)
-        if not path.is_file():
+        json_path = objects.path_for(digest)
+        parquet_path = objects.parquet_path_for(digest)
+        if json_path.is_file():
+            path = json_path
+            media_type = "application/json"
+        elif parquet_path.is_file():
+            path = parquet_path
+            media_type = "application/vnd.apache.parquet"
+        else:
             raise HTTPException(
                 status_code=404,
                 detail=error_detail("IMMUTABLE_OBJECT_NOT_FOUND", "object not found"),
             )
         return FileResponse(
             path,
-            media_type="application/json",
+            media_type=media_type,
             headers={"ETag": f'"sha256:{digest}"', "Cache-Control": "public, immutable"},
         )
 

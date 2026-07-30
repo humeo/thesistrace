@@ -4,6 +4,13 @@ from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from thesistrace.canonical_objects import (
+    CanonicalObjectError,
+    canonical_schema_entries,
+    materialize_partitioned_canonical,
+    update_canonical_partitions,
+    write_full_canonical,
+)
 from thesistrace.fixture import (
     adjustment_factor,
     build_fixture,
@@ -64,10 +71,9 @@ class DatasetPublisher:
             raise InvalidFixtureError("fixture must contain at least 30 instruments")
 
         source_object = self.objects.put_json(source)
-        canonical_object = self.objects.put_json(canonical)
         object_entries = [
             {"kind": source_kind, **source_object},
-            {"kind": "canonical_fixture", **canonical_object},
+            *write_full_canonical(self.objects, canonical),
         ]
         manifest_core: dict[str, object] = {
             "predecessor_id": None,
@@ -76,9 +82,16 @@ class DatasetPublisher:
             "session_count": len(sessions),
             "instrument_count": len(instruments),
             "correction_change_set": [],
+            "canonical_schema_version": canonical.get(
+                "schema_version",
+                "canonical-eod-v1",
+            ),
+            "canonical_tables": sorted(
+                key for key in canonical if key != "schema_version"
+            ),
             "schemas": [
                 {"family": source_kind, "version": source_schema},
-                {"family": "canonical_eod", "version": "canonical-eod-v1"},
+                *canonical_schema_entries(),
             ],
             "objects": object_entries,
         }
@@ -349,15 +362,24 @@ class DatasetPublisher:
             "liquidity_universes_replace": universe_replacements,
             "price_corrections": canonical_corrections,
         }
+        materialized = json.loads(
+            json.dumps(canonical, ensure_ascii=False, allow_nan=False)
+        )
+        apply_canonical_delta(materialized, canonical_delta)
         source_object = self.objects.put_json(source_delta)
-        canonical_object = self.objects.put_json(canonical_delta)
         predecessor_objects = predecessor.get("objects")
         if not isinstance(predecessor_objects, list):
             raise InvalidFixtureError("predecessor object manifest is invalid")
+        canonical_entries = update_canonical_partitions(
+            self.objects,
+            canonical_partition_entries(predecessor_objects),
+            materialized,
+            canonical_delta,
+        )
         objects = [
-            *predecessor_objects,
+            *noncanonical_object_entries(predecessor_objects),
             {"kind": "source_delta", **source_object},
-            {"kind": "canonical_delta", **canonical_object},
+            *canonical_entries,
         ]
         manifest_core: dict[str, object] = {
             "predecessor_id": predecessor["id"],
@@ -369,7 +391,14 @@ class DatasetPublisher:
             "session_count": len(all_sessions),
             "instrument_count": len(instruments),
             "correction_change_set": corrections,
-            "schemas": predecessor["schemas"],
+            "canonical_schema_version": materialized.get(
+                "schema_version",
+                "canonical-eod-v1",
+            ),
+            "canonical_tables": sorted(
+                key for key in materialized if key != "schema_version"
+            ),
+            "schemas": schemas_with_canonical(predecessor["schemas"]),
             "objects": objects,
         }
         release_digest = hashlib.sha256(canonical_json_bytes(manifest_core)).hexdigest()
@@ -414,14 +443,19 @@ class DatasetPublisher:
             raise InvalidFixtureError("incremental canonical data is incomplete")
 
         source_object = self.objects.put_json(source)
-        canonical_object = self.objects.put_json(canonical_delta)
         predecessor_objects = predecessor.get("objects")
         if not isinstance(predecessor_objects, list):
             raise InvalidFixtureError("predecessor object manifest is invalid")
+        canonical_entries = update_canonical_partitions(
+            self.objects,
+            canonical_partition_entries(predecessor_objects),
+            materialized,
+            canonical_delta,
+        )
         objects = [
-            *predecessor_objects,
+            *noncanonical_object_entries(predecessor_objects),
             {"kind": "source_tushare_delta", **source_object},
-            {"kind": "canonical_delta", **canonical_object},
+            *canonical_entries,
         ]
         corrections = source.get("corrections", [])
         manifest_core: dict[str, object] = {
@@ -434,10 +468,17 @@ class DatasetPublisher:
             "session_count": len(calendar),
             "instrument_count": len(instruments),
             "correction_change_set": corrections,
+            "canonical_schema_version": materialized.get(
+                "schema_version",
+                "canonical-eod-v1",
+            ),
+            "canonical_tables": sorted(
+                key for key in materialized if key != "schema_version"
+            ),
             "schemas": [
                 *[
                     item
-                    for item in predecessor["schemas"]
+                    for item in schemas_with_canonical(predecessor["schemas"])
                     if item.get("family") != "source_tushare_delta"
                 ],
                 {"family": "source_tushare_delta", "version": source_schema},
@@ -457,6 +498,16 @@ class DatasetPublisher:
         objects = release.get("objects")
         if not isinstance(objects, list):
             raise InvalidFixtureError("release has no object manifest")
+        partition_entries = canonical_partition_entries(objects)
+        if partition_entries:
+            try:
+                return materialize_partitioned_canonical(
+                    self.objects,
+                    release,
+                    partition_entries,
+                )
+            except CanonicalObjectError as error:
+                raise InvalidFixtureError(str(error)) from error
         canonical: dict[str, object] | None = None
         seen: set[str] = set()
         for entry in objects:
@@ -482,6 +533,46 @@ class DatasetPublisher:
         if canonical is None:
             raise InvalidFixtureError("release has no canonical object")
         return canonical
+
+
+def canonical_partition_entries(
+    entries: list[object],
+) -> list[dict[str, object]]:
+    return [
+        dict(entry)
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("kind") == "canonical_partition"
+    ]
+
+
+def noncanonical_object_entries(
+    entries: list[object],
+) -> list[dict[str, object]]:
+    return [
+        dict(entry)
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("kind")
+        not in {"canonical_partition", "canonical_fixture", "canonical_delta"}
+    ]
+
+
+def schemas_with_canonical(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        raise InvalidFixtureError("predecessor schema manifest is invalid")
+    canonical_schemas = canonical_schema_entries()
+    canonical_families = {
+        schema["family"] for schema in canonical_schemas
+    } | {"canonical_eod"}
+    retained = [
+        {"family": str(item["family"]), "version": str(item["version"])}
+        for item in value
+        if isinstance(item, dict)
+        and "family" in item
+        and "version" in item
+        and str(item["family"]) not in canonical_families
+    ]
+    return [*retained, *canonical_schemas]
 
 
 def apply_canonical_delta(canonical: dict[str, object], delta: dict[str, object]) -> None:

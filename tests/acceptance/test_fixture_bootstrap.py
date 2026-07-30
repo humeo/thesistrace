@@ -30,7 +30,7 @@ def test_fixture_bootstrap_is_atomic_immutable_and_idempotent(tmp_path: Path) ->
         assert published["release"]["appended_session_range"]["end"]
         assert {item["kind"] for item in published["release"]["objects"]} >= {
             "source_fixture",
-            "canonical_fixture",
+            "canonical_partition",
         }
         assert all(len(item["sha256"]) == 64 for item in published["release"]["objects"])
 
@@ -50,6 +50,20 @@ def test_fixture_bootstrap_is_atomic_immutable_and_idempotent(tmp_path: Path) ->
         object_response = client.get(f"/api/v1/objects/{first_object['sha256']}")
         assert object_response.status_code == 200
         assert object_response.headers["etag"] == f'"sha256:{first_object["sha256"]}"'
+
+        canonical_object = next(
+            item
+            for item in published["release"]["objects"]
+            if item["kind"] == "canonical_partition"
+        )
+        parquet_response = client.get(
+            f"/api/v1/objects/{canonical_object['sha256']}"
+        )
+        assert parquet_response.status_code == 200
+        assert parquet_response.headers["content-type"] == "application/vnd.apache.parquet"
+        assert parquet_response.headers["etag"] == (
+            f'"sha256:{canonical_object["sha256"]}"'
+        )
 
         failed = client.post(
             "/api/v1/dataset-releases/bootstrap",

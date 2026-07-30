@@ -152,7 +152,10 @@ class ImmutableObjectStore:
         return json.loads(self.path_for(digest).read_text(encoding="utf-8"))
 
     def read_parquet_bytes(self, digest: str) -> bytes:
-        return self.parquet_path_for(digest).read_bytes()
+        payload = self.parquet_path_for(digest).read_bytes()
+        if hashlib.sha256(payload).hexdigest() != digest:
+            raise ParquetContractError("Parquet object checksum does not match its identity")
+        return payload
 
     def read_parquet(self, digest: str, contract: ParquetWriterContract) -> pa.Table:
         require_pinned_writer_runtime()
