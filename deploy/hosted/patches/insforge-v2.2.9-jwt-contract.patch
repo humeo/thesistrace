@@ -1,0 +1,46 @@
+diff --git a/backend/src/infra/security/token.manager.ts b/backend/src/infra/security/token.manager.ts
+index ac14f0e6..0ff3a6c4 100644
+--- a/backend/src/infra/security/token.manager.ts
++++ b/backend/src/infra/security/token.manager.ts
+@@ -149,10 +149,14 @@ export class TokenManager {
+         algorithm: 'RS256',
+         keyid: this.kid,
+         expiresIn: ACCESS_TOKEN_EXPIRES_IN,
++        issuer: 'insforge',
++        audience: 'thesistrace',
+       });
+     }
+     return jwt.sign(payload, JWT_SECRET, {
+       algorithm: 'HS256',
+       expiresIn: ACCESS_TOKEN_EXPIRES_IN,
++      issuer: 'insforge',
++      audience: 'thesistrace',
+     });
+   }
+diff --git a/backend/src/server.ts b/backend/src/server.ts
+index ea125178..5ee24c93 100644
+--- a/backend/src/server.ts
++++ b/backend/src/server.ts
+@@ -45,5 +45,6 @@ import { webscraperRouter } from '@/api/routes/webscraper/index.routes.js';
+ import { appConfig } from '@/infra/config/app.config.js';
+ import { TelemetryService } from '@/services/telemetry/telemetry.service.js';
+ import { TokenManager } from '@/infra/security/token.manager.js';
++import { SecretService } from '@/services/secrets/secret.service.js';
+ const __filename = fileURLToPath(import.meta.url);
+ const __dirname = path.dirname(__filename);
+@@ -194,1 +195,15 @@ export async function createApp() {
++  apiRouter.get('/auth/anon-key', async (_req: Request, res: Response) => {
++    try {
++      const anonKey = await SecretService.getInstance().getSecretByKey('ANON_KEY');
++      if (!anonKey) {
++        res.status(503).json({ error: 'Service Unavailable' });
++        return;
++      }
++      res.json({ anonKey });
++    } catch (error) {
++      logger.error('Failed to serve anon key', { error });
++      res.status(500).json({ error: 'Internal Server Error' });
++    }
++  });
++
+   apiRouter.get('/health', (_req: Request, res: Response) => {

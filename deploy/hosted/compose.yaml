@@ -3,6 +3,10 @@ x-app: &app
   environment: &app-environment
     THESISTRACE_RELEASE_VERSION: ${THESISTRACE_RELEASE_VERSION:-0.1.0}
     THESISTRACE_RUNTIME_MODE: ${THESISTRACE_RUNTIME_MODE:-local}
+    THESISTRACE_AUTH_MODE: insforge
+    THESISTRACE_INSFORGE_JWKS_URL: http://insforge:7130/.well-known/jwks.json
+    THESISTRACE_INSFORGE_JWT_ISSUER: insforge
+    THESISTRACE_INSFORGE_JWT_AUDIENCE: thesistrace
     THESISTRACE_HOME: /var/lib/thesistrace
     THESISTRACE_API_HOST: 0.0.0.0
     THESISTRACE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}

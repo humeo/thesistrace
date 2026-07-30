@@ -6,6 +6,7 @@ state_dir="$root/.hosted"
 env_file="$state_dir/hosted.env"
 insforge_dir="$state_dir/insforge-v2.2.9"
 insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
+insforge_patch="$root/deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch"
 compose_file="$root/deploy/hosted/compose.yaml"
 
 random_secret() {
@@ -21,6 +22,12 @@ prepare() {
     actual_commit="$(git -C "$insforge_dir" rev-parse HEAD)"
     if [ "$actual_commit" != "$insforge_commit" ]; then
         echo "InsForge source is not the pinned v2.2.9 commit" >&2
+        exit 1
+    fi
+    if git -C "$insforge_dir" apply --check "$insforge_patch" >/dev/null 2>&1; then
+        git -C "$insforge_dir" apply "$insforge_patch"
+    elif ! git -C "$insforge_dir" apply --reverse --check "$insforge_patch" >/dev/null 2>&1; then
+        echo "InsForge JWT contract patch does not match the pinned source" >&2
         exit 1
     fi
     if [ ! -f "$env_file" ]; then

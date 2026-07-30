@@ -10,6 +10,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from thesistrace.auth import (
+    AuthenticationFailure,
+    IdentityVerifier,
+    build_identity_verifier,
+)
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
@@ -66,6 +71,7 @@ def create_app(
     *,
     tushare_transport: TushareTransport | None = None,
     runtime_ports: RuntimePorts | None = None,
+    identity_verifier: IdentityVerifier | None = None,
 ) -> FastAPI:
     runtime = runtime_ports or build_runtime(settings)
     store = runtime.control_metadata
@@ -85,6 +91,44 @@ def create_app(
     )
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
+    verifier = identity_verifier
+    if settings.auth_mode == "insforge" and verifier is None:
+        verifier = build_identity_verifier(
+            database_url=settings.database_url,
+            jwks_url=settings.insforge_jwks_url,
+            issuer=settings.insforge_jwt_issuer,
+            audience=settings.insforge_jwt_audience,
+        )
+
+    @app.middleware("http")
+    async def authenticate_product_request(request: Request, call_next):
+        if (
+            settings.auth_mode != "insforge"
+            or request.url.path == "/api/v1/health"
+            or not request.url.path.startswith("/api/v1/")
+        ):
+            return await call_next(request)
+        assert verifier is not None
+        try:
+            request.state.identity = verifier.verify(
+                request.headers.get("Authorization")
+            )
+        except AuthenticationFailure as error:
+            message = (
+                "verified email required"
+                if error.reason_code == "AUTH_EMAIL_UNVERIFIED"
+                else "authentication required"
+            )
+            return JSONResponse(
+                status_code=error.status_code,
+                content={
+                    "detail": error_detail(error.reason_code, message),
+                },
+                headers={"WWW-Authenticate": "Bearer"}
+                if error.status_code == 401
+                else None,
+            )
+        return await call_next(request)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(
@@ -129,6 +173,25 @@ def create_app(
             "installation_id": store.installation_id(),
             "resource_counts": store.resource_counts(),
             "latest_dataset_release": store.latest_dataset_release(),
+        }
+
+    @app.get("/api/v1/session")
+    def get_product_session(request: Request) -> dict[str, object]:
+        if settings.auth_mode != "insforge":
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "AUTH_NOT_CONFIGURED",
+                    "hosted authentication is not configured",
+                ),
+            )
+        identity = request.state.identity
+        return {
+            "product_state": "non_provisioned",
+            "identity": {
+                "subject": identity.subject,
+                "email": identity.email,
+            },
         }
 
     @app.get("/api/v1/research-definitions")

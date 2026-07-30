@@ -14,9 +14,24 @@
 		reverse_proxy api:8000
 	}
 
-	@insforge_auth path /api/auth/* /.well-known/jwks.json /api/.well-known/jwks.json
-	handle @insforge_auth {
+	@insforge_auth_post {
+		method POST
+		path /api/auth/users /api/auth/sessions /api/auth/refresh /api/auth/logout /api/auth/email/send-verification /api/auth/email/verify /api/auth/email/send-reset-password /api/auth/email/exchange-reset-password-token /api/auth/email/reset-password
+	}
+	handle @insforge_auth_post {
 		reverse_proxy insforge:7130
+	}
+
+	@insforge_auth_get {
+		method GET
+		path /api/auth/public-config /api/auth/anon-key /api/auth/sessions/current /api/auth/email/verify-link /api/auth/email/reset-password-link /.well-known/jwks.json /api/.well-known/jwks.json
+	}
+	handle @insforge_auth_get {
+		reverse_proxy insforge:7130
+	}
+
+	handle /api/auth/* {
+		respond 404
 	}
 
 	handle {
