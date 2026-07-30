@@ -680,6 +680,11 @@ class MetadataStore:
                 """,
                 (idempotency_key, run_id),
             )
+            self._enqueue_research_run(
+                connection,
+                run_id=run_id,
+                created_at=now,
+            )
         frozen = {
             "id": frozen_id,
             "draft_id": draft_id,
@@ -702,6 +707,16 @@ class MetadataStore:
             "result_manifest_sha256": None,
         }
         return frozen, run, True
+
+    def _enqueue_research_run(
+        self,
+        connection,
+        *,
+        run_id: str,
+        created_at: str,
+    ) -> None:
+        """Hosted stores override this transaction hook to write the execution outbox."""
+        del connection, run_id, created_at
 
     def frozen_research_definition(self, version_id: str) -> dict[str, object] | None:
         with self.connect() as connection:
@@ -1086,6 +1101,11 @@ class MetadataStore:
                 VALUES (?, ?)
                 """,
                 (idempotency_key, run_id),
+            )
+            self._enqueue_research_run(
+                connection,
+                run_id=run_id,
+                created_at=now,
             )
         run = self.research_run(run_id)
         if run is None:

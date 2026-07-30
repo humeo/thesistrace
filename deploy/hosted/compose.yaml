@@ -11,6 +11,8 @@ x-app: &app
     THESISTRACE_HOME: /var/lib/thesistrace
     THESISTRACE_API_HOST: 0.0.0.0
     THESISTRACE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
+    THESISTRACE_TEMPORAL_ADDRESS: temporal:7233
+    THESISTRACE_TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-thesistrace}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   restart: unless-stopped
   networks:
@@ -287,6 +289,17 @@ services:
       timeout: 3s
       retries: 40
 
+  execution-relay:
+    <<: *app
+    command: ["thesistrace-execution-relay", "--interval", "1"]
+    environment:
+      <<: *app-environment
+      THESISTRACE_DATABASE_ROLE: relay
+    depends_on:
+      <<: *release-dependency
+      temporal-namespace:
+        condition: service_completed_successfully
+
   data-worker:
     <<: *worker
     command: ["thesistrace-worker", "--role", "data", "--interval", "2"]
@@ -302,7 +315,7 @@ services:
   compute-worker-1:
     <<: *worker
     command: &compute-command
-      ["thesistrace-worker", "--role", "compute", "--interval", "2"]
+      ["thesistrace-temporal-worker"]
     environment: &compute-environment
       <<: *app-environment
       THESISTRACE_DATABASE_ROLE: compute

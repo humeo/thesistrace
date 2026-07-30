@@ -39,7 +39,9 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   await expect(page.getByText("没有伪造示例资源")).toBeVisible();
 
   await page.getByRole("button", { name: "发布 Live Tushare Bootstrap" }).click();
-  await expect(page.getByRole("alert")).toContainText("TOKEN_MISSING");
+  await expect(page.getByRole("alert")).toContainText(
+    "SOURCE_AUTHORIZATION_REQUIRED",
+  );
 
   await page.getByRole("button", { name: "发布 Fixture Bootstrap" }).click();
 

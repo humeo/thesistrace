@@ -86,5 +86,21 @@ class PostgresControlMetadataStore(MetadataStore):
                     )
             yield PostgresConnectionAdapter(connection)
 
+    def _enqueue_research_run(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        run_id: str,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO execution_outbox
+                (id, resource_kind, resource_id, status, created_at)
+            VALUES (?, 'research_run', ?, 'pending', ?)
+            """,
+            (f"outbox_{run_id}", run_id, created_at),
+        )
+
 
 __all__ = ["PostgresControlMetadataStore"]

@@ -17,6 +17,8 @@ class Settings:
     insforge_jwks_url: str = "http://insforge:7130/.well-known/jwks.json"
     insforge_jwt_issuer: str = "insforge"
     insforge_jwt_audience: str = "thesistrace"
+    temporal_address: str = "temporal:7233"
+    temporal_namespace: str = "thesistrace"
 
 
 def settings_from_environment() -> Settings:
@@ -40,6 +42,14 @@ def settings_from_environment() -> Settings:
         ),
         insforge_jwt_audience=os.environ.get(
             "THESISTRACE_INSFORGE_JWT_AUDIENCE",
+            "thesistrace",
+        ),
+        temporal_address=os.environ.get(
+            "THESISTRACE_TEMPORAL_ADDRESS",
+            "temporal:7233",
+        ),
+        temporal_namespace=os.environ.get(
+            "THESISTRACE_TEMPORAL_NAMESPACE",
             "thesistrace",
         ),
     )

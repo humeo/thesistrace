@@ -29,6 +29,7 @@ PRIVATE_TABLES = (
     "research_definition_drafts",
     "research_definitions",
     "research_runs",
+    "execution_outbox",
     "research_run_idempotency",
     "research_run_attempts",
     "daily_tracks",
@@ -96,6 +97,7 @@ def truncate_product_state() -> None:
                 thesistrace_product.research_definition_drafts,
                 thesistrace_product.research_definitions,
                 thesistrace_product.research_runs,
+                thesistrace_product.execution_outbox,
                 thesistrace_product.research_run_idempotency,
                 thesistrace_product.research_run_attempts,
                 thesistrace_product.daily_tracks,
@@ -291,6 +293,7 @@ def seed_private_table_graph(
         "research_definition_drafts": f"draft-{prefix}",
         "research_definitions": f"definition-{prefix}",
         "research_runs": f"run-{prefix}",
+        "execution_outbox": f"outbox-{prefix}",
         "research_run_idempotency": f"run-key-{prefix}",
         "research_run_attempts": f"attempt-{prefix}",
         "daily_tracks": f"track-{prefix}",
@@ -351,6 +354,19 @@ def seed_private_table_graph(
                 workspace_id,
                 ids["research_run_idempotency"],
                 ids["research_runs"],
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO thesistrace_product.execution_outbox
+                (workspace_id, id, resource_kind, resource_id, status, created_at)
+            VALUES (%s, %s, 'research_run', %s, 'dispatched', %s)
+            """,
+            (
+                workspace_id,
+                ids["execution_outbox"],
+                ids["research_runs"],
+                now,
             ),
         )
         connection.execute(
@@ -500,14 +516,24 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
     ids_b = seed_private_table_graph(workspace_b, str(release["id"]), f"b-{suffix}")
 
     with psycopg.connect(TEST_DATABASE_URL) as connection:
-        role = connection.execute(
+        roles = connection.execute(
+            """
+            SELECT rolname, rolsuper, rolbypassrls
+                FROM pg_roles
+                WHERE rolname = ANY(%s)
+                ORDER BY rolname
+                """,
+            (["thesistrace_api", "thesistrace_relay"],),
+        ).fetchone()
+        assert roles == ("thesistrace_api", False, False)
+        relay_role = connection.execute(
             """
             SELECT rolsuper, rolbypassrls
             FROM pg_roles
-            WHERE rolname = 'thesistrace_api'
+            WHERE rolname = 'thesistrace_relay'
             """
         ).fetchone()
-        assert role == (False, False)
+        assert relay_role == (False, False)
         table_contracts = connection.execute(
             """
             SELECT table_name, is_nullable
@@ -575,17 +601,18 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
                     f"SELECT count(*) FROM {table} WHERE {identifying_column} = ?",
                     (other_id,),
                 ).fetchone()[0]
-                changed = connection.execute(
-                    f"""
-                    UPDATE {table}
-                    SET workspace_id = workspace_id
-                    WHERE {identifying_column} = ?
-                    """,
-                    (other_id,),
-                ).rowcount
                 assert own == 1
                 assert hidden == 0
-                assert changed == 0
+                if table != "execution_outbox":
+                    changed = connection.execute(
+                        f"""
+                        UPDATE {table}
+                        SET workspace_id = workspace_id
+                        WHERE {identifying_column} = ?
+                        """,
+                        (other_id,),
+                    ).rowcount
+                    assert changed == 0
 
             with pytest.raises(psycopg.errors.InsufficientPrivilege):
                 connection.execute(

@@ -1,10 +1,11 @@
+import copy
 import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
@@ -95,6 +96,77 @@ def public_dataset_release_view(release: dict[str, object]) -> dict[str, object]
         )
         if key in release
     } | {"correction_count": corrections}
+
+
+def page(items: list[dict[str, object]], offset: int, limit: int) -> dict[str, object]:
+    selected = items[offset : offset + limit]
+    return {
+        "items": selected,
+        "offset": offset,
+        "limit": limit,
+        "has_more": offset + len(selected) < len(items),
+    }
+
+
+def public_research_run_view(run: dict[str, object]) -> dict[str, object]:
+    view = copy.deepcopy(run)
+    view.pop("result_manifest_sha256", None)
+    return view
+
+
+def public_result_view(
+    result: dict[str, object],
+    *,
+    daily_offset: int,
+    daily_limit: int,
+    position_offset: int,
+    position_limit: int,
+) -> dict[str, object]:
+    view = copy.deepcopy(result)
+    manifest = view.get("manifest")
+    if isinstance(manifest, dict):
+        manifest.pop("objects", None)
+        manifest.pop("manifest_sha256", None)
+        release = manifest.get("dataset_release")
+        if isinstance(release, dict):
+            release.pop("manifest_sha256", None)
+
+    factor = view.get("factor_evaluation")
+    if isinstance(factor, dict):
+        horizons = factor.get("horizons")
+        if isinstance(horizons, dict):
+            for horizon in horizons.values():
+                if isinstance(horizon, dict):
+                    for key in ("alpha_checksum", "label_checksum", "source_checksum"):
+                        horizon.pop(key, None)
+
+    strategy = view.get("strategy_backtest")
+    if isinstance(strategy, dict):
+        strategy.pop("alpha_checksum", None)
+        strategy.pop("rebalance_aggregates", None)
+        strategy.pop("execution_aggregates", None)
+        daily = strategy.get("daily")
+        if isinstance(daily, list):
+            strategy["daily"] = daily[daily_offset : daily_offset + daily_limit]
+            strategy["daily_page"] = {
+                "offset": daily_offset,
+                "limit": daily_limit,
+                "has_more": daily_offset + len(strategy["daily"]) < len(daily),
+            }
+
+    terminal = view.get("terminal_strategy_state")
+    if isinstance(terminal, dict):
+        positions = terminal.get("positions")
+        if isinstance(positions, list):
+            terminal["positions"] = positions[
+                position_offset : position_offset + position_limit
+            ]
+            terminal["positions_page"] = {
+                "offset": position_offset,
+                "limit": position_limit,
+                "has_more": position_offset + len(terminal["positions"]) < len(positions),
+            }
+    return view
 
 
 def create_app(
@@ -336,8 +408,11 @@ def create_app(
         )
 
     @app.get("/api/v1/research-definitions")
-    def list_research_definitions() -> dict[str, object]:
-        return {"items": store.list_research_drafts()}
+    def list_research_definitions(
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=100),
+    ) -> dict[str, object]:
+        return page(store.list_research_drafts(), offset, limit)
 
     @app.post("/api/v1/research-definitions")
     def create_research_definition(content: dict[str, object]) -> JSONResponse:
@@ -392,7 +467,14 @@ def create_app(
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(
             status_code=202 if created else 200,
-            content={"frozen_definition": frozen, "run": run},
+            content={
+                "frozen_definition": frozen,
+                "run": (
+                    public_research_run_view(run)
+                    if settings.runtime_mode == "hosted"
+                    else run
+                ),
+            },
         )
 
     @app.get("/api/v1/research-definition-versions/{version_id}")
@@ -409,12 +491,21 @@ def create_app(
         return frozen
 
     @app.get("/api/v1/research-definition-versions")
-    def list_research_definition_versions() -> dict[str, object]:
-        return {"items": store.list_frozen_research_definitions()}
+    def list_research_definition_versions(
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=100),
+    ) -> dict[str, object]:
+        return page(store.list_frozen_research_definitions(), offset, limit)
 
     @app.get("/api/v1/research-runs")
-    def list_research_runs() -> dict[str, object]:
-        return {"items": store.list_research_runs()}
+    def list_research_runs(
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=100),
+    ) -> dict[str, object]:
+        runs = store.list_research_runs()
+        if settings.runtime_mode == "hosted":
+            runs = [public_research_run_view(run) for run in runs]
+        return page(runs, offset, limit)
 
     @app.get("/api/v1/research-runs/{run_id}")
     def get_research_run(run_id: str) -> dict[str, object]:
@@ -424,7 +515,11 @@ def create_app(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
             )
-        return run
+        return (
+            public_research_run_view(run)
+            if settings.runtime_mode == "hosted"
+            else run
+        )
 
     @app.get("/api/v1/research-runs/{run_id}/attempts/{ordinal}")
     def get_research_run_attempt(run_id: str, ordinal: int) -> dict[str, object]:
@@ -448,7 +543,13 @@ def create_app(
         )
 
     @app.get("/api/v1/research-runs/{run_id}/result")
-    def get_research_run_result(run_id: str) -> dict[str, object]:
+    def get_research_run_result(
+        run_id: str,
+        daily_offset: int = Query(0, ge=0),
+        daily_limit: int = Query(756, ge=1, le=756),
+        position_offset: int = Query(0, ge=0),
+        position_limit: int = Query(100, ge=1, le=100),
+    ) -> dict[str, object]:
         try:
             result = research_runs.result_view(run_id)
         except KeyError as error:
@@ -464,7 +565,17 @@ def create_app(
                     "ResearchRun has no successful Result Bundle",
                 ),
             )
-        return result
+        return (
+            public_result_view(
+                result,
+                daily_offset=daily_offset,
+                daily_limit=daily_limit,
+                position_offset=position_offset,
+                position_limit=position_limit,
+            )
+            if settings.runtime_mode == "hosted"
+            else result
+        )
 
     @app.post("/api/v1/research-runs/{run_id}/cancel")
     def cancel_research_run(run_id: str) -> dict[str, object]:
@@ -474,7 +585,11 @@ def create_app(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
             )
-        return run
+        return (
+            public_research_run_view(run)
+            if settings.runtime_mode == "hosted"
+            else run
+        )
 
     @app.post("/api/v1/research-runs/{run_id}/rerun")
     def rerun_research(
@@ -490,7 +605,14 @@ def create_app(
             ) from error
         if created:
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
-        return JSONResponse(status_code=202 if created else 200, content=run)
+        return JSONResponse(
+            status_code=202 if created else 200,
+            content=(
+                public_research_run_view(run)
+                if settings.runtime_mode == "hosted"
+                else run
+            ),
+        )
 
     @app.post("/api/v1/research-runs/{run_id}/daily-tracks")
     def activate_daily_track(
@@ -509,8 +631,11 @@ def create_app(
         return JSONResponse(status_code=201 if created else 200, content=track)
 
     @app.get("/api/v1/daily-tracks")
-    def list_daily_tracks() -> dict[str, object]:
-        return {"items": tracking.list_tracks()}
+    def list_daily_tracks(
+        offset: int = Query(0, ge=0),
+        limit: int = Query(10, ge=1, le=10),
+    ) -> dict[str, object]:
+        return page(tracking.list_tracks(), offset, limit)
 
     @app.get("/api/v1/daily-tracks/{track_id}")
     def get_daily_track(track_id: str) -> dict[str, object]:
@@ -921,11 +1046,14 @@ def create_app(
         )
 
     @app.get("/api/v1/dataset-releases")
-    def list_dataset_releases() -> dict[str, object]:
+    def list_dataset_releases(
+        offset: int = Query(0, ge=0),
+        limit: int = Query(100, ge=1, le=100),
+    ) -> dict[str, object]:
         releases = store.list_dataset_releases()
         if settings.runtime_mode == "hosted":
             releases = [public_dataset_release_view(release) for release in releases]
-        return {"items": releases}
+        return page(releases, offset, limit)
 
     @app.get("/api/v1/dataset-releases/{release_id}")
     def get_dataset_release(release_id: str) -> dict[str, object]:

@@ -1,0 +1,2 @@
+GRANT SELECT ON thesistrace_product.research_definitions
+TO thesistrace_compute;

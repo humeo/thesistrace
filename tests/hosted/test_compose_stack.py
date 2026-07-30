@@ -44,6 +44,7 @@ def test_hosted_stack_declares_the_complete_pinned_topology() -> None:
         "thesistrace-migrations",
         "volume-permissions",
         "release-gate",
+        "execution-relay",
         "data-worker",
         "compute-worker-1",
         "compute-worker-2",
@@ -124,6 +125,8 @@ def test_hosted_processes_use_explicit_database_and_worker_roles() -> None:
     assert services["api"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "api"
     assert services["data-worker"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "data"
     assert services["data-worker"]["command"][1:3] == ["--role", "data"]
+    assert services["execution-relay"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "relay"
+    assert services["execution-relay"]["command"][0] == "thesistrace-execution-relay"
     for name in {
         "compute-worker-1",
         "compute-worker-2",
@@ -131,7 +134,7 @@ def test_hosted_processes_use_explicit_database_and_worker_roles() -> None:
         "compute-worker-4",
     }:
         assert services[name]["environment"]["THESISTRACE_DATABASE_ROLE"] == "compute"
-        assert services[name]["command"][1:3] == ["--role", "compute"]
+        assert services[name]["command"][0] == "thesistrace-temporal-worker"
 
 
 def test_one_shot_migrations_gate_every_public_or_steady_application_service() -> None:
@@ -162,6 +165,7 @@ def test_one_shot_migrations_gate_every_public_or_steady_application_service() -
         "api",
         "edge",
         "data-worker",
+        "execution-relay",
         "compute-worker-1",
         "compute-worker-2",
         "compute-worker-3",
