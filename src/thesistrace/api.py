@@ -74,6 +74,7 @@ def create_app(
         objects,
         WorkingCacheStore(cache_root),
     )
+    tracking.reconcile_cache_deletions()
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 

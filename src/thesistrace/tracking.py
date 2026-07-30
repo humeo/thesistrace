@@ -181,6 +181,7 @@ class DailyTrackingService:
             definition=content,
             calculation_kernel=str(manifest["calculation_kernel"]),
         )
+        self.cache.advance_fence(track_id, 1, stopped=False)
         admitted = False
         existing_track_id: str | None = None
         try:
@@ -583,6 +584,14 @@ class DailyTrackingService:
                 """,
                 (track_id,),
             ).fetchall()
+            deletion = connection.execute(
+                """
+                SELECT *
+                FROM working_cache_deletions
+                WHERE daily_track_id = ?
+                """,
+                (track_id,),
+            ).fetchone()
         track = {key: row[key] for key in row.keys()}
         track["generations"] = [
             {key: generation[key] for key in generation.keys()} for generation in generations
@@ -600,6 +609,11 @@ class DailyTrackingService:
             None,
         )
         track["head"] = head
+        track["cache_deletion"] = (
+            {key: deletion[key] for key in deletion.keys()}
+            if deletion is not None
+            else None
+        )
         return track
 
     def list_tracks(self) -> list[dict[str, object]]:
@@ -735,13 +749,49 @@ class DailyTrackingService:
     def stop(self, track_id: str) -> dict[str, object] | None:
         now = datetime.now(UTC).isoformat()
         with self.metadata.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """
+                SELECT status, fencing_token
+                FROM daily_tracks
+                WHERE id = ?
+                """,
+                (track_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            fencing_token = int(row["fencing_token"])
+            if row["status"] == "active":
+                fencing_token += 1
+                connection.execute(
+                    """
+                    UPDATE daily_tracks
+                    SET status = 'stopped', stopped_at = ?, fencing_token = ?
+                    WHERE id = ? AND status = 'active'
+                    """,
+                    (now, fencing_token, track_id),
+                )
             connection.execute(
                 """
-                UPDATE daily_tracks
-                SET status = 'stopped', stopped_at = ?
-                WHERE id = ? AND status = 'active'
+                INSERT INTO working_cache_deletions
+                    (daily_track_id, fencing_token, status, requested_at)
+                VALUES (?, ?, 'pending', ?)
+                ON CONFLICT(daily_track_id) DO UPDATE SET
+                    fencing_token = MAX(
+                        working_cache_deletions.fencing_token,
+                        excluded.fencing_token
+                    ),
+                    status = CASE
+                        WHEN working_cache_deletions.status = 'completed'
+                        THEN 'completed'
+                        ELSE 'pending'
+                    END,
+                    requested_at = MIN(
+                        working_cache_deletions.requested_at,
+                        excluded.requested_at
+                    )
                 """,
-                (now, track_id),
+                (track_id, fencing_token, now),
             )
             connection.execute(
                 """
@@ -774,7 +824,114 @@ class DailyTrackingService:
                 """,
                 (now, track_id),
             )
+        try:
+            self.cache.advance_fence(
+                track_id,
+                fencing_token,
+                stopped=True,
+            )
+            self.reconcile_cache_deletions(track_id=track_id)
+        except Exception as error:
+            with self.metadata.connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE working_cache_deletions
+                    SET last_error = ?
+                    WHERE daily_track_id = ? AND status = 'pending'
+                    """,
+                    (str(error), track_id),
+                )
         return self.get_track(track_id)
+
+    def reconcile_cache_deletions(
+        self,
+        *,
+        track_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        with self.metadata.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT deletion.daily_track_id, deletion.fencing_token,
+                       deletion.attempt_count, track.status AS track_status
+                FROM working_cache_deletions AS deletion
+                LEFT JOIN daily_tracks AS track
+                  ON track.id = deletion.daily_track_id
+                WHERE deletion.status = 'pending'
+                  AND (? IS NULL OR deletion.daily_track_id = ?)
+                ORDER BY deletion.requested_at, deletion.daily_track_id
+                """,
+                (track_id, track_id),
+            ).fetchall()
+        outcomes: list[dict[str, object]] = []
+        for row in rows:
+            current_track_id = str(row["daily_track_id"])
+            token = int(row["fencing_token"])
+            try:
+                self.cache.advance_fence(
+                    current_track_id,
+                    token,
+                    stopped=True,
+                )
+                self.cache.delete_if_not_newer(current_track_id, token)
+            except Exception as error:
+                with self.metadata.connect() as connection:
+                    connection.execute(
+                        """
+                        UPDATE working_cache_deletions
+                        SET attempt_count = attempt_count + 1,
+                            last_error = ?
+                        WHERE daily_track_id = ? AND status = 'pending'
+                        """,
+                        (str(error), current_track_id),
+                    )
+                outcomes.append(
+                    {
+                        "daily_track_id": current_track_id,
+                        "status": "pending",
+                        "error": str(error),
+                    }
+                )
+                continue
+            completed_at = datetime.now(UTC).isoformat()
+            with self.metadata.connect() as connection:
+                connection.execute(
+                    """
+                    UPDATE working_cache_deletions
+                    SET status = 'completed',
+                        attempt_count = attempt_count + 1,
+                        completed_at = ?, last_error = NULL
+                    WHERE daily_track_id = ? AND status = 'pending'
+                    """,
+                    (completed_at, current_track_id),
+                )
+            outcomes.append(
+                {
+                    "daily_track_id": current_track_id,
+                    "status": "completed",
+                }
+            )
+
+        with self.metadata.connect() as connection:
+            states = {
+                str(row["id"]): (str(row["status"]), int(row["fencing_token"]))
+                for row in connection.execute(
+                    "SELECT id, status, fencing_token FROM daily_tracks"
+                ).fetchall()
+            }
+        for cached_track_id in self.cache.list_track_ids():
+            state = states.get(cached_track_id)
+            if state is not None and state[0] == "active":
+                continue
+            if state is None:
+                self.cache.delete(cached_track_id)
+            else:
+                self.cache.advance_fence(
+                    cached_track_id,
+                    state[1],
+                    stopped=True,
+                )
+                self.cache.delete_if_not_newer(cached_track_id, state[1])
+        return outcomes
 
     def enqueue_active_tracks(self, target_release_id: str) -> list[dict[str, str]]:
         failures: list[dict[str, str]] = []
@@ -2054,6 +2211,11 @@ class DailyTrackingService:
                 """,
                 (attempt_id, advance_id, ordinal, now, fencing_token),
             )
+        self.cache.advance_fence(
+            str(row["daily_track_id"]),
+            fencing_token,
+            stopped=False,
+        )
         return self._advance(advance_id), {
             "id": attempt_id,
             "ordinal": ordinal,

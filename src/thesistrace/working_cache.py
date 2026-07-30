@@ -1,8 +1,10 @@
+import fcntl
 import hashlib
 import json
 import os
 import shutil
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -127,7 +129,13 @@ class WorkingCacheStore:
                     f"Working Cache seed is {total_bytes} bytes; limit is {MAX_CACHE_BYTES}"
                 )
             destination.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(staging, destination)
+            with self._track_lock(track_id):
+                fence = self._read_fence(track_id)
+                if fence is not None and fence["stopped"]:
+                    raise WorkingCacheError(
+                        "stopped DailyTrack cannot recreate a Working Cache"
+                    )
+                os.replace(staging, destination)
             remove_empty_directory(self.root / ".staging")
             return basis
         except Exception:
@@ -261,19 +269,29 @@ class WorkingCacheStore:
                 )
             if before_install is not None:
                 before_install()
-            installed_basis = self.read_basis(track_id)
-            if incoming_token <= int(installed_basis["fencing_token"]):
-                raise WorkingCacheError(
-                    "Working Cache commit has a stale fencing token"
-                )
-            os.replace(destination, backup)
-            replaced = True
-            try:
-                os.replace(staging, destination)
-            except Exception:
-                os.replace(backup, destination)
-                replaced = False
-                raise
+            with self._track_lock(track_id):
+                fence = self._read_fence(track_id)
+                if (
+                    fence is None
+                    or fence["stopped"]
+                    or int(fence["fencing_token"]) != incoming_token
+                ):
+                    raise WorkingCacheError(
+                        "Working Cache commit has a stale fencing token"
+                    )
+                installed_basis = self.read_basis(track_id)
+                if incoming_token <= int(installed_basis["fencing_token"]):
+                    raise WorkingCacheError(
+                        "Working Cache commit has a stale fencing token"
+                    )
+                os.replace(destination, backup)
+                replaced = True
+                try:
+                    os.replace(staging, destination)
+                except Exception:
+                    os.replace(backup, destination)
+                    replaced = False
+                    raise
             shutil.rmtree(backup, ignore_errors=True)
             replaced = False
             remove_empty_directory(self.root / ".staging")
@@ -326,27 +344,89 @@ class WorkingCacheStore:
         shutil.rmtree(self._track_path(track_id), ignore_errors=True)
 
     def delete_if_not_newer(self, track_id: str, fencing_token: int) -> None:
-        path = self._track_path(track_id)
-        if not path.exists():
-            return
-        try:
-            basis = self.read_basis(track_id)
-        except (OSError, ValueError):
+        with self._track_lock(track_id):
+            fence = self._read_fence(track_id)
+            if fence is not None and int(fence["fencing_token"]) > fencing_token:
+                raise WorkingCacheError(
+                    "stale fencing token cannot delete the current Working Cache"
+                )
+            path = self._track_path(track_id)
+            if not path.exists():
+                return
+            try:
+                basis = self.read_basis(track_id)
+            except (OSError, ValueError):
+                shutil.rmtree(path)
+                return
+            if int(basis["fencing_token"]) > fencing_token:
+                raise WorkingCacheError(
+                    "stale fencing token cannot delete the current Working Cache"
+                )
             shutil.rmtree(path)
-            return
-        if int(basis["fencing_token"]) > fencing_token:
-            raise WorkingCacheError(
-                "stale fencing token cannot delete the current Working Cache"
-            )
-        shutil.rmtree(path)
 
     def discard_staging(self) -> None:
         shutil.rmtree(self.root / ".staging", ignore_errors=True)
+
+    def advance_fence(
+        self,
+        track_id: str,
+        fencing_token: int,
+        *,
+        stopped: bool,
+    ) -> dict[str, object]:
+        with self._track_lock(track_id):
+            current = self._read_fence(track_id)
+            if current is not None and int(current["fencing_token"]) > fencing_token:
+                raise WorkingCacheError("Working Cache fence cannot move backwards")
+            if current is not None and current["stopped"] and not stopped:
+                raise WorkingCacheError("stopped DailyTrack fence is permanent")
+            value = {
+                "daily_track_id": track_id,
+                "fencing_token": fencing_token,
+                "stopped": stopped or bool(current and current["stopped"]),
+            }
+            destination = self._fence_path(track_id)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            temporary = destination.with_name(
+                f".{destination.name}.{uuid4().hex}.tmp"
+            )
+            temporary.write_bytes(canonical_json_bytes(value))
+            os.replace(temporary, destination)
+            return value
+
+    def read_fence(self, track_id: str) -> dict[str, object] | None:
+        with self._track_lock(track_id):
+            return self._read_fence(track_id)
 
     def _track_path(self, track_id: str) -> Path:
         if not track_id or "/" in track_id or track_id in {".", ".."}:
             raise WorkingCacheError("DailyTrack id is not path-safe")
         return self.root / "tracks" / track_id
+
+    def _fence_path(self, track_id: str) -> Path:
+        self._track_path(track_id)
+        return self.root / "fences" / f"{track_id}.json"
+
+    def _read_fence(self, track_id: str) -> dict[str, object] | None:
+        path = self._fence_path(track_id)
+        if not path.exists():
+            return None
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict):
+            raise WorkingCacheError("Working Cache fence is invalid")
+        return value
+
+    @contextmanager
+    def _track_lock(self, track_id: str) -> Iterator[None]:
+        self._track_path(track_id)
+        path = self.root / "locks" / f"{track_id}.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _basis(

@@ -156,6 +156,7 @@ def test_top3000_seed_shape_stays_below_the_cache_byte_limit(tmp_path: Path) -> 
         }
         for instrument in range(3_000)
     ]
+    cache.advance_fence("track_capacity", 2, stopped=False)
     advanced_basis = cache.commit_advance(
         {
             "daily_track_id": "track_capacity",

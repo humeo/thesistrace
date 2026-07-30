@@ -48,6 +48,7 @@ def main() -> None:
     while True:
         store.record_worker_heartbeat(datetime.now(UTC))
         try:
+            tracking.reconcile_cache_deletions()
             store.recover_abandoned_research_runs(
                 stale_after_seconds=settings.worker_stale_after_seconds
             )

@@ -171,6 +171,16 @@ class MetadataStore:
                     diagnostic_json TEXT,
                     UNIQUE(advance_id, ordinal)
                 );
+
+                CREATE TABLE IF NOT EXISTS working_cache_deletions (
+                    daily_track_id TEXT PRIMARY KEY REFERENCES daily_tracks(id),
+                    fencing_token INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
+                    requested_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    last_error TEXT
+                );
                 """
             )
             connection.execute(
