@@ -5,13 +5,116 @@ strategy backtests, and continuous daily research tracking.
 
 ## Language
 
-**Workspace**:
-The complete user-visible boundary of one V1 deployment for one operator. It
-contains many Research Definitions, ResearchRuns, DailyTracks, Dataset
-Releases, and reports but has no User, Organization, Tenant, membership,
-sharing, or RBAC ownership model. Deployment infrastructure may protect access
-from outside the domain.
-_Avoid_: Tenant, organization, user account, shared project
+**V1 Workspace**:
+The historical user-visible boundary of one V1 deployment for one operator. It
+has no User, tenant ownership, membership, sharing, or RBAC model.
+_Avoid_: Personal Workspace, Tenant, organization, user account
+
+**User**:
+An authenticated person who owns exactly one Personal Workspace in the first
+hosted release.
+_Avoid_: Tenant, account, operator
+
+**Operator**:
+The trusted human responsible for running the Hosted Platform V2 deployment.
+The Operator deploys and migrates services, issues Registration Invitations,
+applies Quota Profile overrides, manages secrets and backups, performs disaster
+recovery, and reviews platform-wide health. Operator authority is an
+administrative deployment boundary and does not make the Operator the owner of
+a User's Personal Workspace or research resources.
+_Avoid_: User, Personal Workspace member, Worker service identity, tenant admin
+
+**Personal Workspace**:
+The private tenant, ownership, quota, and scheduling boundary for one User's
+research resources. It has no additional members or sharing in the first hosted
+release.
+_Avoid_: User, Organization, shared project, V1 Workspace
+
+**Quota Profile**:
+The named set of resource and admission limits assigned to one Personal
+Workspace. It is independent of pricing, payment, or subscription status.
+_Avoid_: Billing plan, account balance, Compute capacity
+
+**Request Rate Limit**:
+A short-window abuse and overload control applied to HTTP requests. Cloudflare
+applies coarse unauthenticated limits by public route and client IP, while the
+ThesisTrace API applies authenticated limits by User and Personal Workspace. It
+does not allocate stored capacity or durable Compute work and is not a Quota
+Profile dimension.
+_Avoid_: Quota Profile, Compute concurrency, Personal Workspace storage limit
+
+**Resource Exhaustion Failure**:
+The terminal execution classification `RESOURCE_EXHAUSTED`, recorded after an
+accepted Compute or Publication Activity exceeds its container resource
+envelope twice. It identifies platform capacity or implementation failure, not
+a User quota violation, disk-pressure admission rejection, validation error, or
+unsuccessful investment result.
+_Avoid_: QUOTA_EXCEEDED, retryable infrastructure event, Alpha failure
+
+**Resource Tombstone**:
+The permanent minimal record left when a terminal private research resource is
+deleted. It preserves identity, authoritative manifest hash, actor, and deletion
+time without retaining the deleted result payload.
+_Avoid_: Soft-deleted resource, Result Bundle, garbage-collection marker
+
+**Registration Invitation**:
+A single-use, email-bound authorization to register one User and provision that
+User's Personal Workspace during the first hosted release. It grants no access
+to an existing Personal Workspace or research resource.
+_Avoid_: Workspace membership invitation, login token, resource permission
+
+**System Health**:
+The operational truth of whether the hosted services can safely accept,
+schedule, execute, persist, and serve work. It covers Auth, API, PostgreSQL,
+object storage, Temporal, workers, Dataset Publication, Activity heartbeats and
+timeouts, Task Queues, and capacity pressure. Host CPU and memory are evidence,
+not the whole definition.
+_Avoid_: Host monitoring alone, Data Health, Quantitative Semantic Health
+
+**Service Liveness**:
+The cheap, dependency-independent evidence that one process is alive and able
+to make internal progress. It never writes a Storage probe or declares
+PostgreSQL, Temporal, Tushare, or telemetry healthy.
+_Avoid_: Service Readiness, System Health, dependency check
+
+**Service Readiness**:
+The evidence that one service instance and its required internal dependencies
+can safely receive that service's traffic or work. Optional external telemetry
+and Tushare availability do not determine whole-platform Readiness.
+_Avoid_: Service Liveness, Data Health, automatic restart signal
+
+**Temporal Workflow Execution**:
+The infrastructure execution coordinator linked to one finite Dataset
+Publication, ResearchRun, Tracking Advance, equivalence-verification, or
+maintenance-only Tracking Generation rebuild operation. It carries only opaque
+resource identities, hashes, and small orchestration state; PostgreSQL remains
+the product-state authority and bulk data remains in object storage.
+_Avoid_: ResearchRun, domain truth, Alpha Matrix, permanent DailyTrack
+
+**Compute Priority**:
+The dispatch tier attached to a normal Compute Activity on the shared Temporal
+Task Queue. P1 is reserved for automatic Tracking Advances, while P3 covers
+ResearchRuns and explicit equivalence verification. Priority is evaluated
+before equal-weight Personal Workspace fairness and never preempts a running
+Activity.
+_Avoid_: Quota Profile, Compute concurrency, Dataset Publication priority
+
+**Data Health**:
+The quality and timeliness of the path from Tushare inputs to an immutable
+Dataset Release. It covers freshness, expected coverage, schema validity,
+calendar consistency, duplicates, unexplained gaps, lineage, checksums, and
+publication delay.
+_Avoid_: Successful HTTP request, System Health, Alpha performance
+
+**Quantitative Semantic Health**:
+The evidence that research computation continues to honor its frozen domain,
+numeric, and reproducibility contracts across Alpha Matrix, Factor Evaluation,
+Strategy Backtest, and Daily Tracking. It includes deterministic regression
+evidence, coverage and missing-reason behavior, accounting invariants,
+canonical checksums, and Batch-Incremental Equivalence. It does not promise
+that an Alpha remains profitable. Historical-correction boundaries and
+release-sequence equivalence are separate visible evidence.
+_Avoid_: Investment-performance guarantee, System Health, Data Health
 
 **Investment Hypothesis**:
 A human-readable claim about a market relationship that motivates an Alpha.
@@ -128,10 +231,11 @@ _Avoid_: ResearchRun, rolling backtest, mutable latest Definition
 **Tracking Origin**:
 The seed ResearchRun's original `R1` Research Session coordinate, all-cash
 baseline, Research Window schedule anchor, and frozen Definition semantics from
-which both corrected replay and the DailyTrack batch oracle begin. Market data
-is resolved through the current Generation's target Dataset Release, not frozen
-into the Origin. It never rolls forward with the latest 504-session Research
-Window.
+which the DailyTrack reference oracle begins. Market data is resolved through
+the ordered Dataset Release sequence bound by the Activation Checkpoint and
+later Tracking Checkpoints, not frozen into the Origin or replaced
+retroactively by the Head Release. It never rolls forward with the latest
+504-session Research Window.
 _Avoid_: Activation date only, latest rolling R1, Tracking Head
 
 **Activation Checkpoint**:
@@ -160,7 +264,9 @@ _Avoid_: New Tracking Advance, ResearchRun Attempt, partial Checkpoint
 The immutable authoritative manifest and state published by a successful
 Tracking Advance. It binds its Generation, same-Generation predecessor or null
 Generation root, target release, processed sessions, new Alpha and Label
-artifacts, Strategy events and state, versions, and checksums. A mutable
+artifacts, Strategy events and state, versions, and checksums. Its predecessor
+chain and each target release form the authoritative ordered Release sequence;
+it identifies a Tracking Correction Boundary when applicable. A mutable
 Tracking Head only points to one Checkpoint.
 _Avoid_: Mutable tracker row, attempt log, Result Bundle extension
 
@@ -172,23 +278,33 @@ _Avoid_: Result truth, mutable Checkpoint, Dataset latest
 
 **Tracking Generation**:
 One immutable DailyTrack result branch. Normal Advances append within a
-Generation; a history-changing correction creates a fully replayed new
-Generation from the Tracking Origin. Each Generation pins one calculation
-kernel semantic version under the DailyTrack's Numeric Execution Contract and
-has exactly one predecessor-free root Checkpoint. A result-changing runtime fix
-also requires a fully replayed new Generation. The prior as-known Generation
-remains queryable and unchanged.
-_Avoid_: In-place historical correction, partial patch, Dataset Release
+Generation, including an Advance whose Dataset Release contains an accepted
+historical correction. Each Generation pins one calculation-kernel semantic
+version under the DailyTrack's Numeric Execution Contract and has exactly one
+predecessor-free root Checkpoint. A result-changing runtime fix requires a new
+fully executed Generation. The prior as-known Generation remains queryable and
+unchanged.
+_Avoid_: Dataset correction boundary, partial patch, Dataset Release
+
+**Tracking Correction Boundary**:
+A successful Tracking Advance whose target Dataset Release contains an
+accepted historical correction that affects the DailyTrack's dependency
+closure. It continues from the prior Checkpoint in the same Generation,
+preserves every previously published observation and account state, and uses
+the corrected Release only for results first published by this and later
+Advances. It is visible provenance, not a replay or historical rewrite.
+_Avoid_: New Tracking Generation, corrected backtest, in-place mutation
 
 **Batch-Incremental Equivalence**:
-The core V1 correctness invariant that batch replay and session-by-session
-Daily Tracking from the same Tracking Origin, research semantics, target
-release, Generation-pinned calculation kernel, and DailyTrack-pinned Numeric
-Execution Contract produce canonically exact Alpha Values, matured Labels,
-orders, costs, holdings, cash, NAV, and derived results. Standard rolling
-504-session ResearchRun output is not the comparator for a later continuous
-DailyTrack.
-_Avoid_: Tolerance-only comparison, latest rolling Run, two calculation kernels
+The core V1 correctness invariant that a reference execution and
+session-by-session Daily Tracking from the same Tracking Origin, research
+semantics, ordered Advance Dataset Release sequence, Generation-pinned
+calculation kernel, and DailyTrack-pinned Numeric Execution Contract produce
+canonically exact Alpha Values, matured Labels, orders, costs, holdings, cash,
+NAV, and derived results. After a Tracking Correction Boundary, a calculation
+that applies only the latest corrected Release from the Origin is a
+counterfactual, not the comparator.
+_Avoid_: Latest-Release-only replay, tolerance-only comparison, latest rolling Run
 
 **Strategy**:
 Rules that translate Alpha Values into portfolio targets and changes over time.
@@ -727,36 +843,38 @@ warm-up sessions followed by the 504-session Research Window.
 _Avoid_: Research Window, complete market history, report period
 
 **Dataset Release**:
-An identified, immutable manifest for one validated market-data snapshot. It
-is a cumulative logical snapshot from Dataset Bootstrap through its final
-Research Session and binds the exact Research Calendar, Universe snapshots,
-Canonical Dataset Schemas and immutable Physical Data Objects, Adjustment
-Anchors, Adjustment Factors, and other required dated families. Its manifest
-records its direct predecessor, appended session range, and accepted historical
-correction change-set with affected logical keys or ranges. The physical
-encoding may remain a small predecessor-linked delta rather than copying all
-history. The Bootstrap Release is the chain root with no predecessor, the
-complete bootstrapped calendar as its appended range, and an empty correction
-change-set; every later Release names one predecessor. Factor Evaluation,
-Strategy Backtest, Alpha generation and validation, collaboration, and
-reproduction resolve data through this one snapshot. A ResearchRun pins one
-release, while each Tracking Advance separately pins its target release without
-modifying the DailyTrack's seed Definition. `latest` may select a release
-before freezing but is never itself a reproducible identity.
-_Avoid_: Mutable dataset, latest dataset, runtime cache
+A platform-owned, immutable manifest for one validated market-data snapshot,
+available read-only to every Personal Workspace. It is a cumulative logical
+snapshot from Dataset Bootstrap through its final Research Session and binds the
+exact Research Calendar, Universe snapshots, Canonical Dataset Schemas and
+immutable Physical Data Objects, Adjustment Anchors, Adjustment Factors, and
+other required dated families. Its manifest records its direct predecessor,
+appended session range, and accepted historical correction change-set with
+affected logical keys or ranges. The physical encoding may remain a small
+predecessor-linked delta rather than copying all history. The Bootstrap Release
+is the chain root with no predecessor, the complete bootstrapped calendar as its
+appended range, and an empty correction change-set; every later Release names
+one predecessor. Factor Evaluation, Strategy Backtest, Alpha generation and
+validation, collaboration, and reproduction resolve data through this one
+snapshot. A ResearchRun pins one release, while each Tracking Advance separately
+pins its target release without modifying the DailyTrack's seed Definition.
+`latest` may select a release before freezing but is never itself a reproducible
+identity.
+_Avoid_: Workspace-owned dataset, mutable dataset, latest dataset, runtime cache
 
 **Dataset Publication**:
-The post-close process attempted only when a newly completed Research Session
-extends the latest release. It makes a new Dataset Release available after all
-required daily inputs, pending accepted historical corrections, and quality
-checks succeed. A correction without a new Research Session waits for the next
-normal attempt. V1 incrementally fetches the new session and does not re-scan
-the complete three-year history for corrections after every close. After
-consecutive failures, one successful release catches up to the latest completed
-session without manufacturing intermediate releases. Failure leaves the
-previous latest release unchanged. A committed release may enqueue independent
-active DailyTrack Advances, but Publication never waits for or rolls back
-because of their outcome.
+The platform-operated post-close process attempted only when a newly completed
+Research Session extends the latest release. Personal Workspaces may consume its
+Dataset Releases but do not publish them. It makes a new Dataset Release
+available after all required daily inputs, pending accepted historical
+corrections, and quality checks succeed. A correction without a new Research
+Session waits for the next normal attempt. V1 incrementally fetches the new
+session and does not re-scan the complete three-year history for corrections
+after every close. After consecutive failures, one successful release catches
+up to the latest completed session without manufacturing intermediate releases.
+Failure leaves the previous latest release unchanged. A committed release may
+enqueue independent active DailyTrack Advances, but Publication never waits for
+or rolls back because of their outcome.
 _Avoid_: Data fetch, partial update, in-place dataset mutation,
 correction-only release
 

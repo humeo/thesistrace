@@ -30,9 +30,10 @@ reusing every unchanged object; it does not copy the full historical dataset.
 If no new Research Session completes, no release is published regardless of
 how many corrections are pending.
 
-If such a correction changes an active DailyTrack dependency, ADR-0107 creates
-a new immutable Tracking Generation and full replay. It never rewrites the
-older as-known Generation.
+If such a correction changes an active DailyTrack dependency, ADR-0144 applies
+it prospectively in the next normal Tracking Advance. The Advance continues
+from the current Checkpoint in the same Tracking Generation and never rewrites
+already published observations.
 
 This cadence deliberately permits a correction to wait through a weekend or
 market holiday. V1 does not expose an operator action for publishing a

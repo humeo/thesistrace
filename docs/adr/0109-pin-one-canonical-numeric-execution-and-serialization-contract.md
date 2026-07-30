@@ -65,10 +65,11 @@ separators, and report rounding never enter equality or checksums.
 Each Tracking Generation pins one calculation-kernel semantic version in
 addition to the DailyTrack's numeric contract. Ordinary deployment build IDs
 may vary by Checkpoint only when they declare compatibility with both pinned
-versions. A result-changing runtime correction requires a new Generation and
-full replay from Tracking Origin using ADR-0107's predecessor-free root and
-superseded-Generation provenance. Its replay basis is the current Tracking
-Head Checkpoint's target Dataset Release; only a successful complete replay
-atomically moves Head, after which later Release Advances may continue. A
-changed research or Numeric Execution Contract requires a new successful
-ResearchRun and DailyTrack.
+versions. An accepted historical data correction does not change the kernel or
+Generation and follows ADR-0144. A result-changing runtime correction is a
+different boundary: it requires a new Generation and full execution from the
+Tracking Origin with a predecessor-free root and superseded-Generation
+provenance. Its basis is the current Tracking Head Checkpoint's target Dataset
+Release; only a successful complete execution atomically moves Head, after
+which later Release Advances may continue. A changed research or Numeric
+Execution Contract requires a new successful ResearchRun and DailyTrack.

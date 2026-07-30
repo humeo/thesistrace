@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0144
 ---
 
 # Create a new Tracking Generation for a historical correction

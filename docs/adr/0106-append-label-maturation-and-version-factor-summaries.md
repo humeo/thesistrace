@@ -33,10 +33,17 @@ Resolution appends an immutable Label Maturation event containing
 `generation_id`, signal session, horizon, effective maturity session,
 originating Alpha observation, computed Label or governed missing reason,
 `basis_dataset_release_id`, and publishing Checkpoint. The basis Release is the
-actual Advance Release during normal tracking and the corrected replay target
-for a replay Generation. It never edits the seed Result Bundle or an earlier
-pending or right-censored observation and never invents a historical Release
-identity for a catch-up or corrected replay.
+actual target Release of the Advance, including an ADR-0144 correction-boundary
+Advance. It never edits the seed Result Bundle or an earlier matured or
+right-censored observation and never invents a historical Release identity for
+a catch-up.
+
+A pending Label that first reaches maturity at a correction boundary is a new
+observation and resolves against that Advance's target Release. Previously
+matured Labels remain unchanged. A new Factor Summary Snapshot is built from
+the retained immutable observation sequence plus observations first published
+by the current Advance; it does not recompute old observations from the latest
+corrected Release.
 
 The newly mature Label may append the corresponding daily IC, Rank IC,
 Five-Quantile, and Top-Bottom observations under their existing sample rules.

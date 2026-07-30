@@ -30,17 +30,22 @@ it incrementally:
 ADR-0103 starts an explicit DailyTrack from one successful seed ResearchRun,
 and ADR-0104 keeps one fixed Tracking Origin instead of restarting a rolling
 504-session account after every Release. The central correctness comparator is
-therefore a batch replay and incremental replay that share that Origin,
-research semantics, and target Dataset Release—not a fresh standard
-ResearchRun on the target Release.
+therefore a reference execution and incremental execution that share that
+Origin, research semantics, and ordered sequence of Advance Dataset Releases,
+not a fresh standard ResearchRun on the Head Release. When no accepted
+historical correction changes a dependency, the sequence is equivalent to the
+target Release's cumulative snapshot. After a correction boundary, ADR-0144
+requires the reference execution to apply the same Release sequence at the same
+Advance boundaries rather than pretending the latest corrected Release was
+known from the Origin.
 
 ADR-0108 requires canonically exact overlapping Alpha Values, matured Labels,
 orders, costs, holdings, cash, NAV, and derived results under the pinned numeric
 contracts. Every incremental observation remains attributable to its exact
 DailyTrack, Definition semantics, and Dataset Release. ADR-0105 publishes
-immutable Checkpoints, ADR-0106 appends Label maturation, and ADR-0107 creates a
-new immutable Generation rather than modifying old observations when a
-historical correction requires replay.
+immutable Checkpoints, ADR-0106 appends Label maturation, and ADR-0144
+continues prospectively across a historical correction without modifying old
+observations.
 
 V1 still creates no Alpha compiler or separately persisted compiled plan.
 Validation, parsing, and evaluation are formula-engine operations over the

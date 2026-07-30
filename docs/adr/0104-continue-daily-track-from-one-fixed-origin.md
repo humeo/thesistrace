@@ -8,11 +8,12 @@ DailyTrack is a fixed-inception continuous simulated account, not a daily
 rolling 504-session backtest. Its Tracking Origin fixes the seed ResearchRun's
 `R1` Research Session coordinate, all-cash baseline, original Rebalance
 schedule anchor, and seed Definition semantics. Market data is resolved through
-the current Tracking Generation's Dataset Release rather than frozen into the
-Origin. At Generation 0 activation, the DailyTrack continues from the seed
-Result Bundle's Terminal Holdings, Execution Share Quantities, adjusted units,
-Gross and Net Cash, Gross and Net NAV, Benchmark state, cumulative costs, and
-Rebalance phase without resetting any of them.
+each Tracking Advance's target Dataset Release rather than frozen into the
+Origin or retroactively replaced by the Head Release. At Generation 0
+activation, the DailyTrack continues from the seed Result Bundle's Terminal
+Holdings, Execution Share Quantities, adjusted units, Gross and Net Cash, Gross
+and Net NAV, Benchmark state, cumulative costs, and Rebalance phase without
+resetting any of them.
 
 The Activation Checkpoint must retain a seed Release post-close Alpha signal if
 and only if that signal lies on the original Rebalance schedule and its
@@ -34,7 +35,9 @@ DailyTrack. A standard ResearchRun remains a rolling 756-input/504-report
 snapshot that starts from all cash; it is not the direct comparator for a
 later continuous DailyTrack state.
 
-The batch oracle for DailyTrack replays from the same Tracking Origin with the
-same activation rules through the same target Dataset Release. It must equal
-the incremental Tracking path. It does not re-anchor at the latest release's
-new rolling `R1`.
+The reference oracle for DailyTrack starts from the same Tracking Origin with
+the same activation rules and applies the same ordered sequence of Advance
+Dataset Releases. It must equal the incremental Tracking path. It does not
+re-anchor at the latest Release's new rolling `R1`, and after an ADR-0144
+correction boundary it does not apply the latest corrected Release
+retroactively to earlier Advances.
