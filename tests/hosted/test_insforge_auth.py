@@ -12,8 +12,40 @@ from thesistrace.auth import (
     InsForgeUser,
 )
 from thesistrace.config import Settings
+from thesistrace.provisioning import (
+    ProductIdentity,
+    ProvisioningResult,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+class MemoryRegistrationService:
+    def __init__(self) -> None:
+        self.product_identity: ProductIdentity | None = None
+
+    def resolve_identity(self, insforge_subject: str) -> ProductIdentity | None:
+        if (
+            self.product_identity is None
+            or self.product_identity.insforge_subject != insforge_subject
+        ):
+            return None
+        return self.product_identity
+
+    def provision(self, identity) -> ProvisioningResult:
+        created = self.product_identity is None
+        if self.product_identity is None:
+            self.product_identity = ProductIdentity(
+                user_id="user_test",
+                workspace_id="workspace_test",
+                insforge_subject=identity.subject,
+                normalized_email=identity.email.casefold(),
+            )
+        return ProvisioningResult(
+            invitation_id="invite_test",
+            identity=self.product_identity,
+            created=created,
+        )
 
 
 class MemoryIdentityDirectory:
@@ -98,7 +130,11 @@ def test_valid_verified_identity_is_explicitly_non_provisioned(tmp_path: Path) -
     )
 
     with TestClient(
-        create_app(auth_settings(tmp_path), identity_verifier=identity_verifier)
+        create_app(
+            auth_settings(tmp_path),
+            identity_verifier=identity_verifier,
+            registration_service=MemoryRegistrationService(),
+        )
     ) as client:
         response = client.get(
             "/api/v1/session",
@@ -117,7 +153,8 @@ def test_valid_verified_identity_is_explicitly_non_provisioned(tmp_path: Path) -
             "email": "researcher@example.com",
         },
     }
-    assert workspace.status_code == 200
+    assert workspace.status_code == 403
+    assert workspace.json()["detail"]["reason_code"] == "PRODUCT_PROVISIONING_REQUIRED"
 
 
 def test_missing_invalid_expired_and_unverified_tokens_are_sanitized(
@@ -137,7 +174,11 @@ def test_missing_invalid_expired_and_unverified_tokens_are_sanitized(
     wrong_audience = token(private_key, audience="another-product")
 
     with TestClient(
-        create_app(auth_settings(tmp_path), identity_verifier=identity_verifier)
+        create_app(
+            auth_settings(tmp_path),
+            identity_verifier=identity_verifier,
+            registration_service=MemoryRegistrationService(),
+        )
     ) as client:
         missing = client.get("/api/v1/session")
         forged = client.get(
@@ -175,7 +216,11 @@ def test_missing_invalid_expired_and_unverified_tokens_are_sanitized(
         jwks,
     )
     with TestClient(
-        create_app(auth_settings(tmp_path), identity_verifier=unverified_verifier)
+        create_app(
+            auth_settings(tmp_path),
+            identity_verifier=unverified_verifier,
+            registration_service=MemoryRegistrationService(),
+        )
     ) as client:
         unverified = client.get(
             "/api/v1/session",
@@ -195,7 +240,11 @@ def test_valid_token_without_insforge_identity_is_not_product_mapping_detail(
     identity_verifier, access_token = verifier(None, private_key, jwks)
 
     with TestClient(
-        create_app(auth_settings(tmp_path), identity_verifier=identity_verifier)
+        create_app(
+            auth_settings(tmp_path),
+            identity_verifier=identity_verifier,
+            registration_service=MemoryRegistrationService(),
+        )
     ) as client:
         response = client.get(
             "/api/v1/session",
@@ -217,7 +266,11 @@ def test_health_remains_anonymous_but_product_routes_require_auth(tmp_path: Path
     )
 
     with TestClient(
-        create_app(auth_settings(tmp_path), identity_verifier=identity_verifier)
+        create_app(
+            auth_settings(tmp_path),
+            identity_verifier=identity_verifier,
+            registration_service=MemoryRegistrationService(),
+        )
     ) as client:
         health = client.get("/api/v1/health")
         product = client.get("/api/v1/workspace")

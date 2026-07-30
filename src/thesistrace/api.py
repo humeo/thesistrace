@@ -8,6 +8,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from thesistrace.auth import (
@@ -19,6 +20,11 @@ from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
 from thesistrace.management import SourceAuthorizationService, build_management_store
+from thesistrace.provisioning import (
+    ProvisioningError,
+    RegistrationService,
+    build_registration_service,
+)
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
@@ -72,6 +78,7 @@ def create_app(
     tushare_transport: TushareTransport | None = None,
     runtime_ports: RuntimePorts | None = None,
     identity_verifier: IdentityVerifier | None = None,
+    registration_service: RegistrationService | None = None,
 ) -> FastAPI:
     runtime = runtime_ports or build_runtime(settings)
     store = runtime.control_metadata
@@ -99,6 +106,12 @@ def create_app(
             issuer=settings.insforge_jwt_issuer,
             audience=settings.insforge_jwt_audience,
         )
+    registration = registration_service
+    if settings.auth_mode == "insforge" and registration is None:
+        registration = build_registration_service(
+            settings=settings,
+            source_authorization=source_authorization,
+        )
 
     @app.middleware("http")
     async def authenticate_product_request(request: Request, call_next):
@@ -110,8 +123,9 @@ def create_app(
             return await call_next(request)
         assert verifier is not None
         try:
-            request.state.identity = verifier.verify(
-                request.headers.get("Authorization")
+            request.state.identity = await run_in_threadpool(
+                verifier.verify,
+                request.headers.get("Authorization"),
             )
         except AuthenticationFailure as error:
             message = (
@@ -127,6 +141,24 @@ def create_app(
                 headers={"WWW-Authenticate": "Bearer"}
                 if error.status_code == 401
                 else None,
+            )
+        assert registration is not None
+        request.state.product_identity = await run_in_threadpool(
+            registration.resolve_identity,
+            request.state.identity.subject,
+        )
+        if (
+            request.url.path not in {"/api/v1/session", "/api/v1/provision"}
+            and request.state.product_identity is None
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "detail": error_detail(
+                        "PRODUCT_PROVISIONING_REQUIRED",
+                        "product provisioning is required",
+                    )
+                },
             )
         return await call_next(request)
 
@@ -186,6 +218,17 @@ def create_app(
                 ),
             )
         identity = request.state.identity
+        product_identity = request.state.product_identity
+        if product_identity is not None:
+            return {
+                "product_state": "provisioned",
+                "identity": {
+                    "subject": identity.subject,
+                    "email": identity.email,
+                },
+                "user_id": product_identity.user_id,
+                "workspace_id": product_identity.workspace_id,
+            }
         return {
             "product_state": "non_provisioned",
             "identity": {
@@ -193,6 +236,39 @@ def create_app(
                 "email": identity.email,
             },
         }
+
+    @app.post("/api/v1/provision")
+    def provision_product_identity(request: Request) -> JSONResponse:
+        if settings.auth_mode != "insforge" or registration is None:
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "AUTH_NOT_CONFIGURED",
+                    "hosted authentication is not configured",
+                ),
+            )
+        try:
+            result = registration.provision(request.state.identity)
+        except ProvisioningError as error:
+            raise HTTPException(
+                status_code=403
+                if error.reason_code == "INVITATION_NOT_ELIGIBLE"
+                else 409,
+                detail=error_detail(
+                    error.reason_code,
+                    "product provisioning is not available",
+                ),
+            ) from error
+        return JSONResponse(
+            status_code=201 if result.created else 200,
+            content={
+                "product_state": "provisioned",
+                "invitation_id": result.invitation_id,
+                "user_id": result.identity.user_id,
+                "workspace_id": result.identity.workspace_id,
+                "created": result.created,
+            },
+        )
 
     @app.get("/api/v1/research-definitions")
     def list_research_definitions() -> dict[str, object]:
