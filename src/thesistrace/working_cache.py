@@ -2,7 +2,7 @@ import hashlib
 import json
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from uuid import uuid4
 
@@ -185,9 +185,14 @@ class WorkingCacheStore:
         retained_pending_sessions: Sequence[str],
         new_pending_alpha: Mapping[str, Sequence[Mapping[str, object]]],
         rolling_factor: Sequence[Mapping[str, object]],
+        attempt_id: str = "inline",
+        before_install: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         track_id = required_coordinate(coordinates, "daily_track_id")
         current_basis = self.read_basis(track_id)
+        incoming_token = int(coordinates["fencing_token"])
+        if incoming_token <= int(current_basis["fencing_token"]):
+            raise WorkingCacheError("Working Cache commit has a stale fencing token")
         current_entries = current_basis.get("pending_alpha")
         if not isinstance(current_entries, list):
             raise WorkingCacheError("pending Alpha index is invalid")
@@ -205,8 +210,16 @@ class WorkingCacheStore:
             raise WorkingCacheError("retained Pending Alpha is missing from current cache")
 
         destination = self._track_path(track_id)
-        staging = self.root / ".staging" / f"{track_id}-{uuid4().hex}"
-        backup = self.root / ".staging" / f"{track_id}-old-{uuid4().hex}"
+        staging = (
+            self.root
+            / ".staging"
+            / f"{track_id}-{path_safe_attempt(attempt_id)}-{uuid4().hex}"
+        )
+        backup = (
+            self.root
+            / ".staging"
+            / f"{track_id}-{path_safe_attempt(attempt_id)}-old-{uuid4().hex}"
+        )
         staging.mkdir(parents=True, exist_ok=False)
         replaced = False
         try:
@@ -245,6 +258,13 @@ class WorkingCacheStore:
             if total_bytes > MAX_CACHE_BYTES:
                 raise WorkingCacheError(
                     f"Working Cache advance is {total_bytes} bytes; limit is {MAX_CACHE_BYTES}"
+                )
+            if before_install is not None:
+                before_install()
+            installed_basis = self.read_basis(track_id)
+            if incoming_token <= int(installed_basis["fencing_token"]):
+                raise WorkingCacheError(
+                    "Working Cache commit has a stale fencing token"
                 )
             os.replace(destination, backup)
             replaced = True
@@ -304,6 +324,21 @@ class WorkingCacheStore:
 
     def delete(self, track_id: str) -> None:
         shutil.rmtree(self._track_path(track_id), ignore_errors=True)
+
+    def delete_if_not_newer(self, track_id: str, fencing_token: int) -> None:
+        path = self._track_path(track_id)
+        if not path.exists():
+            return
+        try:
+            basis = self.read_basis(track_id)
+        except (OSError, ValueError):
+            shutil.rmtree(path)
+            return
+        if int(basis["fencing_token"]) > fencing_token:
+            raise WorkingCacheError(
+                "stale fencing token cannot delete the current Working Cache"
+            )
+        shutil.rmtree(path)
 
     def discard_staging(self) -> None:
         shutil.rmtree(self.root / ".staging", ignore_errors=True)
@@ -385,6 +420,12 @@ def required_coordinate(coordinates: Mapping[str, object], key: str) -> str:
     if not isinstance(value, str) or not value:
         raise WorkingCacheError(f"Working Cache coordinate is missing {key}")
     return value
+
+
+def path_safe_attempt(attempt_id: str) -> str:
+    if not attempt_id or "/" in attempt_id or attempt_id in {".", ".."}:
+        raise WorkingCacheError("Attempt id is not path-safe")
+    return attempt_id
 
 
 def directory_bytes(path: Path) -> int:

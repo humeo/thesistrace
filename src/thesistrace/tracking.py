@@ -165,6 +165,7 @@ class DailyTrackingService:
             "pending_strategy_signal": pending_signal,
             "numeric_execution_contract": content["numeric_execution_contract"],
             "calculation_kernel": manifest["calculation_kernel"],
+            "cache_fencing_token": 1,
             "runtime_build": RUNTIME_BUILD,
             "created_at": now,
         }
@@ -218,8 +219,9 @@ class DailyTrackingService:
                             (id, seed_run_id, definition_version_id,
                              definition_content_hash, activation_release_id,
                              origin_session, numeric_execution_contract, status,
-                             current_generation_id, head_checkpoint_id, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                             current_generation_id, head_checkpoint_id, created_at,
+                             fencing_token)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 1)
                         """,
                         (
                             track_id,
@@ -380,10 +382,13 @@ class DailyTrackingService:
         self,
         track: dict[str, object],
         generation: dict[str, object],
+        *,
+        write_fencing_token: int | None = None,
     ) -> dict[str, object]:
         head = track.get("head")
         if not isinstance(head, dict):
             raise DailyTrackingError("DailyTrack has no Head")
+        head_manifest = self._checkpoint_manifest(str(head["manifest_sha256"]))
         expected = {
             "daily_track_id": track["id"],
             "generation_id": track["current_generation_id"],
@@ -393,15 +398,48 @@ class DailyTrackingService:
             "calculation_kernel": generation["calculation_kernel"],
             "numeric_execution_contract": track["numeric_execution_contract"],
             "basis_dataset_release_id": head["target_dataset_release_id"],
-            "fencing_token": len(track["checkpoints"]),
+            "fencing_token": head_manifest["cache_fencing_token"],
         }
         try:
             return self.cache.validate(str(track["id"]), expected)
         except (OSError, ValueError, KeyError, WorkingCacheError):
-            self.cache.delete(str(track["id"]))
+            if write_fencing_token is not None:
+                self._assert_cache_write_authority(
+                    str(track["id"]),
+                    write_fencing_token,
+                )
+            self.cache.delete_if_not_newer(
+                str(track["id"]),
+                (
+                    write_fencing_token
+                    if write_fencing_token is not None
+                    else int(expected["fencing_token"])
+                ),
+            )
             self.cache.discard_staging()
             self._rebuild_working_cache(track, generation, expected)
             return self.cache.validate(str(track["id"]), expected)
+
+    def _assert_cache_write_authority(
+        self,
+        track_id: str,
+        fencing_token: int,
+    ) -> None:
+        with self.metadata.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT status, fencing_token
+                FROM daily_tracks
+                WHERE id = ?
+                """,
+                (track_id,),
+            ).fetchone()
+        if (
+            row is None
+            or row["status"] != "active"
+            or int(row["fencing_token"]) != fencing_token
+        ):
+            raise DailyTrackingError("Working Cache write authority was fenced")
 
     def _rebuild_working_cache(
         self,
@@ -962,7 +1000,11 @@ class DailyTrackingService:
             return self._advance(advance_id)
         advance, attempt = claimed
         try:
-            checkpoint = self._calculate_advance(advance)
+            checkpoint = self._calculate_advance(
+                advance,
+                fencing_token=int(attempt["fencing_token"]),
+                attempt_id=str(attempt["id"]),
+            )
             self._publish_advance_success(
                 advance,
                 attempt,
@@ -1128,6 +1170,9 @@ class DailyTrackingService:
     def _calculate_advance(
         self,
         advance: dict[str, object],
+        *,
+        fencing_token: int,
+        attempt_id: str,
     ) -> dict[str, object]:
         track = self.get_track(str(advance["daily_track_id"]))
         if track is None:
@@ -1174,6 +1219,8 @@ class DailyTrackingService:
                 canonical=canonical,
                 generation=generation,
                 kernel=kernel,
+                fencing_token=fencing_token,
+                attempt_id=attempt_id,
             )
         if compact_head:
             return self._calculate_incremental_advance(
@@ -1184,6 +1231,8 @@ class DailyTrackingService:
                 definition=definition,
                 canonical=canonical,
                 generation=generation,
+                fencing_token=fencing_token,
+                attempt_id=attempt_id,
             )
         raise DailyTrackingError("Tracking Head does not use the compact contract")
 
@@ -1197,6 +1246,8 @@ class DailyTrackingService:
         canonical: dict[str, object],
         generation: dict[str, object],
         kernel: str,
+        fencing_token: int,
+        attempt_id: str,
     ) -> dict[str, object]:
         alpha = self._alpha(canonical, definition, kernel=kernel)
         summary_labels = build_forward_labels(
@@ -1261,6 +1312,7 @@ class DailyTrackingService:
             },
             "numeric_execution_contract": track["numeric_execution_contract"],
             "calculation_kernel": generation["calculation_kernel"],
+            "cache_fencing_token": fencing_token,
             "runtime_build": RUNTIME_BUILD,
             "basis_dataset_release_id": target["id"],
             "supersedes_generation_id": generation[
@@ -1287,7 +1339,11 @@ class DailyTrackingService:
             for item in pending_items
         }
         rolling_rows = factor_artifact_to_rolling_rows(factor)
-        self.cache.delete(str(track["id"]))
+        self._assert_cache_write_authority(
+            str(track["id"]),
+            fencing_token,
+        )
+        self.cache.delete_if_not_newer(str(track["id"]), fencing_token)
         self.cache.discard_staging()
         self.cache.commit_seed(
             {
@@ -1301,7 +1357,7 @@ class DailyTrackingService:
                     "numeric_execution_contract"
                 ],
                 "basis_dataset_release_id": target["id"],
-                "fencing_token": len(track["checkpoints"]) + 1,
+                "fencing_token": fencing_token,
             },
             pending_alpha=pending,
             rolling_factor=rolling_rows,
@@ -1322,24 +1378,17 @@ class DailyTrackingService:
         definition: dict[str, object],
         canonical: dict[str, object],
         generation: dict[str, object],
+        fencing_token: int,
+        attempt_id: str,
     ) -> dict[str, object]:
         head = track["head"]
         if not isinstance(head, dict):
             raise DailyTrackingError("DailyTrack has no Head")
-        basis = self._ensure_working_cache(track, generation)
-        expected_basis = {
-            "daily_track_id": track["id"],
-            "generation_id": track["current_generation_id"],
-            "basis_checkpoint_id": head["id"],
-            "basis_checkpoint_sha256": head["manifest_sha256"],
-            "definition_content_hash": track["definition_content_hash"],
-            "calculation_kernel": generation["calculation_kernel"],
-            "numeric_execution_contract": track["numeric_execution_contract"],
-            "basis_dataset_release_id": head["target_dataset_release_id"],
-        }
-        for key, expected in expected_basis.items():
-            if basis.get(key) != expected:
-                raise DailyTrackingError(f"Working Cache basis mismatch: {key}")
+        self._ensure_working_cache(
+            track,
+            generation,
+            write_fencing_token=fencing_token,
+        )
 
         prior_release = self.metadata.dataset_release(str(head["target_dataset_release_id"]))
         if prior_release is None:
@@ -1623,6 +1672,7 @@ class DailyTrackingService:
             },
             "numeric_execution_contract": track["numeric_execution_contract"],
             "calculation_kernel": generation["calculation_kernel"],
+            "cache_fencing_token": fencing_token,
             "runtime_build": RUNTIME_BUILD,
             "basis_dataset_release_id": target["id"],
             "supersedes_generation_id": None,
@@ -1644,6 +1694,7 @@ class DailyTrackingService:
             ]
             for session in sorted(set(pending) - set(retained))
         }
+        self._assert_cache_write_authority(str(track["id"]), fencing_token)
         self.cache.commit_advance(
             {
                 "daily_track_id": track["id"],
@@ -1656,11 +1707,12 @@ class DailyTrackingService:
                     "numeric_execution_contract"
                 ],
                 "basis_dataset_release_id": target["id"],
-                "fencing_token": int(basis["fencing_token"]) + 1,
+                "fencing_token": fencing_token,
             },
             retained_pending_sessions=retained,
             new_pending_alpha=newly_retained,
             rolling_factor=rolling_rows,
+            attempt_id=attempt_id,
         )
         return {
             "id": checkpoint_id,
@@ -1953,6 +2005,17 @@ class DailyTrackingService:
                 raise KeyError(advance_id)
             if row["status"] not in {"pending", "blocked"}:
                 return None
+            track = connection.execute(
+                """
+                SELECT status, fencing_token
+                FROM daily_tracks
+                WHERE id = ?
+                """,
+                (row["daily_track_id"],),
+            ).fetchone()
+            if track is None or track["status"] != "active":
+                return None
+            fencing_token = int(track["fencing_token"]) + 1
             ordinal = (
                 int(
                     connection.execute(
@@ -1977,15 +2040,24 @@ class DailyTrackingService:
             )
             connection.execute(
                 """
-                INSERT INTO tracking_advance_attempts
-                    (id, advance_id, ordinal, status, started_at)
-                VALUES (?, ?, ?, 'running', ?)
+                UPDATE daily_tracks
+                SET fencing_token = ?
+                WHERE id = ? AND status = 'active'
                 """,
-                (attempt_id, advance_id, ordinal, now),
+                (fencing_token, row["daily_track_id"]),
+            )
+            connection.execute(
+                """
+                INSERT INTO tracking_advance_attempts
+                    (id, advance_id, ordinal, status, started_at, fencing_token)
+                VALUES (?, ?, ?, 'running', ?, ?)
+                """,
+                (attempt_id, advance_id, ordinal, now, fencing_token),
             )
         return self._advance(advance_id), {
             "id": attempt_id,
             "ordinal": ordinal,
+            "fencing_token": fencing_token,
         }
 
     def _publish_advance_success(
@@ -2000,7 +2072,8 @@ class DailyTrackingService:
             connection.execute("BEGIN IMMEDIATE")
             track = connection.execute(
                 """
-                SELECT status, current_generation_id, head_checkpoint_id
+                SELECT status, current_generation_id, head_checkpoint_id,
+                       fencing_token
                 FROM daily_tracks
                 WHERE id = ?
                 """,
@@ -2012,7 +2085,7 @@ class DailyTrackingService:
             ).fetchone()
             current_attempt = connection.execute(
                 """
-                SELECT status
+                SELECT status, fencing_token
                 FROM tracking_advance_attempts
                 WHERE id = ? AND advance_id = ?
                 """,
@@ -2039,6 +2112,12 @@ class DailyTrackingService:
                 or track["head_checkpoint_id"] != expected_head_checkpoint_id
                 or current["status"] != "running"
                 or current_attempt["status"] != "running"
+                or int(track["fencing_token"]) != int(
+                    current_attempt["fencing_token"]
+                )
+                or int(manifest["cache_fencing_token"]) != int(
+                    current_attempt["fencing_token"]
+                )
             ):
                 raise DailyTrackingError("Advance publication was fenced")
             connection.execute(

@@ -214,8 +214,15 @@ class MetadataStore:
                 ("head_checkpoint_id", "TEXT"),
                 ("created_at", "TEXT"),
                 ("stopped_at", "TEXT"),
+                ("fencing_token", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 self._ensure_column(connection, "daily_tracks", column, definition)
+            self._ensure_column(
+                connection,
+                "tracking_advance_attempts",
+                "fencing_token",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
 
     def installation_id(self) -> str:
         with self.connect() as connection:

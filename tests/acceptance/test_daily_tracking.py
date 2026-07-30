@@ -171,7 +171,11 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert still_claimed["status"] == "running"
         assert still_claimed["attempts"][-1]["status"] == "running"
 
-        checkpoint = tracking._calculate_advance(current_advance)
+        checkpoint = tracking._calculate_advance(
+            current_advance,
+            fencing_token=current_attempt["fencing_token"],
+            attempt_id=current_attempt["id"],
+        )
         tracking._publish_advance_success(current_advance, current_attempt, checkpoint)
         advanced = tracking._advance(advance_id)
         tracking.enqueue_toward(track_id, later_release["id"])
