@@ -949,11 +949,25 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
     status: "active" | "stopped";
     current_generation_id: string;
     head: { target_dataset_release_id: string };
-    advances: { status: string }[];
+    advances: {
+      status: string;
+      correction_boundary: {
+        target_dataset_release_id: string;
+        accepted_correction_change_set: unknown[];
+      } | null;
+    }[];
   } | null>(null);
   const [trackingError, setTrackingError] = useState<string | null>(null);
   const [trackingView, setTrackingView] = useState<{
-    checkpoint: { id: string; kind: string; processed_sessions?: string[] };
+    checkpoint: {
+      id: string;
+      kind: string;
+      processed_sessions?: string[];
+      correction_boundary?: {
+        target_dataset_release_id: string;
+        accepted_correction_change_set: unknown[];
+      } | null;
+    };
     factor_summary: {
       horizons: Record<
         string,
@@ -1374,6 +1388,17 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
                     .join(" · ")}
                 </small>
               ) : null}
+              {trackingView?.checkpoint.correction_boundary ? (
+                <small>
+                  CORRECTION BOUNDARY ·{" "}
+                  {trackingView.checkpoint.correction_boundary.target_dataset_release_id} ·{" "}
+                  {
+                    trackingView.checkpoint.correction_boundary
+                      .accepted_correction_change_set.length
+                  }{" "}
+                  ACCEPTED CHANGE
+                </small>
+              ) : null}
             </>
           ) : (
             <>
@@ -1447,7 +1472,15 @@ function OperationsLedger() {
       current_generation_id: string;
       head_checkpoint_id: string;
       generations: { id: string; reason: string }[];
-      advances: { id: string; status: string; target_dataset_release_id: string }[];
+      advances: {
+        id: string;
+        status: string;
+        target_dataset_release_id: string;
+        correction_boundary: {
+          target_dataset_release_id: string;
+          accepted_correction_change_set: unknown[];
+        } | null;
+      }[];
       checkpoints: { id: string; target_dataset_release_id: string }[];
     }[]
   >([]);
@@ -1794,6 +1827,14 @@ function OperationsLedger() {
                           rel="noreferrer"
                         >
                           Advance {advance.id} · {advance.status}
+                          {advance.correction_boundary
+                            ? ` · Correction Boundary ${
+                                advance.correction_boundary.target_dataset_release_id
+                              } · ${
+                                advance.correction_boundary
+                                  .accepted_correction_change_set.length
+                              } accepted change`
+                            : ""}
                         </a>
                       </li>
                     ))}

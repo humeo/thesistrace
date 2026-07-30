@@ -262,28 +262,87 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
                 ],
             },
         ).json()["release"]
-        queued_replay = tracking.get_track(track_id)
-        assert queued_replay is not None
-        assert queued_replay["generations"][-1]["reason"] == "historical_correction"
-        assert queued_replay["advances"][-1]["target_dataset_release_id"] == correction["id"]
-        generation_count = len(queued_replay["generations"])
-        advance_count = len(queued_replay["advances"])
+        prior_correction_head = tracking.get_track(track_id)["head"]
+        prior_correction_manifest = objects.read_json(
+            prior_correction_head["manifest_sha256"]
+        )
+        prior_correction_view = client.get(
+            f"/api/v1/daily-tracks/{track_id}/current"
+        ).json()
+        queued_correction = tracking.get_track(track_id)
+        assert queued_correction is not None
+        assert queued_correction["current_generation_id"] == track["current_generation_id"]
+        assert all(
+            generation["reason"] != "historical_correction"
+            for generation in queued_correction["generations"]
+        )
+        correction_advance = queued_correction["advances"][-1]
+        assert correction_advance["target_dataset_release_id"] == correction["id"]
+        assert correction_advance["correction_boundary"] == {
+            "accepted_correction_change_set": correction["correction_change_set"],
+            "prior_checkpoint_id": prior_correction_head["id"],
+            "prior_dataset_release_id": prior_correction_head[
+                "target_dataset_release_id"
+            ],
+            "target_dataset_release_id": correction["id"],
+        }
+        generation_count = len(queued_correction["generations"])
+        advance_count = len(queued_correction["advances"])
         assert tracking.enqueue_active_tracks(correction["id"]) == []
         assert tracking.enqueue_active_tracks(correction["id"]) == []
         reconciled = tracking.get_track(track_id)
         assert len(reconciled["generations"]) == generation_count
         assert len(reconciled["advances"]) == advance_count
+        advance_resource = client.get(
+            f"/api/v1/daily-tracks/{track_id}/advances/{correction_advance['id']}"
+        ).json()
+        assert advance_resource["correction_boundary"] == correction_advance[
+            "correction_boundary"
+        ]
 
-        replay = tracking.execute_next()
-        assert replay is not None
-        assert replay["status"] == "succeeded"
+        claimed_correction = tracking._claim_advance(correction_advance["id"])
+        assert claimed_correction is not None
+        claimed_advance, claimed_attempt = claimed_correction
+        tracking._block_advance(
+            claimed_advance,
+            claimed_attempt,
+            {
+                "reason_code": "TEST_CORRECTION_RETRY",
+                "message": "retry the same correction boundary",
+            },
+        )
+        after_failed_correction = tracking.get_track(track_id)
+        assert after_failed_correction["head"]["id"] == prior_correction_head["id"]
+        assert after_failed_correction["advances"][-1]["id"] == correction_advance["id"]
+
+        continued = tracking.execute_next()
+        assert continued is not None
+        assert continued["status"] == "succeeded"
+        assert [attempt["status"] for attempt in continued["attempts"]] == [
+            "failed",
+            "succeeded",
+        ]
         corrected = tracking.get_track(track_id)
         assert corrected is not None
-        assert corrected["current_generation_id"] == replay["generation_id"]
+        assert corrected["current_generation_id"] == track["current_generation_id"]
         corrected_head = objects.read_json(corrected["head"]["manifest_sha256"])
-        assert corrected_head["predecessor_checkpoint_id"] is None
-        assert corrected_head["supersedes_generation_id"] == track["current_generation_id"]
-        assert client.post(f"/api/v1/daily-tracks/{track_id}/verify-equivalence").status_code == 200
+        assert corrected_head["predecessor_checkpoint_id"] == prior_correction_head["id"]
+        assert corrected_head["processed_sessions"] == [
+            correction["appended_session_range"]["end"]
+        ]
+        assert corrected_head["correction_boundary"] == correction_advance[
+            "correction_boundary"
+        ]
+        corrected_view = client.get(
+            f"/api/v1/daily-tracks/{track_id}/current"
+        ).json()
+        assert corrected_view["strategy"]["daily"][:-1] == prior_correction_view[
+            "strategy"
+        ]["daily"]
+        assert (
+            objects.read_json(prior_correction_head["manifest_sha256"])
+            == prior_correction_manifest
+        )
 
         generation_count = len(corrected["generations"])
         irrelevant_correction = client.post(
@@ -303,6 +362,7 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         ).json()["release"]
         queued_increment = tracking.get_track(track_id)
         assert len(queued_increment["generations"]) == generation_count
+        assert queued_increment["advances"][-1]["correction_boundary"] is None
         incremental = tracking.execute_next()
         assert incremental is not None
         assert incremental["status"] == "succeeded"

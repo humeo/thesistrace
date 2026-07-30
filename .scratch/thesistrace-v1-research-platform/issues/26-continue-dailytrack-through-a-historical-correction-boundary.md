@@ -10,10 +10,10 @@ through the Checkpoint, public API, and Web UI.
 bounded Working Cache; Bounded Research Storage 07 — Rebuild invalid Working
 Caches within bounded windows.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] An affecting correction creates an Advance in the current Generation whose successful Checkpoint directly follows the prior Head and processes only newly appended Research Sessions.
-- [ ] The Checkpoint, DailyTrack API, and Web UI identify the Tracking Correction Boundary, its target Dataset Release, and the accepted correction change-set.
-- [ ] Previously published Strategy observations, Factor summaries, Terminal Strategy State, and pending Strategy decisions remain unchanged; only values first calculated at or after the boundary use corrected data.
-- [ ] A correction outside the Track's dependency closure advances normally without a Correction Boundary, while only a result-changing calculation-kernel correction can create a new Generation.
-- [ ] Failed, retried, and duplicate deliveries preserve the prior Head and one logical Advance and never produce a replay root or duplicate Checkpoint.
+- [x] An affecting correction creates an Advance in the current Generation whose successful Checkpoint directly follows the prior Head and processes only newly appended Research Sessions.
+- [x] The Checkpoint, DailyTrack API, and Web UI identify the Tracking Correction Boundary, its target Dataset Release, and the accepted correction change-set.
+- [x] Previously published Strategy observations, Factor summaries, Terminal Strategy State, and pending Strategy decisions remain unchanged; only values first calculated at or after the boundary use corrected data.
+- [x] A correction outside the Track's dependency closure advances normally without a Correction Boundary, while only a result-changing calculation-kernel correction can create a new Generation.
+- [x] Failed, retried, and duplicate deliveries preserve the prior Head and one logical Advance and never produce a replay root or duplicate Checkpoint.

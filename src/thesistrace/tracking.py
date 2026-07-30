@@ -596,7 +596,7 @@ class DailyTrackingService:
         track["generations"] = [
             {key: generation[key] for key in generation.keys()} for generation in generations
         ]
-        track["advances"] = [{key: advance[key] for key in advance.keys()} for advance in advances]
+        track["advances"] = [self._advance_from_row(advance) for advance in advances]
         track["checkpoints"] = [
             {key: checkpoint[key] for key in checkpoint.keys()} for checkpoint in checkpoints
         ]
@@ -975,40 +975,23 @@ class DailyTrackingService:
             next_release.get("correction_change_set"),
             next_release,
         )
-        if correction:
-            generation = next(
-                (
-                    item
-                    for item in track["generations"]
-                    if item["reason"] == "historical_correction"
-                    and item["basis_dataset_release_id"] == next_release["id"]
-                    and item["supersedes_generation_id"]
-                    == track["current_generation_id"]
-                    and item["supersedes_head_checkpoint_id"]
-                    == track["head_checkpoint_id"]
-                ),
-                None,
-            )
-            if generation is None:
-                generation = self._create_generation_with_advance(
-                    str(track["id"]),
-                    basis_release_id=str(next_release["id"]),
-                    kernel=self._generation_kernel(
-                        track,
-                        str(track["current_generation_id"]),
-                    ),
-                    reason="historical_correction",
-                    target_release_id=str(next_release["id"]),
-                    expected_generation_id=str(track["current_generation_id"]),
-                    expected_head_checkpoint_id=str(track["head_checkpoint_id"]),
-                )
-            generation_id = str(generation["id"])
-        else:
-            generation_id = str(track["current_generation_id"])
+        correction_boundary = (
+            {
+                "accepted_correction_change_set": next_release[
+                    "correction_change_set"
+                ],
+                "prior_checkpoint_id": head["id"],
+                "prior_dataset_release_id": head_release_id,
+                "target_dataset_release_id": next_release["id"],
+            }
+            if correction
+            else None
+        )
         return self._create_advance(
             track_id,
-            generation_id,
+            str(track["current_generation_id"]),
             str(next_release["id"]),
+            correction_boundary=correction_boundary,
         )
 
     def _corrections_affect_track(
@@ -1811,6 +1794,7 @@ class DailyTrackingService:
             "predecessor_checkpoint_id": head["id"],
             "target_dataset_release_id": target["id"],
             "processed_sessions": processed_sessions,
+            "correction_boundary": advance["correction_boundary"],
             "tracking_origin": {
                 "session": track["origin_session"],
                 "activation_session": str(
@@ -2114,8 +2098,20 @@ class DailyTrackingService:
         track_id: str,
         generation_id: str,
         target_release_id: str,
+        *,
+        correction_boundary: dict[str, object] | None = None,
     ) -> dict[str, object]:
         now = datetime.now(UTC).isoformat()
+        correction_boundary_json = (
+            json.dumps(
+                correction_boundary,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if correction_boundary is not None
+            else None
+        )
         with self.metadata.connect() as connection:
             existing = connection.execute(
                 """
@@ -2127,20 +2123,22 @@ class DailyTrackingService:
                 (track_id, generation_id, target_release_id),
             ).fetchone()
             if existing is not None:
-                return {key: existing[key] for key in existing.keys()}
+                return self._advance_from_row(existing)
             advance_id = f"advance_{uuid4().hex[:20]}"
             connection.execute(
                 """
                 INSERT INTO tracking_advances
                     (id, daily_track_id, generation_id,
-                     target_dataset_release_id, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                     target_dataset_release_id, correction_boundary_json,
+                     status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
                 """,
                 (
                     advance_id,
                     track_id,
                     generation_id,
                     target_release_id,
+                    correction_boundary_json,
                     now,
                     now,
                 ),
@@ -2396,7 +2394,7 @@ class DailyTrackingService:
                 """,
                 (advance_id,),
             ).fetchall()
-        result = {key: row[key] for key in row.keys()}
+        result = self._advance_from_row(row)
         result["attempts"] = [
             {
                 **{key: attempt[key] for key in attempt.keys() if key != "diagnostic_json"},
@@ -2408,6 +2406,21 @@ class DailyTrackingService:
             }
             for attempt in attempts
         ]
+        return result
+
+    @staticmethod
+    def _advance_from_row(row: object) -> dict[str, object]:
+        result = {
+            key: row[key]
+            for key in row.keys()
+            if key != "correction_boundary_json"
+        }
+        raw_boundary = row["correction_boundary_json"]
+        result["correction_boundary"] = (
+            json.loads(str(raw_boundary))
+            if raw_boundary is not None
+            else None
+        )
         return result
 
     def _checkpoint_manifest(self, digest: str) -> dict[str, object]:

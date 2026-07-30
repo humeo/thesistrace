@@ -154,6 +154,7 @@ class MetadataStore:
                     daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
                     generation_id TEXT NOT NULL REFERENCES tracking_generations(id),
                     target_dataset_release_id TEXT NOT NULL,
+                    correction_boundary_json TEXT,
                     status TEXT NOT NULL,
                     checkpoint_id TEXT,
                     created_at TEXT NOT NULL,
@@ -232,6 +233,12 @@ class MetadataStore:
                 "tracking_advance_attempts",
                 "fencing_token",
                 "INTEGER NOT NULL DEFAULT 0",
+            )
+            self._ensure_column(
+                connection,
+                "tracking_advances",
+                "correction_boundary_json",
+                "TEXT",
             )
 
     def installation_id(self) -> str:
