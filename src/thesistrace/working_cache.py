@@ -128,9 +128,11 @@ class WorkingCacheStore:
                 )
             destination.parent.mkdir(parents=True, exist_ok=True)
             os.replace(staging, destination)
+            remove_empty_directory(self.root / ".staging")
             return basis
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
+            remove_empty_directory(self.root / ".staging")
             raise
 
     def read_basis(self, track_id: str) -> dict[str, object]:
@@ -138,6 +140,43 @@ class WorkingCacheStore:
         if not isinstance(value, dict):
             raise WorkingCacheError("Working Cache basis is invalid")
         return value
+
+    def validate(
+        self,
+        track_id: str,
+        expected_coordinates: Mapping[str, object],
+    ) -> dict[str, object]:
+        basis = self.read_basis(track_id)
+        for key, expected in expected_coordinates.items():
+            if basis.get(key) != expected:
+                raise WorkingCacheError(f"Working Cache basis mismatch: {key}")
+        pending = basis.get("pending_alpha")
+        rolling = basis.get("rolling_factor")
+        if not isinstance(pending, list) or len(pending) > MAX_PENDING_ALPHA_SESSIONS:
+            raise WorkingCacheError("Working Cache pending Alpha bound is invalid")
+        if not isinstance(rolling, dict):
+            raise WorkingCacheError("Working Cache rolling Factor index is invalid")
+        if int(rolling.get("rows", -1)) > MAX_ROLLING_FACTOR_ROWS:
+            raise WorkingCacheError("Working Cache rolling Factor bound is invalid")
+        if self.namespace_bytes(track_id) > MAX_CACHE_BYTES:
+            raise WorkingCacheError("Working Cache namespace exceeds its byte limit")
+        self.read_pending_alpha(track_id)
+        rolling_rows = self.read_rolling_factor(track_id)
+        if len(rolling_rows) != int(rolling["rows"]):
+            raise WorkingCacheError("Working Cache rolling Factor row count is invalid")
+        referenced = {
+            "basis.json",
+            *(str(entry["path"]) for entry in pending if isinstance(entry, dict)),
+            str(rolling["path"]),
+        }
+        actual = {
+            path.relative_to(self._track_path(track_id)).as_posix()
+            for path in self._track_path(track_id).rglob("*")
+            if path.is_file()
+        }
+        if actual != referenced:
+            raise WorkingCacheError("Working Cache namespace contains partial payloads")
+        return basis
 
     def commit_advance(
         self,
@@ -217,12 +256,14 @@ class WorkingCacheStore:
                 raise
             shutil.rmtree(backup, ignore_errors=True)
             replaced = False
+            remove_empty_directory(self.root / ".staging")
             return basis
         except Exception:
             shutil.rmtree(staging, ignore_errors=True)
             if replaced and backup.exists() and not destination.exists():
                 os.replace(backup, destination)
             shutil.rmtree(backup, ignore_errors=True)
+            remove_empty_directory(self.root / ".staging")
             raise
 
     def read_pending_alpha(
@@ -263,6 +304,9 @@ class WorkingCacheStore:
 
     def delete(self, track_id: str) -> None:
         shutil.rmtree(self._track_path(track_id), ignore_errors=True)
+
+    def discard_staging(self) -> None:
+        shutil.rmtree(self.root / ".staging", ignore_errors=True)
 
     def _track_path(self, track_id: str) -> Path:
         if not track_id or "/" in track_id or track_id in {".", ".."}:
@@ -345,3 +389,12 @@ def required_coordinate(coordinates: Mapping[str, object], key: str) -> str:
 
 def directory_bytes(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def remove_empty_directory(path: Path) -> None:
+    try:
+        path.rmdir()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass

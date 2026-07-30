@@ -38,7 +38,7 @@ from thesistrace.result_objects import (
 )
 from thesistrace.storage import MetadataStore
 from thesistrace.strategy import run_strategy, strategy_metrics
-from thesistrace.working_cache import WorkingCacheStore
+from thesistrace.working_cache import WorkingCacheError, WorkingCacheStore
 
 
 class DailyTrackingError(RuntimeError):
@@ -375,6 +375,134 @@ class DailyTrackingService:
             pending_alpha=pending_alpha,
             rolling_factor=rolling_factor,
         )
+
+    def _ensure_working_cache(
+        self,
+        track: dict[str, object],
+        generation: dict[str, object],
+    ) -> dict[str, object]:
+        head = track.get("head")
+        if not isinstance(head, dict):
+            raise DailyTrackingError("DailyTrack has no Head")
+        expected = {
+            "daily_track_id": track["id"],
+            "generation_id": track["current_generation_id"],
+            "basis_checkpoint_id": head["id"],
+            "basis_checkpoint_sha256": head["manifest_sha256"],
+            "definition_content_hash": track["definition_content_hash"],
+            "calculation_kernel": generation["calculation_kernel"],
+            "numeric_execution_contract": track["numeric_execution_contract"],
+            "basis_dataset_release_id": head["target_dataset_release_id"],
+            "fencing_token": len(track["checkpoints"]),
+        }
+        try:
+            return self.cache.validate(str(track["id"]), expected)
+        except (OSError, ValueError, KeyError, WorkingCacheError):
+            self.cache.delete(str(track["id"]))
+            self.cache.discard_staging()
+            self._rebuild_working_cache(track, generation, expected)
+            return self.cache.validate(str(track["id"]), expected)
+
+    def _rebuild_working_cache(
+        self,
+        track: dict[str, object],
+        generation: dict[str, object],
+        coordinates: dict[str, object],
+    ) -> None:
+        release_ids = self._checkpoint_release_sequence(track)
+        if not release_ids or release_ids[-1] != coordinates[
+            "basis_dataset_release_id"
+        ]:
+            raise DailyTrackingError("Checkpoint Release sequence is incomplete")
+        release = self.metadata.dataset_release(str(release_ids[-1]))
+        frozen = self.metadata.frozen_research_definition(
+            str(track["definition_version_id"])
+        )
+        if release is None or frozen is None:
+            raise DailyTrackingError("Working Cache rebuild truth is missing")
+        definition = frozen["content"]
+        if not isinstance(definition, dict):
+            raise DailyTrackingError("Working Cache rebuild Definition is invalid")
+        canonical = self.datasets.materialize_canonical(release)
+        calendar = [str(session) for session in canonical["research_calendar"]]
+        alpha_definition = definition.get("alpha")
+        if not isinstance(alpha_definition, dict):
+            raise DailyTrackingError("Working Cache rebuild Alpha is invalid")
+        lookback = validate_alpha(
+            str(alpha_definition["expression"])
+        ).effective_lookback
+        window_start = max(0, len(calendar) - 504 - lookback)
+        window = slice_canonical_range(canonical, calendar[window_start])
+        alpha = self._alpha(
+            window,
+            definition,
+            kernel=str(generation["calculation_kernel"]),
+        )
+        recent_sessions = set(calendar[-504:])
+        recent_alpha = {
+            **alpha,
+            "sessions": [
+                item
+                for item in alpha["sessions"]
+                if str(item["session"]) in recent_sessions
+            ],
+        }
+        recent_alpha["checksum"] = alpha_matrix_checksum(recent_alpha)
+        labels = build_forward_labels(
+            canonical,
+            recent_alpha,
+            signal_sessions=calendar[-504:],
+        )
+        factor = evaluate_factor(labels)
+        pending = {
+            str(item["session"]): [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "alpha": float(row["value"]),
+                }
+                for row in item["values"]
+            ]
+            for item in recent_alpha["sessions"][-21:]
+        }
+        self.cache.commit_seed(
+            coordinates,
+            pending_alpha=pending,
+            rolling_factor=factor_artifact_to_rolling_rows(factor),
+        )
+
+    def _checkpoint_release_sequence(
+        self,
+        track: dict[str, object],
+    ) -> list[str]:
+        checkpoints = {
+            str(item["id"]): item
+            for item in track["checkpoints"]
+            if isinstance(item, dict)
+        }
+        cursor: str | None = str(track["head_checkpoint_id"])
+        release_ids: list[str] = []
+        while cursor is not None:
+            checkpoint = checkpoints.get(cursor)
+            if checkpoint is None:
+                raise DailyTrackingError("Checkpoint chain is incomplete")
+            manifest = self._checkpoint_manifest(
+                str(checkpoint["manifest_sha256"])
+            )
+            release_ids.append(str(manifest["target_dataset_release_id"]))
+            predecessor = manifest.get("predecessor_checkpoint_id")
+            cursor = str(predecessor) if predecessor is not None else None
+        release_ids.reverse()
+        for ancestor, descendant in zip(
+            release_ids,
+            release_ids[1:],
+            strict=False,
+        ):
+            chain = self._release_chain(ancestor, descendant)
+            if len(chain) != 1:
+                raise DailyTrackingError(
+                    "Checkpoint Dataset Releases are not an ordered sequence"
+                )
+        return release_ids
 
     def get_track(self, track_id: str) -> dict[str, object] | None:
         with self.metadata.connect() as connection:
@@ -1159,8 +1287,9 @@ class DailyTrackingService:
             for item in pending_items
         }
         rolling_rows = factor_artifact_to_rolling_rows(factor)
-        prior_basis = self.cache.read_basis(str(track["id"]))
-        self.cache.commit_advance(
+        self.cache.delete(str(track["id"]))
+        self.cache.discard_staging()
+        self.cache.commit_seed(
             {
                 "daily_track_id": track["id"],
                 "generation_id": generation["id"],
@@ -1172,10 +1301,9 @@ class DailyTrackingService:
                     "numeric_execution_contract"
                 ],
                 "basis_dataset_release_id": target["id"],
-                "fencing_token": int(prior_basis["fencing_token"]) + 1,
+                "fencing_token": len(track["checkpoints"]) + 1,
             },
-            retained_pending_sessions=[],
-            new_pending_alpha=pending,
+            pending_alpha=pending,
             rolling_factor=rolling_rows,
         )
         return {
@@ -1198,7 +1326,7 @@ class DailyTrackingService:
         head = track["head"]
         if not isinstance(head, dict):
             raise DailyTrackingError("DailyTrack has no Head")
-        basis = self.cache.read_basis(str(track["id"]))
+        basis = self._ensure_working_cache(track, generation)
         expected_basis = {
             "daily_track_id": track["id"],
             "generation_id": track["current_generation_id"],
