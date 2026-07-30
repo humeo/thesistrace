@@ -10,6 +10,7 @@ class Settings:
     working_cache_root: Path | None = None
     worker_stale_after_seconds: int = 30
     tushare_token: str | None = None
+    runtime_mode: str = "local"
 
 
 def settings_from_environment() -> Settings:
@@ -19,4 +20,5 @@ def settings_from_environment() -> Settings:
         object_root=home / "objects",
         working_cache_root=home / "working-cache",
         tushare_token=os.environ.get("TUSHARE_TOKEN"),
+        runtime_mode=os.environ.get("THESISTRACE_RUNTIME_MODE", "local"),
     )

@@ -13,9 +13,9 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
-from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
-from thesistrace.storage import DatasetPublicationConflict, MetadataStore
+from thesistrace.runtime import RuntimePorts, build_runtime
+from thesistrace.storage import DatasetPublicationConflict
 from thesistrace.tracking import (
     DailyTrackingError,
     DailyTrackingService,
@@ -29,7 +29,6 @@ from thesistrace.tushare_source import (
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
-from thesistrace.working_cache import WorkingCacheStore
 
 
 class BootstrapRequest(BaseModel):
@@ -65,19 +64,19 @@ def create_app(
     settings: Settings,
     *,
     tushare_transport: TushareTransport | None = None,
+    runtime_ports: RuntimePorts | None = None,
 ) -> FastAPI:
-    store = MetadataStore(settings.metadata_path)
-    store.initialize()
-    objects = ImmutableObjectStore(settings.object_root)
+    runtime = runtime_ports or build_runtime(settings)
+    store = runtime.control_metadata
+    objects = runtime.objects
     publisher = DatasetPublisher(store, objects)
     definitions = ResearchDefinitionService(store, publisher)
     research_runs = ResearchRunService(store, publisher, objects)
-    cache_root = settings.working_cache_root or settings.metadata_path.parent / "working-cache"
     tracking = DailyTrackingService(
         store,
         publisher,
         objects,
-        WorkingCacheStore(cache_root),
+        runtime.working_cache,
     )
     tracking.reconcile_cache_deletions()
     source_transport = tushare_transport or HttpTushareTransport()
@@ -179,6 +178,8 @@ def create_app(
             ) from error
         except DefinitionValidationError as error:
             raise HTTPException(status_code=422, detail={"errors": error.errors}) from error
+        if created:
+            runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(
             status_code=202 if created else 200,
             content={"frozen_definition": frozen, "run": run},
@@ -277,6 +278,8 @@ def create_app(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
             ) from error
+        if created:
+            runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(status_code=202 if created else 200, content=run)
 
     @app.post("/api/v1/research-runs/{run_id}/daily-tracks")
@@ -291,6 +294,8 @@ def create_app(
                 status_code=409,
                 detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
             ) from error
+        if created:
+            runtime.execution_dispatch.dispatch("daily_track", str(track["id"]))
         return JSONResponse(status_code=201 if created else 200, content=track)
 
     @app.get("/api/v1/daily-tracks")

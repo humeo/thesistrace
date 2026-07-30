@@ -16,7 +16,12 @@ from thesistrace.factor import (
     mean_or_none,
 )
 from thesistrace.numeric import canonical_binary64_bytes, canonical_decimal
-from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
+from thesistrace.objects import canonical_json_bytes
+from thesistrace.ports import (
+    ControlMetadataPort,
+    ObjectStorePort,
+    WorkingCachePort,
+)
 from thesistrace.research_runs import RUNTIME_BUILD
 from thesistrace.result_objects import (
     EXECUTION_AGGREGATE_CONTRACT,
@@ -39,9 +44,8 @@ from thesistrace.result_objects import (
 from thesistrace.result_objects import (
     terminal_strategy_state as compact_terminal_strategy_state,
 )
-from thesistrace.storage import MetadataStore
 from thesistrace.strategy import run_strategy, strategy_metrics
-from thesistrace.working_cache import WorkingCacheError, WorkingCacheStore
+from thesistrace.working_cache import WorkingCacheError
 
 
 class DailyTrackingError(RuntimeError):
@@ -68,17 +72,15 @@ COMPACT_RESULT_OBJECTS = {
 class DailyTrackingService:
     def __init__(
         self,
-        metadata: MetadataStore,
+        metadata: ControlMetadataPort,
         datasets: DatasetPublisher,
-        objects: ImmutableObjectStore,
-        cache: WorkingCacheStore | None = None,
+        objects: ObjectStorePort,
+        cache: WorkingCachePort,
     ) -> None:
         self.metadata = metadata
         self.datasets = datasets
         self.objects = objects
-        self.cache = cache or WorkingCacheStore(
-            metadata.path.parent / "working-cache"
-        )
+        self.cache = cache
 
     def activate(
         self,

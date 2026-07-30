@@ -6,13 +6,13 @@ from datetime import UTC, datetime
 from thesistrace.alpha import evaluate_alpha_matrix
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.factor import build_forward_labels, evaluate_factor
-from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
+from thesistrace.objects import canonical_json_bytes
+from thesistrace.ports import ControlMetadataPort, ObjectStorePort
 from thesistrace.result_objects import (
     CompactResultError,
     publish_compact_result_objects,
     reconstruct_result_view,
 )
-from thesistrace.storage import MetadataStore
 from thesistrace.strategy import run_strategy
 
 RUNTIME_BUILD = {"package": "thesistrace", "version": "0.1.0"}
@@ -30,9 +30,9 @@ class TransientResearchRunError(RuntimeError):
 class ResearchRunService:
     def __init__(
         self,
-        metadata: MetadataStore,
+        metadata: ControlMetadataPort,
         datasets: DatasetPublisher,
-        objects: ImmutableObjectStore,
+        objects: ObjectStorePort,
         *,
         calculator: Calculator | None = None,
     ) -> None:

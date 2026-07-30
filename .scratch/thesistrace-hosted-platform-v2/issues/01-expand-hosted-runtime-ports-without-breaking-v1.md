@@ -8,10 +8,10 @@ that makes later hosted vertical slices small enough to land independently.
 
 **Blocked by:** `thesistrace-bounded-research-storage/01 — Write deterministic Parquet Physical Data Objects`.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Research, Dataset Publication, and Daily Tracking services depend on explicit control-metadata, ObjectStore, and execution-dispatch ports rather than constructing one concrete runtime internally.
-- [ ] The existing local SQLite, filesystem ObjectStore, and local Worker adapters continue to support every V1 API and browser workflow without changing quantitative semantics.
-- [ ] Hosted adapters can be selected through deployment configuration without branching inside Alpha, Factor, Strategy, or Tracking calculations.
-- [ ] The ObjectStore boundary accepts the typed immutable JSON and Parquet Physical Data Objects established by the storage specification without exposing physical paths to domain services.
-- [ ] Existing backend, frontend, and browser acceptance suites remain green before any hosted implementation is selected.
+- [x] Research, Dataset Publication, and Daily Tracking services depend on explicit control-metadata, ObjectStore, and execution-dispatch ports rather than constructing one concrete runtime internally.
+- [x] The existing local SQLite, filesystem ObjectStore, and local Worker adapters continue to support every V1 API and browser workflow without changing quantitative semantics.
+- [x] Hosted adapters can be selected through deployment configuration without branching inside Alpha, Factor, Strategy, or Tracking calculations.
+- [x] The ObjectStore boundary accepts the typed immutable JSON and Parquet Physical Data Objects established by the storage specification without exposing physical paths to domain services.
+- [x] Existing backend, frontend, and browser acceptance suites remain green before any hosted implementation is selected.

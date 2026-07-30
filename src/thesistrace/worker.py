@@ -1,16 +1,15 @@
 import argparse
 import logging
 import time
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from thesistrace.config import settings_from_environment
 from thesistrace.datasets import DatasetPublisher
-from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
-from thesistrace.storage import MetadataStore
+from thesistrace.runtime import build_runtime
 from thesistrace.tracking import DailyTrackingService
-from thesistrace.working_cache import WorkingCacheStore
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +26,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = build_parser().parse_args()
     settings = settings_from_environment()
-    metadata_path = args.metadata or settings.metadata_path
-    object_root = args.objects or settings.object_root
-    store = MetadataStore(metadata_path)
-    store.initialize()
-    objects = ImmutableObjectStore(object_root)
+    settings = replace(
+        settings,
+        metadata_path=args.metadata or settings.metadata_path,
+        object_root=args.objects or settings.object_root,
+    )
+    runtime = build_runtime(settings)
+    store = runtime.control_metadata
+    objects = runtime.objects
     runs = ResearchRunService(
         store,
         DatasetPublisher(store, objects),
@@ -41,9 +43,7 @@ def main() -> None:
         store,
         DatasetPublisher(store, objects),
         objects,
-        WorkingCacheStore(
-            settings.working_cache_root or metadata_path.parent / "working-cache"
-        ),
+        runtime.working_cache,
     )
     while True:
         store.record_worker_heartbeat(datetime.now(UTC))

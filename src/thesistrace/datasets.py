@@ -18,8 +18,8 @@ from thesistrace.fixture import (
     liquidity_universes,
     price_rows,
 )
-from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
-from thesistrace.storage import MetadataStore
+from thesistrace.objects import canonical_json_bytes
+from thesistrace.ports import ControlMetadataPort, ObjectStorePort
 
 
 class InvalidFixtureError(ValueError):
@@ -27,7 +27,11 @@ class InvalidFixtureError(ValueError):
 
 
 class DatasetPublisher:
-    def __init__(self, metadata: MetadataStore, objects: ImmutableObjectStore) -> None:
+    def __init__(
+        self,
+        metadata: ControlMetadataPort,
+        objects: ObjectStorePort,
+    ) -> None:
         self.metadata = metadata
         self.objects = objects
 

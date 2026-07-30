@@ -12,6 +12,7 @@ from thesistrace.research_runs import ResearchRunService
 from thesistrace.result_objects import STRATEGY_DAILY_CONTRACT
 from thesistrace.storage import MetadataStore
 from thesistrace.tracking import DailyTrackingError, DailyTrackingService
+from thesistrace.working_cache import WorkingCacheStore
 
 
 def definition() -> dict[str, object]:
@@ -46,7 +47,15 @@ def services(
     datasets = DatasetPublisher(metadata, objects)
     return (
         ResearchRunService(metadata, datasets, objects),
-        DailyTrackingService(metadata, datasets, objects),
+        DailyTrackingService(
+            metadata,
+            datasets,
+            objects,
+            WorkingCacheStore(
+                settings.working_cache_root
+                or settings.metadata_path.parent / "working-cache"
+            ),
+        ),
         objects,
     )
 

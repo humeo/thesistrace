@@ -13,6 +13,7 @@ from thesistrace.research_runs import (
 )
 from thesistrace.storage import MetadataStore
 from thesistrace.tracking import DailyTrackingService
+from thesistrace.working_cache import WorkingCacheStore
 
 FORBIDDEN_RESULT_OBJECTS = {
     "alpha_matrix",
@@ -64,6 +65,7 @@ def test_revised_v1_chain_through_public_api(tmp_path: Path) -> None:
         metadata,
         datasets,
         objects,
+        WorkingCacheStore(settings.working_cache_root),
     )
 
     with TestClient(create_app(settings)) as client:

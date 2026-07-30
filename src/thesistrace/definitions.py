@@ -6,7 +6,7 @@ from thesistrace.alpha import AlphaValidationError, ParsedAlpha, validate_alpha
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.objects import canonical_json_bytes
-from thesistrace.storage import MetadataStore
+from thesistrace.ports import ControlMetadataPort
 
 FIXED_COSTS = {
     "commission_rate_all_in": Decimal("0.0003"),
@@ -29,7 +29,11 @@ class DefinitionValidationError(ValueError):
 
 
 class ResearchDefinitionService:
-    def __init__(self, metadata: MetadataStore, datasets: DatasetPublisher) -> None:
+    def __init__(
+        self,
+        metadata: ControlMetadataPort,
+        datasets: DatasetPublisher,
+    ) -> None:
         self.metadata = metadata
         self.datasets = datasets
 
