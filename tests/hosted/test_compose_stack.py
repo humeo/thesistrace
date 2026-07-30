@@ -118,6 +118,22 @@ def test_private_services_use_internal_networks_and_persistent_named_volumes() -
     assert "RUN deno cache server.ts" in deno_dockerfile
 
 
+def test_hosted_processes_use_explicit_database_and_worker_roles() -> None:
+    services = compose_model()["services"]
+    assert services["api"]["environment"]["THESISTRACE_RUNTIME_MODE"] == "hosted"
+    assert services["api"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "api"
+    assert services["data-worker"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "data"
+    assert services["data-worker"]["command"][1:3] == ["--role", "data"]
+    for name in {
+        "compute-worker-1",
+        "compute-worker-2",
+        "compute-worker-3",
+        "compute-worker-4",
+    }:
+        assert services[name]["environment"]["THESISTRACE_DATABASE_ROLE"] == "compute"
+        assert services[name]["command"][1:3] == ["--role", "compute"]
+
+
 def test_one_shot_migrations_gate_every_public_or_steady_application_service() -> None:
     model = compose_model()
     services = model["services"]

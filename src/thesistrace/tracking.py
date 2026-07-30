@@ -863,10 +863,11 @@ class DailyTrackingService:
                 LEFT JOIN daily_tracks AS track
                   ON track.id = deletion.daily_track_id
                 WHERE deletion.status = 'pending'
-                  AND (? IS NULL OR deletion.daily_track_id = ?)
+                  AND deletion.daily_track_id =
+                      COALESCE(?, deletion.daily_track_id)
                 ORDER BY deletion.requested_at, deletion.daily_track_id
                 """,
-                (track_id, track_id),
+                (track_id,),
             ).fetchall()
         outcomes: list[dict[str, object]] = []
         for row in rows:

@@ -12,6 +12,7 @@ class Settings:
     tushare_token: str | None = None
     runtime_mode: str = "local"
     database_url: str | None = None
+    database_role: str = "api"
     auth_mode: str = "disabled"
     insforge_jwks_url: str = "http://insforge:7130/.well-known/jwks.json"
     insforge_jwt_issuer: str = "insforge"
@@ -27,6 +28,7 @@ def settings_from_environment() -> Settings:
         tushare_token=os.environ.get("TUSHARE_TOKEN"),
         runtime_mode=os.environ.get("THESISTRACE_RUNTIME_MODE", "local"),
         database_url=os.environ.get("THESISTRACE_DATABASE_URL"),
+        database_role=os.environ.get("THESISTRACE_DATABASE_ROLE", "api"),
         auth_mode=os.environ.get("THESISTRACE_AUTH_MODE", "disabled"),
         insforge_jwks_url=os.environ.get(
             "THESISTRACE_INSFORGE_JWKS_URL",

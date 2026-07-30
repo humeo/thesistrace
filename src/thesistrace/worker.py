@@ -20,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--objects", type=Path)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--interval", type=float, default=5.0)
+    parser.add_argument(
+        "--role",
+        choices=("local", "compute", "data"),
+        default="local",
+    )
     return parser
 
 
@@ -47,6 +52,11 @@ def main() -> None:
     )
     while True:
         store.record_worker_heartbeat(datetime.now(UTC))
+        if args.role == "data":
+            if args.once:
+                return
+            time.sleep(args.interval)
+            continue
         try:
             tracking.reconcile_cache_deletions()
             store.recover_abandoned_research_runs(

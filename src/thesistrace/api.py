@@ -28,6 +28,7 @@ from thesistrace.provisioning import (
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
+from thesistrace.tenancy import authenticated_subject
 from thesistrace.tracking import (
     DailyTrackingError,
     DailyTrackingService,
@@ -70,6 +71,30 @@ class KernelUpgradeRequest(BaseModel):
 
 def error_detail(reason_code: str, message: str) -> dict[str, str]:
     return {"reason_code": reason_code, "message": message}
+
+
+def public_dataset_release_view(release: dict[str, object]) -> dict[str, object]:
+    correction_change_set = release.get("correction_change_set")
+    corrections = (
+        len(correction_change_set)
+        if isinstance(correction_change_set, list)
+        else 0
+    )
+    return {
+        key: release[key]
+        for key in (
+            "id",
+            "predecessor_id",
+            "created_at",
+            "appended_session_range",
+            "session_count",
+            "instrument_count",
+            "canonical_schema_version",
+            "canonical_tables",
+            "schemas",
+        )
+        if key in release
+    } | {"correction_count": corrections}
 
 
 def create_app(
@@ -115,6 +140,45 @@ def create_app(
 
     @app.middleware("http")
     async def authenticate_product_request(request: Request, call_next):
+        if settings.runtime_mode == "hosted":
+            hidden_hosted_paths = {
+                "/api/v1/dataset-releases/bootstrap",
+                "/api/v1/dataset-releases/bootstrap-live",
+                "/api/v1/dataset-releases/publish-fixture",
+                "/api/v1/dataset-releases/publish-live",
+                "/api/v1/sources/tushare/preflight",
+            }
+            if (
+                request.url.path.startswith("/api/v1/objects/")
+                or request.url.path in hidden_hosted_paths
+            ):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "detail": error_detail(
+                            "ROUTE_NOT_FOUND",
+                            "route not found",
+                        )
+                    },
+                )
+            supplied_workspace_keys = {
+                "workspace_id",
+                "personal_workspace_id",
+            }
+            if (
+                supplied_workspace_keys.intersection(request.query_params)
+                or request.headers.get("X-Workspace-ID") is not None
+                or request.headers.get("X-Personal-Workspace-ID") is not None
+            ):
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "detail": error_detail(
+                            "CLIENT_WORKSPACE_FORBIDDEN",
+                            "Personal Workspace is derived from the authenticated User",
+                        )
+                    },
+                )
         if (
             settings.auth_mode != "insforge"
             or request.url.path == "/api/v1/health"
@@ -160,7 +224,8 @@ def create_app(
                     )
                 },
             )
-        return await call_next(request)
+        with authenticated_subject(request.state.identity.subject):
+            return await call_next(request)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(
@@ -276,6 +341,7 @@ def create_app(
 
     @app.post("/api/v1/research-definitions")
     def create_research_definition(content: dict[str, object]) -> JSONResponse:
+        reject_client_workspace_identity(content)
         return JSONResponse(status_code=201, content=definitions.create_draft(content))
 
     @app.get("/api/v1/research-definitions/{draft_id}")
@@ -293,6 +359,7 @@ def create_app(
 
     @app.put("/api/v1/research-definitions/{draft_id}")
     def update_research_definition(draft_id: str, content: dict[str, object]) -> dict[str, object]:
+        reject_client_workspace_identity(content)
         draft = definitions.update_draft(draft_id, content)
         if draft is None:
             raise HTTPException(
@@ -855,7 +922,10 @@ def create_app(
 
     @app.get("/api/v1/dataset-releases")
     def list_dataset_releases() -> dict[str, object]:
-        return {"items": store.list_dataset_releases()}
+        releases = store.list_dataset_releases()
+        if settings.runtime_mode == "hosted":
+            releases = [public_dataset_release_view(release) for release in releases]
+        return {"items": releases}
 
     @app.get("/api/v1/dataset-releases/{release_id}")
     def get_dataset_release(release_id: str) -> dict[str, object]:
@@ -865,6 +935,8 @@ def create_app(
                 status_code=404,
                 detail=error_detail("DATASET_RELEASE_NOT_FOUND", "dataset release not found"),
             )
+        if settings.runtime_mode == "hosted":
+            return public_dataset_release_view(release)
         return release
 
     @app.get("/api/v1/dataset-releases/{release_id}/data-contract")
@@ -922,6 +994,18 @@ def probe_object_store(root: Path) -> bool:
         return False
     finally:
         probe_path.unlink(missing_ok=True)
+
+
+def reject_client_workspace_identity(content: dict[str, object]) -> None:
+    forbidden = {"workspace_id", "personal_workspace_id"}
+    if forbidden.intersection(content):
+        raise HTTPException(
+            status_code=422,
+            detail=error_detail(
+                "CLIENT_WORKSPACE_FORBIDDEN",
+                "Personal Workspace is derived from the authenticated User",
+            ),
+        )
 
 
 def main() -> None:
