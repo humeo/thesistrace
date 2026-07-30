@@ -3,6 +3,7 @@ import json
 import sys
 from collections.abc import Sequence
 from datetime import datetime
+from typing import cast
 
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.management import (
@@ -15,6 +16,11 @@ from thesistrace.provisioning import (
     ProvisioningError,
     RegistrationService,
     build_registration_service,
+)
+from thesistrace.quota import (
+    QuotaProfileError,
+    QuotaProfileService,
+    QuotaProfileStore,
 )
 from thesistrace.storage import MetadataStore
 
@@ -49,6 +55,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect = invitation_commands.add_parser("inspect")
     inspect.add_argument("--invitation-id", required=True)
+
+    quotas = resources.add_parser("quota")
+    quota_commands = quotas.add_subparsers(dest="command", required=True)
+
+    quota_inspect = quota_commands.add_parser("inspect")
+    quota_inspect.add_argument("--workspace-id", required=True)
+
+    quota_override = quota_commands.add_parser("override")
+    quota_override.add_argument("--actor", required=True)
+    quota_override.add_argument("--workspace-id", required=True)
+    quota_override.add_argument("--max-active-daily-tracks", type=int)
+    quota_override.add_argument(
+        "--max-nonterminal-user-compute-jobs",
+        type=int,
+    )
+    quota_override.add_argument("--max-private-storage-bytes", type=int)
     return parser
 
 
@@ -57,15 +79,71 @@ def run(
     *,
     settings: Settings | None = None,
     registration_service: RegistrationService | None = None,
+    quota_service: QuotaProfileService | None = None,
 ) -> int:
     arguments = build_parser().parse_args(argv)
     active_settings = settings or settings_from_environment()
     local_store = MetadataStore(active_settings.metadata_path)
     if not active_settings.database_url:
         local_store.initialize()
-    service = SourceAuthorizationService(
-        build_management_store(active_settings, local_store)
-    )
+    management_store = build_management_store(active_settings, local_store)
+    service = SourceAuthorizationService(management_store)
+
+    if arguments.resource == "quota":
+        if quota_service is None and not active_settings.database_url:
+            print(
+                json.dumps(
+                    {
+                        "reason_code": "HOSTED_DATABASE_REQUIRED",
+                        "message": "Quota Profiles require the hosted database",
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        quotas = quota_service or QuotaProfileService(
+            cast(QuotaProfileStore, management_store)
+        )
+        try:
+            if arguments.command == "inspect":
+                profile = quotas.inspect(arguments.workspace_id)
+            else:
+                profile = quotas.override(
+                    actor=arguments.actor,
+                    workspace_id=arguments.workspace_id,
+                    max_active_daily_tracks=arguments.max_active_daily_tracks,
+                    max_nonterminal_user_compute_jobs=(
+                        arguments.max_nonterminal_user_compute_jobs
+                    ),
+                    max_private_storage_bytes=(
+                        arguments.max_private_storage_bytes
+                    ),
+                )
+        except QuotaProfileError as error:
+            print(
+                json.dumps(
+                    {
+                        "reason_code": error.reason_code,
+                        "message": str(error),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            json.dumps(
+                {
+                    "workspace_id": arguments.workspace_id,
+                    "profile": profile,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
 
     if arguments.resource == "invitation":
         registration = registration_service or build_registration_service(

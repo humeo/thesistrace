@@ -77,6 +77,72 @@ class PostgresManagementStore:
             ).fetchall()
         return [self._serialize_row(row) for row in rows if row is not None]
 
+    def quota_profile(self, workspace_id: str) -> dict[str, int] | None:
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    max_active_daily_tracks,
+                    max_nonterminal_user_compute_jobs,
+                    max_private_storage_bytes
+                FROM thesistrace_control.workspace_quota_profiles
+                WHERE workspace_id = %s
+                """,
+                (workspace_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {key: int(value) for key, value in row.items()}
+
+    def update_quota_profile(
+        self,
+        *,
+        workspace_id: str,
+        overrides: dict[str, int],
+        audit_event: dict[str, object],
+    ) -> dict[str, int]:
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.transaction():
+                current = connection.execute(
+                    """
+                    SELECT
+                        max_active_daily_tracks,
+                        max_nonterminal_user_compute_jobs,
+                        max_private_storage_bytes
+                    FROM thesistrace_control.workspace_quota_profiles
+                    WHERE workspace_id = %s
+                    FOR UPDATE
+                    """,
+                    (workspace_id,),
+                ).fetchone()
+                if current is None:
+                    raise KeyError(workspace_id)
+                profile = {key: int(value) for key, value in current.items()}
+                profile.update(overrides)
+                updated = connection.execute(
+                    """
+                    UPDATE thesistrace_control.workspace_quota_profiles
+                    SET max_active_daily_tracks = %s,
+                        max_nonterminal_user_compute_jobs = %s,
+                        max_private_storage_bytes = %s,
+                        updated_at = %s,
+                        updated_by = %s
+                    WHERE workspace_id = %s
+                    """,
+                    (
+                        profile["max_active_daily_tracks"],
+                        profile["max_nonterminal_user_compute_jobs"],
+                        profile["max_private_storage_bytes"],
+                        audit_event["occurred_at"],
+                        audit_event["actor"],
+                        workspace_id,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise KeyError(workspace_id)
+                self._insert_audit_event(connection, audit_event)
+        return profile
+
     @staticmethod
     def _insert_audit_event(
         connection: psycopg.Connection,

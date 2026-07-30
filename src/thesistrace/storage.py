@@ -623,6 +623,11 @@ class MetadataStore:
         idempotency_key: str,
     ) -> tuple[dict[str, object], dict[str, object], bool]:
         with self.connect() as connection:
+            self._lock_idempotent_admission(
+                connection,
+                operation="research_run",
+                idempotency_key=idempotency_key,
+            )
             existing = connection.execute(
                 """
                 SELECT run.id AS run_id, run.definition_version_id, run.dataset_release_id,
@@ -672,6 +677,12 @@ class MetadataStore:
                 VALUES (?, ?, ?, 'queued', ?, ?)
                 """,
                 (run_id, frozen_id, dataset_release_id, now, now),
+            )
+            self._admit_user_compute(
+                connection,
+                resource_kind="research_run",
+                resource_id=run_id,
+                admitted_at=now,
             )
             connection.execute(
                 """
@@ -727,6 +738,38 @@ class MetadataStore:
     ) -> None:
         """Hosted stores override this transaction hook to deliver cancellation."""
         del connection, run_id, created_at
+
+    def _admit_user_compute(
+        self,
+        connection,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        admitted_at: str,
+    ) -> None:
+        """Hosted stores override this transaction hook to enforce Compute quota."""
+        del connection, resource_kind, resource_id, admitted_at
+
+    def _lock_idempotent_admission(
+        self,
+        connection,
+        *,
+        operation: str,
+        idempotency_key: str,
+    ) -> None:
+        """Hosted stores override this transaction hook to serialize request retries."""
+        del connection, operation, idempotency_key
+
+    def _complete_user_compute(
+        self,
+        connection,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        completed_at: str,
+    ) -> None:
+        """Hosted stores override this transaction hook to release Compute quota."""
+        del connection, resource_kind, resource_id, completed_at
 
     @staticmethod
     def _lock_research_run(connection, run_id: str):
@@ -803,6 +846,13 @@ class MetadataStore:
         )
         if updated.rowcount != 1:
             raise RuntimeError("ResearchRun transition fence failed")
+        if next_status in {"succeeded", "failed", "cancelled"}:
+            self._complete_user_compute(
+                connection,
+                resource_kind="research_run",
+                resource_id=run_id,
+                completed_at=now,
+            )
         return True
 
     def frozen_research_definition(self, version_id: str) -> dict[str, object] | None:
@@ -1129,6 +1179,12 @@ class MetadataStore:
             )
             if attempt_update.rowcount != 1:
                 raise RuntimeError("ResearchRun Attempt publication fence failed")
+            self._complete_user_compute(
+                connection,
+                resource_kind="research_run",
+                resource_id=run_id,
+                completed_at=now,
+            )
         return True
 
     def cancel_research_run(self, run_id: str) -> dict[str, object] | None:
@@ -1197,6 +1253,11 @@ class MetadataStore:
         now = datetime.now(UTC).isoformat()
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self._lock_idempotent_admission(
+                connection,
+                operation="research_run",
+                idempotency_key=idempotency_key,
+            )
             existing = connection.execute(
                 """
                 SELECT run.id, run.definition_version_id, run.dataset_release_id,
@@ -1236,6 +1297,12 @@ class MetadataStore:
                     now,
                     now,
                 ),
+            )
+            self._admit_user_compute(
+                connection,
+                resource_kind="research_run",
+                resource_id=run_id,
+                admitted_at=now,
             )
             connection.execute(
                 """

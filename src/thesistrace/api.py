@@ -26,6 +26,7 @@ from thesistrace.provisioning import (
     RegistrationService,
     build_registration_service,
 )
+from thesistrace.quota import QuotaExceededError
 from thesistrace.research_runs import (
     ResearchRunService,
     recover_staged_research_run,
@@ -75,6 +76,15 @@ class KernelUpgradeRequest(BaseModel):
 
 def error_detail(reason_code: str, message: str) -> dict[str, str]:
     return {"reason_code": reason_code, "message": message}
+
+
+def quota_error_detail(error: QuotaExceededError) -> dict[str, object]:
+    return {
+        "reason_code": error.reason_code,
+        "message": "Personal Workspace Compute quota is full",
+        "dimension": error.dimension,
+        "limit": error.limit,
+    }
 
 
 def public_dataset_release_view(release: dict[str, object]) -> dict[str, object]:
@@ -466,6 +476,11 @@ def create_app(
             ) from error
         except DefinitionValidationError as error:
             raise HTTPException(status_code=422, detail={"errors": error.errors}) from error
+        except QuotaExceededError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=quota_error_detail(error),
+            ) from error
         if created:
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(
@@ -607,6 +622,11 @@ def create_app(
             raise HTTPException(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
+            ) from error
+        except QuotaExceededError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=quota_error_detail(error),
             ) from error
         if created:
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))

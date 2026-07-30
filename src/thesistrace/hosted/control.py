@@ -5,6 +5,7 @@ from typing import Any
 import psycopg
 from psycopg import sql
 
+from thesistrace.quota import QuotaExceededError
 from thesistrace.storage import MetadataStore
 from thesistrace.tenancy import service_workspace, verified_subject
 
@@ -128,6 +129,100 @@ class PostgresControlMetadataStore(MetadataStore):
             ON CONFLICT (workspace_id, resource_kind, resource_id) DO NOTHING
             """,
             (f"cancel_{run_id}", run_id, created_at),
+        )
+
+    def _admit_user_compute(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        admitted_at: str,
+    ) -> None:
+        workspace = connection.execute(
+            "SELECT thesistrace_control.current_workspace_id() AS workspace_id"
+        ).fetchone()
+        if workspace is None or workspace["workspace_id"] is None:
+            raise RuntimeError("Personal Workspace context is missing")
+        workspace_id = str(workspace["workspace_id"])
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (workspace_id,),
+        )
+        profile = connection.execute(
+            """
+            SELECT max_nonterminal_user_compute_jobs
+            FROM thesistrace_control.workspace_quota_profiles
+            WHERE workspace_id = ?
+            """,
+            (workspace_id,),
+        ).fetchone()
+        if profile is None:
+            raise RuntimeError("Personal Workspace Quota Profile is missing")
+        limit = int(profile["max_nonterminal_user_compute_jobs"])
+        active = int(
+            connection.execute(
+                """
+                SELECT count(*)
+                FROM user_compute_admissions
+                WHERE completed_at IS NULL
+                """
+            ).fetchone()[0]
+        )
+        if active >= limit:
+            raise QuotaExceededError(
+                dimension="max_nonterminal_user_compute_jobs",
+                limit=limit,
+            )
+        connection.execute(
+            """
+            INSERT INTO user_compute_admissions (
+                resource_kind,
+                resource_id,
+                admitted_at
+            )
+            VALUES (?, ?, ?)
+            """,
+            (resource_kind, resource_id, admitted_at),
+        )
+
+    def _lock_idempotent_admission(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        operation: str,
+        idempotency_key: str,
+    ) -> None:
+        workspace = connection.execute(
+            "SELECT thesistrace_control.current_workspace_id() AS workspace_id"
+        ).fetchone()
+        if workspace is None or workspace["workspace_id"] is None:
+            raise RuntimeError("Personal Workspace context is missing")
+        lock_identity = (
+            f"{workspace['workspace_id']}:{operation}:{idempotency_key}"
+        )
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (lock_identity,),
+        )
+
+    def _complete_user_compute(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        completed_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE user_compute_admissions
+            SET completed_at = COALESCE(completed_at, ?)
+            WHERE resource_kind = ?
+              AND resource_id = ?
+              AND completed_at IS NULL
+            """,
+            (completed_at, resource_kind, resource_id),
         )
 
 

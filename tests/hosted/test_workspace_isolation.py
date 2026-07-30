@@ -30,6 +30,7 @@ PRIVATE_TABLES = (
     "research_definitions",
     "research_runs",
     "execution_outbox",
+    "user_compute_admissions",
     "research_run_idempotency",
     "research_run_attempts",
     "daily_tracks",
@@ -98,6 +99,7 @@ def truncate_product_state() -> None:
                 thesistrace_product.research_definitions,
                 thesistrace_product.research_runs,
                 thesistrace_product.execution_outbox,
+                thesistrace_product.user_compute_admissions,
                 thesistrace_product.research_run_idempotency,
                 thesistrace_product.research_run_attempts,
                 thesistrace_product.daily_tracks,
@@ -294,6 +296,7 @@ def seed_private_table_graph(
         "research_definitions": f"definition-{prefix}",
         "research_runs": f"run-{prefix}",
         "execution_outbox": f"outbox-{prefix}",
+        "user_compute_admissions": f"run-{prefix}",
         "research_run_idempotency": f"run-key-{prefix}",
         "research_run_attempts": f"attempt-{prefix}",
         "daily_tracks": f"track-{prefix}",
@@ -354,6 +357,19 @@ def seed_private_table_graph(
                 workspace_id,
                 ids["research_run_idempotency"],
                 ids["research_runs"],
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO thesistrace_product.user_compute_admissions
+                (workspace_id, resource_kind, resource_id, admitted_at, completed_at)
+            VALUES (%s, 'research_run', %s, %s, %s)
+            """,
+            (
+                workspace_id,
+                ids["user_compute_admissions"],
+                now,
+                now,
             ),
         )
         connection.execute(
@@ -591,6 +607,8 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
                     }
                     else "daily_track_id"
                     if table == "working_cache_deletions"
+                    else "resource_id"
+                    if table == "user_compute_admissions"
                     else "id"
                 )
                 own = connection.execute(
