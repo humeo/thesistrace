@@ -768,6 +768,6 @@ def probe_object_store(root: Path) -> bool:
 def main() -> None:
     uvicorn.run(
         create_app(settings_from_environment()),
-        host="127.0.0.1",
+        host=os.environ.get("THESISTRACE_API_HOST", "127.0.0.1"),
         port=int(os.environ.get("THESISTRACE_API_PORT", "8000")),
     )

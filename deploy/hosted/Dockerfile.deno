@@ -1,0 +1,4 @@
+# syntax=docker/dockerfile:1.7
+FROM ghcr.io/insforge/deno-runtime@sha256:43d086b5e885307e513879fe8fd307cb3dd1a388ec271fc717f06d767da49cbc
+
+RUN deno cache server.ts

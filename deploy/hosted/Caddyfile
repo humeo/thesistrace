@@ -1,0 +1,33 @@
+{
+	admin off
+	servers {
+		trusted_proxies static private_ranges
+		client_ip_headers CF-Connecting-IP X-Forwarded-For
+	}
+}
+
+{$THESISTRACE_SITE_ADDRESS:https://localhost} {
+	encode zstd gzip
+
+	@thesistrace_api path /api/v1/*
+	handle @thesistrace_api {
+		reverse_proxy api:8000
+	}
+
+	@insforge_auth path /api/auth/* /.well-known/jwks.json /api/.well-known/jwks.json
+	handle @insforge_auth {
+		reverse_proxy insforge:7130
+	}
+
+	handle {
+		root * /srv
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+	}
+}

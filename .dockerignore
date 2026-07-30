@@ -1,0 +1,6 @@
+.git
+.hosted
+.local
+.venv
+web/dist
+web/node_modules

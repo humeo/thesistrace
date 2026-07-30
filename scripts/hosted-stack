@@ -1,0 +1,86 @@
+#!/bin/sh
+set -eu
+
+root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+state_dir="$root/.hosted"
+env_file="$state_dir/hosted.env"
+insforge_dir="$state_dir/insforge-v2.2.9"
+insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
+compose_file="$root/deploy/hosted/compose.yaml"
+
+random_secret() {
+    openssl rand -hex 32
+}
+
+prepare() {
+    mkdir -p "$state_dir"
+    if [ ! -d "$insforge_dir/.git" ]; then
+        git clone --filter=blob:none https://github.com/InsForge/InsForge.git "$insforge_dir"
+        git -C "$insforge_dir" checkout --detach "$insforge_commit"
+    fi
+    actual_commit="$(git -C "$insforge_dir" rev-parse HEAD)"
+    if [ "$actual_commit" != "$insforge_commit" ]; then
+        echo "InsForge source is not the pinned v2.2.9 commit" >&2
+        exit 1
+    fi
+    if [ ! -f "$env_file" ]; then
+        umask 077
+        {
+            echo "THESISTRACE_RELEASE_VERSION=0.1.0"
+            echo "THESISTRACE_SITE_ADDRESS=https://localhost"
+            echo "THESISTRACE_HOSTED_ORIGIN=https://localhost"
+            echo "THESISTRACE_SMOKE_INSECURE_TLS=1"
+            echo "INSFORGE_SOURCE_DIR=$insforge_dir"
+            echo "POSTGRES_PASSWORD=$(random_secret)"
+            echo "TEMPORAL_DB_PASSWORD=$(random_secret)"
+            echo "INSFORGE_JWT_SECRET=$(random_secret)"
+            echo "INSFORGE_ENCRYPTION_KEY=$(random_secret)"
+            echo "INSFORGE_ADMIN_PASSWORD=$(random_secret)"
+            echo "GRAFANA_ADMIN_PASSWORD=$(random_secret)"
+        } >"$env_file"
+    fi
+}
+
+compose() {
+    docker compose \
+        --project-name thesistrace-hosted \
+        --project-directory "$root" \
+        --env-file "$env_file" \
+        --file "$compose_file" \
+        "$@"
+}
+
+action="${1:-up}"
+case "$action" in
+    init)
+        prepare
+        ;;
+    config)
+        prepare
+        compose config
+        ;;
+    up)
+        prepare
+        compose up --build --detach --wait
+        ;;
+    down)
+        prepare
+        compose down
+        ;;
+    restart)
+        prepare
+        compose down
+        compose up --build --detach --wait
+        ;;
+    smoke)
+        prepare
+        set -a
+        . "$env_file"
+        set +a
+        exec "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
+        ;;
+    *)
+        echo "usage: scripts/hosted-stack {init|config|up|down|restart|smoke}" >&2
+        exit 2
+        ;;
+esac

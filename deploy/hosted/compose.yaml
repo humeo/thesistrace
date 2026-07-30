@@ -1,0 +1,398 @@
+x-app: &app
+  image: thesistrace/app:${THESISTRACE_RELEASE_VERSION:-0.1.0}
+  environment: &app-environment
+    THESISTRACE_RELEASE_VERSION: ${THESISTRACE_RELEASE_VERSION:-0.1.0}
+    THESISTRACE_RUNTIME_MODE: ${THESISTRACE_RUNTIME_MODE:-local}
+    THESISTRACE_HOME: /var/lib/thesistrace
+    THESISTRACE_API_HOST: 0.0.0.0
+    THESISTRACE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
+    OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  restart: unless-stopped
+  networks:
+    - control
+    - execution
+    - observability
+  volumes:
+    - app-runtime:/var/lib/thesistrace
+    - immutable-objects:/var/lib/thesistrace/objects
+
+x-release-dependency: &release-dependency
+  release-gate:
+    condition: service_completed_successfully
+
+x-worker: &worker
+  <<: *app
+  command: ["thesistrace-worker", "--interval", "2"]
+  depends_on:
+    <<: *release-dependency
+    temporal-namespace:
+      condition: service_completed_successfully
+    api:
+      condition: service_healthy
+
+services:
+  volume-permissions:
+    <<: *app
+    user: "0:0"
+    command: ["sh", "-c", "chown -R 10001:10001 /var/lib/thesistrace"]
+    networks: [control]
+    restart: "no"
+
+  postgres:
+    image: ghcr.io/insforge/postgres:v15.13.4
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - app.encryption_key=${INSFORGE_ENCRYPTION_KEY:-change-me-encryption-key-at-least-32-characters}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-insforge}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-insforge}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    networks: [control]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/db-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/jwt.sql:/docker-entrypoint-initdb.d/02-jwt.sql:ro
+      - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    restart: unless-stopped
+
+  temporal-postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
+      POSTGRES_PASSWORD: ${TEMPORAL_DB_PASSWORD:-change-me}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TEMPORAL_DB_USER:-temporal}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    networks: [execution]
+    volumes:
+      - temporal-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  insforge-migrations:
+    image: thesistrace/insforge:2.2.9
+    build:
+      context: ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}
+      dockerfile: Dockerfile
+      target: runner
+      args:
+        VITE_API_BASE_URL: ${THESISTRACE_SITE_ADDRESS:-https://localhost}
+    command: ["sh", "-c", "cd backend && npm run migrate:up"]
+    environment: &insforge-environment
+      PORT: "7130"
+      API_BASE_URL: ${THESISTRACE_SITE_ADDRESS:-https://localhost}
+      JWT_SECRET: ${INSFORGE_JWT_SECRET:-change-me-jwt-secret-at-least-32-characters}
+      ENCRYPTION_KEY: ${INSFORGE_ENCRYPTION_KEY:-change-me-encryption-key-at-least-32-characters}
+      ROOT_ADMIN_USERNAME: ${INSFORGE_ADMIN_USERNAME:-admin}
+      ROOT_ADMIN_PASSWORD: ${INSFORGE_ADMIN_PASSWORD:-change-me}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-insforge}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
+      POSTGREST_BASE_URL: http://postgrest:3000
+      DENO_RUNTIME_URL: http://deno:7133
+      STORAGE_DIR: /insforge-storage
+      LOGS_DIR: /insforge-logs
+      INSFORGE_TELEMETRY_DISABLED: "1"
+      INSFORGE_DEPLOYMENT_METHOD: docker-compose
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [control]
+    restart: "no"
+
+  temporal-schema:
+    image: temporalio/admin-tools:1.31.0
+    environment:
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: temporal-postgres
+      POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:-change-me}
+    entrypoint: ["/bin/sh"]
+    command: ["/bootstrap/setup-postgres.sh"]
+    depends_on:
+      temporal-postgres:
+        condition: service_healthy
+    networks: [execution]
+    volumes:
+      - ./deploy/hosted/temporal:/bootstrap:ro
+    restart: "no"
+
+  temporal:
+    image: temporalio/server:1.31.0
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_SEEDS: temporal-postgres
+      POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:-change-me}
+      BIND_ON_IP: 0.0.0.0
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/dynamicconfig.yaml
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "nc", "-z", "127.0.0.1", "7233"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+    networks: [execution]
+    volumes:
+      - ./deploy/hosted/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/dynamicconfig.yaml:ro
+    restart: unless-stopped
+
+  temporal-namespace:
+    image: temporalio/admin-tools:1.31.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-thesistrace}
+    entrypoint: ["/bin/sh"]
+    command: ["/bootstrap/create-namespace.sh"]
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks: [execution]
+    volumes:
+      - ./deploy/hosted/temporal:/bootstrap:ro
+    restart: "no"
+
+  thesistrace-migrations:
+    <<: *app
+    build:
+      context: .
+      dockerfile: deploy/hosted/Dockerfile.app
+    command: ["python", "-m", "thesistrace.hosted.migrations"]
+    environment:
+      <<: *app-environment
+      THESISTRACE_INJECT_MIGRATION_FAILURE: ${THESISTRACE_INJECT_MIGRATION_FAILURE:-0}
+      THESISTRACE_MIGRATIONS_DIR: /app/deploy/hosted/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+      volume-permissions:
+        condition: service_completed_successfully
+    restart: "no"
+
+  release-gate:
+    <<: *app
+    command: ["python", "-m", "thesistrace.hosted.release_gate"]
+    depends_on:
+      insforge-migrations:
+        condition: service_completed_successfully
+      temporal-namespace:
+        condition: service_completed_successfully
+      thesistrace-migrations:
+        condition: service_completed_successfully
+    restart: "no"
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.12
+    environment:
+      PGRST_DB_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
+      PGRST_DB_SCHEMA: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${INSFORGE_JWT_SECRET:-change-me-jwt-secret-at-least-32-characters}
+    depends_on:
+      <<: *release-dependency
+      postgres:
+        condition: service_healthy
+    networks: [control]
+    restart: unless-stopped
+
+  deno:
+    image: thesistrace/insforge-deno:2.2.9
+    build:
+      context: .
+      dockerfile: deploy/hosted/Dockerfile.deno
+    environment:
+      PORT: "7133"
+      DENO_ENV: production
+      DENO_DIR: /deno-dir
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-insforge}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGREST_BASE_URL: http://postgrest:3000
+      WORKER_TIMEOUT_MS: "60000"
+      ENCRYPTION_KEY: ${INSFORGE_ENCRYPTION_KEY:-change-me-encryption-key-at-least-32-characters}
+      JWT_SECRET: ${INSFORGE_JWT_SECRET:-change-me-jwt-secret-at-least-32-characters}
+    depends_on:
+      <<: *release-dependency
+      postgrest:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:7133/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    networks: [control]
+    restart: unless-stopped
+
+  insforge:
+    image: thesistrace/insforge:2.2.9
+    command: ["npm", "start"]
+    environment:
+      <<: *insforge-environment
+    depends_on:
+      <<: *release-dependency
+      postgrest:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:7130/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    networks: [control]
+    volumes:
+      - insforge-storage:/insforge-storage
+      - insforge-logs:/insforge-logs
+    restart: unless-stopped
+
+  api:
+    <<: *app
+    depends_on:
+      <<: *release-dependency
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+
+  data-worker:
+    <<: *worker
+    networks:
+      - control
+      - execution
+      - observability
+      - data-egress
+
+  compute-worker-1:
+    <<: *worker
+
+  compute-worker-2:
+    <<: *worker
+
+  compute-worker-3:
+    <<: *worker
+
+  compute-worker-4:
+    <<: *worker
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.136.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./deploy/hosted/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    networks: [observability]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.6.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --storage.tsdb.retention.size=5GB
+    volumes:
+      - ./deploy/hosted/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      <<: *release-dependency
+      otel-collector:
+        condition: service_started
+    networks: [observability]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.2.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      <<: *release-dependency
+      prometheus:
+        condition: service_started
+    networks: [observability]
+    restart: unless-stopped
+
+  edge:
+    image: thesistrace/edge:${THESISTRACE_RELEASE_VERSION:-0.1.0}
+    build:
+      context: .
+      dockerfile: deploy/hosted/Dockerfile.edge
+    environment:
+      THESISTRACE_SITE_ADDRESS: ${THESISTRACE_SITE_ADDRESS:-https://localhost}
+    depends_on:
+      <<: *release-dependency
+      api:
+        condition: service_healthy
+      insforge:
+        condition: service_healthy
+    ports:
+      - target: 80
+        published: "${THESISTRACE_HTTP_PORT:-80}"
+        protocol: tcp
+      - target: 443
+        published: "${THESISTRACE_HTTPS_PORT:-443}"
+        protocol: tcp
+    networks:
+      - edge
+      - control
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
+  control:
+    driver: bridge
+    internal: true
+  execution:
+    driver: bridge
+    internal: true
+  observability:
+    driver: bridge
+    internal: true
+  data-egress:
+    driver: bridge
+
+volumes:
+  app-runtime:
+  caddy-config:
+  caddy-data:
+  grafana-data:
+  immutable-objects:
+  insforge-logs:
+  insforge-storage:
+  postgres-data:
+  prometheus-data:
+  temporal-data:
