@@ -3,15 +3,25 @@ from pathlib import Path
 from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
-from thesistrace.config import Settings
+from thesistrace.config import Settings, settings_from_environment
+from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
+from thesistrace.objects import ImmutableObjectStore
 from thesistrace.storage import MetadataStore
+
+
+class BootstrapRequest(BaseModel):
+    fixture: str
 
 
 def create_app(settings: Settings) -> FastAPI:
     store = MetadataStore(settings.metadata_path)
     store.initialize()
+    objects = ImmutableObjectStore(settings.object_root)
+    publisher = DatasetPublisher(store, objects)
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
     @app.get("/api/v1/workspace")
@@ -19,7 +29,7 @@ def create_app(settings: Settings) -> FastAPI:
         return {
             "installation_id": store.installation_id(),
             "resource_counts": store.resource_counts(),
-            "latest_dataset_release": None,
+            "latest_dataset_release": store.latest_dataset_release(),
         }
 
     @app.get("/api/v1/health")
@@ -46,6 +56,40 @@ def create_app(settings: Settings) -> FastAPI:
             },
         }
 
+    @app.post("/api/v1/dataset-releases/bootstrap")
+    def bootstrap_dataset_release(
+        request: BootstrapRequest,
+        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        try:
+            release, created = publisher.bootstrap(idempotency_key, request.fixture)
+        except InvalidFixtureError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content={"status": "succeeded", "release": release},
+        )
+
+    @app.get("/api/v1/dataset-releases/{release_id}")
+    def get_dataset_release(release_id: str) -> dict[str, object]:
+        release = store.dataset_release(release_id)
+        if release is None:
+            raise HTTPException(status_code=404, detail="dataset release not found")
+        return release
+
+    @app.get("/api/v1/objects/{digest}")
+    def get_object(digest: str) -> FileResponse:
+        if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+            raise HTTPException(status_code=404, detail="object not found")
+        path = objects.path_for(digest)
+        if not path.is_file():
+            raise HTTPException(status_code=404, detail="object not found")
+        return FileResponse(
+            path,
+            media_type="application/json",
+            headers={"ETag": f'"sha256:{digest}"', "Cache-Control": "public, immutable"},
+        )
+
     return app
 
 
@@ -62,8 +106,4 @@ def probe_object_store(root: Path) -> bool:
 
 
 def main() -> None:
-    settings = Settings(
-        metadata_path=Path(".local/metadata.sqlite3"),
-        object_root=Path(".local/objects"),
-    )
-    uvicorn.run(create_app(settings), host="127.0.0.1", port=8000)
+    uvicorn.run(create_app(settings_from_environment()), host="127.0.0.1", port=8000)

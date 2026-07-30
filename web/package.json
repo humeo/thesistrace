@@ -4,7 +4,9 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "dev": "THESISTRACE_HOME=../.local concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "dev:test": "bun run reset:test && THESISTRACE_HOME=.test-workspace concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "reset:test": "bun e2e/reset-workspace.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "test:e2e": "playwright test"

@@ -1,5 +1,6 @@
 .DS_Store
 .local/
+.test-workspace/
 .pytest_cache/
 .ruff_cache/
 .venv/
@@ -8,4 +9,3 @@ __pycache__/
 web/dist/
 web/node_modules/
 test-results/
-

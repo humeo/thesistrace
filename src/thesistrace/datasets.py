@@ -1,0 +1,62 @@
+import hashlib
+from datetime import UTC, datetime
+
+from thesistrace.fixture import build_fixture
+from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
+from thesistrace.storage import MetadataStore
+
+
+class InvalidFixtureError(ValueError):
+    pass
+
+
+class DatasetPublisher:
+    def __init__(self, metadata: MetadataStore, objects: ImmutableObjectStore) -> None:
+        self.metadata = metadata
+        self.objects = objects
+
+    def bootstrap(self, idempotency_key: str, fixture: str) -> tuple[dict[str, object], bool]:
+        existing = self.metadata.dataset_release_for_idempotency_key(idempotency_key)
+        if existing is not None:
+            return existing, False
+        if fixture != "v1":
+            raise InvalidFixtureError("fixture must be v1")
+        if self.metadata.latest_dataset_release() is not None:
+            raise InvalidFixtureError("a bootstrap root already exists")
+
+        source, canonical = build_fixture()
+        sessions = canonical["research_calendar"]
+        instruments = canonical["instruments"]
+        if not isinstance(sessions, list) or len(sessions) != 756:
+            raise InvalidFixtureError("fixture must contain exactly 756 sessions")
+        if not isinstance(instruments, list) or len(instruments) < 30:
+            raise InvalidFixtureError("fixture must contain at least 30 instruments")
+
+        source_object = self.objects.put_json(source)
+        canonical_object = self.objects.put_json(canonical)
+        object_entries = [
+            {"kind": "source_fixture", **source_object},
+            {"kind": "canonical_fixture", **canonical_object},
+        ]
+        manifest_core: dict[str, object] = {
+            "predecessor_id": None,
+            "created_at": datetime.now(UTC).isoformat(),
+            "appended_session_range": {"start": sessions[0], "end": sessions[-1]},
+            "session_count": len(sessions),
+            "instrument_count": len(instruments),
+            "correction_change_set": [],
+            "schemas": [
+                {"family": "source_fixture", "version": "tushare-fixture-v1"},
+                {"family": "canonical_eod", "version": "canonical-eod-v1"},
+            ],
+            "objects": object_entries,
+        }
+        release_digest = hashlib.sha256(canonical_json_bytes(manifest_core)).hexdigest()
+        release = {
+            "id": f"dsr_{release_digest[:20]}",
+            **manifest_core,
+            "manifest_sha256": release_digest,
+        }
+        self.objects.put_manifest(str(release["id"]), release)
+        self.metadata.publish_dataset_release(release, idempotency_key)
+        return release, True

@@ -23,7 +23,17 @@ type ResourceCounts = {
 type Workspace = {
   installation_id: string;
   resource_counts: ResourceCounts;
-  latest_dataset_release: string | null;
+  latest_dataset_release: DatasetRelease | null;
+};
+
+type DatasetRelease = {
+  id: string;
+  predecessor_id: string | null;
+  session_count: number;
+  instrument_count: number;
+  appended_session_range: { start: string; end: string };
+  objects: { kind: string; sha256: string; bytes: number }[];
+  manifest_sha256: string;
 };
 
 type ComponentHealth = {
@@ -54,6 +64,7 @@ const resources = [
 
 export default function App() {
   const [state, setState] = useState<WorkspaceState>({ status: "loading" });
+  const [publication, setPublication] = useState<"idle" | "running" | "failed">("idle");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -77,6 +88,39 @@ export default function App() {
 
     return () => controller.abort();
   }, []);
+
+  async function bootstrapFixture() {
+    if (state.status !== "ready") {
+      return;
+    }
+    setPublication("running");
+    try {
+      const response = await fetch("/api/v1/dataset-releases/bootstrap", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": "workspace-bootstrap-fixture-v1",
+        },
+        body: JSON.stringify({ fixture: "v1" }),
+      }).then(assertResponse);
+      const payload = (await response.json()) as { release: DatasetRelease };
+      setState({
+        status: "ready",
+        health: state.health,
+        workspace: {
+          ...state.workspace,
+          latest_dataset_release: payload.release,
+          resource_counts: {
+            ...state.workspace.resource_counts,
+            dataset_releases: 1,
+          },
+        },
+      });
+      setPublication("idle");
+    } catch {
+      setPublication("failed");
+    }
+  }
 
   return (
     <div className="app-shell">
@@ -161,10 +205,24 @@ export default function App() {
                       <p>
                         Bootstrap Release 发布后，这里会显示固定日历、Universe、标准字段和复权锚点。
                       </p>
+                      <button
+                        className="bootstrap-button"
+                        type="button"
+                        onClick={bootstrapFixture}
+                        disabled={publication === "running"}
+                      >
+                        {publication === "running" ? "正在发布…" : "发布 Fixture Bootstrap"}
+                        <ArrowUpRight size={16} aria-hidden="true" />
+                      </button>
+                      {publication === "failed" && (
+                        <p className="publication-error" role="alert">
+                          发布失败；latest 数据版本未改变。
+                        </p>
+                      )}
                     </div>
                   </div>
                 ) : (
-                  <p>{state.workspace.latest_dataset_release}</p>
+                  <ReleaseSummary release={state.workspace.latest_dataset_release} />
                 )}
                 <div className="truth-note">
                   <span>TRUTH POLICY</span>
@@ -201,6 +259,46 @@ export default function App() {
           </>
         )}
       </main>
+    </div>
+  );
+}
+
+function ReleaseSummary({ release }: { release: DatasetRelease }) {
+  return (
+    <div className="release-summary">
+      <div className="release-lead">
+        <span className="release-status">PUBLISHED</span>
+        <div>
+          <h3>Fixture Bootstrap 已发布</h3>
+          <code>{release.id}</code>
+        </div>
+      </div>
+      <dl className="release-facts">
+        <div>
+          <dt>PREDECESSOR</dt>
+          <dd>{release.predecessor_id ?? "ROOT"}</dd>
+        </div>
+        <div>
+          <dt>RESEARCH RANGE</dt>
+          <dd>
+            {release.appended_session_range.start} → {release.appended_session_range.end}
+          </dd>
+        </div>
+        <div>
+          <dt>COVERAGE</dt>
+          <dd>
+            {release.session_count} sessions · {release.instrument_count} instruments
+          </dd>
+        </div>
+        <div>
+          <dt>OBJECTS</dt>
+          <dd>{release.objects.length} immutable objects</dd>
+        </div>
+      </dl>
+      <div className="manifest-line">
+        <span>MANIFEST</span>
+        <code>{release.manifest_sha256.slice(0, 24)}…</code>
+      </div>
     </div>
   );
 }
