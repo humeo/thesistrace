@@ -28,6 +28,18 @@ class LiveBootstrapRequest(BaseModel):
     as_of: date
 
 
+class PriceCorrection(BaseModel):
+    session: str
+    instrument_id: str
+    field: str
+    value: str
+
+
+class FixtureIncrementRequest(BaseModel):
+    new_sessions: int
+    corrections: list[PriceCorrection]
+
+
 def create_app(
     settings: Settings,
     *,
@@ -130,6 +142,24 @@ def create_app(
         except TushareSourceError as error:
             raise HTTPException(status_code=424, detail=error.diagnostic()) from error
         except InvalidFixtureError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content={"status": "succeeded", "release": release},
+        )
+
+    @app.post("/api/v1/dataset-releases/publish-fixture")
+    def publish_fixture_increment(
+        request: FixtureIncrementRequest,
+        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        try:
+            release, created = publisher.publish_fixture_increment(
+                idempotency_key,
+                new_sessions=request.new_sessions,
+                corrections=[item.model_dump() for item in request.corrections],
+            )
+        except (InvalidFixtureError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return JSONResponse(
             status_code=201 if created else 200,
