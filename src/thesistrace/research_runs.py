@@ -7,6 +7,11 @@ from thesistrace.alpha import evaluate_alpha_matrix
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
+from thesistrace.result_objects import (
+    CompactResultError,
+    publish_compact_result_objects,
+    reconstruct_result_view,
+)
 from thesistrace.storage import MetadataStore
 from thesistrace.strategy import run_strategy
 
@@ -124,7 +129,7 @@ class ResearchRunService:
         }
         if set(artifacts) != required:
             raise RuntimeError("calculation did not produce the complete Result Bundle")
-        object_entries = {
+        compatibility_entries = {
             kind: {
                 "kind": kind,
                 **self.objects.put_json(artifacts[kind]),
@@ -134,6 +139,11 @@ class ResearchRunService:
         content = frozen["content"]
         if not isinstance(content, dict):
             raise RuntimeError("frozen Research Definition is invalid")
+        object_entries = publish_compact_result_objects(
+            self.objects,
+            artifacts,
+            content,
+        )
         semantics = content.get("semantic_versions")
         if not isinstance(semantics, dict):
             raise RuntimeError("Research semantics are missing")
@@ -153,6 +163,7 @@ class ResearchRunService:
             "runtime_build": RUNTIME_BUILD,
             "input_sessions": {"total": 756, "warmup": 252, "report": 504},
             "objects": object_entries,
+            "compatibility_objects": compatibility_entries,
             "created_at": datetime.now(UTC).isoformat(),
         }
         digest = hashlib.sha256(canonical_json_bytes(manifest_core)).hexdigest()
@@ -180,7 +191,18 @@ class ResearchRunService:
         entries = manifest.get("objects")
         if not isinstance(entries, dict):
             raise RuntimeError("Result Manifest object index is invalid")
+        if "factor_summary" not in entries:
+            return self._legacy_result_view(manifest, entries)
+        try:
+            return reconstruct_result_view(self.objects, manifest)
+        except CompactResultError as error:
+            raise RuntimeError(str(error)) from error
 
+    def _legacy_result_view(
+        self,
+        manifest: dict[str, object],
+        entries: dict[str, object],
+    ) -> dict[str, object]:
         def read(kind: str) -> object:
             entry = entries.get(kind)
             if not isinstance(entry, dict) or not isinstance(entry.get("sha256"), str):

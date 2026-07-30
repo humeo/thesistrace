@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pyarrow.parquet as pq
 from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
@@ -104,28 +105,103 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
         }
         assert manifest["numeric_execution_contract"] == "thesistrace-numeric-v1"
         assert manifest["calculation_kernel"] == "kernel-v1"
-        assert set(manifest["objects"]) >= {
-            "alpha_matrix",
-            "forward_labels",
-            "factor_evaluation",
-            "strategy_backtest",
-            "strategy_time_series",
-            "strategy_events",
-            "diagnostics",
+        assert set(manifest["objects"]) == {
+            "diagnostic_summary",
+            "execution_aggregates",
+            "factor_summary",
+            "rebalance_aggregates",
+            "strategy_daily_observations",
+            "strategy_summary",
+            "terminal_positions",
+            "terminal_strategy_state",
         }
-        assert all(
-            (
-                settings.object_root / "sha256" / entry["sha256"][:2] / f"{entry['sha256']}.json"
+        assert "compatibility_objects" not in manifest
+        parquet_kinds = {
+            "execution_aggregates",
+            "rebalance_aggregates",
+            "strategy_daily_observations",
+            "terminal_positions",
+        }
+        for kind, entry in manifest["objects"].items():
+            suffix = "parquet" if kind in parquet_kinds else "json"
+            assert (
+                settings.object_root
+                / "sha256"
+                / entry["sha256"][:2]
+                / f"{entry['sha256']}.{suffix}"
             ).is_file()
-            for entry in manifest["objects"].values()
+
+        daily_entry = manifest["objects"]["strategy_daily_observations"]
+        assert [
+            field["name"]
+            for field in daily_entry["writer_contract"]["schema"]
+        ] == [
+            "session",
+            "gross_nav",
+            "net_nav",
+            "benchmark_nav",
+            "net_cash",
+            "transaction_cost_cny",
+            "holdings_count",
+            "maximum_single_name_weight",
+            "upper_limit_buy_rejections",
+            "lower_limit_sell_rejections",
+            "suspension_rejections",
+        ]
+        daily_path = (
+            settings.object_root
+            / "sha256"
+            / daily_entry["sha256"][:2]
+            / f"{daily_entry['sha256']}.parquet"
         )
-        assert len(payload["factor_evaluation"]["horizons"]["1"]["daily"]) == 504
+        assert pq.ParquetFile(daily_path).metadata.num_row_groups == 1
+
+        assert all(
+            "daily" not in horizon
+            for horizon in payload["factor_evaluation"]["horizons"].values()
+        )
         assert len(payload["strategy_backtest"]["daily"]) == 504
-        assert len(payload["diagnostics"]["alpha_coverage"]) == 756
+        assert "fills" not in payload["strategy_backtest"]
+        assert "rejections" not in payload["strategy_backtest"]
+        assert "alpha_coverage" not in payload["diagnostics"]
+        assert payload["diagnostics"]["alpha_coverage_summary"]["session_count"] == 756
         assert (
             payload["factor_evaluation"]["horizons"]["1"]["alpha_checksum"]
             == payload["strategy_backtest"]["alpha_checksum"]
         )
+
+        raw_manifest = service(settings).objects.read_json(
+            completed["result_manifest_sha256"]
+        )
+        assert isinstance(raw_manifest, dict)
+        compatibility = raw_manifest["compatibility_objects"]
+        assert set(compatibility) == {
+            "alpha_matrix",
+            "diagnostics",
+            "factor_evaluation",
+            "forward_labels",
+            "strategy_backtest",
+            "strategy_events",
+            "strategy_time_series",
+        }
+        legacy_factor = service(settings).objects.read_json(
+            compatibility["factor_evaluation"]["sha256"]
+        )
+        legacy_strategy = service(settings).objects.read_json(
+            compatibility["strategy_backtest"]["sha256"]
+        )
+        assert payload["strategy_backtest"]["metrics"] == legacy_strategy["metrics"]
+        assert all(
+            payload["factor_evaluation"]["horizons"][horizon]["summary"]
+            == legacy_factor["horizons"][horizon]["summary"]
+            for horizon in ("1", "5", "20")
+        )
+        assert payload["terminal_strategy_state"]["session"] == payload[
+            "strategy_backtest"
+        ]["daily"][-1]["session"]
+        assert payload["terminal_strategy_state"]["positions"] == legacy_strategy[
+            "positions"
+        ]
         missing_attempt = client.get(f"/api/v1/research-runs/{run_id}/attempts/99")
         assert missing_attempt.status_code == 404
         assert missing_attempt.json()["detail"]["reason_code"] == (

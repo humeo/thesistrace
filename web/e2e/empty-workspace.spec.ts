@@ -47,7 +47,7 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   await expect(page.getByRole("heading", { name: "Fixture Bootstrap 已发布" })).toBeVisible();
   await expect(dataPanel.getByText("756 sessions")).toBeVisible();
   await expect(dataPanel.getByText("ROOT", { exact: true })).toBeVisible();
-  await expect(dataPanel.getByText("2 immutable objects")).toBeVisible();
+  await expect(dataPanel.getByText("11 immutable objects")).toBeVisible();
   await expect(page.getByRole("heading", { name: "标准研究数据契约" })).toBeVisible();
   await expect(page.getByText("open_adj", { exact: true })).toBeVisible();
   await expect(page.getByText("TOP 300 · TOP 1000 · TOP 2000 · TOP 3000")).toBeVisible();
@@ -79,15 +79,13 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   await expect(page.getByRole("heading", { name: "策略结论" })).toBeVisible();
   await expect(page.getByText("RESULT BUNDLE", { exact: true })).toBeVisible();
   await expect(page.getByText("DATASET RELEASE", { exact: true })).toBeVisible();
-  await expect(page.getByRole("img", { name: "1 日因子 Rank IC 日序列" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "1 日因子 Rank IC 日序列" })).toHaveCount(0);
   await expect(page.getByRole("img", { name: "基准 NAV 日序列" })).toBeVisible();
   await expect(page.getByRole("img", { name: "现金比例日序列" })).toBeVisible();
-  await expect(page.getByText("RECENT COST EVENTS")).toBeVisible();
-  await expect(page.getByText("RECENT MARKET REJECTIONS")).toBeVisible();
-  await expect(page.getByText("AUTHORITATIVE ARTIFACTS")).toBeVisible();
-  await expect
-    .poll(() => page.locator(".artifact-links a").count())
-    .toBeGreaterThanOrEqual(7);
+  await expect(page.getByText("RECENT COST EVENTS")).toHaveCount(0);
+  await expect(page.getByText("RECENT MARKET REJECTIONS")).toHaveCount(0);
+  await expect(page.getByText("AUTHORITATIVE ARTIFACTS")).toHaveCount(0);
+  await expect(page.locator(".artifact-links a")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "运行与追踪记录" })).toBeVisible();
   await expect(page.getByText("DATASET RELEASES", { exact: true })).toBeVisible();
   await expect(page.getByText("DEFINITIONS", { exact: true })).toBeVisible();

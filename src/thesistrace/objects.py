@@ -194,7 +194,7 @@ def parquet_bytes(
     pq.write_table(
         table,
         output,
-        row_group_size=table.num_rows,
+        row_group_size=max(1, table.num_rows),
         version=PARQUET_FORMAT_VERSION,
         use_dictionary=False,
         compression="zstd",
@@ -223,8 +223,6 @@ def canonicalize_parquet_rows(
     rows: Sequence[Mapping[str, object]],
     contract: ParquetWriterContract,
 ) -> list[dict[str, object]]:
-    if not rows:
-        raise ParquetContractError("Parquet Physical Data Objects must contain at least one row")
     expected_fields = set(contract.schema.names)
     validated: list[dict[str, object]] = []
     identities: set[tuple[object, ...]] = set()

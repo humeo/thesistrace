@@ -72,7 +72,7 @@ class DailyTrackingService:
         content = frozen["content"]
         if not isinstance(content, dict):
             raise DailyTrackingError("seed Research Definition is invalid")
-        entries = manifest.get("objects")
+        entries = manifest.get("compatibility_objects", manifest.get("objects"))
         if not isinstance(entries, dict):
             raise DailyTrackingError("seed Result Manifest is invalid")
         strategy = self._read_result_object(entries, "strategy_backtest")

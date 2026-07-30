@@ -806,8 +806,7 @@ h1 {
   border-right: 0;
 }
 
-.result-evidence span,
-.artifact-register span {
+.result-evidence span {
   display: block;
   color: var(--muted);
   font-size: 8px;
@@ -847,69 +846,6 @@ h1 {
   border-top: 1px solid var(--ink);
 }
 
-.event-register {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  border-top: 1px solid var(--ink);
-}
-
-.event-register > div {
-  min-width: 0;
-  padding: 14px 20px;
-  border-right: 1px solid var(--rule);
-}
-
-.event-register > div:last-child {
-  border-right: 0;
-}
-
-.event-register span {
-  display: block;
-  color: var(--muted);
-  font-size: 8px;
-  font-weight: 720;
-  letter-spacing: 0.12em;
-}
-
-.event-register small {
-  display: block;
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: 9px;
-}
-
-.event-table-wrap {
-  overflow-x: auto;
-  margin-top: 9px;
-}
-
-.event-table-wrap table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 9px;
-  text-align: left;
-}
-
-.event-table-wrap th,
-.event-table-wrap td {
-  padding: 5px 6px 5px 0;
-  border-top: 1px solid var(--rule);
-  white-space: nowrap;
-}
-
-.event-table-wrap th {
-  color: var(--muted);
-  font-weight: 650;
-}
-
-.artifact-register {
-  display: grid;
-  grid-template-columns: 0.8fr 2fr;
-  gap: 20px;
-  padding: 16px 20px;
-  border-top: 1px solid var(--ink);
-}
-
 .diagnostic-register {
   display: flex;
   align-items: center;
@@ -934,32 +870,6 @@ h1 {
   color: var(--muted);
   font-family: "Newsreader Variable", serif;
   font-size: 10px;
-}
-
-.artifact-register small {
-  display: block;
-  margin-top: 6px;
-  color: var(--muted);
-  font-family: "Newsreader Variable", serif;
-  font-size: 11px;
-}
-
-.artifact-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
-.artifact-links a {
-  padding: 6px 8px;
-  border: 1px solid var(--rule);
-  font-size: 9px;
-  text-transform: uppercase;
-}
-
-.artifact-links a:hover {
-  color: var(--paper);
-  background: var(--ink);
 }
 
 .tracking-control {
@@ -1456,15 +1366,8 @@ h1 {
   .factor-horizons,
   .strategy-metrics,
   .result-evidence,
-  .metric-register,
-  .event-register,
-  .artifact-register {
+  .metric-register {
     grid-template-columns: 1fr;
-  }
-
-  .event-register > div {
-    border-right: 0;
-    border-bottom: 1px solid var(--rule);
   }
 
   .tracking-control {

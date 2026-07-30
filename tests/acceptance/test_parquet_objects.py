@@ -117,6 +117,19 @@ def test_parquet_read_rejects_bytes_that_do_not_match_the_content_identity(
         store.read_parquet(str(entry["sha256"]), parquet_contract())
 
 
+def test_empty_declared_table_still_has_one_deterministic_row_group(
+    tmp_path: Path,
+) -> None:
+    store = ImmutableObjectStore(tmp_path / "objects")
+    contract = parquet_contract()
+
+    entry = store.put_parquet_rows([], contract)
+    table = store.read_parquet(str(entry["sha256"]), contract)
+
+    assert table.num_rows == 0
+    assert table.schema == contract.schema
+
+
 def parquet_contract() -> ParquetWriterContract:
     return ParquetWriterContract(
         name="test.equity_observation",

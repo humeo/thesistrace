@@ -89,21 +89,17 @@ type ResearchResult = {
     horizons: Record<
       string,
       {
-        daily: {
-          session: string;
-          sample_count: number;
-          ic: number | null;
-          rank_ic: number | null;
-          correlation_reason: string | null;
-          quantile_returns: Record<string, number | null>;
-          top_bottom_return: number | null;
-          quantile_reason: string | null;
-        }[];
         summary: {
           ic: FactorCorrelationSummary;
           rank_ic: FactorCorrelationSummary;
           quantile_returns: Record<string, number | null>;
           top_bottom_return: number | null;
+        };
+        diagnostics: {
+          session_count: number;
+          missing_session_count: number;
+          correlation_reason_counts: Record<string, number>;
+          quantile_reason_counts: Record<string, number>;
         };
       }
     >;
@@ -117,14 +113,6 @@ type ResearchResult = {
       maximum_single_name_weight: number;
       cash_ratio: number;
     }[];
-    fills: {
-      session: string;
-      instrument_id: string;
-      side: string;
-      quantity: number;
-      cost: string;
-    }[];
-    rejections: { session: string; reason: string; instrument_id: string }[];
     metrics: {
       gross_cumulative_return: number;
       net_cumulative_return: number;
@@ -169,11 +157,15 @@ type ResearchResult = {
     };
   };
   diagnostics: {
-    alpha_coverage: {
-      session: string;
-      coverage_loss: Record<string, number>;
-    }[];
-    strategy: unknown[];
+    alpha_coverage_summary: {
+      session_count: number;
+      loss_session_count: number;
+      reason_counts: Record<string, number>;
+    };
+    strategy_summary: {
+      event_count: number;
+      reason_counts: Record<string, number>;
+    };
   };
 };
 
@@ -944,17 +936,12 @@ function ResearchDefinitionEditor() {
 function ResearchResultPanel({ result }: { result: ResearchResult }) {
   const trackingEpoch = useRef(0);
   const metrics = result.strategy_backtest.metrics;
-  const alphaCoverageLossDays = result.diagnostics.alpha_coverage.filter((item) =>
-    Object.values(item.coverage_loss).some((value) => value > 0),
-  ).length;
+  const alphaCoverageLossDays =
+    result.diagnostics.alpha_coverage_summary.loss_session_count;
   const factorMissingDays = Object.values(
     result.factor_evaluation.horizons,
   ).reduce(
-    (total, horizon) =>
-      total +
-      horizon.daily.filter(
-        (item) => item.correlation_reason !== null || item.quantile_reason !== null,
-      ).length,
+    (total, horizon) => total + horizon.diagnostics.missing_session_count,
     0,
   );
   const [track, setTrack] = useState<{
@@ -1222,28 +1209,6 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
         </div>
       </div>
       <div className="result-evidence">
-        {["1", "5", "20"].map((horizon) => (
-          <div key={`rank-${horizon}`}>
-            <span>{horizon}D DAILY RANK IC</span>
-            <Sparkline
-              values={result.factor_evaluation.horizons[horizon].daily.map(
-                (item) => item.rank_ic,
-              )}
-              label={`${horizon} 日因子 Rank IC 日序列`}
-            />
-          </div>
-        ))}
-        {["1", "5", "20"].map((horizon) => (
-          <div key={`spread-${horizon}`}>
-            <span>{horizon}D TOP−BOTTOM</span>
-            <Sparkline
-              values={result.factor_evaluation.horizons[horizon].daily.map(
-                (item) => item.top_bottom_return,
-              )}
-              label={`${horizon} 日五分组 Top-Bottom 日序列`}
-            />
-          </div>
-        ))}
         <div>
           <span>NET NAV</span>
           <Sparkline
@@ -1299,15 +1264,6 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           <Sparkline
             values={result.strategy_backtest.daily.map((item) => item.cash_ratio)}
             label="现金比例日序列"
-          />
-        </div>
-        <div>
-          <span>RECENT FILL COST</span>
-          <Sparkline
-            values={result.strategy_backtest.fills
-              .slice(-252)
-              .map((item) => Number(item.cost))}
-            label="最近成交费用序列"
           />
         </div>
       </div>
@@ -1373,90 +1329,16 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           } / ${metrics.market_rejections.suspension ?? 0}`}
         />
       </div>
-      <div className="event-register">
-        <div>
-          <span>RECENT COST EVENTS</span>
-          <small>
-            最近 {Math.min(result.strategy_backtest.fills.length, 10)} /{" "}
-            {result.strategy_backtest.fills.length} 笔；完整记录见 strategy events。
-          </small>
-          <div className="event-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>SESSION</th>
-                  <th>INSTRUMENT</th>
-                  <th>SIDE / QTY</th>
-                  <th>COST CNY</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.strategy_backtest.fills.slice(-10).map((fill, index) => (
-                  <tr key={`${fill.session}-${fill.instrument_id}-${index}`}>
-                    <td>{fill.session}</td>
-                    <td>{fill.instrument_id}</td>
-                    <td>{fill.side} / {fill.quantity}</td>
-                    <td>{Number(fill.cost).toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div>
-          <span>RECENT MARKET REJECTIONS</span>
-          <small>
-            最近 {Math.min(result.strategy_backtest.rejections.length, 10)} /{" "}
-            {result.strategy_backtest.rejections.length} 笔；完整记录见 strategy events。
-          </small>
-          <div className="event-table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>SESSION</th>
-                  <th>INSTRUMENT</th>
-                  <th>REASON CODE</th>
-                </tr>
-              </thead>
-              <tbody>
-                {result.strategy_backtest.rejections.slice(-10).map((rejection, index) => (
-                  <tr key={`${rejection.session}-${rejection.instrument_id}-${index}`}>
-                    <td>{rejection.session}</td>
-                    <td>{rejection.instrument_id}</td>
-                    <td>{rejection.reason}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
       <div className="diagnostic-register">
         <span>DIAGNOSTICS</span>
         <strong>{alphaCoverageLossDays} Alpha coverage-loss sessions</strong>
         <strong>{factorMissingDays} horizon-session factor diagnostics</strong>
-        <strong>{result.diagnostics.strategy.length} Strategy diagnostics</strong>
+        <strong>
+          {result.diagnostics.strategy_summary.event_count} Strategy diagnostics
+        </strong>
         <small>
-          逐日 reason code 与执行事件保存在 diagnostics / strategy_events
-          权威文件中。
+          报告仅保留 bounded reason-count summaries；逐事件计算明细不持久化。
         </small>
-      </div>
-      <div className="artifact-register">
-        <div>
-          <span>AUTHORITATIVE ARTIFACTS</span>
-          <small>下载的是 Result Manifest 索引的原始 JSON，不由页面重算。</small>
-        </div>
-        <div className="artifact-links">
-          {Object.entries(result.manifest.objects).map(([kind, artifact]) => (
-            <a
-              key={kind}
-              href={`/api/v1/objects/${artifact.sha256}`}
-              download={`${kind}.json`}
-            >
-              {kind.replaceAll("_", " ")}
-            </a>
-          ))}
-        </div>
       </div>
       <div className="tracking-control" id="tracking">
         <div>
