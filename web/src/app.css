@@ -766,6 +766,46 @@ h1 {
   font-weight: 560;
 }
 
+.tracking-control {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--ink);
+  background: #e3ded1;
+}
+
+.tracking-control > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  margin-right: auto;
+}
+
+.tracking-control span,
+.tracking-control small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+}
+
+.tracking-control code {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 9px;
+  text-overflow: ellipsis;
+}
+
+.tracking-control .bootstrap-button {
+  margin-top: 0;
+}
+
+.tracking-error {
+  color: var(--bad) !important;
+}
+
 .contract-version {
   padding: 5px 8px;
   border: 1px solid var(--ink);
@@ -1012,6 +1052,11 @@ h1 {
   .factor-horizons,
   .strategy-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .tracking-control {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .result-provenance > div {

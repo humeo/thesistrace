@@ -8,6 +8,10 @@ from thesistrace.objects import canonical_json_bytes
 HORIZONS = (1, 5, 20)
 
 
+class FactorDataError(RuntimeError):
+    pass
+
+
 def build_forward_labels(
     canonical: dict[str, object],
     alpha_matrix: dict[str, object],
@@ -30,26 +34,47 @@ def build_forward_labels(
             signal_session = calendar[signal_index]
             alpha_values = list(alpha_by_session[signal_session]["values"])
             samples: list[dict[str, object]] = []
+            resolutions: list[dict[str, object]] = []
             unavailable: Counter[str] = Counter()
             entry_index = signal_index + 1
             exit_index = signal_index + 1 + horizon
             for alpha in alpha_values:
                 instrument_id = str(alpha["instrument_id"])
                 if exit_index >= len(calendar):
-                    unavailable["right_censored"] += 1
+                    reason = "right_censored_by_release_end"
+                    unavailable[reason] += 1
+                    resolutions.append(
+                        {
+                            "instrument_id": instrument_id,
+                            "alpha": float(alpha["value"]),
+                            "label": None,
+                            "reason": reason,
+                        }
+                    )
                     continue
                 entry_session = calendar[entry_index]
                 exit_session = calendar[exit_index]
                 entry = prices.get((entry_session, instrument_id))
                 if entry is None:
-                    unavailable[
-                        unavailable_reason(
-                            states.get((entry_session, instrument_id)),
-                            instruments[instrument_id],
-                            entry_session,
-                            valid_entry=False,
+                    reason = unavailable_reason(
+                        states.get((entry_session, instrument_id)),
+                        instruments[instrument_id],
+                        entry_session,
+                        valid_entry=False,
+                    )
+                    if reason == "unexplained_missing_or_invalid_data":
+                        raise FactorDataError(
+                            f"unexplained Label entry Open for {instrument_id} on {entry_session}"
                         )
-                    ] += 1
+                    unavailable[reason] += 1
+                    resolutions.append(
+                        {
+                            "instrument_id": instrument_id,
+                            "alpha": float(alpha["value"]),
+                            "label": None,
+                            "reason": reason,
+                        }
+                    )
                     continue
                 exit_price = prices.get((exit_session, instrument_id))
                 if exit_price is None:
@@ -62,32 +87,51 @@ def build_forward_labels(
                     if reason == "terminal_delisting":
                         label = -1.0
                     else:
+                        if reason == "unexplained_missing_or_invalid_data":
+                            raise FactorDataError(
+                                f"unexplained Label exit Open for {instrument_id} on {exit_session}"
+                            )
                         unavailable[reason] += 1
+                        resolutions.append(
+                            {
+                                "instrument_id": instrument_id,
+                                "alpha": float(alpha["value"]),
+                                "label": None,
+                                "reason": reason,
+                            }
+                        )
                         continue
                 else:
                     entry_open = float(entry["open_adj"])
                     exit_open = float(exit_price["open_adj"])
                     if entry_open == 0.0:
-                        unavailable["invalid_entry_open"] += 1
-                        continue
+                        raise FactorDataError(
+                            f"invalid Label entry Open for {instrument_id} on {entry_session}"
+                        )
                     label = exit_open / entry_open - 1.0
                     if not math.isfinite(label):
-                        unavailable["non_finite_label"] += 1
-                        continue
+                        raise FactorDataError(
+                            f"non-finite Label for {instrument_id} on {signal_session}"
+                        )
+                resolution = {
+                    "instrument_id": instrument_id,
+                    "alpha": float(alpha["value"]),
+                    "label": label,
+                    "reason": None,
+                }
+                resolutions.append(resolution)
                 samples.append(
-                    {
-                        "instrument_id": instrument_id,
-                        "alpha": float(alpha["value"]),
-                        "label": label,
-                    }
+                    {key: resolution[key] for key in ("instrument_id", "alpha", "label")}
                 )
             samples.sort(key=lambda row: str(row["instrument_id"]))
+            resolutions.sort(key=lambda row: str(row["instrument_id"]))
             sessions.append(
                 {
                     "session": signal_session,
                     "signal_session": signal_session,
                     "alpha_values": alpha_values,
                     "samples": samples,
+                    "resolutions": resolutions,
                     "unavailable": dict(sorted(unavailable.items())),
                 }
             )
@@ -111,11 +155,11 @@ def unavailable_reason(
     valid_entry: bool,
 ) -> str:
     listed_to = str(instrument.get("listed_to", ""))
-    if valid_entry and listed_to and listed_to <= session:
-        return "terminal_delisting"
+    if listed_to and listed_to <= session:
+        return "terminal_delisting" if valid_entry else "confirmed_market_open_unavailable"
     if trading_state == "full_session_suspension":
-        return "confirmed_open_unavailable"
-    return "unexplained_data_failure"
+        return "confirmed_market_open_unavailable"
+    return "unexplained_missing_or_invalid_data"
 
 
 def evaluate_factor(labels: dict[str, object]) -> dict[str, object]:

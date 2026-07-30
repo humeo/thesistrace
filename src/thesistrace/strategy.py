@@ -104,12 +104,25 @@ def run_strategy(
     canonical: dict[str, object],
     alpha_matrix: dict[str, object],
     definition: dict[str, object],
+    *,
+    origin_session: str | None = None,
+    terminal_cutoff: bool = True,
+    continuation: dict[str, object] | None = None,
+    skip_execution_sessions: set[str] | None = None,
 ) -> dict[str, object]:
     calendar = [str(value) for value in canonical["research_calendar"]]
-    report_start = len(calendar) - 504
-    report_calendar = calendar[report_start:]
-    if len(report_calendar) != 504:
+    origin_index = len(calendar) - 504 if origin_session is None else calendar.index(origin_session)
+    if origin_index < 0 or len(calendar) - origin_index < 504:
         raise StrategyCalculationError("Strategy requires 504 report sessions")
+    if continuation is None:
+        processing_start = origin_index
+    else:
+        prior_daily = continuation.get("daily")
+        if not isinstance(prior_daily, list) or not prior_daily:
+            raise StrategyCalculationError("continuation has no Strategy history")
+        last_session = str(prior_daily[-1]["session"])
+        processing_start = calendar.index(last_session) + 1
+    report_calendar = calendar[processing_start:]
     strategy = definition["strategy"]
     holdings_count = int(strategy["holdings_count"])
     rebalance_interval = int(strategy["rebalance_interval"])
@@ -118,6 +131,7 @@ def run_strategy(
     if Decimal(str(strategy["initial_cash_cny"])) != INITIAL_CASH:
         raise StrategyCalculationError("invalid Initial Cash")
     costs = {name: Decimal(str(value)) for name, value in definition["costs"].items()}
+    skipped_sessions = skip_execution_sessions or set()
 
     instruments = {str(item["instrument_id"]): item for item in canonical["instruments"]}
     prices = {
@@ -137,27 +151,59 @@ def run_strategy(
         for item in canonical["liquidity_universes"][str(definition["universe"])]
     }
 
-    positions: dict[str, Position] = {}
-    gross_cash = INITIAL_CASH
-    net_cash = INITIAL_CASH
-    cumulative_cost = Decimal(0)
-    benchmark_nav = Decimal(1)
-    daily: list[dict[str, object]] = []
-    fills: list[dict[str, object]] = []
-    orders: list[dict[str, object]] = []
-    child_orders: list[dict[str, object]] = []
-    rejections: list[dict[str, object]] = []
-    diagnostics: list[dict[str, object]] = []
-    rebalance_events: list[dict[str, object]] = []
-    turnover_events: list[dict[str, object]] = []
+    if continuation is None:
+        positions: dict[str, Position] = {}
+        gross_cash = INITIAL_CASH
+        net_cash = INITIAL_CASH
+        cumulative_cost = Decimal(0)
+        benchmark_nav = Decimal(1)
+        daily: list[dict[str, object]] = []
+        fills: list[dict[str, object]] = []
+        orders: list[dict[str, object]] = []
+        child_orders: list[dict[str, object]] = []
+        rejections: list[dict[str, object]] = []
+        diagnostics: list[dict[str, object]] = []
+        rebalance_events: list[dict[str, object]] = []
+        turnover_events: list[dict[str, object]] = []
+    else:
+        position_rows = continuation.get("positions")
+        if not isinstance(position_rows, list):
+            raise StrategyCalculationError("continuation positions are invalid")
+        positions = {
+            str(item["instrument_id"]): Position(
+                execution_shares=int(item["execution_shares"]),
+                adjusted_units=Decimal(str(item["adjusted_units"])),
+                last_adjusted_price=Decimal(str(item["last_adjusted_price"])),
+            )
+            for item in position_rows
+        }
+        daily = [dict(item) for item in continuation["daily"]]
+        last_daily = daily[-1]
+        gross_cash = Decimal(str(last_daily["gross_cash"]))
+        net_cash = Decimal(str(last_daily["net_cash"]))
+        cumulative_cost = Decimal(str(last_daily["cumulative_transaction_cost"]))
+        benchmark_nav = Decimal(str(last_daily["benchmark_nav"]))
+        fills = [dict(item) for item in continuation.get("fills", [])]
+        orders = [dict(item) for item in continuation.get("orders", [])]
+        child_orders = [dict(item) for item in continuation.get("child_orders", [])]
+        rejections = [dict(item) for item in continuation.get("rejections", [])]
+        diagnostics = [dict(item) for item in continuation.get("diagnostics", [])]
+        rebalance_events = [dict(item) for item in continuation.get("rebalance_events", [])]
+        prior_turnover = continuation.get("metrics", {}).get("turnover", {}).get("events", [])
+        turnover_events = [dict(item) for item in prior_turnover]
 
-    for report_index, session in enumerate(report_calendar):
-        global_index = report_start + report_index
+    for session in report_calendar:
+        global_index = calendar.index(session)
+        report_index = global_index - origin_index
         marks, valuation_events = mark_positions(session, positions, prices, states, instruments)
         pre_gross_nav = money(gross_cash + sum_position_values(positions, marks))
         pre_net_nav = money(net_cash + sum_position_values(positions, marks))
         pre_weights = account_weights(net_cash, pre_net_nav, positions, marks)
-        cycle_type = "terminal_valuation" if report_index == len(report_calendar) - 1 else "open"
+        cycle_type = (
+            "terminal_valuation"
+            if terminal_cutoff and global_index == len(calendar) - 1
+            else "open"
+        )
         rebalance = False
         benchmark_return = Decimal(0)
         event_side_order: list[str] = []
@@ -166,8 +212,9 @@ def run_strategy(
         signal_index = global_index - 1
         if (
             report_index > 0
-            and global_index < len(calendar) - 1
-            and (signal_index - report_start) % rebalance_interval == 0
+            and (not terminal_cutoff or global_index < len(calendar) - 1)
+            and session not in skipped_sessions
+            and (signal_index - origin_index) % rebalance_interval == 0
         ):
             rebalance = True
             signal_session = calendar[signal_index]
@@ -396,8 +443,8 @@ def run_strategy(
             raise StrategyCalculationError("Net Cash became negative")
 
         if report_index >= 2:
-            signal_session = report_calendar[report_index - 2]
-            entry_session = report_calendar[report_index - 1]
+            signal_session = calendar[global_index - 2]
+            entry_session = calendar[global_index - 1]
             benchmark_return = equal_weight_benchmark_return(
                 signal_session,
                 entry_session,
@@ -458,6 +505,7 @@ def run_strategy(
             "instrument_id": instrument_id,
             "execution_shares": position.execution_shares,
             "adjusted_units": canonical_decimal(position.adjusted_units),
+            "last_adjusted_price": canonical_decimal(position.last_adjusted_price),
         }
         for instrument_id, position in sorted(positions.items())
     ]

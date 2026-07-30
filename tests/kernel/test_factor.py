@@ -1,7 +1,10 @@
 import math
 
+import pytest
+
 from thesistrace.alpha import evaluate_alpha_matrix
 from thesistrace.factor import (
+    FactorDataError,
     build_forward_labels,
     evaluate_factor,
     factor_day,
@@ -41,7 +44,7 @@ def test_forward_labels_use_next_open_timing_and_fixed_report_limits() -> None:
 
     last = labels["horizons"]["20"]["sessions"][-1]
     assert last["samples"] == []
-    assert last["unavailable"]["right_censored"] == len(last["alpha_values"])
+    assert last["unavailable"]["right_censored_by_release_end"] == len(last["alpha_values"])
 
 
 def test_factor_day_handles_small_samples_constants_ties_and_missing() -> None:
@@ -102,10 +105,14 @@ def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
         "sessions": [
             {
                 "session": session,
-                "values": [
-                    {"instrument_id": "equity:X.SH", "value": 1.0},
-                    {"instrument_id": "equity:Y.SH", "value": 2.0},
-                ],
+                "values": (
+                    [
+                        {"instrument_id": "equity:X.SH", "value": 1.0},
+                        {"instrument_id": "equity:Y.SH", "value": 2.0},
+                    ]
+                    if session == sessions[0]
+                    else []
+                ),
             }
             for session in sessions
         ],
@@ -115,7 +122,29 @@ def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
     first = labels["horizons"]["1"]["sessions"][0]
 
     assert first["samples"] == [{"instrument_id": "equity:X.SH", "alpha": 1.0, "label": -1.0}]
-    assert first["unavailable"] == {"confirmed_open_unavailable": 1}
+    assert first["unavailable"] == {"confirmed_market_open_unavailable": 1}
+
+
+def test_unexplained_label_open_is_a_hard_data_failure() -> None:
+    canonical = {
+        "research_calendar": ["2026-07-01", "2026-07-02", "2026-07-03"],
+        "instruments": [{"instrument_id": "equity:X.SH", "listed_to": ""}],
+        "prices": [],
+        "trading_states": [],
+    }
+    matrix = {
+        "checksum": "alpha",
+        "sessions": [
+            {
+                "session": session,
+                "values": [{"instrument_id": "equity:X.SH", "value": 1.0}],
+            }
+            for session in canonical["research_calendar"]
+        ],
+    }
+
+    with pytest.raises(FactorDataError, match="unexplained Label entry Open"):
+        build_forward_labels(canonical, matrix, report_sessions=3)
 
 
 def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:

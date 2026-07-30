@@ -68,6 +68,7 @@ type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 type ResearchResult = {
   manifest: {
     id: string;
+    research_run_id: string;
     dataset_release: { id: string };
     definition: { id: string; content_hash: string };
     calculation_kernel: string;
@@ -615,6 +616,84 @@ function ResearchDefinitionEditor() {
 
 function ResearchResultPanel({ result }: { result: ResearchResult }) {
   const metrics = result.strategy_backtest.metrics;
+  const [track, setTrack] = useState<{
+    id: string;
+    status: "active" | "stopped";
+    current_generation_id: string;
+    head: { target_dataset_release_id: string };
+    advances: { status: string }[];
+  } | null>(null);
+  const [trackingError, setTrackingError] = useState(false);
+  const [trackingView, setTrackingView] = useState<{
+    checkpoint: { id: string; kind: string };
+    strategy: {
+      daily: { net_nav: string; session: string }[];
+    };
+  } | null>(null);
+
+  useEffect(() => {
+    fetch("/api/v1/daily-tracks")
+      .then(assertResponse)
+      .then((response) => response.json())
+      .then(
+        (payload: {
+          items: ({
+            seed_run_id: string;
+          } & NonNullable<typeof track>)[];
+        }) => {
+          setTrack(
+            payload.items.find(
+              (item) => item.seed_run_id === result.manifest.research_run_id,
+            ) ?? null,
+          );
+        },
+      )
+      .catch(() => setTrackingError(true));
+  }, [result.manifest.research_run_id]);
+
+  useEffect(() => {
+    if (!track) {
+      setTrackingView(null);
+      return;
+    }
+    fetch(`/api/v1/daily-tracks/${track.id}/current`)
+      .then(assertResponse)
+      .then((response) => response.json())
+      .then(setTrackingView)
+      .catch(() => setTrackingError(true));
+  }, [track]);
+
+  async function activateTracking() {
+    try {
+      const response = await fetch(
+        `/api/v1/research-runs/${result.manifest.research_run_id}/daily-tracks`,
+        {
+          method: "POST",
+          headers: {
+            "Idempotency-Key": `daily-track-${result.manifest.research_run_id}`,
+          },
+        },
+      ).then(assertResponse);
+      setTrack(await response.json());
+    } catch {
+      setTrackingError(true);
+    }
+  }
+
+  async function stopTracking() {
+    if (!track) {
+      return;
+    }
+    try {
+      const response = await fetch(`/api/v1/daily-tracks/${track.id}/stop`, {
+        method: "POST",
+      }).then(assertResponse);
+      setTrack(await response.json());
+    } catch {
+      setTrackingError(true);
+    }
+  }
+
   return (
     <section className="result-panel" aria-label="ResearchRun 结果">
       <div className="result-provenance">
@@ -683,6 +762,47 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
             />
           </div>
         </div>
+      </div>
+      <div className="tracking-control">
+        <div>
+          <span>DAILY TRACKING</span>
+          {track ? (
+            <>
+              <strong>{track.status.toUpperCase()}</strong>
+              <code>
+                {track.id} · {track.current_generation_id} ·{" "}
+                {track.head.target_dataset_release_id}
+              </code>
+              {trackingView && (
+                <small>
+                  HEAD {trackingView.checkpoint.id} ·{" "}
+                  {trackingView.strategy.daily.at(-1)?.session} · NET NAV{" "}
+                  {trackingView.strategy.daily.at(-1)?.net_nav}
+                </small>
+              )}
+            </>
+          ) : (
+            <>
+              <strong>NOT ACTIVATED</strong>
+              <small>从本次成功 Result Bundle 延续同一个模拟账户</small>
+            </>
+          )}
+        </div>
+        {track?.status === "active" ? (
+          <button type="button" className="secondary-button" onClick={stopTracking}>
+            停止追踪
+          </button>
+        ) : track === null ? (
+          <button
+            type="button"
+            className="bootstrap-button"
+            onClick={activateTracking}
+          >
+            开始每日追踪
+            <ArrowUpRight size={16} aria-hidden="true" />
+          </button>
+        ) : null}
+        {trackingError && <span className="tracking-error">追踪状态读取失败</span>}
       </div>
     </section>
   );

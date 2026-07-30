@@ -13,6 +13,7 @@ from thesistrace.definitions import DefinitionValidationError, ResearchDefinitio
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
+from thesistrace.tracking import DailyTrackingError, DailyTrackingService
 from thesistrace.tushare_source import (
     HttpTushareTransport,
     TushareAdapter,
@@ -42,6 +43,11 @@ class FixtureIncrementRequest(BaseModel):
     corrections: list[PriceCorrection]
 
 
+class KernelUpgradeRequest(BaseModel):
+    calculation_kernel: str
+    numeric_execution_contract: str
+
+
 def create_app(
     settings: Settings,
     *,
@@ -53,6 +59,7 @@ def create_app(
     publisher = DatasetPublisher(store, objects)
     definitions = ResearchDefinitionService(store, publisher)
     research_runs = ResearchRunService(store, publisher, objects)
+    tracking = DailyTrackingService(store, publisher, objects)
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
@@ -152,6 +159,69 @@ def create_app(
         except KeyError as error:
             raise HTTPException(status_code=404, detail="ResearchRun not found") from error
         return JSONResponse(status_code=202 if created else 200, content=run)
+
+    @app.post("/api/v1/research-runs/{run_id}/daily-tracks")
+    def activate_daily_track(
+        run_id: str,
+        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        try:
+            track, created = tracking.activate(run_id, idempotency_key)
+        except DailyTrackingError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return JSONResponse(status_code=201 if created else 200, content=track)
+
+    @app.get("/api/v1/daily-tracks")
+    def list_daily_tracks() -> dict[str, object]:
+        return {"items": tracking.list_tracks()}
+
+    @app.get("/api/v1/daily-tracks/{track_id}")
+    def get_daily_track(track_id: str) -> dict[str, object]:
+        track = tracking.get_track(track_id)
+        if track is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return track
+
+    @app.get("/api/v1/daily-tracks/{track_id}/current")
+    def get_daily_track_current_view(track_id: str) -> dict[str, object]:
+        try:
+            return tracking.current_view(track_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="DailyTrack not found") from error
+        except DailyTrackingError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/v1/daily-tracks/{track_id}/stop")
+    def stop_daily_track(track_id: str) -> dict[str, object]:
+        track = tracking.stop(track_id)
+        if track is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return track
+
+    @app.post("/api/v1/daily-tracks/{track_id}/kernel-upgrade")
+    def upgrade_daily_track_kernel(
+        track_id: str,
+        request: KernelUpgradeRequest,
+    ) -> dict[str, object]:
+        try:
+            return tracking.upgrade_kernel(
+                track_id,
+                calculation_kernel=request.calculation_kernel,
+                numeric_execution_contract=request.numeric_execution_contract,
+            )
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="DailyTrack not found") from error
+        except DailyTrackingError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.post("/api/v1/daily-tracks/{track_id}/verify-equivalence")
+    def verify_daily_track(track_id: str) -> dict[str, object]:
+        try:
+            return tracking.verify_equivalence(track_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="DailyTrack not found") from error
+        except DailyTrackingError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/api/v1/health")
     def get_health() -> dict[str, object]:
@@ -254,6 +324,8 @@ def create_app(
             )
         except (InvalidFixtureError, ValueError) as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        if created:
+            tracking.enqueue_active_tracks(str(release["id"]))
         return JSONResponse(
             status_code=201 if created else 200,
             content={"status": "succeeded", "release": release},

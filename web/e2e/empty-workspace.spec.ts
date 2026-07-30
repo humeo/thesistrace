@@ -39,6 +39,10 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByText("SUCCEEDED")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("heading", { name: "因子结论" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "策略结论" })).toBeVisible();
-  await expect(page.getByText("RESULT BUNDLE")).toBeVisible();
+  await expect(page.getByText("RESULT BUNDLE", { exact: true })).toBeVisible();
   await expect(page.getByText("DATASET RELEASE", { exact: true })).toBeVisible();
+  await expect(page.getByText("NOT ACTIVATED")).toBeVisible();
+  await page.getByRole("button", { name: "开始每日追踪" }).click();
+  await expect(page.getByText("ACTIVE", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "停止追踪" })).toBeVisible();
 });

@@ -9,6 +9,7 @@ from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
+from thesistrace.tracking import DailyTrackingService
 
 logger = logging.getLogger(__name__)
 
@@ -35,13 +36,22 @@ def main() -> None:
         DatasetPublisher(store, objects),
         objects,
     )
+    tracking = DailyTrackingService(
+        store,
+        DatasetPublisher(store, objects),
+        objects,
+    )
     while True:
         store.record_worker_heartbeat(datetime.now(UTC))
         try:
             store.recover_abandoned_research_runs(
                 stale_after_seconds=settings.worker_stale_after_seconds
             )
+            tracking.recover_abandoned_attempts(
+                stale_after_seconds=settings.worker_stale_after_seconds
+            )
             runs.execute_next()
+            tracking.execute_next()
         except Exception:
             logger.exception("ResearchRun worker iteration failed")
         store.record_worker_heartbeat(datetime.now(UTC))

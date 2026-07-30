@@ -102,7 +102,70 @@ class MetadataStore:
                 );
 
                 CREATE TABLE IF NOT EXISTS daily_tracks (
-                    id TEXT PRIMARY KEY
+                    id TEXT PRIMARY KEY,
+                    seed_run_id TEXT,
+                    definition_version_id TEXT,
+                    definition_content_hash TEXT,
+                    activation_release_id TEXT,
+                    origin_session TEXT,
+                    numeric_execution_contract TEXT,
+                    status TEXT,
+                    current_generation_id TEXT,
+                    head_checkpoint_id TEXT,
+                    created_at TEXT,
+                    stopped_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS daily_track_activation_idempotency (
+                    idempotency_key TEXT PRIMARY KEY,
+                    daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS tracking_generations (
+                    id TEXT PRIMARY KEY,
+                    daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
+                    ordinal INTEGER NOT NULL,
+                    calculation_kernel TEXT NOT NULL,
+                    numeric_execution_contract TEXT NOT NULL,
+                    basis_dataset_release_id TEXT NOT NULL,
+                    supersedes_generation_id TEXT,
+                    supersedes_head_checkpoint_id TEXT,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(daily_track_id, ordinal)
+                );
+
+                CREATE TABLE IF NOT EXISTS tracking_checkpoints (
+                    id TEXT PRIMARY KEY,
+                    daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
+                    generation_id TEXT NOT NULL REFERENCES tracking_generations(id),
+                    predecessor_checkpoint_id TEXT,
+                    target_dataset_release_id TEXT NOT NULL,
+                    manifest_sha256 TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS tracking_advances (
+                    id TEXT PRIMARY KEY,
+                    daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
+                    generation_id TEXT NOT NULL REFERENCES tracking_generations(id),
+                    target_dataset_release_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    checkpoint_id TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(daily_track_id, generation_id, target_dataset_release_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS tracking_advance_attempts (
+                    id TEXT PRIMARY KEY,
+                    advance_id TEXT NOT NULL REFERENCES tracking_advances(id),
+                    ordinal INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    diagnostic_json TEXT,
+                    UNIQUE(advance_id, ordinal)
                 );
                 """
             )
@@ -135,6 +198,20 @@ class MetadataStore:
                 ("result_manifest_sha256", "TEXT"),
             ):
                 self._ensure_column(connection, "research_runs", column, definition)
+            for column, definition in (
+                ("seed_run_id", "TEXT"),
+                ("definition_version_id", "TEXT"),
+                ("definition_content_hash", "TEXT"),
+                ("activation_release_id", "TEXT"),
+                ("origin_session", "TEXT"),
+                ("numeric_execution_contract", "TEXT"),
+                ("status", "TEXT"),
+                ("current_generation_id", "TEXT"),
+                ("head_checkpoint_id", "TEXT"),
+                ("created_at", "TEXT"),
+                ("stopped_at", "TEXT"),
+            ):
+                self._ensure_column(connection, "daily_tracks", column, definition)
 
     def installation_id(self) -> str:
         with self.connect() as connection:
