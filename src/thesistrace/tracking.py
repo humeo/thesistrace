@@ -9,8 +9,10 @@ from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.numeric import canonical_binary64_bytes
 from thesistrace.objects import ImmutableObjectStore, canonical_json_bytes
 from thesistrace.research_runs import RUNTIME_BUILD
+from thesistrace.result_objects import reconstruct_result_view
 from thesistrace.storage import MetadataStore
 from thesistrace.strategy import run_strategy
+from thesistrace.working_cache import WorkingCacheStore
 
 
 class DailyTrackingError(RuntimeError):
@@ -22,6 +24,16 @@ class EquivalenceError(DailyTrackingError):
 
 
 SUPPORTED_CALCULATION_KERNELS = {"kernel-v1", "kernel-v2"}
+COMPACT_RESULT_OBJECTS = {
+    "diagnostic_summary",
+    "execution_aggregates",
+    "factor_summary",
+    "rebalance_aggregates",
+    "strategy_daily_observations",
+    "strategy_summary",
+    "terminal_positions",
+    "terminal_strategy_state",
+}
 
 
 class DailyTrackingService:
@@ -30,10 +42,14 @@ class DailyTrackingService:
         metadata: MetadataStore,
         datasets: DatasetPublisher,
         objects: ImmutableObjectStore,
+        cache: WorkingCacheStore | None = None,
     ) -> None:
         self.metadata = metadata
         self.datasets = datasets
         self.objects = objects
+        self.cache = cache or WorkingCacheStore(
+            metadata.path.parent / "working-cache"
+        )
 
     def activate(
         self,
@@ -72,10 +88,19 @@ class DailyTrackingService:
         content = frozen["content"]
         if not isinstance(content, dict):
             raise DailyTrackingError("seed Research Definition is invalid")
-        entries = manifest.get("compatibility_objects", manifest.get("objects"))
-        if not isinstance(entries, dict):
-            raise DailyTrackingError("seed Result Manifest is invalid")
-        strategy = self._read_result_object(entries, "strategy_backtest")
+        public_entries = manifest.get("objects")
+        if (
+            not isinstance(public_entries, dict)
+            or set(public_entries) != COMPACT_RESULT_OBJECTS
+        ):
+            raise DailyTrackingError("DailyTrack requires a complete compact Result Bundle")
+        compatibility_entries = manifest.get("compatibility_objects")
+        if not isinstance(compatibility_entries, dict):
+            raise DailyTrackingError("seed Result migration evidence is incomplete")
+        result_view = reconstruct_result_view(self.objects, manifest)
+        strategy = result_view["strategy_backtest"]
+        if not isinstance(strategy, dict):
+            raise DailyTrackingError("seed Strategy state is incomplete")
         daily = strategy.get("daily")
         if not isinstance(daily, list) or len(daily) != 504:
             raise DailyTrackingError("seed Strategy state is incomplete")
@@ -113,11 +138,15 @@ class DailyTrackingService:
                 "id": manifest["id"],
                 "manifest_sha256": run["result_manifest_sha256"],
             },
-            "objects": {
-                "alpha_matrix": entries["alpha_matrix"],
-                "forward_labels": entries["forward_labels"],
-                "factor_evaluation": entries["factor_evaluation"],
-                "strategy_backtest": entries["strategy_backtest"],
+            "objects": public_entries,
+            "migration_seed_objects": {
+                kind: compatibility_entries[kind]
+                for kind in (
+                    "alpha_matrix",
+                    "factor_evaluation",
+                    "forward_labels",
+                    "strategy_backtest",
+                )
             },
             "pending_strategy_signal": pending_signal,
             "numeric_execution_contract": content["numeric_execution_contract"],
@@ -127,72 +156,124 @@ class DailyTrackingService:
         }
         checkpoint_object = self.objects.put_json(checkpoint_manifest)
         self.objects.put_manifest(checkpoint_id, checkpoint_manifest)
-        with self.metadata.connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            connection.execute(
-                """
-                INSERT INTO daily_tracks
-                    (id, seed_run_id, definition_version_id,
-                     definition_content_hash, activation_release_id,
-                     origin_session, numeric_execution_contract, status,
-                     current_generation_id, head_checkpoint_id, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
-                """,
-                (
-                    track_id,
-                    run_id,
-                    frozen["id"],
-                    frozen["content_hash"],
-                    release["id"],
-                    origin_session,
-                    content["numeric_execution_contract"],
-                    generation_id,
-                    checkpoint_id,
-                    now,
-                ),
-            )
-            connection.execute(
-                """
-                INSERT INTO tracking_generations
-                    (id, daily_track_id, ordinal, calculation_kernel,
-                     numeric_execution_contract, basis_dataset_release_id,
-                     reason, created_at)
-                VALUES (?, ?, 0, ?, ?, ?, 'activation', ?)
-                """,
-                (
-                    generation_id,
-                    track_id,
-                    manifest["calculation_kernel"],
-                    content["numeric_execution_contract"],
-                    release["id"],
-                    now,
-                ),
-            )
-            connection.execute(
-                """
-                INSERT INTO tracking_checkpoints
-                    (id, daily_track_id, generation_id,
-                     predecessor_checkpoint_id, target_dataset_release_id,
-                     manifest_sha256, created_at)
-                VALUES (?, ?, ?, NULL, ?, ?, ?)
-                """,
-                (
-                    checkpoint_id,
-                    track_id,
-                    generation_id,
-                    release["id"],
-                    checkpoint_object["sha256"],
-                    now,
-                ),
-            )
-            connection.execute(
-                """
-                INSERT INTO daily_track_activation_idempotency
-                    (idempotency_key, daily_track_id)
-                VALUES (?, ?)
-                """,
-                (idempotency_key, track_id),
-            )
+        self._commit_activation_cache(
+            track_id=track_id,
+            generation_id=generation_id,
+            checkpoint_id=checkpoint_id,
+            checkpoint_sha256=str(checkpoint_object["sha256"]),
+            frozen=frozen,
+            release=release,
+            definition=content,
+            calculation_kernel=str(manifest["calculation_kernel"]),
+        )
+        admitted = False
+        existing_track_id: str | None = None
+        try:
+            with self.metadata.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                existing = connection.execute(
+                    """
+                    SELECT daily_track_id
+                    FROM daily_track_activation_idempotency
+                    WHERE idempotency_key = ?
+                    """,
+                    (idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    existing_track_id = str(existing["daily_track_id"])
+                    return_existing = True
+                else:
+                    return_existing = False
+                active_count = int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*)
+                        FROM daily_tracks
+                        WHERE status = 'active'
+                        """
+                    ).fetchone()[0]
+                )
+                if not return_existing and active_count >= 10:
+                    raise DailyTrackingError("Active DailyTrack limit of 10 reached")
+                if return_existing:
+                    connection.rollback()
+                else:
+                    connection.execute(
+                        """
+                        INSERT INTO daily_tracks
+                            (id, seed_run_id, definition_version_id,
+                             definition_content_hash, activation_release_id,
+                             origin_session, numeric_execution_contract, status,
+                             current_generation_id, head_checkpoint_id, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                        """,
+                        (
+                            track_id,
+                            run_id,
+                            frozen["id"],
+                            frozen["content_hash"],
+                            release["id"],
+                            origin_session,
+                            content["numeric_execution_contract"],
+                            generation_id,
+                            checkpoint_id,
+                            now,
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO tracking_generations
+                            (id, daily_track_id, ordinal, calculation_kernel,
+                             numeric_execution_contract, basis_dataset_release_id,
+                             reason, created_at)
+                        VALUES (?, ?, 0, ?, ?, ?, 'activation', ?)
+                        """,
+                        (
+                            generation_id,
+                            track_id,
+                            manifest["calculation_kernel"],
+                            content["numeric_execution_contract"],
+                            release["id"],
+                            now,
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO tracking_checkpoints
+                            (id, daily_track_id, generation_id,
+                             predecessor_checkpoint_id, target_dataset_release_id,
+                             manifest_sha256, created_at)
+                        VALUES (?, ?, ?, NULL, ?, ?, ?)
+                        """,
+                        (
+                            checkpoint_id,
+                            track_id,
+                            generation_id,
+                            release["id"],
+                            checkpoint_object["sha256"],
+                            now,
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO daily_track_activation_idempotency
+                            (idempotency_key, daily_track_id)
+                        VALUES (?, ?)
+                        """,
+                        (idempotency_key, track_id),
+                    )
+                    admitted = True
+        except Exception:
+            self.cache.delete(track_id)
+            raise
+        if not admitted:
+            self.cache.delete(track_id)
+            if existing_track_id is None:
+                raise DailyTrackingError("DailyTrack activation was not admitted")
+            existing_track = self.get_track(existing_track_id)
+            if existing_track is None:
+                raise DailyTrackingError("idempotent DailyTrack disappeared")
+            return existing_track, False
         latest = self.metadata.latest_dataset_release()
         if latest is not None and latest["id"] != release["id"]:
             self.enqueue_toward(track_id, str(latest["id"]))
@@ -200,6 +281,86 @@ class DailyTrackingService:
         if track is None:
             raise DailyTrackingError("activated DailyTrack disappeared")
         return track, True
+
+    def _commit_activation_cache(
+        self,
+        *,
+        track_id: str,
+        generation_id: str,
+        checkpoint_id: str,
+        checkpoint_sha256: str,
+        frozen: dict[str, object],
+        release: dict[str, object],
+        definition: dict[str, object],
+        calculation_kernel: str,
+    ) -> None:
+        canonical = self.datasets.materialize_canonical(release)
+        alpha = self._alpha(
+            canonical,
+            definition,
+            kernel=calculation_kernel,
+        )
+        alpha_sessions = alpha.get("sessions")
+        if not isinstance(alpha_sessions, list):
+            raise DailyTrackingError("seed Alpha Matrix is invalid")
+        pending_alpha = {
+            str(item["session"]): [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "alpha": float(row["value"]),
+                }
+                for row in item["values"]
+            ]
+            for item in alpha_sessions[-21:]
+            if isinstance(item, dict) and isinstance(item.get("values"), list)
+        }
+        labels = build_forward_labels(canonical, alpha, report_sessions=504)
+        factor = evaluate_factor(labels)
+        rolling_factor: list[dict[str, object]] = []
+        horizons = factor.get("horizons")
+        if not isinstance(horizons, dict):
+            raise DailyTrackingError("seed Factor Evaluation is invalid")
+        for horizon, value in sorted(horizons.items(), key=lambda item: int(item[0])):
+            if not isinstance(value, dict) or not isinstance(value.get("daily"), list):
+                raise DailyTrackingError("seed Factor Evaluation horizon is invalid")
+            for row in value["daily"]:
+                quantiles = row.get("quantile_returns")
+                if not isinstance(row, dict) or not isinstance(quantiles, dict):
+                    raise DailyTrackingError("seed Factor daily result is invalid")
+                rolling_factor.append(
+                    {
+                        "session": str(row["session"]),
+                        "horizon": int(horizon),
+                        "sample_count": int(row["sample_count"]),
+                        "ic": row["ic"],
+                        "rank_ic": row["rank_ic"],
+                        "q1": quantiles["q1"],
+                        "q2": quantiles["q2"],
+                        "q3": quantiles["q3"],
+                        "q4": quantiles["q4"],
+                        "q5": quantiles["q5"],
+                        "top_bottom_return": row["top_bottom_return"],
+                        "correlation_reason": row["correlation_reason"],
+                        "quantile_reason": row["quantile_reason"],
+                    }
+                )
+        self.cache.commit_seed(
+            {
+                "daily_track_id": track_id,
+                "generation_id": generation_id,
+                "basis_checkpoint_id": checkpoint_id,
+                "basis_checkpoint_sha256": checkpoint_sha256,
+                "definition_content_hash": frozen["content_hash"],
+                "calculation_kernel": calculation_kernel,
+                "numeric_execution_contract": definition[
+                    "numeric_execution_contract"
+                ],
+                "basis_dataset_release_id": release["id"],
+                "fencing_token": 1,
+            },
+            pending_alpha=pending_alpha,
+            rolling_factor=rolling_factor,
+        )
 
     def get_track(self, track_id: str) -> dict[str, object] | None:
         with self.metadata.connect() as connection:
@@ -277,6 +438,30 @@ class DailyTrackingService:
             raise DailyTrackingError("DailyTrack has no Head")
         manifest = self._checkpoint_manifest(str(head["manifest_sha256"]))
         objects = manifest.get("objects")
+        if (
+            manifest.get("kind") == "activation"
+            and isinstance(objects, dict)
+            and set(objects) == COMPACT_RESULT_OBJECTS
+        ):
+            result_view = reconstruct_result_view(
+                self.objects,
+                {
+                    "objects": objects,
+                    "calculation_kernel": manifest["calculation_kernel"],
+                },
+            )
+            return {
+                "daily_track": {
+                    "id": track["id"],
+                    "status": track["status"],
+                    "generation_id": track["current_generation_id"],
+                    "head_checkpoint_id": track["head_checkpoint_id"],
+                },
+                "checkpoint": manifest,
+                "factor_summary": result_view["factor_evaluation"],
+                "strategy": result_view["strategy_backtest"],
+                "recent_label_maturation": {"events": []},
+            }
         factor_kind = (
             "factor_summary"
             if isinstance(objects, dict) and "factor_summary" in objects
@@ -731,12 +916,16 @@ class DailyTrackingService:
             if not isinstance(head, dict):
                 raise DailyTrackingError("DailyTrack has no Head")
             prior_manifest = self._checkpoint_manifest(str(head["manifest_sha256"]))
+            prior_entries = prior_manifest.get(
+                "migration_seed_objects",
+                prior_manifest.get("objects"),
+            )
             prior_alpha = self._read_result_object(
-                prior_manifest["objects"],
+                prior_entries,
                 "alpha_matrix",
             )
             prior_strategy = self._read_result_object(
-                prior_manifest["objects"],
+                prior_entries,
                 "strategy_backtest",
             )
             prior_release = self.metadata.dataset_release(str(head["target_dataset_release_id"]))

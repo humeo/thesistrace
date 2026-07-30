@@ -10,6 +10,7 @@ from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
 from thesistrace.tracking import DailyTrackingService
+from thesistrace.working_cache import WorkingCacheStore
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,9 @@ def main() -> None:
         store,
         DatasetPublisher(store, objects),
         objects,
+        WorkingCacheStore(
+            settings.working_cache_root or metadata_path.parent / "working-cache"
+        ),
     )
     while True:
         store.record_worker_heartbeat(datetime.now(UTC))

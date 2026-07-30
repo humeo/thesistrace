@@ -24,6 +24,7 @@ from thesistrace.tushare_source import (
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
+from thesistrace.working_cache import WorkingCacheStore
 
 
 class BootstrapRequest(BaseModel):
@@ -66,7 +67,13 @@ def create_app(
     publisher = DatasetPublisher(store, objects)
     definitions = ResearchDefinitionService(store, publisher)
     research_runs = ResearchRunService(store, publisher, objects)
-    tracking = DailyTrackingService(store, publisher, objects)
+    cache_root = settings.working_cache_root or settings.metadata_path.parent / "working-cache"
+    tracking = DailyTrackingService(
+        store,
+        publisher,
+        objects,
+        WorkingCacheStore(cache_root),
+    )
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
