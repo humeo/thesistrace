@@ -20,8 +20,8 @@ ALPHA_FIELDS = (
     ("high_adj", "price.high.adjusted", "fixed-anchor adjusted high", "CNY/share"),
     ("low_adj", "price.low.adjusted", "fixed-anchor adjusted low", "CNY/share"),
     ("close_adj", "price.close.adjusted", "fixed-anchor adjusted close", "CNY/share"),
-    ("volume", "market.volume.shares", "traded share volume", "shares"),
-    ("amount", "market.turnover.cny", "turnover amount", "CNY"),
+    ("volume_shares", "market.volume.shares", "traded share volume", "shares"),
+    ("turnover_amount_cny", "market.turnover.cny", "turnover amount", "CNY"),
 )
 
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
+from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.storage import MetadataStore
 from thesistrace.tushare_source import (
@@ -49,6 +50,7 @@ def create_app(
     store.initialize()
     objects = ImmutableObjectStore(settings.object_root)
     publisher = DatasetPublisher(store, objects)
+    definitions = ResearchDefinitionService(store, publisher)
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
@@ -59,6 +61,53 @@ def create_app(
             "resource_counts": store.resource_counts(),
             "latest_dataset_release": store.latest_dataset_release(),
         }
+
+    @app.get("/api/v1/research-definitions")
+    def list_research_definitions() -> dict[str, object]:
+        return {"items": store.list_research_drafts()}
+
+    @app.post("/api/v1/research-definitions")
+    def create_research_definition(content: dict[str, object]) -> JSONResponse:
+        return JSONResponse(status_code=201, content=definitions.create_draft(content))
+
+    @app.get("/api/v1/research-definitions/{draft_id}")
+    def get_research_definition(draft_id: str) -> dict[str, object]:
+        draft = store.research_draft(draft_id)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="research definition draft not found")
+        return draft
+
+    @app.put("/api/v1/research-definitions/{draft_id}")
+    def update_research_definition(draft_id: str, content: dict[str, object]) -> dict[str, object]:
+        draft = definitions.update_draft(draft_id, content)
+        if draft is None:
+            raise HTTPException(status_code=404, detail="research definition draft not found")
+        return draft
+
+    @app.post("/api/v1/research-definitions/{draft_id}/runs")
+    def request_research_run(
+        draft_id: str,
+        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        try:
+            frozen, run, created = definitions.request_run(draft_id, idempotency_key)
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404, detail="research definition draft not found"
+            ) from error
+        except DefinitionValidationError as error:
+            raise HTTPException(status_code=422, detail={"errors": error.errors}) from error
+        return JSONResponse(
+            status_code=202 if created else 200,
+            content={"frozen_definition": frozen, "run": run},
+        )
+
+    @app.get("/api/v1/research-definition-versions/{version_id}")
+    def get_research_definition_version(version_id: str) -> dict[str, object]:
+        frozen = store.frozen_research_definition(version_id)
+        if frozen is None:
+            raise HTTPException(status_code=404, detail="frozen definition not found")
+        return frozen
 
     @app.get("/api/v1/health")
     def get_health() -> dict[str, object]:

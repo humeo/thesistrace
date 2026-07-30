@@ -33,8 +33,8 @@ def test_release_exposes_complete_canonical_market_and_research_contract(tmp_pat
             "high_adj",
             "low_adj",
             "close_adj",
-            "volume",
-            "amount",
+            "volume_shares",
+            "turnover_amount_cny",
         ]
         assert set(contract["universes"]) == {"top300", "top1000", "top2000", "top3000"}
         assert contract["industry_levels"] == ["SW2021_L1", "SW2021_L2", "SW2021_L3"]

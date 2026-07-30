@@ -255,7 +255,10 @@ export default function App() {
             </div>
 
             {state.workspace.latest_dataset_release && (
-              <DataContractPanel releaseId={state.workspace.latest_dataset_release.id} />
+              <>
+                <DataContractPanel releaseId={state.workspace.latest_dataset_release.id} />
+                <ResearchDefinitionEditor />
+              </>
             )}
 
             <footer className="workspace-footer">
@@ -272,6 +275,233 @@ export default function App() {
         )}
       </main>
     </div>
+  );
+}
+
+type DefinitionForm = {
+  title: string;
+  hypothesis: string;
+  universe: string;
+  expression: string;
+  neutralization: string;
+  holdingsCount: number;
+  rebalanceInterval: number;
+};
+
+const initialDefinition: DefinitionForm = {
+  title: "20 日价格动量",
+  hypothesis: "",
+  universe: "top300",
+  expression: "pct_change($close_adj, 20)",
+  neutralization: "industry",
+  holdingsCount: 30,
+  rebalanceInterval: 5,
+};
+
+function ResearchDefinitionEditor() {
+  const [form, setForm] = useState<DefinitionForm>(initialDefinition);
+  const [draftId, setDraftId] = useState<string | null>(null);
+  const [status, setStatus] = useState<
+    "idle" | "saving" | "saved" | "running" | "queued" | "error"
+  >("idle");
+  const [frozenVersion, setFrozenVersion] = useState<number | null>(null);
+  const [errors, setErrors] = useState<string[]>([]);
+
+  function content() {
+    return {
+      title: form.title,
+      hypothesis: form.hypothesis,
+      dataset_release: "latest",
+      universe: form.universe,
+      alpha: { expression: form.expression },
+      neutralization: form.neutralization,
+      strategy: {
+        holdings_count: form.holdingsCount,
+        rebalance_interval: form.rebalanceInterval,
+        initial_cash_cny: "10000000",
+        execution: "next_open_full_fill",
+      },
+      costs: {
+        commission_rate_all_in: "0.0003",
+        commission_min_cny: "5",
+        stamp_duty_sell_rate: "0.0005",
+        transfer_fee_rate: "0.00001",
+      },
+      risk_free_rate: "0",
+    };
+  }
+
+  async function saveDraft(): Promise<string> {
+    setStatus("saving");
+    setErrors([]);
+    const response = await fetch(
+      draftId ? `/api/v1/research-definitions/${draftId}` : "/api/v1/research-definitions",
+      {
+        method: draftId ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(content()),
+      },
+    ).then(assertResponse);
+    const draft = (await response.json()) as { id: string };
+    setDraftId(draft.id);
+    setStatus("saved");
+    return draft.id;
+  }
+
+  async function handleSave() {
+    try {
+      await saveDraft();
+    } catch {
+      setStatus("error");
+      setErrors(["Draft 保存失败"]);
+    }
+  }
+
+  async function handleRun() {
+    try {
+      const currentDraftId = draftId ?? (await saveDraft());
+      setStatus("running");
+      setErrors([]);
+      const response = await fetch(`/api/v1/research-definitions/${currentDraftId}/runs`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      });
+      if (!response.ok) {
+        const payload = (await response.json()) as {
+          detail?: { errors?: { location: string; message: string }[] };
+        };
+        setErrors(
+          payload.detail?.errors?.map((item) => `${item.location}: ${item.message}`) ?? [
+            "研究定义验证失败",
+          ],
+        );
+        setStatus("error");
+        return;
+      }
+      const payload = (await response.json()) as {
+        frozen_definition: { version: number };
+      };
+      setFrozenVersion(payload.frozen_definition.version);
+      setStatus("queued");
+    } catch {
+      setStatus("error");
+      setErrors(["ResearchRun 创建失败"]);
+    }
+  }
+
+  return (
+    <section className="definition-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">AUTHORING / ONE STRUCTURED INPUT</p>
+          <h2>Research Definition</h2>
+        </div>
+        <span className="draft-state">
+          {status === "queued"
+            ? "RUN QUEUED"
+            : status === "saved"
+              ? "DRAFT SAVED"
+              : status === "error"
+                ? "NEEDS ATTENTION"
+                : "DRAFT"}
+        </span>
+      </div>
+      <div className="definition-grid">
+        <label className="form-field title-field">
+          <span>研究名称</span>
+          <input
+            value={form.title}
+            onChange={(event) => setForm({ ...form, title: event.target.value })}
+          />
+        </label>
+        <label className="form-field hypothesis-field">
+          <span>研究假设</span>
+          <textarea
+            value={form.hypothesis}
+            onChange={(event) => setForm({ ...form, hypothesis: event.target.value })}
+            placeholder="用一句可验证的话描述 Alpha 假设"
+          />
+        </label>
+        <label className="form-field expression-field">
+          <span>Alpha Expression</span>
+          <input
+            className="code-input"
+            value={form.expression}
+            onChange={(event) => setForm({ ...form, expression: event.target.value })}
+          />
+        </label>
+        <label className="form-field">
+          <span>Liquidity Universe</span>
+          <select
+            value={form.universe}
+            onChange={(event) => setForm({ ...form, universe: event.target.value })}
+          >
+            <option value="top300">Top 300</option>
+            <option value="top1000">Top 1000</option>
+            <option value="top2000">Top 2000</option>
+            <option value="top3000">Top 3000</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Neutralization</span>
+          <select
+            value={form.neutralization}
+            onChange={(event) => setForm({ ...form, neutralization: event.target.value })}
+          >
+            <option value="none">None</option>
+            <option value="industry">Industry demean</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Holdings Count</span>
+          <input
+            type="number"
+            min="1"
+            max="100"
+            value={form.holdingsCount}
+            onChange={(event) =>
+              setForm({ ...form, holdingsCount: Number(event.target.value) })
+            }
+          />
+        </label>
+        <label className="form-field">
+          <span>Rebalance Interval</span>
+          <input
+            type="number"
+            min="1"
+            max="20"
+            value={form.rebalanceInterval}
+            onChange={(event) =>
+              setForm({ ...form, rebalanceInterval: Number(event.target.value) })
+            }
+          />
+        </label>
+        <div className="fixed-contract">
+          <span>FIXED V1 CONTRACT</span>
+          <strong>CNY 10,000,000 · NEXT OPEN · RF 0%</strong>
+          <small>commission 0.03% · min CNY 5 · stamp 0.05% · transfer 0.001%</small>
+        </div>
+      </div>
+      {errors.length > 0 && (
+        <ul className="definition-errors" aria-label="验证错误">
+          {errors.map((message) => (
+            <li key={message}>{message}</li>
+          ))}
+        </ul>
+      )}
+      <div className="definition-actions">
+        <span>
+          {frozenVersion ? `FROZEN VERSION ${frozenVersion}` : "Run 时自动冻结当前 Draft"}
+        </span>
+        <button type="button" className="secondary-button" onClick={handleSave}>
+          保存 Draft
+        </button>
+        <button type="button" className="bootstrap-button" onClick={handleRun}>
+          运行研究
+          <ArrowUpRight size={16} aria-hidden="true" />
+        </button>
+      </div>
+    </section>
   );
 }
 

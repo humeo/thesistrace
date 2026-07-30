@@ -525,6 +525,144 @@ h1 {
   background: rgba(244, 241, 232, 0.8);
 }
 
+.definition-panel {
+  margin-top: 24px;
+  padding: 25px;
+  border: 1px solid var(--ink);
+  background: rgba(244, 241, 232, 0.8);
+}
+
+.draft-state {
+  padding: 5px 8px;
+  color: var(--signal);
+  border: 1px solid currentColor;
+  font-size: 9px;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+}
+
+.definition-grid {
+  display: grid;
+  grid-template-columns: 1.1fr 1.1fr 0.7fr 0.7fr;
+  margin-top: 20px;
+  border-top: 1px solid var(--rule);
+  border-left: 1px solid var(--rule);
+}
+
+.form-field,
+.fixed-contract {
+  display: flex;
+  min-width: 0;
+  min-height: 86px;
+  flex-direction: column;
+  gap: 9px;
+  padding: 12px;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.title-field,
+.hypothesis-field,
+.expression-field {
+  grid-column: span 2;
+}
+
+.form-field > span,
+.fixed-contract > span {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.form-field input,
+.form-field textarea,
+.form-field select {
+  width: 100%;
+  min-width: 0;
+  margin-top: auto;
+  padding: 7px 0;
+  border: 0;
+  border-bottom: 1px solid var(--ink);
+  border-radius: 0;
+  outline: none;
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+
+.form-field textarea {
+  min-height: 48px;
+  resize: vertical;
+}
+
+.form-field input:focus,
+.form-field textarea:focus,
+.form-field select:focus {
+  border-bottom-color: var(--signal);
+}
+
+.code-input {
+  font-family: "Space Grotesk Variable", sans-serif !important;
+}
+
+.fixed-contract {
+  grid-column: span 2;
+  justify-content: center;
+  background: #e3ded1;
+}
+
+.fixed-contract strong {
+  font-size: 11px;
+}
+
+.fixed-contract small {
+  color: var(--muted);
+  font-family: "Newsreader Variable", serif;
+  font-size: 11px;
+}
+
+.definition-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 9px;
+  margin-top: 18px;
+}
+
+.definition-actions > span {
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.secondary-button {
+  padding: 11px 14px;
+  border: 1px solid var(--ink);
+  color: var(--ink);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.secondary-button:hover {
+  background: #e3ded1;
+}
+
+.definition-errors {
+  margin: 14px 0 0;
+  padding: 12px 12px 12px 30px;
+  color: var(--bad);
+  border: 1px solid var(--bad);
+  font-size: 11px;
+}
+
 .contract-version {
   padding: 5px 8px;
   border: 1px solid var(--ink);
@@ -678,6 +816,10 @@ h1 {
     grid-template-columns: 1fr 1fr;
   }
 
+  .definition-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .release-panel {
     border-right: 0;
     border-bottom: 1px solid var(--ink);
@@ -724,5 +866,25 @@ h1 {
 
   .contract-block.fields {
     grid-row: auto;
+  }
+
+  .definition-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .title-field,
+  .hypothesis-field,
+  .expression-field,
+  .fixed-contract {
+    grid-column: auto;
+  }
+
+  .definition-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .definition-actions > span {
+    margin: 0 0 6px;
   }
 }

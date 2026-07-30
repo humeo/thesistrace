@@ -27,4 +27,13 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByText("TOP 300 · TOP 1000 · TOP 2000 · TOP 3000")).toBeVisible();
   await expect(page.getByText("SW2021 L1 · L2 · L3")).toBeVisible();
   await expect(page.getByText("FULL SESSION SUSPENSION · 1")).toBeVisible();
+
+  await expect(page.getByRole("heading", { name: "Research Definition" })).toBeVisible();
+  await page.getByLabel("研究假设").fill("过去 20 日上涨的股票，未来收益更高。");
+  await page.getByRole("button", { name: "保存 Draft" }).click();
+  await expect(page.getByText("DRAFT SAVED")).toBeVisible();
+  await page.getByRole("button", { name: "运行研究" }).click();
+  await expect(page.getByText("RUN QUEUED")).toBeVisible();
+  await expect(page.getByText("FROZEN VERSION 1")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Freeze" })).toHaveCount(0);
 });
