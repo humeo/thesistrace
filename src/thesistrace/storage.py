@@ -48,6 +48,52 @@ class MetadataStore:
                     heartbeat_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS management_audit_events (
+                    id TEXT PRIMARY KEY,
+                    occurred_at TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    outcome TEXT NOT NULL CHECK (outcome IN ('succeeded', 'rejected')),
+                    reason_code TEXT,
+                    subject_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    details_json TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS source_authorization_declarations (
+                    id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    intended_scope TEXT NOT NULL,
+                    actor TEXT NOT NULL,
+                    declared_at TEXT NOT NULL,
+                    audit_event_id TEXT NOT NULL
+                        REFERENCES management_audit_events(id)
+                );
+
+                CREATE TRIGGER IF NOT EXISTS management_audit_events_no_update
+                BEFORE UPDATE ON management_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'management audit events are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS management_audit_events_no_delete
+                BEFORE DELETE ON management_audit_events
+                BEGIN
+                    SELECT RAISE(ABORT, 'management audit events are non-deletable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS source_authorizations_no_update
+                BEFORE UPDATE ON source_authorization_declarations
+                BEGIN
+                    SELECT RAISE(ABORT, 'source authorization declarations are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS source_authorizations_no_delete
+                BEFORE DELETE ON source_authorization_declarations
+                BEGIN
+                    SELECT RAISE(ABORT, 'source authorization declarations are non-deletable');
+                END;
+
                 CREATE TABLE IF NOT EXISTS dataset_releases (
                     id TEXT PRIMARY KEY,
                     manifest_json TEXT,
@@ -249,6 +295,112 @@ class MetadataStore:
         if row is None:
             raise RuntimeError("workspace metadata is not initialized")
         return str(row["installation_id"])
+
+    def record_source_authorization(
+        self,
+        declaration: dict[str, object],
+        audit_event: dict[str, object],
+    ) -> None:
+        with self.connect() as connection:
+            self._insert_management_audit_event(connection, audit_event)
+            connection.execute(
+                """
+                INSERT INTO source_authorization_declarations (
+                    id, source, intended_scope, actor, declared_at, audit_event_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    declaration["id"],
+                    declaration["source"],
+                    declaration["scope"],
+                    declaration["actor"],
+                    declaration["declared_at"],
+                    declaration["audit_event_id"],
+                ),
+            )
+
+    def append_management_audit_event(self, event: dict[str, object]) -> None:
+        with self.connect() as connection:
+            self._insert_management_audit_event(connection, event)
+
+    def latest_source_authorization(self) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    id,
+                    source,
+                    intended_scope AS scope,
+                    actor,
+                    declared_at,
+                    audit_event_id
+                FROM source_authorization_declarations
+                WHERE source = 'tushare'
+                ORDER BY declared_at DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_management_audit_events(self) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    id,
+                    occurred_at,
+                    actor,
+                    action,
+                    outcome,
+                    reason_code,
+                    subject_type,
+                    subject_id,
+                    details_json
+                FROM management_audit_events
+                ORDER BY occurred_at, id
+                """
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "details": json.loads(str(row["details_json"])),
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _insert_management_audit_event(
+        connection: sqlite3.Connection,
+        event: dict[str, object],
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO management_audit_events (
+                id,
+                occurred_at,
+                actor,
+                action,
+                outcome,
+                reason_code,
+                subject_type,
+                subject_id,
+                details_json
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event["id"],
+                event["occurred_at"],
+                event["actor"],
+                event["action"],
+                event["outcome"],
+                event["reason_code"],
+                event["subject_type"],
+                event["subject_id"],
+                json.dumps(event["details"], sort_keys=True, separators=(",", ":")),
+            ),
+        )
 
     def resource_counts(self) -> dict[str, int]:
         with self.connect() as connection:

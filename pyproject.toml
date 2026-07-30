@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 thesistrace-api = "thesistrace.api:main"
+thesistrace-operator = "thesistrace.operator:main"
 thesistrace-worker = "thesistrace.worker:main"
 
 [dependency-groups]

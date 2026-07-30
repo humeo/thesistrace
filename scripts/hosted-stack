@@ -79,8 +79,13 @@ case "$action" in
         set +a
         exec "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
         ;;
+    operator)
+        prepare
+        shift
+        compose exec -T api thesistrace-operator "$@"
+        ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|up|down|restart|smoke}" >&2
+        echo "usage: scripts/hosted-stack {init|config|up|down|restart|smoke|operator}" >&2
         exit 2
         ;;
 esac

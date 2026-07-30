@@ -28,6 +28,25 @@ The generated state is under `.hosted/` and is ignored by Git. Production
 operators must replace `THESISTRACE_SITE_ADDRESS=https://localhost` in
 `.hosted/hosted.env` with the Cloudflare-proxied hostname before launch.
 
+## Source authorization declaration
+
+Possessing a Tushare token does not open hosted live Dataset Publication.
+After independently confirming that the deployment has the required upstream
+rights, the trusted Operator records the fixed policy declaration through the
+versioned CLI running inside the private application network:
+
+```sh
+make hosted-operator ARGS="source-authorization record \
+  --actor operator-1 \
+  --scope hosted-shared-dataset-releases"
+make hosted-operator ARGS="source-authorization inspect"
+```
+
+The declaration and its sanitized audit event contain the actor, time, fixed
+scope, and generated audit identity. They contain no Tushare token or other
+credential. Recording the declaration enables ThesisTrace's policy gate only;
+the command does not validate, negotiate, or interpret upstream legal rights.
+
 ## Verify
 
 The black-box smoke uses only `THESISTRACE_HOSTED_ORIGIN`; it does not address

@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
+from thesistrace.management import SourceAuthorizationService, build_management_store
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
@@ -79,6 +80,9 @@ def create_app(
         runtime.working_cache,
     )
     tracking.reconcile_cache_deletions()
+    source_authorization = SourceAuthorizationService(
+        build_management_store(settings, store)
+    )
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
@@ -502,6 +506,14 @@ def create_app(
         request: LiveBootstrapRequest,
         idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
     ) -> JSONResponse:
+        if not source_authorization.is_authorized():
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail(
+                    "SOURCE_AUTHORIZATION_REQUIRED",
+                    "hosted shared Tushare use requires an accepted Operator declaration",
+                ),
+            )
         if not settings.tushare_token:
             raise HTTPException(
                 status_code=409,
@@ -590,6 +602,14 @@ def create_app(
         request: LiveBootstrapRequest,
         idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
     ) -> JSONResponse:
+        if not source_authorization.is_authorized():
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail(
+                    "SOURCE_AUTHORIZATION_REQUIRED",
+                    "hosted shared Tushare use requires an accepted Operator declaration",
+                ),
+            )
         existing = store.dataset_release_for_idempotency_key(idempotency_key)
         if existing is not None:
             try:
