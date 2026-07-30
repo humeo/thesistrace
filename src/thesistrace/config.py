@@ -8,6 +8,7 @@ class Settings:
     metadata_path: Path
     object_root: Path
     worker_stale_after_seconds: int = 30
+    tushare_token: str | None = None
 
 
 def settings_from_environment() -> Settings:
@@ -15,4 +16,5 @@ def settings_from_environment() -> Settings:
     return Settings(
         metadata_path=home / "metadata.sqlite3",
         object_root=home / "objects",
+        tushare_token=os.environ.get("TUSHARE_TOKEN"),
     )

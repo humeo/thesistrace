@@ -26,6 +26,28 @@ class DatasetPublisher:
             raise InvalidFixtureError("a bootstrap root already exists")
 
         source, canonical = build_fixture()
+        return self.bootstrap_documents(
+            idempotency_key,
+            source=source,
+            canonical=canonical,
+            source_kind="source_fixture",
+            source_schema="tushare-fixture-v1",
+        )
+
+    def bootstrap_documents(
+        self,
+        idempotency_key: str,
+        *,
+        source: dict[str, object],
+        canonical: dict[str, object],
+        source_kind: str,
+        source_schema: str,
+    ) -> tuple[dict[str, object], bool]:
+        existing = self.metadata.dataset_release_for_idempotency_key(idempotency_key)
+        if existing is not None:
+            return existing, False
+        if self.metadata.latest_dataset_release() is not None:
+            raise InvalidFixtureError("a bootstrap root already exists")
         sessions = canonical["research_calendar"]
         instruments = canonical["instruments"]
         if not isinstance(sessions, list) or len(sessions) != 756:
@@ -36,7 +58,7 @@ class DatasetPublisher:
         source_object = self.objects.put_json(source)
         canonical_object = self.objects.put_json(canonical)
         object_entries = [
-            {"kind": "source_fixture", **source_object},
+            {"kind": source_kind, **source_object},
             {"kind": "canonical_fixture", **canonical_object},
         ]
         manifest_core: dict[str, object] = {
@@ -47,7 +69,7 @@ class DatasetPublisher:
             "instrument_count": len(instruments),
             "correction_change_set": [],
             "schemas": [
-                {"family": "source_fixture", "version": "tushare-fixture-v1"},
+                {"family": source_kind, "version": source_schema},
                 {"family": "canonical_eod", "version": "canonical-eod-v1"},
             ],
             "objects": object_entries,

@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,17 +11,33 @@ from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.storage import MetadataStore
+from thesistrace.tushare_source import (
+    HttpTushareTransport,
+    TushareAdapter,
+    TushareSourceError,
+    TushareTransport,
+    normalize_tushare_snapshot,
+)
 
 
 class BootstrapRequest(BaseModel):
     fixture: str
 
 
-def create_app(settings: Settings) -> FastAPI:
+class LiveBootstrapRequest(BaseModel):
+    as_of: date
+
+
+def create_app(
+    settings: Settings,
+    *,
+    tushare_transport: TushareTransport | None = None,
+) -> FastAPI:
     store = MetadataStore(settings.metadata_path)
     store.initialize()
     objects = ImmutableObjectStore(settings.object_root)
     publisher = DatasetPublisher(store, objects)
+    source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
     @app.get("/api/v1/workspace")
@@ -63,6 +79,56 @@ def create_app(settings: Settings) -> FastAPI:
     ) -> JSONResponse:
         try:
             release, created = publisher.bootstrap(idempotency_key, request.fixture)
+        except InvalidFixtureError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content={"status": "succeeded", "release": release},
+        )
+
+    @app.post("/api/v1/sources/tushare/preflight")
+    def preflight_tushare() -> dict[str, object]:
+        if not settings.tushare_token:
+            raise HTTPException(
+                status_code=409,
+                detail={"reason_code": "TOKEN_MISSING", "source_code": None},
+            )
+        adapter = TushareAdapter(
+            token=settings.tushare_token,
+            transport=source_transport,
+        )
+        try:
+            return adapter.preflight()
+        except TushareSourceError as error:
+            raise HTTPException(status_code=424, detail=error.diagnostic()) from error
+
+    @app.post("/api/v1/dataset-releases/bootstrap-live")
+    def bootstrap_live_dataset_release(
+        request: LiveBootstrapRequest,
+        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        if not settings.tushare_token:
+            raise HTTPException(
+                status_code=409,
+                detail={"reason_code": "TOKEN_MISSING", "source_code": None},
+            )
+        adapter = TushareAdapter(
+            token=settings.tushare_token,
+            transport=source_transport,
+        )
+        try:
+            adapter.preflight()
+            snapshot = adapter.collect_bootstrap_snapshot(request.as_of)
+            source, canonical = normalize_tushare_snapshot(snapshot)
+            release, created = publisher.bootstrap_documents(
+                idempotency_key,
+                source=source,
+                canonical=canonical,
+                source_kind="source_tushare",
+                source_schema="tushare-v1",
+            )
+        except TushareSourceError as error:
+            raise HTTPException(status_code=424, detail=error.diagnostic()) from error
         except InvalidFixtureError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return JSONResponse(
