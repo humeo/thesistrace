@@ -41,3 +41,6 @@ class ImmutableObjectStore:
 
     def path_for(self, digest: str) -> Path:
         return self.root / "sha256" / digest[:2] / f"{digest}.json"
+
+    def read_json(self, digest: str) -> object:
+        return json.loads(self.path_for(digest).read_text(encoding="utf-8"))

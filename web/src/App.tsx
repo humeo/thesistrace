@@ -50,6 +50,14 @@ type Health = {
   };
 };
 
+type DataContract = {
+  calendar: { session_count: number; start: string; end: string };
+  alpha_authorable_fields: string[];
+  universes: string[];
+  industry_levels: string[];
+  trading_state_counts: Record<string, number>;
+};
+
 type WorkspaceState =
   | { status: "loading" }
   | { status: "ready"; workspace: Workspace; health: Health }
@@ -246,6 +254,10 @@ export default function App() {
               </section>
             </div>
 
+            {state.workspace.latest_dataset_release && (
+              <DataContractPanel releaseId={state.workspace.latest_dataset_release.id} />
+            )}
+
             <footer className="workspace-footer">
               <div>
                 <span className="footer-label">INSTALLATION</span>
@@ -260,6 +272,78 @@ export default function App() {
         )}
       </main>
     </div>
+  );
+}
+
+function DataContractPanel({ releaseId }: { releaseId: string }) {
+  const [contract, setContract] = useState<DataContract | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/v1/dataset-releases/${releaseId}/data-contract`, {
+      signal: controller.signal,
+    })
+      .then(assertResponse)
+      .then((response) => response.json() as Promise<DataContract>)
+      .then(setContract)
+      .catch(() => setContract(null));
+    return () => controller.abort();
+  }, [releaseId]);
+
+  if (contract === null) {
+    return null;
+  }
+
+  const universeLabel = ["top300", "top1000", "top2000", "top3000"]
+    .filter((name) => contract.universes.includes(name))
+    .map((name) => `TOP ${name.slice(3)}`)
+    .join(" · ");
+
+  return (
+    <section className="contract-panel">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">CANONICAL RESEARCH SURFACE</p>
+          <h2>标准研究数据契约</h2>
+        </div>
+        <span className="contract-version">EOD · V1</span>
+      </div>
+      <div className="contract-grid">
+        <div className="contract-block fields">
+          <span>ALPHA FIELDS</span>
+          <div className="field-chips">
+            {contract.alpha_authorable_fields.map((field) => (
+              <code key={field}>{field}</code>
+            ))}
+          </div>
+        </div>
+        <div className="contract-block">
+          <span>RESEARCH CALENDAR</span>
+          <strong>{contract.calendar.session_count} SESSION INTERSECTION</strong>
+          <small>
+            {contract.calendar.start} → {contract.calendar.end}
+          </small>
+        </div>
+        <div className="contract-block">
+          <span>LIQUIDITY UNIVERSES</span>
+          <strong>{universeLabel}</strong>
+          <small>20-session mean turnover · deterministic ties</small>
+        </div>
+        <div className="contract-block">
+          <span>INDUSTRY MEMBERSHIP</span>
+          <strong>SW2021 L1 · L2 · L3</strong>
+          <small>point-in-time half-open intervals</small>
+        </div>
+        <div className="contract-block">
+          <span>TRADING STATE EVIDENCE</span>
+          <strong>
+            FULL SESSION SUSPENSION ·{" "}
+            {contract.trading_state_counts.full_session_suspension ?? 0}
+          </strong>
+          <small>normal · partial opening · after open · full session</small>
+        </div>
+      </div>
+    </section>
   );
 }
 

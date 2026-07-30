@@ -22,4 +22,9 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByText("756 sessions")).toBeVisible();
   await expect(page.getByText("ROOT", { exact: true })).toBeVisible();
   await expect(page.getByText("2 immutable objects")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "标准研究数据契约" })).toBeVisible();
+  await expect(page.getByText("open_adj", { exact: true })).toBeVisible();
+  await expect(page.getByText("TOP 300 · TOP 1000 · TOP 2000 · TOP 3000")).toBeVisible();
+  await expect(page.getByText("SW2021 L1 · L2 · L3")).toBeVisible();
+  await expect(page.getByText("FULL SESSION SUSPENSION · 1")).toBeVisible();
 });

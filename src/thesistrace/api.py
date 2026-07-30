@@ -77,6 +77,16 @@ def create_app(settings: Settings) -> FastAPI:
             raise HTTPException(status_code=404, detail="dataset release not found")
         return release
 
+    @app.get("/api/v1/dataset-releases/{release_id}/data-contract")
+    def get_dataset_contract(release_id: str) -> dict[str, object]:
+        release = store.dataset_release(release_id)
+        if release is None:
+            raise HTTPException(status_code=404, detail="dataset release not found")
+        try:
+            return publisher.data_contract(release)
+        except InvalidFixtureError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+
     @app.get("/api/v1/objects/{digest}")
     def get_object(digest: str) -> FileResponse:
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):

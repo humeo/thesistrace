@@ -113,7 +113,12 @@ def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
             {"session": session, "instrument_ids": [item["instrument_id"] for item in instruments]}
             for session in sessions
         ],
-        "liquidity_universes": liquidity_universes(sessions, instruments),
+        "liquidity_universes": liquidity_universes(
+            sessions,
+            instruments,
+            canonical_prices,
+            trading_states,
+        ),
         "industry_membership": industry_membership(instruments, sessions),
         "field_catalog": field_catalog(sessions[-1]),
     }
@@ -243,15 +248,48 @@ def industry_membership(
 
 
 def liquidity_universes(
-    sessions: list[str], instruments: list[dict[str, str]]
+    sessions: list[str],
+    instruments: list[dict[str, str]],
+    prices: list[dict[str, str]],
+    states: list[dict[str, str]],
 ) -> dict[str, list[dict[str, object]]]:
-    ranked = [item["instrument_id"] for item in reversed(instruments)]
+    turnover = {
+        (row["session"], row["instrument_id"]): Decimal(row["turnover_cny"]) for row in prices
+    }
+    trading_state_by_position = {
+        (row["session"], row["instrument_id"]): row["state"] for row in states
+    }
+    ranked_by_session: list[list[str]] = []
+    for session_index, _session in enumerate(sessions):
+        if session_index < 19:
+            ranked_by_session.append([])
+            continue
+        window = sessions[session_index - 19 : session_index + 1]
+        scored: list[tuple[Decimal, str]] = []
+        for instrument in instruments:
+            instrument_id = instrument["instrument_id"]
+            values: list[Decimal] = []
+            for window_session in window:
+                value = turnover.get((window_session, instrument_id))
+                if value is not None:
+                    values.append(value)
+                elif (
+                    trading_state_by_position.get((window_session, instrument_id))
+                    == "full_session_suspension"
+                ):
+                    values.append(Decimal(0))
+            if len(values) == 20:
+                scored.append((sum(values, Decimal(0)) / 20, instrument_id))
+        scored.sort(key=lambda item: item[1])
+        scored.sort(key=lambda item: item[0], reverse=True)
+        ranked_by_session.append([instrument_id for _, instrument_id in scored])
+
     universes: dict[str, list[dict[str, object]]] = {}
     for size in (300, 1000, 2000, 3000):
         universes[f"top{size}"] = [
             {
                 "session": session,
-                "instrument_ids": ranked[:size] if index >= 19 else [],
+                "instrument_ids": ranked_by_session[index][:size],
                 "status": "available" if index >= 19 else "insufficient_history",
             }
             for index, session in enumerate(sessions)

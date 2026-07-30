@@ -518,6 +518,77 @@ h1 {
   font-size: 11px;
 }
 
+.contract-panel {
+  margin-top: 24px;
+  padding: 25px;
+  border: 1px solid var(--ink);
+  background: rgba(244, 241, 232, 0.8);
+}
+
+.contract-version {
+  padding: 5px 8px;
+  border: 1px solid var(--ink);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.contract-grid {
+  display: grid;
+  grid-template-columns: 1.35fr 1fr 1fr;
+  margin-top: 20px;
+  border-top: 1px solid var(--rule);
+  border-left: 1px solid var(--rule);
+}
+
+.contract-block {
+  display: flex;
+  min-height: 106px;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px;
+  border-right: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+}
+
+.contract-block.fields {
+  grid-row: span 2;
+}
+
+.contract-block > span {
+  color: var(--signal);
+  font-size: 8px;
+  font-weight: 720;
+  letter-spacing: 0.12em;
+}
+
+.contract-block strong {
+  margin-top: auto;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.contract-block small {
+  color: var(--muted);
+  font-family: "Newsreader Variable", serif;
+  font-size: 12px;
+}
+
+.field-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin-top: 8px;
+}
+
+.field-chips code {
+  padding: 6px 8px;
+  color: var(--ink);
+  background: #e3ded1;
+  font-family: "Space Grotesk Variable", sans-serif;
+  font-size: 11px;
+}
+
 .workspace-footer > div:first-child {
   display: flex;
   gap: 12px;
@@ -603,6 +674,10 @@ h1 {
     grid-template-columns: 1fr;
   }
 
+  .contract-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+
   .release-panel {
     border-right: 0;
     border-bottom: 1px solid var(--ink);
@@ -641,5 +716,13 @@ h1 {
   .workspace-footer > div:first-child {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .contract-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .contract-block.fields {
+    grid-row: auto;
   }
 }
