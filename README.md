@@ -3,7 +3,7 @@
 ThesisTrace is a single-node workspace for reproducible, post-close A-share
 factor research, strategy backtesting, and daily tracking.
 
-The implementation is being built ticket-by-ticket from
+The implementation follows the specification and ticket history in
 `.scratch/thesistrace-v1-research-platform/`.
 
 ## Local development

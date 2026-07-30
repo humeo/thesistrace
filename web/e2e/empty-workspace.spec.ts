@@ -1,6 +1,28 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 
-test("shows the real empty workspace and dependency health", async ({ page }) => {
+test.setTimeout(120_000);
+
+const viewport =
+  process.env.THESISTRACE_E2E_VIEWPORT === "desktop"
+    ? { width: 1440, height: 1000 }
+    : { width: 390, height: 844 };
+
+async function inspectResource(page: Page, link: Locator) {
+  await expect(link).toBeVisible();
+  const [resource] = await Promise.all([
+    page.waitForEvent("popup"),
+    link.click(),
+  ]);
+  await resource.waitForLoadState();
+  expect(resource.url()).toContain("/api/v1/");
+  await expect(resource.locator("body")).not.toBeEmpty();
+  await resource.close();
+}
+
+test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace chain`, async ({
+  page,
+}) => {
+  await page.setViewportSize(viewport);
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "研究工作台" })).toBeVisible();
@@ -15,6 +37,9 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByText("Object Store")).toBeVisible();
   await expect(page.getByText("Worker")).toBeVisible();
   await expect(page.getByText("没有伪造示例资源")).toBeVisible();
+
+  await page.getByRole("button", { name: "发布 Live Tushare Bootstrap" }).click();
+  await expect(page.getByRole("alert")).toContainText("TOKEN_MISSING");
 
   await page.getByRole("button", { name: "发布 Fixture Bootstrap" }).click();
 
@@ -34,7 +59,16 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await page.getByLabel("研究假设").fill("过去 20 日上涨的股票，未来收益更高。");
   await page.getByRole("button", { name: "保存 Draft" }).click();
   await expect(definitionPanel.getByText("DRAFT SAVED")).toBeVisible();
+  await page.getByLabel("研究假设").fill("运行时必须冻结当前页面里的最新假设。");
+  const updatedDraftRequest = page.waitForRequest(
+    (request) =>
+      request.method() === "PUT" &&
+      request.url().includes("/api/v1/research-definitions/"),
+  );
   await page.getByRole("button", { name: "运行研究" }).click();
+  expect((await updatedDraftRequest).postDataJSON().hypothesis).toBe(
+    "运行时必须冻结当前页面里的最新假设。",
+  );
   await expect(definitionPanel.getByText("RUN QUEUED")).toBeVisible();
   await expect(page.getByText("FROZEN VERSION 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Freeze" })).toHaveCount(0);
@@ -45,7 +79,11 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "策略结论" })).toBeVisible();
   await expect(page.getByText("RESULT BUNDLE", { exact: true })).toBeVisible();
   await expect(page.getByText("DATASET RELEASE", { exact: true })).toBeVisible();
-  await expect(page.getByRole("img", { name: "1 日因子 IC 日序列" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "1 日因子 Rank IC 日序列" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "基准 NAV 日序列" })).toBeVisible();
+  await expect(page.getByRole("img", { name: "现金比例日序列" })).toBeVisible();
+  await expect(page.getByText("RECENT COST EVENTS")).toBeVisible();
+  await expect(page.getByText("RECENT MARKET REJECTIONS")).toBeVisible();
   await expect(page.getByText("AUTHORITATIVE ARTIFACTS")).toBeVisible();
   await expect
     .poll(() => page.locator(".artifact-links a").count())
@@ -63,7 +101,7 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByRole("heading", { name: "Dataset Release 已发布" })).toBeVisible();
   await expect(dataPanel.getByText("757 sessions")).toBeVisible();
   await expect(page.getByText(/[1-9]\d* LABEL EVENTS/)).toBeVisible({
-    timeout: 20_000,
+    timeout: 60_000,
   });
   await expect(
     page.getByRole("group", { name: "Dataset Releases" }).getByText("2", {
@@ -71,13 +109,29 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
     }),
   ).toBeVisible();
 
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.reload();
-  await expect(page.getByRole("heading", { name: "研究工作台" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "因子结论" })).toBeVisible({
+  await expect(page.getByText(/^Checkpoint checkpoint_/).first()).toBeVisible({
     timeout: 20_000,
   });
-  await expect(page.getByText("ACTIVE", { exact: true })).toBeVisible();
+  await inspectResource(
+    page,
+    page.locator('a[href^="/api/v1/dataset-releases/"]').first(),
+  );
+  await inspectResource(page, page.getByText("查看 Draft").first());
+  await inspectResource(page, page.getByText("查看 Frozen Version").first());
+  await inspectResource(
+    page,
+    page.locator('a[href^="/api/v1/research-runs/"]').first(),
+  );
+  await inspectResource(page, page.locator('a[href$="/result"]').first());
+  await inspectResource(page, page.locator('a[href*="/attempts/"]').first());
+  await inspectResource(
+    page,
+    page.locator('a[href^="/api/v1/daily-tracks/"]').first(),
+  );
+  await inspectResource(page, page.locator('a[href*="/generations/"]').first());
+  await inspectResource(page, page.locator('a[href*="/advances/"]').first());
+  await inspectResource(page, page.locator('a[href*="/checkpoints/"]').first());
+
   await page.getByRole("button", { name: "停止追踪" }).click();
   await expect(page.getByText("STOPPED", { exact: true })).toBeVisible();
 });

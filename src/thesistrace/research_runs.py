@@ -191,6 +191,7 @@ class ResearchRunService:
             "manifest": manifest,
             "factor_evaluation": read("factor_evaluation"),
             "strategy_backtest": read("strategy_backtest"),
+            "diagnostics": read("diagnostics"),
         }
 
 

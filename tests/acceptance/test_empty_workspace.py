@@ -45,6 +45,23 @@ def test_empty_workspace_is_persistent_and_reports_dependency_health(tmp_path: P
         },
     }
 
+    with TestClient(create_app(settings)) as client:
+        missing = client.get("/api/v1/research-runs/missing")
+        unknown_route = client.get("/api/v1/not-a-resource")
+        missing_header = client.post(
+            "/api/v1/dataset-releases/bootstrap",
+            json={"fixture": "v1"},
+        )
+    assert missing.status_code == 404
+    assert missing.json()["detail"] == {
+        "reason_code": "RESEARCH_RUN_NOT_FOUND",
+        "message": "ResearchRun not found",
+    }
+    assert unknown_route.status_code == 404
+    assert unknown_route.json()["detail"]["reason_code"] == "ROUTE_NOT_FOUND"
+    assert missing_header.status_code == 422
+    assert missing_header.json()["detail"]["reason_code"] == "REQUEST_VALIDATION_FAILED"
+
     with TestClient(create_app(settings)) as restarted_client:
         restarted_workspace = restarted_client.get("/api/v1/workspace").json()
 

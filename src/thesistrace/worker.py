@@ -50,6 +50,16 @@ def main() -> None:
             tracking.recover_abandoned_attempts(
                 stale_after_seconds=settings.worker_stale_after_seconds
             )
+            latest_release = store.latest_dataset_release()
+            if latest_release is not None:
+                enqueue_failures = tracking.enqueue_active_tracks(str(latest_release["id"]))
+                for failure in enqueue_failures:
+                    logger.warning(
+                        "%s for %s: %s",
+                        failure["reason_code"],
+                        failure["track_id"],
+                        failure["message"],
+                    )
             runs.execute_next()
             tracking.execute_next()
         except Exception:

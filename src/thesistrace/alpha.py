@@ -203,12 +203,22 @@ def evaluate_series(
 def evaluate_parsed_series(
     parsed: ParsedAlpha,
     values_by_field: dict[str, list[float | None]],
+    *,
+    length: int | None = None,
 ) -> list[float | None]:
     lengths = {len(values_by_field[field]) for field in parsed.field_names}
-    if len(lengths) != 1:
+    if len(lengths) > 1:
         raise ValueError("all Alpha input series must have the same length")
-    length = lengths.pop() if lengths else 0
-    return [evaluate_node(parsed.tree.body, index, values_by_field) for index in range(length)]
+    inferred_length = lengths.pop() if lengths else None
+    if length is not None and inferred_length is not None and length != inferred_length:
+        raise ValueError("explicit Alpha series length does not match field inputs")
+    result_length = (
+        length if length is not None else (1 if inferred_length is None else inferred_length)
+    )
+    return [
+        evaluate_node(parsed.tree.body, index, values_by_field)
+        for index in range(result_length)
+    ]
 
 
 def evaluate_node(
@@ -324,7 +334,11 @@ def evaluate_alpha_matrix(
                 else None
                 for session in calendar
             ]
-        evaluated[instrument_id] = evaluate_parsed_series(parsed, inputs)
+        evaluated[instrument_id] = evaluate_parsed_series(
+            parsed,
+            inputs,
+            length=len(calendar),
+        )
 
     universes = canonical["liquidity_universes"]
     universe_snapshots = {

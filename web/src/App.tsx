@@ -9,7 +9,7 @@ import {
   Layers3,
   Radio,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import "./app.css";
 
@@ -33,6 +33,7 @@ type DatasetRelease = {
   instrument_count: number;
   appended_session_range: { start: string; end: string };
   objects: { kind: string; sha256: string; bytes: number }[];
+  schemas: { family: string; version: string }[];
   manifest_sha256: string;
 };
 
@@ -52,6 +53,16 @@ type Health = {
 
 type DataContract = {
   calendar: { session_count: number; start: string; end: string };
+  fields: {
+    name: string;
+    field_id: string;
+    definition: string;
+    unit: string;
+    time_semantics: string;
+    alpha_authorable: boolean;
+    coverage: string;
+    release_available_from: string;
+  }[];
   alpha_authorable_fields: string[];
   universes: string[];
   industry_levels: string[];
@@ -80,13 +91,18 @@ type ResearchResult = {
       {
         daily: {
           session: string;
+          sample_count: number;
           ic: number | null;
           rank_ic: number | null;
+          correlation_reason: string | null;
+          quantile_returns: Record<string, number | null>;
           top_bottom_return: number | null;
+          quantile_reason: string | null;
         }[];
         summary: {
-          ic: { mean: number | null; icir: number | null };
-          rank_ic: { mean: number | null; icir: number | null };
+          ic: FactorCorrelationSummary;
+          rank_ic: FactorCorrelationSummary;
+          quantile_returns: Record<string, number | null>;
           top_bottom_return: number | null;
         };
       }
@@ -101,6 +117,13 @@ type ResearchResult = {
       maximum_single_name_weight: number;
       cash_ratio: number;
     }[];
+    fills: {
+      session: string;
+      instrument_id: string;
+      side: string;
+      quantity: number;
+      cost: string;
+    }[];
     rejections: { session: string; reason: string; instrument_id: string }[];
     metrics: {
       gross_cumulative_return: number;
@@ -108,6 +131,7 @@ type ResearchResult = {
       net_cagr: number | null;
       gross_cagr: number | null;
       benchmark_cumulative_return: number;
+      benchmark_cagr: number | null;
       annualized_excess_return: number | null;
       maximum_drawdown: {
         value: number;
@@ -117,6 +141,7 @@ type ResearchResult = {
       sharpe: number | null;
       calmar: number | null;
       turnover: {
+        average_rebalance: number | null;
         annualized: number | null;
         events: { session: string; value: number }[];
       };
@@ -125,7 +150,12 @@ type ResearchResult = {
         ratio: number;
         return_drag: number;
       };
-      holdings_count: { mean: number; ending: number };
+      holdings_count: {
+        mean: number;
+        minimum: number;
+        maximum: number;
+        ending: number;
+      };
       maximum_single_name_weight: {
         period_maximum: { value: number; session: string };
         ending: number;
@@ -138,6 +168,21 @@ type ResearchResult = {
       market_rejections: Record<string, number>;
     };
   };
+  diagnostics: {
+    alpha_coverage: {
+      session: string;
+      coverage_loss: Record<string, number>;
+    }[];
+    strategy: unknown[];
+  };
+};
+
+type FactorCorrelationSummary = {
+  mean: number | null;
+  sample_deviation: number | null;
+  icir: number | null;
+  positive_fraction: number | null;
+  valid_session_count: number;
 };
 
 const resources = [
@@ -148,14 +193,19 @@ const resources = [
 ] as const;
 
 export default function App() {
+  const workspaceEpoch = useRef(0);
   const [state, setState] = useState<WorkspaceState>({ status: "loading" });
   const [publication, setPublication] = useState<"idle" | "running" | "failed">("idle");
+  const [publicationError, setPublicationError] = useState<string | null>(null);
+  const [liveAsOf, setLiveAsOf] = useState(new Date().toISOString().slice(0, 10));
 
   useEffect(() => {
     const controller = new AbortController();
     let loaded = false;
+    let timeout: number | undefined;
 
     async function refreshWorkspace() {
+      const epoch = workspaceEpoch.current;
       try {
         const [workspaceResponse, healthResponse] = await Promise.all([
           fetch("/api/v1/workspace", { signal: controller.signal }).then(assertResponse),
@@ -165,21 +215,28 @@ export default function App() {
           workspaceResponse.json() as Promise<Workspace>,
           healthResponse.json() as Promise<Health>,
         ]);
-        loaded = true;
-        setState({ status: "ready", workspace, health });
+        if (epoch === workspaceEpoch.current) {
+          loaded = true;
+          setState({ status: "ready", workspace, health });
+        }
       } catch (error: unknown) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          if (!loaded) {
+          if (!loaded && epoch === workspaceEpoch.current) {
             setState({ status: "error" });
           }
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          timeout = window.setTimeout(() => void refreshWorkspace(), 2_000);
         }
       }
     }
 
     void refreshWorkspace();
-    const interval = window.setInterval(() => void refreshWorkspace(), 2_000);
     return () => {
-      window.clearInterval(interval);
+      if (timeout !== undefined) {
+        window.clearTimeout(timeout);
+      }
       controller.abort();
     };
   }, []);
@@ -188,7 +245,9 @@ export default function App() {
     if (state.status !== "ready") {
       return;
     }
+    workspaceEpoch.current += 1;
     setPublication("running");
+    setPublicationError(null);
     try {
       const response = await fetch("/api/v1/dataset-releases/bootstrap", {
         method: "POST",
@@ -199,6 +258,7 @@ export default function App() {
         body: JSON.stringify({ fixture: "v1" }),
       }).then(assertResponse);
       const payload = (await response.json()) as { release: DatasetRelease };
+      workspaceEpoch.current += 1;
       setState({
         status: "ready",
         health: state.health,
@@ -212,8 +272,52 @@ export default function App() {
         },
       });
       setPublication("idle");
-    } catch {
+    } catch (error: unknown) {
+      workspaceEpoch.current += 1;
       setPublication("failed");
+      setPublicationError(
+        apiErrorMessage(error, "PUBLICATION_FAILED · Fixture Bootstrap 发布失败"),
+      );
+    }
+  }
+
+  async function bootstrapLive() {
+    if (state.status !== "ready") {
+      return;
+    }
+    workspaceEpoch.current += 1;
+    setPublication("running");
+    setPublicationError(null);
+    try {
+      const response = await fetch("/api/v1/dataset-releases/bootstrap-live", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({ as_of: liveAsOf }),
+      }).then(assertResponse);
+      const payload = (await response.json()) as { release: DatasetRelease };
+      workspaceEpoch.current += 1;
+      setState({
+        status: "ready",
+        health: state.health,
+        workspace: {
+          ...state.workspace,
+          latest_dataset_release: payload.release,
+          resource_counts: {
+            ...state.workspace.resource_counts,
+            dataset_releases: 1,
+          },
+        },
+      });
+      setPublication("idle");
+    } catch (error: unknown) {
+      workspaceEpoch.current += 1;
+      setPublication("failed");
+      setPublicationError(
+        apiErrorMessage(error, "PUBLICATION_FAILED · Live Bootstrap 发布失败"),
+      );
     }
   }
 
@@ -221,7 +325,9 @@ export default function App() {
     if (state.status !== "ready") {
       return;
     }
+    workspaceEpoch.current += 1;
     setPublication("running");
+    setPublicationError(null);
     try {
       const response = await fetch("/api/v1/dataset-releases/publish-fixture", {
         method: "POST",
@@ -232,6 +338,7 @@ export default function App() {
         body: JSON.stringify({ new_sessions: 1, corrections: [] }),
       }).then(assertResponse);
       const payload = (await response.json()) as { release: DatasetRelease };
+      workspaceEpoch.current += 1;
       setState({
         status: "ready",
         health: state.health,
@@ -245,8 +352,52 @@ export default function App() {
         },
       });
       setPublication("idle");
-    } catch {
+    } catch (error: unknown) {
+      workspaceEpoch.current += 1;
       setPublication("failed");
+      setPublicationError(
+        apiErrorMessage(error, "PUBLICATION_FAILED · Fixture Session 发布失败"),
+      );
+    }
+  }
+
+  async function publishLiveSession() {
+    if (state.status !== "ready") {
+      return;
+    }
+    workspaceEpoch.current += 1;
+    setPublication("running");
+    setPublicationError(null);
+    try {
+      const response = await fetch("/api/v1/dataset-releases/publish-live", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({ as_of: liveAsOf }),
+      }).then(assertResponse);
+      const payload = (await response.json()) as { release: DatasetRelease };
+      workspaceEpoch.current += 1;
+      setState({
+        status: "ready",
+        health: state.health,
+        workspace: {
+          ...state.workspace,
+          latest_dataset_release: payload.release,
+          resource_counts: {
+            ...state.workspace.resource_counts,
+            dataset_releases: state.workspace.resource_counts.dataset_releases + 1,
+          },
+        },
+      });
+      setPublication("idle");
+    } catch (error: unknown) {
+      workspaceEpoch.current += 1;
+      setPublication("failed");
+      setPublicationError(
+        apiErrorMessage(error, "PUBLICATION_FAILED · Live Session 发布失败"),
+      );
     }
   }
 
@@ -358,9 +509,26 @@ export default function App() {
                         {publication === "running" ? "正在发布…" : "发布 Fixture Bootstrap"}
                         <ArrowUpRight size={16} aria-hidden="true" />
                       </button>
-                      {publication === "failed" && (
+                      <label className="live-publication-date">
+                        <span>LIVE AS OF</span>
+                        <input
+                          aria-label="Live 发布截止日期"
+                          type="date"
+                          value={liveAsOf}
+                          onChange={(event) => setLiveAsOf(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={bootstrapLive}
+                        disabled={publication === "running"}
+                      >
+                        发布 Live Tushare Bootstrap
+                      </button>
+                      {publication === "failed" && publicationError && (
                         <p className="publication-error" role="alert">
-                          发布失败；latest 数据版本未改变。
+                          {publicationError}
                         </p>
                       )}
                     </div>
@@ -369,7 +537,11 @@ export default function App() {
                   <ReleaseSummary
                     release={state.workspace.latest_dataset_release}
                     publication={publication}
+                    publicationError={publicationError}
+                    liveAsOf={liveAsOf}
+                    onLiveAsOfChange={setLiveAsOf}
                     onPublishFixtureSession={publishFixtureSession}
+                    onPublishLiveSession={publishLiveSession}
                   />
                 )}
                 <div className="truth-note">
@@ -440,6 +612,7 @@ const initialDefinition: DefinitionForm = {
 };
 
 function ResearchDefinitionEditor() {
+  const mutationInFlight = useRef(false);
   const [form, setForm] = useState<DefinitionForm>(initialDefinition);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [status, setStatus] = useState<
@@ -495,17 +668,27 @@ function ResearchDefinitionEditor() {
   }
 
   async function handleSave() {
+    if (mutationInFlight.current) {
+      return;
+    }
+    mutationInFlight.current = true;
     try {
       await saveDraft();
-    } catch {
+    } catch (error: unknown) {
       setStatus("error");
-      setErrors(["Draft 保存失败"]);
+      setErrors([apiErrorMessage(error, "DRAFT_SAVE_FAILED · Draft 保存失败")]);
+    } finally {
+      mutationInFlight.current = false;
     }
   }
 
   async function handleRun() {
+    if (mutationInFlight.current) {
+      return;
+    }
+    mutationInFlight.current = true;
     try {
-      const currentDraftId = draftId ?? (await saveDraft());
+      const currentDraftId = await saveDraft();
       setStatus("running");
       setErrors([]);
       const response = await fetch(`/api/v1/research-definitions/${currentDraftId}/runs`, {
@@ -514,11 +697,24 @@ function ResearchDefinitionEditor() {
       });
       if (!response.ok) {
         const payload = (await response.json()) as {
-          detail?: { errors?: { location: string; message: string }[] };
+          detail?: {
+            reason_code?: string;
+            message?: string;
+            errors?: {
+              location: string;
+              reason_code: string;
+              message: string;
+            }[];
+          };
         };
         setErrors(
-          payload.detail?.errors?.map((item) => `${item.location}: ${item.message}`) ?? [
-            "研究定义验证失败",
+          payload.detail?.errors?.map(
+            (item) =>
+              `${item.reason_code} · ${item.location}: ${item.message}`,
+          ) ?? [
+            payload.detail?.reason_code
+              ? `${payload.detail.reason_code} · ${payload.detail.message ?? "研究定义验证失败"}`
+              : "DEFINITION_VALIDATION_FAILED · 研究定义验证失败",
           ],
         );
         setStatus("error");
@@ -532,9 +728,13 @@ function ResearchDefinitionEditor() {
       setStatus("queued");
       setResult(null);
       await waitForRun(payload.run.id);
-    } catch {
+    } catch (error: unknown) {
       setStatus("error");
-      setErrors(["ResearchRun 创建失败"]);
+      setErrors([
+        apiErrorMessage(error, "RUN_REQUEST_FAILED · ResearchRun 创建失败"),
+      ]);
+    } finally {
+      mutationInFlight.current = false;
     }
   }
 
@@ -547,7 +747,7 @@ function ResearchDefinitionEditor() {
       const run = (await runResponse.json()) as {
         status: RunStatus;
         attempts: {
-          diagnostic: { message?: string } | null;
+          diagnostic: { reason_code?: string; message?: string } | null;
         }[];
       };
       setStatus(run.status);
@@ -559,8 +759,12 @@ function ResearchDefinitionEditor() {
         return;
       }
       if (run.status === "failed" || run.status === "cancelled") {
-        const message = run.attempts.at(-1)?.diagnostic?.message;
-        setErrors([message ?? `ResearchRun ${run.status}`]);
+        const diagnostic = run.attempts.at(-1)?.diagnostic;
+        setErrors([
+          diagnostic
+            ? `${diagnostic.reason_code ?? "RUN_FAILED"} · ${diagnostic.message}`
+            : `RUN_${run.status.toUpperCase()} · ResearchRun ${run.status}`,
+        ]);
         return;
       }
     }
@@ -575,7 +779,7 @@ function ResearchDefinitionEditor() {
           definition_version_id: string;
           status: RunStatus;
           attempts: {
-            diagnostic: { message?: string } | null;
+            diagnostic: { reason_code?: string; message?: string } | null;
           }[];
         }[];
       };
@@ -597,11 +801,20 @@ function ResearchDefinitionEditor() {
       } else if (run.status === "queued" || run.status === "running") {
         await waitForRun(run.id);
       } else {
-        const message = run.attempts.at(-1)?.diagnostic?.message;
-        setErrors([message ?? `ResearchRun ${run.status}`]);
+        const diagnostic = run.attempts.at(-1)?.diagnostic;
+        setErrors([
+          diagnostic
+            ? `${diagnostic.reason_code ?? "RUN_FAILED"} · ${diagnostic.message}`
+            : `RUN_${run.status.toUpperCase()} · ResearchRun ${run.status}`,
+        ]);
       }
-    } catch {
-      setErrors(["最近一次 ResearchRun 状态读取失败"]);
+    } catch (error: unknown) {
+      setErrors([
+        apiErrorMessage(
+          error,
+          "RUN_STATUS_UNAVAILABLE · 最近一次 ResearchRun 状态读取失败",
+        ),
+      ]);
     }
   }
 
@@ -701,14 +914,23 @@ function ResearchDefinitionEditor() {
         <span>
           {frozenVersion ? `FROZEN VERSION ${frozenVersion}` : "Run 时自动冻结当前 Draft"}
         </span>
-        <button type="button" className="secondary-button" onClick={handleSave}>
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={handleSave}
+          disabled={
+            status === "saving" || status === "queued" || status === "running"
+          }
+        >
           保存 Draft
         </button>
         <button
           type="button"
           className="bootstrap-button"
           onClick={handleRun}
-          disabled={status === "queued" || status === "running"}
+          disabled={
+            status === "saving" || status === "queued" || status === "running"
+          }
         >
           运行研究
           <ArrowUpRight size={16} aria-hidden="true" />
@@ -720,7 +942,21 @@ function ResearchDefinitionEditor() {
 }
 
 function ResearchResultPanel({ result }: { result: ResearchResult }) {
+  const trackingEpoch = useRef(0);
   const metrics = result.strategy_backtest.metrics;
+  const alphaCoverageLossDays = result.diagnostics.alpha_coverage.filter((item) =>
+    Object.values(item.coverage_loss).some((value) => value > 0),
+  ).length;
+  const factorMissingDays = Object.values(
+    result.factor_evaluation.horizons,
+  ).reduce(
+    (total, horizon) =>
+      total +
+      horizon.daily.filter(
+        (item) => item.correlation_reason !== null || item.quantile_reason !== null,
+      ).length,
+    0,
+  );
   const [track, setTrack] = useState<{
     id: string;
     status: "active" | "stopped";
@@ -728,7 +964,7 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
     head: { target_dataset_release_id: string };
     advances: { status: string }[];
   } | null>(null);
-  const [trackingError, setTrackingError] = useState(false);
+  const [trackingError, setTrackingError] = useState<string | null>(null);
   const [trackingView, setTrackingView] = useState<{
     checkpoint: { id: string; kind: string; processed_sessions?: string[] };
     factor_summary: {
@@ -738,32 +974,63 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
       >;
     };
     strategy: {
-      daily: { net_nav: string; session: string }[];
+      daily: {
+        net_nav: string;
+        net_cash: string;
+        holdings_count: number;
+        session: string;
+      }[];
     };
     recent_label_maturation: { events: { horizon: number }[] };
   } | null>(null);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let timeout: number | undefined;
     async function refreshTrack() {
+      const epoch = trackingEpoch.current;
       try {
-        const response = await fetch("/api/v1/daily-tracks").then(assertResponse);
+        const response = await fetch("/api/v1/daily-tracks", {
+          signal: controller.signal,
+        }).then(assertResponse);
         const payload = (await response.json()) as {
           items: ({
             seed_run_id: string;
           } & NonNullable<typeof track>)[];
         };
-        setTrack(
-          payload.items.find(
-            (item) => item.seed_run_id === result.manifest.research_run_id,
-          ) ?? null,
-        );
-      } catch {
-        setTrackingError(true);
+        if (epoch === trackingEpoch.current) {
+          setTrack(
+            payload.items.find(
+              (item) => item.seed_run_id === result.manifest.research_run_id,
+            ) ?? null,
+          );
+          setTrackingError(null);
+        }
+      } catch (error: unknown) {
+        if (
+          !(error instanceof DOMException && error.name === "AbortError") &&
+          epoch === trackingEpoch.current
+        ) {
+          setTrackingError(
+            apiErrorMessage(
+              error,
+              "TRACK_STATUS_UNAVAILABLE · 追踪状态读取失败",
+            ),
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          timeout = window.setTimeout(() => void refreshTrack(), 2_000);
+        }
       }
     }
     void refreshTrack();
-    const interval = window.setInterval(() => void refreshTrack(), 2_000);
-    return () => window.clearInterval(interval);
+    return () => {
+      if (timeout !== undefined) {
+        window.clearTimeout(timeout);
+      }
+      controller.abort();
+    };
   }, [result.manifest.research_run_id]);
 
   useEffect(() => {
@@ -771,22 +1038,46 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
       setTrackingView(null);
       return;
     }
+    const controller = new AbortController();
+    let timeout: number | undefined;
     async function refreshCurrent() {
+      const epoch = trackingEpoch.current;
       try {
         const response = await fetch(
           `/api/v1/daily-tracks/${track?.id}/current`,
+          { signal: controller.signal },
         ).then(assertResponse);
-        setTrackingView(await response.json());
-      } catch {
-        setTrackingError(true);
+        const view = await response.json();
+        if (epoch === trackingEpoch.current) {
+          setTrackingView(view);
+          setTrackingError(null);
+        }
+      } catch (error: unknown) {
+        if (
+          !(error instanceof DOMException && error.name === "AbortError") &&
+          epoch === trackingEpoch.current
+        ) {
+          setTrackingError(
+            apiErrorMessage(error, "TRACK_VIEW_UNAVAILABLE · 追踪详情读取失败"),
+          );
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          timeout = window.setTimeout(() => void refreshCurrent(), 2_000);
+        }
       }
     }
     void refreshCurrent();
-    const interval = window.setInterval(() => void refreshCurrent(), 2_000);
-    return () => window.clearInterval(interval);
+    return () => {
+      if (timeout !== undefined) {
+        window.clearTimeout(timeout);
+      }
+      controller.abort();
+    };
   }, [track?.id]);
 
   async function activateTracking() {
+    trackingEpoch.current += 1;
     try {
       const response = await fetch(
         `/api/v1/research-runs/${result.manifest.research_run_id}/daily-tracks`,
@@ -797,9 +1088,15 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           },
         },
       ).then(assertResponse);
-      setTrack(await response.json());
-    } catch {
-      setTrackingError(true);
+      const activated = await response.json();
+      trackingEpoch.current += 1;
+      setTrack(activated);
+      setTrackingError(null);
+    } catch (error: unknown) {
+      trackingEpoch.current += 1;
+      setTrackingError(
+        apiErrorMessage(error, "TRACK_ACTIVATION_FAILED · 每日追踪启动失败"),
+      );
     }
   }
 
@@ -807,13 +1104,20 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
     if (!track) {
       return;
     }
+    trackingEpoch.current += 1;
     try {
       const response = await fetch(`/api/v1/daily-tracks/${track.id}/stop`, {
         method: "POST",
       }).then(assertResponse);
-      setTrack(await response.json());
-    } catch {
-      setTrackingError(true);
+      const stopped = await response.json();
+      trackingEpoch.current += 1;
+      setTrack(stopped);
+      setTrackingError(null);
+    } catch (error: unknown) {
+      trackingEpoch.current += 1;
+      setTrackingError(
+        apiErrorMessage(error, "TRACK_STOP_FAILED · 每日追踪停止失败"),
+      );
     }
   }
 
@@ -856,6 +1160,37 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
                     label="TOP−BOTTOM"
                     value={formatPercent(summary.top_bottom_return)}
                   />
+                  <Metric label="ICIR" value={formatNumber(summary.ic.icir)} />
+                  <Metric
+                    label="RANK ICIR"
+                    value={formatNumber(summary.rank_ic.icir)}
+                  />
+                  <Metric
+                    label="POSITIVE RANK IC"
+                    value={formatPercent(summary.rank_ic.positive_fraction)}
+                  />
+                  <Metric
+                    label="VALID SESSIONS"
+                    value={String(summary.rank_ic.valid_session_count)}
+                  />
+                  <table className="quantile-table">
+                    <thead>
+                      <tr>
+                        {["q1", "q2", "q3", "q4", "q5"].map((quantile) => (
+                          <th key={quantile}>{quantile.toUpperCase()}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        {["q1", "q2", "q3", "q4", "q5"].map((quantile) => (
+                          <td key={quantile}>
+                            {formatPercent(summary.quantile_returns[quantile])}
+                          </td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               );
             })}
@@ -887,15 +1222,28 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
         </div>
       </div>
       <div className="result-evidence">
-        <div>
-          <span>1D DAILY IC</span>
-          <Sparkline
-            values={result.factor_evaluation.horizons["1"].daily.map(
-              (item) => item.ic,
-            )}
-            label="1 日因子 IC 日序列"
-          />
-        </div>
+        {["1", "5", "20"].map((horizon) => (
+          <div key={`rank-${horizon}`}>
+            <span>{horizon}D DAILY RANK IC</span>
+            <Sparkline
+              values={result.factor_evaluation.horizons[horizon].daily.map(
+                (item) => item.rank_ic,
+              )}
+              label={`${horizon} 日因子 Rank IC 日序列`}
+            />
+          </div>
+        ))}
+        {["1", "5", "20"].map((horizon) => (
+          <div key={`spread-${horizon}`}>
+            <span>{horizon}D TOP−BOTTOM</span>
+            <Sparkline
+              values={result.factor_evaluation.horizons[horizon].daily.map(
+                (item) => item.top_bottom_return,
+              )}
+              label={`${horizon} 日五分组 Top-Bottom 日序列`}
+            />
+          </div>
+        ))}
         <div>
           <span>NET NAV</span>
           <Sparkline
@@ -906,19 +1254,19 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           />
         </div>
         <div>
+          <span>BENCHMARK NAV</span>
+          <Sparkline
+            values={result.strategy_backtest.daily.map((item) =>
+              Number(item.benchmark_nav),
+            )}
+            label="基准 NAV 日序列"
+          />
+        </div>
+        <div>
           <span>DRAWDOWN</span>
           <Sparkline
             values={metrics.maximum_drawdown.series.map((item) => item.drawdown)}
             label="策略回撤日序列"
-          />
-        </div>
-        <div>
-          <span>TOP−BOTTOM / 1D</span>
-          <Sparkline
-            values={result.factor_evaluation.horizons["1"].daily.map(
-              (item) => item.top_bottom_return,
-            )}
-            label="1 日五分组 Top-Bottom 日序列"
           />
         </div>
         <div>
@@ -937,6 +1285,31 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
             label="实际持仓数量日序列"
           />
         </div>
+        <div>
+          <span>MAX NAME WEIGHT</span>
+          <Sparkline
+            values={result.strategy_backtest.daily.map(
+              (item) => item.maximum_single_name_weight,
+            )}
+            label="最大单股权重日序列"
+          />
+        </div>
+        <div>
+          <span>CASH RATIO</span>
+          <Sparkline
+            values={result.strategy_backtest.daily.map((item) => item.cash_ratio)}
+            label="现金比例日序列"
+          />
+        </div>
+        <div>
+          <span>RECENT FILL COST</span>
+          <Sparkline
+            values={result.strategy_backtest.fills
+              .slice(-252)
+              .map((item) => Number(item.cost))}
+            label="最近成交费用序列"
+          />
+        </div>
       </div>
       <div className="metric-register">
         <Metric
@@ -949,6 +1322,10 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           value={formatPercent(metrics.annualized_excess_return)}
         />
         <Metric
+          label="BENCHMARK CAGR"
+          value={formatPercent(metrics.benchmark_cagr)}
+        />
+        <Metric
           label="VOLATILITY"
           value={formatPercent(metrics.annualized_volatility)}
         />
@@ -956,6 +1333,10 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
         <Metric
           label="TURNOVER"
           value={formatPercent(metrics.turnover.annualized)}
+        />
+        <Metric
+          label="AVG REBALANCE"
+          value={formatPercent(metrics.turnover.average_rebalance)}
         />
         <Metric
           label="COST RATIO"
@@ -966,8 +1347,8 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           value={formatPercent(metrics.transaction_costs.return_drag)}
         />
         <Metric
-          label="HOLDINGS / END"
-          value={`${metrics.holdings_count.mean.toFixed(1)} / ${metrics.holdings_count.ending}`}
+          label="HOLDINGS MEAN / RANGE / END"
+          value={`${metrics.holdings_count.mean.toFixed(1)} / ${metrics.holdings_count.minimum}–${metrics.holdings_count.maximum} / ${metrics.holdings_count.ending}`}
         />
         <Metric
           label="MAX NAME WEIGHT"
@@ -980,14 +1361,85 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           value={formatPercent(metrics.cash_ratio.ending)}
         />
         <Metric
-          label="REJECTIONS"
-          value={String(
-            Object.values(metrics.market_rejections).reduce(
-              (total, value) => total + value,
-              0,
-            ),
-          )}
+          label="CASH MEAN / MAX"
+          value={`${formatPercent(metrics.cash_ratio.mean)} / ${formatPercent(
+            metrics.cash_ratio.maximum.value,
+          )}`}
         />
+        <Metric
+          label="REJECT UP / DOWN / SUSP"
+          value={`${metrics.market_rejections.upper_limit_buy ?? 0} / ${
+            metrics.market_rejections.lower_limit_sell ?? 0
+          } / ${metrics.market_rejections.suspension ?? 0}`}
+        />
+      </div>
+      <div className="event-register">
+        <div>
+          <span>RECENT COST EVENTS</span>
+          <small>
+            最近 {Math.min(result.strategy_backtest.fills.length, 10)} /{" "}
+            {result.strategy_backtest.fills.length} 笔；完整记录见 strategy events。
+          </small>
+          <div className="event-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>SESSION</th>
+                  <th>INSTRUMENT</th>
+                  <th>SIDE / QTY</th>
+                  <th>COST CNY</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.strategy_backtest.fills.slice(-10).map((fill, index) => (
+                  <tr key={`${fill.session}-${fill.instrument_id}-${index}`}>
+                    <td>{fill.session}</td>
+                    <td>{fill.instrument_id}</td>
+                    <td>{fill.side} / {fill.quantity}</td>
+                    <td>{Number(fill.cost).toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <span>RECENT MARKET REJECTIONS</span>
+          <small>
+            最近 {Math.min(result.strategy_backtest.rejections.length, 10)} /{" "}
+            {result.strategy_backtest.rejections.length} 笔；完整记录见 strategy events。
+          </small>
+          <div className="event-table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>SESSION</th>
+                  <th>INSTRUMENT</th>
+                  <th>REASON CODE</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.strategy_backtest.rejections.slice(-10).map((rejection, index) => (
+                  <tr key={`${rejection.session}-${rejection.instrument_id}-${index}`}>
+                    <td>{rejection.session}</td>
+                    <td>{rejection.instrument_id}</td>
+                    <td>{rejection.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div className="diagnostic-register">
+        <span>DIAGNOSTICS</span>
+        <strong>{alphaCoverageLossDays} Alpha coverage-loss sessions</strong>
+        <strong>{factorMissingDays} horizon-session factor diagnostics</strong>
+        <strong>{result.diagnostics.strategy.length} Strategy diagnostics</strong>
+        <small>
+          逐日 reason code 与执行事件保存在 diagnostics / strategy_events
+          权威文件中。
+        </small>
       </div>
       <div className="artifact-register">
         <div>
@@ -1025,9 +1477,21 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
                     trackingView.factor_summary.horizons["1"]?.summary.rank_ic.mean ??
                       null,
                   )}{" "}
-                  · {trackingView.recent_label_maturation.events.length} LABEL EVENTS
+                  · {trackingView.recent_label_maturation.events.length} LABEL EVENTS ·
+                  NET CASH {trackingView.strategy.daily.at(-1)?.net_cash} · HOLDINGS{" "}
+                  {trackingView.strategy.daily.at(-1)?.holdings_count} · PROCESSED{" "}
+                  {trackingView.checkpoint.processed_sessions?.length ?? 0}
                 </small>
               )}
+              {trackingView?.recent_label_maturation.events.length ? (
+                <small>
+                  RECENT MATURITY ·{" "}
+                  {trackingView.recent_label_maturation.events
+                    .slice(-5)
+                    .map((event) => `T+${event.horizon}`)
+                    .join(" · ")}
+                </small>
+              ) : null}
             </>
           ) : (
             <>
@@ -1050,7 +1514,7 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
             <ArrowUpRight size={16} aria-hidden="true" />
           </button>
         ) : null}
-        {trackingError && <span className="tracking-error">追踪状态读取失败</span>}
+        {trackingError && <span className="tracking-error">{trackingError}</span>}
       </div>
     </section>
   );
@@ -1066,6 +1530,7 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function OperationsLedger() {
+  const ledgerEpoch = useRef(0);
   const [releases, setReleases] = useState<DatasetRelease[]>([]);
   const [drafts, setDrafts] = useState<
     { id: string; state: string; updated_at: string; content: { title?: string } }[]
@@ -1105,14 +1570,28 @@ function OperationsLedger() {
     }[]
   >([]);
   const [loaded, setLoaded] = useState(false);
+  const [operationError, setOperationError] = useState<string | null>(null);
 
   useEffect(() => {
-    void refresh();
-    const interval = window.setInterval(() => void refresh(), 2_000);
-    return () => window.clearInterval(interval);
+    const controller = new AbortController();
+    let timeout: number | undefined;
+    async function poll() {
+      await refresh(controller.signal);
+      if (!controller.signal.aborted) {
+        timeout = window.setTimeout(() => void poll(), 2_000);
+      }
+    }
+    void poll();
+    return () => {
+      if (timeout !== undefined) {
+        window.clearTimeout(timeout);
+      }
+      controller.abort();
+    };
   }, []);
 
-  async function refresh() {
+  async function refresh(signal?: AbortSignal) {
+    const epoch = ledgerEpoch.current;
     try {
       const [
         releaseResponse,
@@ -1121,11 +1600,11 @@ function OperationsLedger() {
         runResponse,
         trackResponse,
       ] = await Promise.all([
-        fetch("/api/v1/dataset-releases").then(assertResponse),
-        fetch("/api/v1/research-definitions").then(assertResponse),
-        fetch("/api/v1/research-definition-versions").then(assertResponse),
-        fetch("/api/v1/research-runs").then(assertResponse),
-        fetch("/api/v1/daily-tracks").then(assertResponse),
+        fetch("/api/v1/dataset-releases", { signal }).then(assertResponse),
+        fetch("/api/v1/research-definitions", { signal }).then(assertResponse),
+        fetch("/api/v1/research-definition-versions", { signal }).then(assertResponse),
+        fetch("/api/v1/research-runs", { signal }).then(assertResponse),
+        fetch("/api/v1/daily-tracks", { signal }).then(assertResponse),
       ]);
       const [
         releasePayload,
@@ -1140,30 +1619,62 @@ function OperationsLedger() {
         runResponse.json(),
         trackResponse.json(),
       ]);
-      setReleases(releasePayload.items);
-      setDrafts(draftPayload.items);
-      setFrozenDefinitions(frozenPayload.items);
-      setRuns(runPayload.items);
-      setTracks(trackPayload.items);
-      setLoaded(true);
-    } catch {
-      setLoaded(true);
+      if (epoch === ledgerEpoch.current) {
+        setReleases(releasePayload.items);
+        setDrafts(draftPayload.items);
+        setFrozenDefinitions(frozenPayload.items);
+        setRuns(runPayload.items);
+        setTracks(trackPayload.items);
+        setLoaded(true);
+        setOperationError(null);
+      }
+    } catch (error: unknown) {
+      if (
+        !(error instanceof DOMException && error.name === "AbortError") &&
+        epoch === ledgerEpoch.current
+      ) {
+        setLoaded(true);
+        setOperationError(
+          apiErrorMessage(
+            error,
+            "RESOURCE_REFRESH_FAILED · 运行与追踪记录读取失败",
+          ),
+        );
+      }
     }
   }
 
   async function cancelRun(runId: string) {
-    await fetch(`/api/v1/research-runs/${runId}/cancel`, {
-      method: "POST",
-    }).then(assertResponse);
-    await refresh();
+    ledgerEpoch.current += 1;
+    try {
+      await fetch(`/api/v1/research-runs/${runId}/cancel`, {
+        method: "POST",
+      }).then(assertResponse);
+      ledgerEpoch.current += 1;
+      await refresh();
+    } catch (error: unknown) {
+      ledgerEpoch.current += 1;
+      setOperationError(
+        apiErrorMessage(error, "RUN_CANCEL_FAILED · ResearchRun 取消失败"),
+      );
+    }
   }
 
   async function rerun(runId: string) {
-    await fetch(`/api/v1/research-runs/${runId}/rerun`, {
-      method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
-    }).then(assertResponse);
-    await refresh();
+    ledgerEpoch.current += 1;
+    try {
+      await fetch(`/api/v1/research-runs/${runId}/rerun`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      }).then(assertResponse);
+      ledgerEpoch.current += 1;
+      await refresh();
+    } catch (error: unknown) {
+      ledgerEpoch.current += 1;
+      setOperationError(
+        apiErrorMessage(error, "RUN_RERUN_FAILED · ResearchRun 重新运行失败"),
+      );
+    }
   }
 
   return (
@@ -1175,6 +1686,11 @@ function OperationsLedger() {
         </div>
         <span className="contract-version">IMMUTABLE LEDGER</span>
       </div>
+      {operationError && (
+        <p className="ledger-diagnostic" role="alert">
+          {operationError}
+        </p>
+      )}
       {!loaded ? (
         <p className="ledger-empty">正在读取 Runs 与 DailyTracks…</p>
       ) : releases.length === 0 &&
@@ -1194,7 +1710,16 @@ function OperationsLedger() {
               {releases.map((release) => (
                 <article className="ledger-row" key={release.id}>
                   <div>
-                    <strong>{release.id}</strong>
+                    <strong>
+                      <a
+                        className="resource-link"
+                        href={`/api/v1/dataset-releases/${release.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {release.id}
+                      </a>
+                    </strong>
                     <span className="ledger-status succeeded">published</span>
                   </div>
                   <code>
@@ -1216,6 +1741,14 @@ function OperationsLedger() {
                     <span className="ledger-status">{draft.state}</span>
                   </div>
                   <code>{draft.id}</code>
+                  <a
+                    className="resource-link resource-inspect-link"
+                    href={`/api/v1/research-definitions/${draft.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    查看 Draft
+                  </a>
                 </article>
               ))}
               {frozenDefinitions.map((definition) => (
@@ -1231,6 +1764,14 @@ function OperationsLedger() {
                     {definition.id} · {definition.content_hash.slice(0, 12)}
                   </code>
                   <small>source Draft {definition.draft_id}</small>
+                  <a
+                    className="resource-link resource-inspect-link"
+                    href={`/api/v1/research-definition-versions/${definition.id}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    查看 Frozen Version
+                  </a>
                 </article>
               ))}
             </div>
@@ -1243,7 +1784,16 @@ function OperationsLedger() {
               return (
                 <article className="ledger-row" key={run.id}>
                   <div>
-                    <strong>{run.id}</strong>
+                    <strong>
+                      <a
+                        className="resource-link"
+                        href={`/api/v1/research-runs/${run.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {run.id}
+                      </a>
+                    </strong>
                     <span className={`ledger-status ${run.status}`}>
                       {run.status}
                     </span>
@@ -1253,13 +1803,29 @@ function OperationsLedger() {
                   </code>
                   <small>
                     {run.result_bundle_id
-                      ? `Result Bundle ${run.result_bundle_id}`
+                      ? (
+                          <a
+                            className="resource-link"
+                            href={`/api/v1/research-runs/${run.id}/result`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Result Bundle {run.result_bundle_id}
+                          </a>
+                        )
                       : "Result Bundle pending"}
                   </small>
                   <ol className="attempt-list" aria-label={`${run.id} Attempts`}>
                     {run.attempts.map((attempt) => (
                       <li key={attempt.ordinal}>
-                        Attempt {attempt.ordinal} · {attempt.status}
+                        <a
+                          className="resource-link"
+                          href={`/api/v1/research-runs/${run.id}/attempts/${attempt.ordinal}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Attempt {attempt.ordinal} · {attempt.status}
+                        </a>
                       </li>
                     ))}
                   </ol>
@@ -1303,7 +1869,16 @@ function OperationsLedger() {
               return (
                 <article className="ledger-row" key={track.id}>
                   <div>
-                    <strong>{track.id}</strong>
+                    <strong>
+                      <a
+                        className="resource-link"
+                        href={`/api/v1/daily-tracks/${track.id}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {track.id}
+                      </a>
+                    </strong>
                     <span className={`ledger-status ${track.status}`}>
                       {track.status}
                     </span>
@@ -1315,6 +1890,44 @@ function OperationsLedger() {
                     {track.generations.length} generation ·{" "}
                     {track.checkpoints.length} checkpoint · lag {pending + blocked}
                   </small>
+                  <ol className="attempt-list" aria-label={`${track.id} resources`}>
+                    {track.generations.map((generation) => (
+                      <li key={generation.id}>
+                        <a
+                          className="resource-link"
+                          href={`/api/v1/daily-tracks/${track.id}/generations/${generation.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Generation {generation.id} · {generation.reason}
+                        </a>
+                      </li>
+                    ))}
+                    {track.advances.map((advance) => (
+                      <li key={advance.id}>
+                        <a
+                          className="resource-link"
+                          href={`/api/v1/daily-tracks/${track.id}/advances/${advance.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Advance {advance.id} · {advance.status}
+                        </a>
+                      </li>
+                    ))}
+                    {track.checkpoints.map((checkpoint) => (
+                      <li key={checkpoint.id}>
+                        <a
+                          className="resource-link"
+                          href={`/api/v1/daily-tracks/${track.id}/checkpoints/${checkpoint.id}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Checkpoint {checkpoint.id}
+                        </a>
+                      </li>
+                    ))}
+                  </ol>
                   {blocked > 0 && (
                     <p className="ledger-diagnostic">
                       BLOCKED_FRONTIER · Worker 将在同一 Advance 身份下重试
@@ -1406,10 +2019,20 @@ function DataContractPanel({ releaseId }: { releaseId: string }) {
       </div>
       <div className="contract-grid">
         <div className="contract-block fields">
-          <span>ALPHA FIELDS</span>
-          <div className="field-chips">
-            {contract.alpha_authorable_fields.map((field) => (
-              <code key={field}>{field}</code>
+          <span>FIELD CATALOG</span>
+          <div className="field-catalog">
+            {contract.fields.map((field) => (
+              <details key={field.field_id}>
+                <summary>
+                  <code>{field.name}</code>
+                  {field.alpha_authorable ? " · ALPHA" : ""}
+                </summary>
+                <small>{field.field_id} · {field.unit} · {field.time_semantics}</small>
+                <small>{field.definition}</small>
+                <small>
+                  {field.coverage} · available from {field.release_available_from}
+                </small>
+              </details>
             ))}
           </div>
         </div>
@@ -1446,12 +2069,23 @@ function DataContractPanel({ releaseId }: { releaseId: string }) {
 function ReleaseSummary({
   release,
   publication,
+  publicationError,
+  liveAsOf,
+  onLiveAsOfChange,
   onPublishFixtureSession,
+  onPublishLiveSession,
 }: {
   release: DatasetRelease;
   publication: "idle" | "running" | "failed";
+  publicationError: string | null;
+  liveAsOf: string;
+  onLiveAsOfChange: (value: string) => void;
   onPublishFixtureSession: () => Promise<void>;
+  onPublishLiveSession: () => Promise<void>;
 }) {
+  const liveSource = release.schemas.some(
+    (schema) => schema.family === "source_tushare",
+  );
   return (
     <div className="release-summary">
       <div className="release-lead">
@@ -1459,7 +2093,9 @@ function ReleaseSummary({
         <div>
           <h3>
             {release.predecessor_id === null
-              ? "Fixture Bootstrap 已发布"
+              ? liveSource
+                ? "Live Tushare Bootstrap 已发布"
+                : "Fixture Bootstrap 已发布"
               : "Dataset Release 已发布"}
           </h3>
           <code>{release.id}</code>
@@ -1492,20 +2128,45 @@ function ReleaseSummary({
         <code>{release.manifest_sha256.slice(0, 24)}…</code>
       </div>
       <div className="release-actions">
-        <button
-          type="button"
-          className="secondary-button"
-          onClick={() => void onPublishFixtureSession()}
-          disabled={publication === "running"}
-        >
-          {publication === "running"
-            ? "正在发布…"
-            : "发布下一 Fixture Session"}
-        </button>
-        <small>验收数据路径；生产发布使用 Tushare 运维接口。</small>
-        {publication === "failed" && (
+        {liveSource ? (
+          <>
+            <label className="live-publication-date">
+              <span>LIVE AS OF</span>
+              <input
+                aria-label="Live 发布截止日期"
+                type="date"
+                value={liveAsOf}
+                onChange={(event) => onLiveAsOfChange(event.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void onPublishLiveSession()}
+              disabled={publication === "running"}
+            >
+              {publication === "running" ? "正在发布…" : "发布 Live Tushare Session"}
+            </button>
+            <small>Token 只从部署环境读取，不进入页面或研究定义。</small>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => void onPublishFixtureSession()}
+              disabled={publication === "running"}
+            >
+              {publication === "running"
+                ? "正在发布…"
+                : "发布下一 Fixture Session"}
+            </button>
+            <small>Fixture 仅用于验收；Live Workspace 请选择 Tushare Bootstrap。</small>
+          </>
+        )}
+        {publication === "failed" && publicationError && (
           <span className="publication-error" role="alert">
-            发布失败；latest 数据版本未改变。
+            {publicationError}
           </span>
         )}
       </div>
@@ -1547,11 +2208,37 @@ function StatusPanel({
   );
 }
 
-function assertResponse(response: Response): Response {
+class ApiError extends Error {
+  constructor(
+    readonly reasonCode: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function assertResponse(response: Response): Promise<Response> {
   if (!response.ok) {
-    throw new Error(`Workspace request failed with ${response.status}`);
+    let reasonCode = `HTTP_${response.status}`;
+    let message = `request failed with ${response.status}`;
+    try {
+      const payload = (await response.json()) as {
+        detail?: { reason_code?: string; message?: string };
+      };
+      reasonCode = payload.detail?.reason_code ?? reasonCode;
+      message = payload.detail?.message ?? message;
+    } catch {
+      // The status-based reason remains stable when a non-JSON gateway fails.
+    }
+    throw new ApiError(reasonCode, message);
   }
   return response;
+}
+
+function apiErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof ApiError
+    ? `${error.reasonCode} · ${error.message}`
+    : fallback;
 }
 
 function formatPercent(value: number | null): string {

@@ -8,5 +8,4 @@ check:
 	.venv/bin/pytest -q
 	bun run --cwd web typecheck
 	bun run --cwd web build
-	bun run --cwd web test:e2e -- --reporter=line
-
+	bun run --cwd web test:e2e

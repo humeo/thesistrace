@@ -40,7 +40,8 @@ The underlying HTTP request follows Tushare's documented `api_name`, `token`,
 
 ## Publish
 
-After the market session is complete:
+After the market session is complete, an empty Web Workspace exposes **LIVE AS
+OF** and **发布 Live Tushare Bootstrap**. The equivalent API call is:
 
 ```sh
 curl -X POST http://127.0.0.1:8000/api/v1/dataset-releases/bootstrap-live \
@@ -50,16 +51,35 @@ curl -X POST http://127.0.0.1:8000/api/v1/dataset-releases/bootstrap-live \
 ```
 
 ThesisTrace preflights permissions, fetches deterministic paginated source
-responses, retains them, validates exactly 756 common Research Sessions,
-normalizes the Canonical EOD contract, writes content-addressed objects, and
-commits the root Release last. Any upstream, coverage, schema, or validation
-failure leaves the latest Release unchanged.
+responses, retains them, validates exactly 756 common Research Sessions, and
+fetches the first valid daily/adjustment pair on or after each listing date as
+that instrument's fixed Adjustment Anchor. It then normalizes the Canonical EOD
+contract, writes content-addressed objects, and commits the root Release last.
+Any upstream, anchor, coverage, schema, or validation failure leaves the latest
+Release unchanged.
+
+For each later completed market session, choose the new date and click **发布
+Live Tushare Session**. The equivalent incremental API call is:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/v1/dataset-releases/publish-live \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: live-close-2026-07-30' \
+  -d '{"as_of":"2026-07-30"}'
+```
+
+This fetches calendar, market, lifecycle, and industry evidence from the
+current Release frontier through `as_of`. It does not refetch historical daily
+prices. Multiple missed sessions become one catch-up Release. Accepted source
+responses and the Canonical delta are new immutable objects; predecessor
+objects and fixed anchors are referenced unchanged. A newly listed instrument
+gets its own source-proven anchor before publication can succeed.
 
 ## Acceptance boundary
 
 Automated tests use a recording transport and generated source snapshot to
 prove pagination, reason-coded failures, secret exclusion, canonical
-normalization, and the shared atomic publication boundary. They do not make a
-live network request. A deployment operator must run the preflight and live
-Bootstrap with that deployment's own token before claiming live acceptance.
-
+normalization, one-session incremental publication, and the shared atomic
+publication boundary. They do not make a live network request. A deployment
+operator must run the preflight, live Bootstrap, and a post-close live
+publication with that deployment's own token before claiming live acceptance.

@@ -25,6 +25,11 @@ def test_a_share_quantity_child_order_and_cost_rules() -> None:
     assert split_child_orders("main", 2_100_000) == [1_000_000, 1_000_000, 100_000]
     assert split_child_orders("chinext", 650_000) == [300_000, 300_000, 50_000]
     assert split_child_orders("star", 200_001) == [100_000, 99_801, 200]
+    assert split_child_orders(
+        "main", 1_000_050, complete_liquidation=True
+    ) == [1_000_000, 50]
+    with pytest.raises(StrategyCalculationError, match="board lot"):
+        split_child_orders("main", 1_000_050)
 
     costs = {
         "commission_rate_all_in": Decimal("0.0003"),

@@ -83,6 +83,9 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
         detail = client.get(f"/api/v1/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
         assert [attempt["status"] for attempt in detail["attempts"]] == ["succeeded"]
+        attempt = client.get(f"/api/v1/research-runs/{run_id}/attempts/1")
+        assert attempt.status_code == 200
+        assert attempt.json()["id"] == detail["attempts"][0]["id"]
 
         result = client.get(f"/api/v1/research-runs/{run_id}/result")
         assert result.status_code == 200
@@ -118,9 +121,15 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
         )
         assert len(payload["factor_evaluation"]["horizons"]["1"]["daily"]) == 504
         assert len(payload["strategy_backtest"]["daily"]) == 504
+        assert len(payload["diagnostics"]["alpha_coverage"]) == 756
         assert (
             payload["factor_evaluation"]["horizons"]["1"]["alpha_checksum"]
             == payload["strategy_backtest"]["alpha_checksum"]
+        )
+        missing_attempt = client.get(f"/api/v1/research-runs/{run_id}/attempts/99")
+        assert missing_attempt.status_code == 404
+        assert missing_attempt.json()["detail"]["reason_code"] == (
+            "RESEARCH_RUN_ATTEMPT_NOT_FOUND"
         )
 
         repeated = service(settings).execute(run_id)

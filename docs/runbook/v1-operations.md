@@ -70,6 +70,10 @@ After a successful preflight, follow
 to Tushare and is never written to metadata, logs, Dataset Releases,
 Definitions, Results, or Tracking Checkpoints.
 
+In an empty Workspace, choose the completed session in **LIVE AS OF** and click
+**发布 Live Tushare Bootstrap**. The Web UI calls the same public API shown in
+the live Bootstrap runbook; it never asks for or stores the token.
+
 Automated tests prove the source contract with a recording transport. They do
 not prove that a deployment token has current permissions or that Tushare is
 available. A live claim therefore requires the deployment operator to run the
@@ -104,15 +108,28 @@ new session:
       "session": "2026-07-01",
       "instrument_id": "equity:600000.SH",
       "field": "close_raw",
-      "value": "9.9900"
+      "value": "8.0500"
     }
   ]
 }
 ```
 
-The current live adapter exposes credential-gated Tushare Bootstrap. The
-incremental post-close command above is deliberately fixture-backed acceptance;
-it must not be represented as a live Tushare daily fetch.
+For a Workspace rooted in a live Tushare Bootstrap, publish the real
+post-close slice by choosing **LIVE AS OF** and clicking **发布 Live Tushare
+Session**, or call the same API directly:
+
+```sh
+curl -X POST http://127.0.0.1:8000/api/v1/dataset-releases/publish-live \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: live-close-2026-07-30' \
+  -d '{"as_of":"2026-07-30"}'
+```
+
+This call fetches only source rows from the current Release frontier through
+`as_of`; it does not rescan the three-year price history. If sessions were
+missed, the same call publishes one catch-up Release. `NO_NEW_RESEARCH_SESSION`
+publishes nothing. Live publication is accepted only against a live-rooted
+Release; fixture and live chains cannot be mixed.
 
 ## 5. Run research
 
@@ -156,8 +173,8 @@ snapshot tooling. If downtime is not possible, create a consistent SQLite
 backup first and then snapshot the immutable object directory:
 
 ```sh
-sqlite3 "$THESISTRACE_HOME/metadata.sqlite3" \
-  ".backup '$THESISTRACE_HOME/metadata.backup.sqlite3'"
+sqlite3 /absolute/path/to/thesistrace-data/metadata.sqlite3 \
+  ".backup '/absolute/path/to/thesistrace-data/metadata.backup.sqlite3'"
 ```
 
 Verify that the backup contains:
@@ -184,7 +201,8 @@ Bundle. A failed Track publication leaves its prior Head unchanged.
 Common stable reason codes include:
 
 - source: `TOKEN_MISSING`, `MISSING_PERMISSION`, `UPSTREAM_UNAVAILABLE`,
-  `INCOMPLETE_REQUIRED_MARKET_FACTS`;
+  `INCOMPLETE_ADJUSTMENT_ANCHOR`, `INVALID_ADJUSTMENT_FACTOR`,
+  `INCOMPLETE_REQUIRED_MARKET_FACTS`, `NO_NEW_RESEARCH_SESSION`;
 - Definition: `FIELD_NOT_AUTHORABLE`, `WINDOW_OUT_OF_RANGE`,
   `HOLDINGS_COUNT_OUT_OF_RANGE`, `REBALANCE_INTERVAL_OUT_OF_RANGE`;
 - execution: `TRANSIENT_FAILURE`, `CALCULATION_FAILED`,

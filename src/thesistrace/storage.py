@@ -14,6 +14,10 @@ RESOURCE_TABLES = (
 )
 
 
+class DatasetPublicationConflict(RuntimeError):
+    pass
+
+
 class MetadataStore:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -283,12 +287,37 @@ class MetadataStore:
             return None
         return dict(json.loads(str(row["manifest_json"])))
 
-    def publish_dataset_release(self, release: dict[str, object], idempotency_key: str) -> None:
+    def publish_dataset_release(
+        self,
+        release: dict[str, object],
+        idempotency_key: str,
+    ) -> tuple[dict[str, object], bool]:
         release_id = str(release["id"])
         manifest_json = json.dumps(
             release, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT release.manifest_json
+                FROM publication_idempotency AS request
+                JOIN dataset_releases AS release ON release.id = request.release_id
+                WHERE request.idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None and existing["manifest_json"] is not None:
+                return dict(json.loads(str(existing["manifest_json"]))), False
+            pointer = connection.execute(
+                "SELECT release_id FROM dataset_release_pointer WHERE singleton = 1"
+            ).fetchone()
+            current_release_id = None if pointer is None else str(pointer["release_id"])
+            expected_predecessor = release.get("predecessor_id")
+            if current_release_id != expected_predecessor:
+                raise DatasetPublicationConflict(
+                    "latest Dataset Release changed during publication"
+                )
             connection.execute(
                 """
                 INSERT INTO dataset_releases (id, manifest_json, created_at)
@@ -311,6 +340,7 @@ class MetadataStore:
                 """,
                 (idempotency_key, release_id),
             )
+        return release, True
 
     def last_worker_heartbeat(self) -> datetime | None:
         with self.connect() as connection:

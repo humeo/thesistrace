@@ -1,4 +1,5 @@
 import hashlib
+import json
 from collections import Counter
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -88,8 +89,7 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        self.metadata.publish_dataset_release(release, idempotency_key)
-        return release, True
+        return self.metadata.publish_dataset_release(release, idempotency_key)
 
     def data_contract(self, release: dict[str, object]) -> dict[str, object]:
         canonical = self.materialize_canonical(release)
@@ -163,22 +163,86 @@ class DatasetPublisher:
             "low_raw",
             "close_raw",
             "pre_close_raw",
-            "change_raw",
-            "pct_change_raw",
             "volume_shares",
             "turnover_cny",
-            "open_adj",
-            "high_adj",
-            "low_adj",
-            "close_adj",
         }
+        canonical_corrections: list[dict[str, str]] = []
+        corrected_positions: set[tuple[str, str]] = set()
         for correction in corrections:
             position = (correction["session"], correction["instrument_id"])
             target = price_by_position.get(position)
             if target is None or correction["field"] not in allowed_correction_fields:
-                raise InvalidFixtureError("correction target is not a canonical price field")
-            Decimal(correction["value"])
-            target[correction["field"]] = correction["value"]
+                raise InvalidFixtureError("correction target is not a source canonical field")
+            value = Decimal(correction["value"])
+            if not value.is_finite():
+                raise InvalidFixtureError("correction value must be finite")
+            if value < 0:
+                raise InvalidFixtureError("correction value must be non-negative")
+            field = correction["field"]
+            places = 0 if field == "volume_shares" else 2 if field == "turnover_cny" else 4
+            normalized_value = decimal_string(value, places)
+            target[field] = normalized_value
+            corrected_positions.add(position)
+            canonical_corrections.append({**correction, "value": normalized_value})
+
+            if field in {"open_raw", "high_raw", "low_raw", "close_raw"}:
+                scale = Decimal(str(target["adjustment_factor"])) / Decimal(
+                    str(target["adjustment_anchor_factor"])
+                )
+                adjusted_field = field.removesuffix("_raw") + "_adj"
+                adjusted_value = decimal_string(value * scale, 8)
+                target[adjusted_field] = adjusted_value
+                canonical_corrections.append(
+                    {
+                        "session": correction["session"],
+                        "instrument_id": correction["instrument_id"],
+                        "field": adjusted_field,
+                        "value": adjusted_value,
+                    }
+                )
+            if field in {"close_raw", "pre_close_raw"}:
+                close = Decimal(str(target["close_raw"]))
+                pre_close = Decimal(str(target["pre_close_raw"]))
+                if pre_close == 0:
+                    raise InvalidFixtureError("pre_close_raw must be non-zero")
+                change = decimal_string(close - pre_close, 4)
+                pct_change = decimal_string((close - pre_close) / pre_close * 100, 6)
+                target["change_raw"] = change
+                target["pct_change_raw"] = pct_change
+                canonical_corrections.extend(
+                    [
+                        {
+                            "session": correction["session"],
+                            "instrument_id": correction["instrument_id"],
+                            "field": "change_raw",
+                            "value": change,
+                        },
+                        {
+                            "session": correction["session"],
+                            "instrument_id": correction["instrument_id"],
+                            "field": "pct_change_raw",
+                            "value": pct_change,
+                        },
+                    ]
+                )
+        for position in corrected_positions:
+            target = price_by_position[position]
+            open_price = Decimal(str(target["open_raw"]))
+            high = Decimal(str(target["high_raw"]))
+            low = Decimal(str(target["low_raw"]))
+            close = Decimal(str(target["close_raw"]))
+            pre_close = Decimal(str(target["pre_close_raw"]))
+            volume = Decimal(str(target["volume_shares"]))
+            turnover = Decimal(str(target["turnover_cny"]))
+            if (
+                min(open_price, close) < low
+                or max(open_price, close) > high
+                or low > high
+                or min(open_price, high, low, close, pre_close) <= 0
+                or volume < 0
+                or turnover < 0
+            ):
+                raise InvalidFixtureError("correction produces an invalid canonical price row")
 
         appended_sessions = next_business_sessions(str(calendar[-1]), new_sessions)
         source_daily: list[dict[str, str]] = []
@@ -251,6 +315,22 @@ class DatasetPublisher:
             "adjustments": source_adjustments,
             "corrections": corrections,
         }
+        universe_replacements: dict[str, list[dict[str, object]]] = {}
+        turnover_correction_sessions = [
+            correction["session"]
+            for correction in corrections
+            if correction["field"] == "turnover_cny"
+        ]
+        if turnover_correction_sessions:
+            replacement_start = min(turnover_correction_sessions)
+            universe_replacements = {
+                name: [
+                    snapshot
+                    for snapshot in snapshots
+                    if str(snapshot["session"]) >= replacement_start
+                ]
+                for name, snapshots in all_universes.items()
+            }
         canonical_delta = {
             "research_calendar_append": appended_sessions,
             "prices_append": appended_prices,
@@ -266,7 +346,8 @@ class DatasetPublisher:
             "liquidity_universes_append": {
                 name: snapshots[-new_sessions:] for name, snapshots in all_universes.items()
             },
-            "price_corrections": corrections,
+            "liquidity_universes_replace": universe_replacements,
+            "price_corrections": canonical_corrections,
         }
         source_object = self.objects.put_json(source_delta)
         canonical_object = self.objects.put_json(canonical_delta)
@@ -298,8 +379,79 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        self.metadata.publish_dataset_release(release, idempotency_key)
-        return release, True
+        return self.metadata.publish_dataset_release(release, idempotency_key)
+
+    def publish_increment_documents(
+        self,
+        idempotency_key: str,
+        *,
+        source: dict[str, object],
+        canonical_delta: dict[str, object],
+        source_schema: str,
+    ) -> tuple[dict[str, object], bool]:
+        existing = self.metadata.dataset_release_for_idempotency_key(idempotency_key)
+        if existing is not None:
+            return existing, False
+        predecessor = self.metadata.latest_dataset_release()
+        if predecessor is None:
+            raise InvalidFixtureError("live Bootstrap must be published first")
+        appended = canonical_delta.get("research_calendar_append")
+        if not isinstance(appended, list) or not appended:
+            raise InvalidFixtureError("incremental publication has no new Research Session")
+        prior = self.materialize_canonical(predecessor)
+        prior_calendar = prior.get("research_calendar")
+        if (
+            not isinstance(prior_calendar, list)
+            or not prior_calendar
+            or str(appended[0]) <= str(prior_calendar[-1])
+        ):
+            raise InvalidFixtureError("incremental sessions do not follow the latest Release")
+        materialized = json.loads(json.dumps(prior, ensure_ascii=False, allow_nan=False))
+        apply_canonical_delta(materialized, canonical_delta)
+        instruments = materialized.get("instruments")
+        calendar = materialized.get("research_calendar")
+        if not isinstance(instruments, list) or not isinstance(calendar, list):
+            raise InvalidFixtureError("incremental canonical data is incomplete")
+
+        source_object = self.objects.put_json(source)
+        canonical_object = self.objects.put_json(canonical_delta)
+        predecessor_objects = predecessor.get("objects")
+        if not isinstance(predecessor_objects, list):
+            raise InvalidFixtureError("predecessor object manifest is invalid")
+        objects = [
+            *predecessor_objects,
+            {"kind": "source_tushare_delta", **source_object},
+            {"kind": "canonical_delta", **canonical_object},
+        ]
+        corrections = source.get("corrections", [])
+        manifest_core: dict[str, object] = {
+            "predecessor_id": predecessor["id"],
+            "created_at": datetime.now(UTC).isoformat(),
+            "appended_session_range": {
+                "start": appended[0],
+                "end": appended[-1],
+            },
+            "session_count": len(calendar),
+            "instrument_count": len(instruments),
+            "correction_change_set": corrections,
+            "schemas": [
+                *[
+                    item
+                    for item in predecessor["schemas"]
+                    if item.get("family") != "source_tushare_delta"
+                ],
+                {"family": "source_tushare_delta", "version": source_schema},
+            ],
+            "objects": objects,
+        }
+        release_digest = hashlib.sha256(canonical_json_bytes(manifest_core)).hexdigest()
+        release = {
+            "id": f"dsr_{release_digest[:20]}",
+            **manifest_core,
+            "manifest_sha256": release_digest,
+        }
+        self.objects.put_manifest(str(release["id"]), release)
+        return self.metadata.publish_dataset_release(release, idempotency_key)
 
     def materialize_canonical(self, release: dict[str, object]) -> dict[str, object]:
         objects = release.get("objects")
@@ -339,13 +491,28 @@ def apply_canonical_delta(canonical: dict[str, object], delta: dict[str, object]
         "trading_states_append": "trading_states",
         "price_limits_append": "price_limits",
         "base_pool_append": "base_pool",
+        "adjustment_anchors_append": "adjustment_anchors",
+        "st_designations_append": "st_designations",
     }
     for delta_key, canonical_key in append_mappings.items():
         addition = delta.get(delta_key, [])
         target = canonical.get(canonical_key)
+        if target is None and canonical_key == "st_designations":
+            canonical[canonical_key] = []
+            target = canonical[canonical_key]
         if not isinstance(addition, list) or not isinstance(target, list):
             raise InvalidFixtureError("canonical delta append is invalid")
         target.extend(addition)
+    instrument_replacement = delta.get("instruments_replace")
+    if instrument_replacement is not None:
+        if not isinstance(instrument_replacement, list):
+            raise InvalidFixtureError("canonical instrument replacement is invalid")
+        canonical["instruments"] = instrument_replacement
+    industry_replacement = delta.get("industry_membership_replace")
+    if industry_replacement is not None:
+        if not isinstance(industry_replacement, list):
+            raise InvalidFixtureError("canonical industry replacement is invalid")
+        canonical["industry_membership"] = industry_replacement
     universe_additions = delta.get("liquidity_universes_append", {})
     universes = canonical.get("liquidity_universes")
     if not isinstance(universe_additions, dict) or not isinstance(universes, dict):
@@ -355,6 +522,24 @@ def apply_canonical_delta(canonical: dict[str, object], delta: dict[str, object]
         if not isinstance(target, list) or not isinstance(addition, list):
             raise InvalidFixtureError("canonical universe append is invalid")
         target.extend(addition)
+    universe_replacements = delta.get("liquidity_universes_replace", {})
+    if not isinstance(universe_replacements, dict):
+        raise InvalidFixtureError("canonical universe replacement is invalid")
+    for name, replacement in universe_replacements.items():
+        target = universes.get(name)
+        if not isinstance(target, list) or not isinstance(replacement, list):
+            raise InvalidFixtureError("canonical universe replacement is invalid")
+        replacement_by_session = {
+            str(snapshot["session"]): snapshot
+            for snapshot in replacement
+            if isinstance(snapshot, dict) and "session" in snapshot
+        }
+        target[:] = [
+            replacement_by_session.get(str(snapshot.get("session")), snapshot)
+            if isinstance(snapshot, dict)
+            else snapshot
+            for snapshot in target
+        ]
     corrections = delta.get("price_corrections", [])
     prices = canonical.get("prices")
     if not isinstance(corrections, list) or not isinstance(prices, list):

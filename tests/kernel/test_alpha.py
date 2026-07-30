@@ -60,6 +60,7 @@ def test_alpha_evaluation_uses_strict_missing_and_fixed_float64_semantics() -> N
         math.log(4.0),
     ]
     assert evaluate_series("$close_adj / ($close_adj - $close_adj)", values) == [None] * 5
+    assert evaluate_series("1", {}) == [1.0]
 
 
 def test_alpha_matrix_is_deterministic_and_industry_neutralization_is_group_demean() -> None:
@@ -86,6 +87,16 @@ def test_alpha_matrix_is_deterministic_and_industry_neutralization_is_group_deme
     assert [row["instrument_id"] for row in raw["sessions"][19]["values"]] == sorted(
         row["instrument_id"] for row in raw["sessions"][19]["values"]
     )
+
+    constant = evaluate_alpha_matrix(
+        canonical,
+        expression="1",
+        universe_name="top300",
+        neutralization="none",
+    )
+    assert len(constant["sessions"]) == len(canonical["research_calendar"])
+    assert constant["sessions"][0]["values"] == []
+    assert {row["value"] for row in constant["sessions"][19]["values"]} == {1.0}
 
     neutralized = evaluate_alpha_matrix(
         canonical,

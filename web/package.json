@@ -5,11 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "THESISTRACE_HOME=../.local concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
-    "dev:test": "bun run reset:test && THESISTRACE_HOME=.test-workspace concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "dev:test": "bun run reset:test && THESISTRACE_HOME=.test-workspace TUSHARE_TOKEN= concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
     "reset:test": "bun e2e/reset-workspace.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test:e2e": "playwright test"
+    "test:e2e": "THESISTRACE_E2E_VIEWPORT=narrow playwright test --reporter=line && THESISTRACE_E2E_VIEWPORT=desktop playwright test --reporter=line"
   },
   "dependencies": {
     "@fontsource-variable/newsreader": "^5.2.8",

@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
@@ -8,7 +9,7 @@ from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
-from thesistrace.tracking import DailyTrackingService
+from thesistrace.tracking import DailyTrackingError, DailyTrackingService
 
 
 def definition() -> dict[str, object]:
@@ -69,6 +70,16 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         ).json()
         run_id = requested["run"]["id"]
         run_service, tracking, objects = services(settings)
+        seed_canonical = DatasetPublisher(
+            MetadataStore(settings.metadata_path),
+            objects,
+        ).materialize_canonical(seed_release)
+        historical_open = next(
+            row
+            for row in seed_canonical["prices"]
+            if row["session"] == seed_canonical["research_calendar"][0]
+            and row["instrument_id"] == "equity:600000.SH"
+        )
         assert run_service.execute(run_id)["status"] == "succeeded"
         queued_rerun = client.post(
             f"/api/v1/research-runs/{run_id}/rerun",
@@ -135,8 +146,34 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
             )
         assert tracking.recover_abandoned_attempts(stale_after_seconds=30) == [advance_id]
 
-        advanced = tracking.execute_next()
-        assert advanced is not None
+        claimed = tracking._claim_advance(advance_id)
+        assert claimed is not None
+        current_advance, current_attempt = claimed
+        stale_attempt = {"id": "track_attempt_abandoned"}
+        stale_checkpoint = {
+            "id": "checkpoint_from_stale_attempt",
+            "manifest_sha256": "0" * 64,
+            "manifest": {"predecessor_checkpoint_id": track["head"]["id"]},
+        }
+        with pytest.raises(DailyTrackingError, match="publication was fenced"):
+            tracking._publish_advance_success(
+                current_advance,
+                stale_attempt,
+                stale_checkpoint,
+            )
+        tracking._block_advance(
+            current_advance,
+            stale_attempt,
+            {"reason_code": "STALE_WORKER", "message": "must be ignored"},
+        )
+        still_claimed = tracking._advance(advance_id)
+        assert still_claimed["status"] == "running"
+        assert still_claimed["attempts"][-1]["status"] == "running"
+
+        checkpoint = tracking._calculate_advance(current_advance)
+        tracking._publish_advance_success(current_advance, current_attempt, checkpoint)
+        advanced = tracking._advance(advance_id)
+        tracking.enqueue_toward(track_id, later_release["id"])
         assert advanced["status"] == "succeeded"
         assert [attempt["status"] for attempt in advanced["attempts"]] == [
             "failed",
@@ -147,6 +184,26 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert current["head"]["target_dataset_release_id"] == catchup_release["id"]
         current_view = client.get(f"/api/v1/daily-tracks/{track_id}/current").json()
         assert current_view["checkpoint"]["id"] == current["head"]["id"]
+        assert (
+            client.get(
+                f"/api/v1/daily-tracks/{track_id}/generations/"
+                f"{current['generations'][0]['id']}"
+            ).json()["id"]
+            == current["generations"][0]["id"]
+        )
+        assert (
+            client.get(
+                f"/api/v1/daily-tracks/{track_id}/advances/{advanced['id']}"
+            ).json()["id"]
+            == advanced["id"]
+        )
+        assert (
+            client.get(
+                f"/api/v1/daily-tracks/{track_id}/checkpoints/"
+                f"{current['head']['id']}"
+            ).json()["id"]
+            == current["head"]["id"]
+        )
         assert len(current_view["factor_summary"]["horizons"]["1"]["daily"]) == 504
         assert current_view["recent_label_maturation"]["events"]
         head_manifest = objects.read_json(current["head"]["manifest_sha256"])
@@ -201,10 +258,10 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
                 "new_sessions": 1,
                 "corrections": [
                     {
-                        "session": "2026-07-29",
+                        "session": seed_canonical["research_calendar"][0],
                         "instrument_id": "equity:600000.SH",
-                        "field": "close_adj",
-                        "value": "9.12345678",
+                        "field": "open_raw",
+                        "value": historical_open["open_raw"],
                     }
                 ],
             },
@@ -213,6 +270,13 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert queued_replay is not None
         assert queued_replay["generations"][-1]["reason"] == "historical_correction"
         assert queued_replay["advances"][-1]["target_dataset_release_id"] == correction["id"]
+        generation_count = len(queued_replay["generations"])
+        advance_count = len(queued_replay["advances"])
+        assert tracking.enqueue_active_tracks(correction["id"]) == []
+        assert tracking.enqueue_active_tracks(correction["id"]) == []
+        reconciled = tracking.get_track(track_id)
+        assert len(reconciled["generations"]) == generation_count
+        assert len(reconciled["advances"]) == advance_count
 
         replay = tracking.execute_next()
         assert replay is not None
@@ -225,6 +289,32 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert corrected_head["supersedes_generation_id"] == track["current_generation_id"]
         assert client.post(f"/api/v1/daily-tracks/{track_id}/verify-equivalence").status_code == 200
 
+        generation_count = len(corrected["generations"])
+        irrelevant_correction = client.post(
+            "/api/v1/dataset-releases/publish-fixture",
+            headers={"Idempotency-Key": "tracking-irrelevant-correction"},
+            json={
+                "new_sessions": 1,
+                "corrections": [
+                    {
+                        "session": "2026-07-29",
+                        "instrument_id": "equity:600000.SH",
+                        "field": "pre_close_raw",
+                        "value": "8.0100",
+                    }
+                ],
+            },
+        ).json()["release"]
+        queued_increment = tracking.get_track(track_id)
+        assert len(queued_increment["generations"]) == generation_count
+        incremental = tracking.execute_next()
+        assert incremental is not None
+        assert incremental["status"] == "succeeded"
+        assert (
+            tracking.get_track(track_id)["head"]["target_dataset_release_id"]
+            == irrelevant_correction["id"]
+        )
+
         upgraded = client.post(
             f"/api/v1/daily-tracks/{track_id}/kernel-upgrade",
             json={
@@ -234,6 +324,26 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         )
         assert upgraded.status_code == 200
         assert upgraded.json()["generations"][-1]["reason"] == "runtime_fix"
+        duplicate_pending_upgrade = client.post(
+            f"/api/v1/daily-tracks/{track_id}/kernel-upgrade",
+            json={
+                "calculation_kernel": "kernel-v2",
+                "numeric_execution_contract": "thesistrace-numeric-v1",
+            },
+        )
+        assert duplicate_pending_upgrade.status_code == 200
+        conflicting_pending_upgrade = client.post(
+            f"/api/v1/daily-tracks/{track_id}/kernel-upgrade",
+            json={
+                "calculation_kernel": "kernel-v1",
+                "numeric_execution_contract": "thesistrace-numeric-v1",
+            },
+        )
+        assert conflicting_pending_upgrade.status_code == 409
+        assert (
+            len(tracking.get_track(track_id)["generations"])
+            == len(upgraded.json()["generations"])
+        )
         runtime_replay = tracking.execute_next()
         assert runtime_replay is not None
         assert runtime_replay["status"] == "succeeded"
@@ -265,6 +375,14 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
             },
         )
         assert rejected_numeric_change.status_code == 409
+        rejected_unknown_kernel = client.post(
+            f"/api/v1/daily-tracks/{track_id}/kernel-upgrade",
+            json={
+                "calculation_kernel": "kernel-v99",
+                "numeric_execution_contract": "thesistrace-numeric-v1",
+            },
+        )
+        assert rejected_unknown_kernel.status_code == 409
 
         stopped = client.post(f"/api/v1/daily-tracks/{track_id}/stop")
         assert stopped.status_code == 200

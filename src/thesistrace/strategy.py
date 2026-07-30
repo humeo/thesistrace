@@ -44,11 +44,22 @@ def legal_order_quantity(
     raise StrategyCalculationError(f"unsupported board: {board}")
 
 
-def split_child_orders(board: str, quantity: int) -> list[int]:
+def split_child_orders(
+    board: str,
+    quantity: int,
+    *,
+    complete_liquidation: bool = False,
+) -> list[int]:
     caps = {"main": 1_000_000, "chinext": 300_000, "star": 100_000}
     minimums = {"main": 100, "chinext": 100, "star": 200}
     if board not in caps:
         raise StrategyCalculationError(f"unsupported board: {board}")
+    if (
+        not complete_liquidation
+        and board in {"main", "chinext"}
+        and quantity % 100
+    ):
+        raise StrategyCalculationError("non-liquidation child order is not a board lot")
     cap = caps[board]
     minimum = minimums[board]
     children: list[int] = []
@@ -57,6 +68,9 @@ def split_child_orders(board: str, quantity: int) -> list[int]:
         children.append(cap)
         remaining -= cap
     if remaining:
+        if complete_liquidation:
+            children.append(remaining)
+            return children
         if children and remaining < minimum:
             adjustment = minimum - remaining
             children[-1] -= adjustment
@@ -638,7 +652,17 @@ def execute_order(
     board = str(instruments[instrument_id]["board"])
     total_cost = Decimal(0)
     total_quantity = 0
-    for child_quantity in split_child_orders(board, quantity):
+    position = positions.get(instrument_id)
+    complete_liquidation = (
+        side == "sell"
+        and position is not None
+        and position.execution_shares == quantity
+    )
+    for child_quantity in split_child_orders(
+        board,
+        quantity,
+        complete_liquidation=complete_liquidation,
+    ):
         child_order_id = len(child_orders)
         raw_notional = money(Decimal(child_quantity) * raw_open)
         child_cost = transaction_cost(raw_notional, side, costs)

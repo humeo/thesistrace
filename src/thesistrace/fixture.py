@@ -27,9 +27,9 @@ ALPHA_FIELDS = (
 
 def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
     sessions = research_sessions()
-    instruments = instrument_reference()
+    instruments = instrument_reference(sessions[0])
     anchor_factors = {
-        instrument["instrument_id"]: adjustment_factor(len(sessions) - 1)
+        instrument["instrument_id"]: adjustment_factor(0)
         for instrument in instruments
     }
     source_daily: list[dict[str, str]] = []
@@ -104,7 +104,7 @@ def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
         "adjustment_anchors": [
             {
                 "instrument_id": instrument_id,
-                "anchor_session": sessions[-1],
+                "anchor_session": sessions[0],
                 "anchor_factor": decimal_string(anchor_factor, 6),
             }
             for instrument_id, anchor_factor in anchor_factors.items()
@@ -135,7 +135,7 @@ def research_sessions() -> list[str]:
     return list(reversed(sessions))
 
 
-def instrument_reference() -> list[dict[str, str]]:
+def instrument_reference(listed_from: str) -> list[dict[str, str]]:
     instruments: list[dict[str, str]] = []
     for index in range(35):
         if index % 2 == 0:
@@ -153,7 +153,7 @@ def instrument_reference() -> list[dict[str, str]]:
                 "asset_type": "ordinary_a_share",
                 "exchange": exchange,
                 "board": board,
-                "listed_from": "2010-01-01",
+                "listed_from": listed_from,
                 "listed_to": "",
             }
         )

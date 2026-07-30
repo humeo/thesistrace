@@ -3,7 +3,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from thesistrace.alpha import evaluate_alpha_matrix
+from thesistrace.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.numeric import canonical_binary64_bytes
@@ -19,6 +19,9 @@ class DailyTrackingError(RuntimeError):
 
 class EquivalenceError(DailyTrackingError):
     pass
+
+
+SUPPORTED_CALCULATION_KERNELS = {"kernel-v1", "kernel-v2"}
 
 
 class DailyTrackingService:
@@ -341,10 +344,21 @@ class DailyTrackingService:
             )
         return self.get_track(track_id)
 
-    def enqueue_active_tracks(self, target_release_id: str) -> None:
+    def enqueue_active_tracks(self, target_release_id: str) -> list[dict[str, str]]:
+        failures: list[dict[str, str]] = []
         for track in self.list_tracks():
             if track["status"] == "active":
-                self.enqueue_toward(str(track["id"]), target_release_id)
+                try:
+                    self.enqueue_toward(str(track["id"]), target_release_id)
+                except DailyTrackingError as error:
+                    failures.append(
+                        {
+                            "track_id": str(track["id"]),
+                            "reason_code": "TRACK_ENQUEUE_FAILED",
+                            "message": str(error),
+                        }
+                    )
+        return failures
 
     def enqueue_toward(self, track_id: str, target_release_id: str) -> dict[str, object] | None:
         track = self.get_track(track_id)
@@ -356,18 +370,49 @@ class DailyTrackingService:
         head_release_id = str(head["target_dataset_release_id"])
         if head_release_id == target_release_id:
             return None
+        unfinished = [
+            advance
+            for advance in track["advances"]
+            if advance["status"] in {"pending", "running", "blocked"}
+        ]
+        if unfinished:
+            return unfinished[0]
         chain = self._release_chain(head_release_id, target_release_id)
         if not chain:
             raise DailyTrackingError("target Release is not a descendant of Tracking Head")
         next_release = chain[0]
-        correction = bool(next_release.get("correction_change_set"))
+        correction = self._corrections_affect_track(
+            track,
+            next_release.get("correction_change_set"),
+            next_release,
+        )
         if correction:
-            generation = self._create_generation(
-                track,
-                basis_release_id=str(next_release["id"]),
-                kernel=str(track["generations"][-1]["calculation_kernel"]),
-                reason="historical_correction",
+            generation = next(
+                (
+                    item
+                    for item in track["generations"]
+                    if item["reason"] == "historical_correction"
+                    and item["basis_dataset_release_id"] == next_release["id"]
+                    and item["supersedes_generation_id"]
+                    == track["current_generation_id"]
+                    and item["supersedes_head_checkpoint_id"]
+                    == track["head_checkpoint_id"]
+                ),
+                None,
             )
+            if generation is None:
+                generation = self._create_generation_with_advance(
+                    str(track["id"]),
+                    basis_release_id=str(next_release["id"]),
+                    kernel=self._generation_kernel(
+                        track,
+                        str(track["current_generation_id"]),
+                    ),
+                    reason="historical_correction",
+                    target_release_id=str(next_release["id"]),
+                    expected_generation_id=str(track["current_generation_id"]),
+                    expected_head_checkpoint_id=str(track["head_checkpoint_id"]),
+                )
             generation_id = str(generation["id"])
         else:
             generation_id = str(track["current_generation_id"])
@@ -376,6 +421,79 @@ class DailyTrackingService:
             generation_id,
             str(next_release["id"]),
         )
+
+    def _corrections_affect_track(
+        self,
+        track: dict[str, object],
+        change_set: object,
+        target_release: dict[str, object],
+    ) -> bool:
+        if not isinstance(change_set, list) or not change_set:
+            return False
+        frozen = self.metadata.frozen_research_definition(
+            str(track["definition_version_id"])
+        )
+        if frozen is None or not isinstance(frozen["content"], dict):
+            raise DailyTrackingError("Tracking Definition is missing")
+        definition = frozen["content"]
+        alpha = definition.get("alpha")
+        if not isinstance(alpha, dict):
+            raise DailyTrackingError("Alpha Definition is invalid")
+        parsed_alpha = validate_alpha(str(alpha["expression"]))
+        alpha_fields = set(parsed_alpha.field_names)
+        canonical = self.datasets.materialize_canonical(target_release)
+        calendar = [str(session) for session in canonical["research_calendar"]]
+        origin_index = calendar.index(str(track["origin_session"]))
+        alpha_start = max(
+            0,
+            origin_index - parsed_alpha.effective_lookback,
+        )
+        liquidity_start = max(0, origin_index - 19)
+        universes = canonical.get("liquidity_universes")
+        selected_universe = (
+            universes.get(str(definition["universe"]))
+            if isinstance(universes, dict)
+            else None
+        )
+        if not isinstance(selected_universe, list):
+            raise DailyTrackingError("Tracking Universe is missing")
+        potentially_relevant_instruments = {
+            str(instrument_id)
+            for snapshot in selected_universe[alpha_start:]
+            if isinstance(snapshot, dict)
+            for instrument_id in snapshot.get("instrument_ids", [])
+        }
+        alpha_dependency = {
+            "open_raw": "open_adj",
+            "high_raw": "high_adj",
+            "low_raw": "low_adj",
+            "close_raw": "close_adj",
+            "volume_shares": "volume_shares",
+            "turnover_cny": "turnover_amount_cny",
+        }
+        for correction in change_set:
+            if not isinstance(correction, dict):
+                raise DailyTrackingError("Dataset correction change set is invalid")
+            field = str(correction.get("field"))
+            session = str(correction.get("session"))
+            instrument_id = str(correction.get("instrument_id"))
+            if session not in calendar:
+                raise DailyTrackingError("Dataset correction session is invalid")
+            session_index = calendar.index(session)
+            if (
+                field == "open_raw"
+                and instrument_id in potentially_relevant_instruments
+            ):
+                return True
+            if field == "turnover_cny" and session_index >= liquidity_start:
+                return True
+            if (
+                alpha_dependency.get(field) in alpha_fields
+                and instrument_id in potentially_relevant_instruments
+                and session_index >= alpha_start
+            ):
+                return True
+        return False
 
     def execute_next(self) -> dict[str, object] | None:
         with self.metadata.connect() as connection:
@@ -495,22 +613,42 @@ class DailyTrackingService:
             raise DailyTrackingError(
                 "Numeric Execution Contract changes require a new ResearchRun and DailyTrack"
             )
+        if calculation_kernel not in SUPPORTED_CALCULATION_KERNELS:
+            raise DailyTrackingError(f"unsupported calculation kernel: {calculation_kernel}")
         head = track["head"]
         if not isinstance(head, dict):
             raise DailyTrackingError("DailyTrack has no Head")
-        current_kernel = str(track["generations"][-1]["calculation_kernel"])
+        current_kernel = self._generation_kernel(
+            track,
+            str(track["current_generation_id"]),
+        )
+        unfinished = [
+            advance
+            for advance in track["advances"]
+            if advance["status"] in {"pending", "running", "blocked"}
+        ]
+        if unfinished:
+            pending_kernels = {
+                self._generation_kernel(track, str(advance["generation_id"]))
+                for advance in unfinished
+            }
+            if pending_kernels == {calculation_kernel}:
+                return track
+            if pending_kernels == {current_kernel} and calculation_kernel == current_kernel:
+                return track
+            raise DailyTrackingError(
+                "DailyTrack must reach its current frontier before a kernel upgrade"
+            )
         if calculation_kernel == current_kernel:
             return track
-        generation = self._create_generation(
-            track,
+        self._create_generation_with_advance(
+            track_id,
             basis_release_id=str(head["target_dataset_release_id"]),
             kernel=calculation_kernel,
             reason="runtime_fix",
-        )
-        self._create_advance(
-            track_id,
-            str(generation["id"]),
-            str(head["target_dataset_release_id"]),
+            target_release_id=str(head["target_dataset_release_id"]),
+            expected_generation_id=str(track["current_generation_id"]),
+            expected_head_checkpoint_id=str(track["head_checkpoint_id"]),
         )
         updated = self.get_track(track_id)
         if updated is None:
@@ -528,6 +666,7 @@ class DailyTrackingService:
         oracle = self._batch_oracle(
             track,
             str(head["target_dataset_release_id"]),
+            kernel=self._generation_kernel(track, str(head["generation_id"])),
         )
         comparisons = {
             "alpha_matrix": oracle["alpha_matrix"],
@@ -572,6 +711,7 @@ class DailyTrackingService:
         generation = next(
             item for item in track["generations"] if item["id"] == advance["generation_id"]
         )
+        kernel = str(generation["calculation_kernel"])
         replay = (
             generation["reason"] != "activation"
             and generation["id"] != track["current_generation_id"]
@@ -583,7 +723,7 @@ class DailyTrackingService:
         prior_manifest: dict[str, object] | None = None
         prior_strategy: dict[str, object] | None = None
         if replay:
-            alpha = self._alpha(canonical, definition)
+            alpha = self._alpha(canonical, definition, kernel=kernel)
             predecessor_id = None
             prior_session = str(track["origin_session"])
         else:
@@ -608,6 +748,7 @@ class DailyTrackingService:
                 definition,
                 prior_alpha,
                 prior_session,
+                kernel=kernel,
             )
             predecessor_id = str(head["id"])
         origin_index = canonical["research_calendar"].index(track["origin_session"])
@@ -627,6 +768,7 @@ class DailyTrackingService:
                 alpha=alpha,
                 labels=labels,
                 factor=factor,
+                kernel=kernel,
             )["strategy_backtest"]
         else:
             assert prior_strategy is not None
@@ -705,6 +847,7 @@ class DailyTrackingService:
         alpha: dict[str, object] | None = None,
         labels: dict[str, object] | None = None,
         factor: dict[str, object] | None = None,
+        kernel: str | None = None,
     ) -> dict[str, dict[str, object]]:
         target = self.metadata.dataset_release(target_release_id)
         frozen = self.metadata.frozen_research_definition(str(track["definition_version_id"]))
@@ -714,8 +857,13 @@ class DailyTrackingService:
         definition = frozen["content"]
         if not isinstance(definition, dict):
             raise DailyTrackingError("batch oracle Definition is invalid")
+        if kernel is None:
+            head = track["head"]
+            if not isinstance(head, dict):
+                raise DailyTrackingError("DailyTrack has no Head")
+            kernel = self._generation_kernel(track, str(head["generation_id"]))
         canonical = self.datasets.materialize_canonical(target)
-        alpha = alpha or self._alpha(canonical, definition)
+        alpha = alpha or self._alpha(canonical, definition, kernel=kernel)
         origin_index = canonical["research_calendar"].index(track["origin_session"])
         labels = labels or build_forward_labels(
             canonical,
@@ -725,7 +873,7 @@ class DailyTrackingService:
         factor = factor or evaluate_factor(labels)
         activation_session = str(activation["appended_session_range"]["end"])
         seed_canonical = slice_canonical_through(canonical, activation_session)
-        seed_alpha = self._alpha(seed_canonical, definition)
+        seed_alpha = self._alpha(seed_canonical, definition, kernel=kernel)
         seed_strategy = run_strategy(seed_canonical, seed_alpha, definition)
         strategy = run_strategy(
             canonical,
@@ -746,63 +894,182 @@ class DailyTrackingService:
         self,
         canonical: dict[str, object],
         definition: dict[str, object],
+        *,
+        kernel: str,
     ) -> dict[str, object]:
         alpha = definition["alpha"]
         if not isinstance(alpha, dict):
             raise DailyTrackingError("Alpha Definition is invalid")
-        return evaluate_alpha_matrix(
+        matrix = evaluate_alpha_matrix(
             canonical,
             expression=str(alpha["expression"]),
             universe_name=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
         )
+        return apply_calculation_kernel(matrix, kernel)
 
-    def _create_generation(
+    @staticmethod
+    def _generation_kernel(track: dict[str, object], generation_id: str) -> str:
+        generation = next(
+            (
+                item
+                for item in track["generations"]
+                if str(item["id"]) == generation_id
+            ),
+            None,
+        )
+        if generation is None:
+            raise DailyTrackingError("Tracking Generation is missing")
+        return str(generation["calculation_kernel"])
+
+    def _create_generation_with_advance(
         self,
-        track: dict[str, object],
+        track_id: str,
         *,
         basis_release_id: str,
         kernel: str,
         reason: str,
+        target_release_id: str,
+        expected_generation_id: str,
+        expected_head_checkpoint_id: str,
     ) -> dict[str, object]:
-        generation_id = f"generation_{uuid4().hex[:20]}"
-        ordinal = max(int(item["ordinal"]) for item in track["generations"]) + 1
         now = datetime.now(UTC).isoformat()
         with self.metadata.connect() as connection:
-            connection.execute(
+            connection.execute("BEGIN IMMEDIATE")
+            track = connection.execute(
                 """
-                INSERT INTO tracking_generations
-                    (id, daily_track_id, ordinal, calculation_kernel,
-                     numeric_execution_contract, basis_dataset_release_id,
-                     supersedes_generation_id, supersedes_head_checkpoint_id,
-                     reason, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT status, current_generation_id, head_checkpoint_id,
+                       numeric_execution_contract
+                FROM daily_tracks
+                WHERE id = ?
+                """,
+                (track_id,),
+            ).fetchone()
+            if track is None or track["status"] != "active":
+                raise DailyTrackingError("DailyTrack is not active")
+            if (
+                track["current_generation_id"] != expected_generation_id
+                or track["head_checkpoint_id"] != expected_head_checkpoint_id
+            ):
+                raise DailyTrackingError("DailyTrack Head changed before replay scheduling")
+            if reason == "runtime_fix":
+                head = connection.execute(
+                    """
+                    SELECT target_dataset_release_id
+                    FROM tracking_checkpoints
+                    WHERE id = ?
+                    """,
+                    (track["head_checkpoint_id"],),
+                ).fetchone()
+                if (
+                    head is None
+                    or head["target_dataset_release_id"] != basis_release_id
+                    or target_release_id != basis_release_id
+                ):
+                    raise DailyTrackingError(
+                        "runtime-fix replay must target the current Head Release"
+                    )
+            unfinished = connection.execute(
+                """
+                SELECT 1
+                FROM tracking_advances
+                WHERE daily_track_id = ?
+                  AND status IN ('pending', 'running', 'blocked')
+                LIMIT 1
+                """,
+                (track_id,),
+            ).fetchone()
+            if unfinished is not None:
+                raise DailyTrackingError(
+                    "DailyTrack must reach its current frontier before replay"
+                )
+            existing = connection.execute(
+                """
+                SELECT *
+                FROM tracking_generations
+                WHERE daily_track_id = ?
+                  AND calculation_kernel = ?
+                  AND basis_dataset_release_id = ?
+                  AND supersedes_generation_id = ?
+                  AND supersedes_head_checkpoint_id = ?
+                  AND reason = ?
                 """,
                 (
-                    generation_id,
-                    track["id"],
-                    ordinal,
+                    track_id,
                     kernel,
-                    track["numeric_execution_contract"],
                     basis_release_id,
                     track["current_generation_id"],
                     track["head_checkpoint_id"],
                     reason,
-                    now,
                 ),
-            )
-        return {
-            "id": generation_id,
-            "daily_track_id": track["id"],
-            "ordinal": ordinal,
-            "calculation_kernel": kernel,
-            "numeric_execution_contract": track["numeric_execution_contract"],
-            "basis_dataset_release_id": basis_release_id,
-            "supersedes_generation_id": track["current_generation_id"],
-            "supersedes_head_checkpoint_id": track["head_checkpoint_id"],
-            "reason": reason,
-            "created_at": now,
-        }
+            ).fetchone()
+            if existing is None:
+                generation_id = f"generation_{uuid4().hex[:20]}"
+                ordinal = int(
+                    connection.execute(
+                        """
+                        SELECT COALESCE(MAX(ordinal), -1) + 1
+                        FROM tracking_generations
+                        WHERE daily_track_id = ?
+                        """,
+                        (track_id,),
+                    ).fetchone()[0]
+                )
+                connection.execute(
+                    """
+                    INSERT INTO tracking_generations
+                        (id, daily_track_id, ordinal, calculation_kernel,
+                         numeric_execution_contract, basis_dataset_release_id,
+                         supersedes_generation_id, supersedes_head_checkpoint_id,
+                         reason, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        generation_id,
+                        track_id,
+                        ordinal,
+                        kernel,
+                        track["numeric_execution_contract"],
+                        basis_release_id,
+                        track["current_generation_id"],
+                        track["head_checkpoint_id"],
+                        reason,
+                        now,
+                    ),
+                )
+                existing = connection.execute(
+                    "SELECT * FROM tracking_generations WHERE id = ?",
+                    (generation_id,),
+                ).fetchone()
+            assert existing is not None
+            advance = connection.execute(
+                """
+                SELECT id
+                FROM tracking_advances
+                WHERE daily_track_id = ? AND generation_id = ?
+                  AND target_dataset_release_id = ?
+                """,
+                (track_id, existing["id"], target_release_id),
+            ).fetchone()
+            if advance is None:
+                advance_id = f"advance_{uuid4().hex[:20]}"
+                connection.execute(
+                    """
+                    INSERT INTO tracking_advances
+                        (id, daily_track_id, generation_id,
+                         target_dataset_release_id, status, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 'pending', ?, ?)
+                    """,
+                    (
+                        advance_id,
+                        track_id,
+                        existing["id"],
+                        target_release_id,
+                        now,
+                        now,
+                    ),
+                )
+            return {key: existing[key] for key in existing.keys()}
 
     def _create_advance(
         self,
@@ -903,18 +1170,46 @@ class DailyTrackingService:
         with self.metadata.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             track = connection.execute(
-                "SELECT status FROM daily_tracks WHERE id = ?",
+                """
+                SELECT status, current_generation_id, head_checkpoint_id
+                FROM daily_tracks
+                WHERE id = ?
+                """,
                 (advance["daily_track_id"],),
             ).fetchone()
             current = connection.execute(
                 "SELECT status FROM tracking_advances WHERE id = ?",
                 (advance["id"],),
             ).fetchone()
+            current_attempt = connection.execute(
+                """
+                SELECT status
+                FROM tracking_advance_attempts
+                WHERE id = ? AND advance_id = ?
+                """,
+                (attempt["id"], advance["id"]),
+            ).fetchone()
+            predecessor_checkpoint_id = manifest["predecessor_checkpoint_id"]
+            replay = predecessor_checkpoint_id is None
+            expected_generation_id = (
+                manifest["supersedes_generation_id"]
+                if replay
+                else advance["generation_id"]
+            )
+            expected_head_checkpoint_id = (
+                manifest["supersedes_head_checkpoint_id"]
+                if replay
+                else predecessor_checkpoint_id
+            )
             if (
                 track is None
                 or current is None
+                or current_attempt is None
                 or track["status"] != "active"
+                or track["current_generation_id"] != expected_generation_id
+                or track["head_checkpoint_id"] != expected_head_checkpoint_id
                 or current["status"] != "running"
+                or current_attempt["status"] != "running"
             ):
                 raise DailyTrackingError("Advance publication was fenced")
             connection.execute(
@@ -977,6 +1272,26 @@ class DailyTrackingService:
             separators=(",", ":"),
         )
         with self.metadata.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            current = connection.execute(
+                "SELECT status FROM tracking_advances WHERE id = ?",
+                (advance["id"],),
+            ).fetchone()
+            current_attempt = connection.execute(
+                """
+                SELECT status
+                FROM tracking_advance_attempts
+                WHERE id = ? AND advance_id = ?
+                """,
+                (attempt["id"], advance["id"]),
+            ).fetchone()
+            if (
+                current is None
+                or current_attempt is None
+                or current["status"] != "running"
+                or current_attempt["status"] != "running"
+            ):
+                return
             connection.execute(
                 """
                 UPDATE tracking_advance_attempts
@@ -1155,6 +1470,8 @@ def append_alpha_matrix(
     definition: dict[str, object],
     prior: dict[str, object],
     prior_session: str,
+    *,
+    kernel: str,
 ) -> dict[str, object]:
     calendar = [str(item) for item in canonical["research_calendar"]]
     next_index = calendar.index(prior_session) + 1
@@ -1172,6 +1489,7 @@ def append_alpha_matrix(
         universe_name=str(definition["universe"]),
         neutralization=str(definition["neutralization"]),
     )
+    evaluated = apply_calculation_kernel(evaluated, kernel)
     new_sessions = set(calendar[next_index:])
     merged_sessions = [
         *prior["sessions"],
@@ -1192,6 +1510,34 @@ def append_alpha_matrix(
         "sessions": merged_sessions,
         "checksum": checksum.hexdigest(),
     }
+
+
+def apply_calculation_kernel(
+    matrix: dict[str, object],
+    kernel: str,
+) -> dict[str, object]:
+    if kernel not in SUPPORTED_CALCULATION_KERNELS:
+        raise DailyTrackingError(f"unsupported calculation kernel: {kernel}")
+    if kernel == "kernel-v2":
+        for session in matrix["sessions"]:
+            for row in session["values"]:
+                value = float(row["value"])
+                if value == 0.0:
+                    row["value"] = 0.0
+        matrix["checksum"] = alpha_matrix_checksum(matrix)
+    return matrix
+
+
+def alpha_matrix_checksum(matrix: dict[str, object]) -> str:
+    checksum = hashlib.sha256()
+    for session in matrix["sessions"]:
+        checksum.update(str(session["session"]).encode())
+        checksum.update(b"\0")
+        for row in session["values"]:
+            checksum.update(str(row["instrument_id"]).encode())
+            checksum.update(b"\0")
+            checksum.update(canonical_binary64_bytes(float(row["value"])))
+    return checksum.hexdigest()
 
 
 def slice_canonical_range(
