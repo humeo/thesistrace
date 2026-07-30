@@ -23,3 +23,8 @@ without editing earlier truth.
   failure.
 - Checkpoints retain full ordered Factor history and separately publish current
   504-signal summaries for all three horizons.
+- Historical note: ADR-0148 and the Bounded Research Storage Spec supersede
+  immutable per-instrument maturation events and complete Factor history.
+  Pending stock-level Alpha exists only in the bounded Working Cache; maturity
+  updates its rolling aggregate cache and the Checkpoint publishes only the
+  resulting Factor Summary Snapshot.

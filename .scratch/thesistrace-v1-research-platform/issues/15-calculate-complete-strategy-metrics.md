@@ -23,3 +23,7 @@ metrics from the one actual fill path and its Net-primary accounting state.
   path.
 - Daily observations retain pre/post NAV, returns, costs, holdings, cash,
   valuation events, and deterministic accounting residuals.
+- Historical note: ADR-0147 and the Bounded Research Storage Spec replace the
+  original event-retention boundary. The complete Strategy Daily Observation
+  series and bounded aggregates remain durable, while raw orders, child orders,
+  fills, and rejection-event details are execution intermediates.

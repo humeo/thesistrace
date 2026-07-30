@@ -24,3 +24,7 @@ Strategy Backtest, and authoritative immutable Result Bundle.
   publication.
 - API and Web result views derive separate Factor and Strategy conclusions from
   the same immutable Result Bundle and display shared provenance.
+- Historical note: ADR-0147 and the Bounded Research Storage Spec supersede the
+  original complete-object boundary. The Alpha Matrix and stock-level Labels
+  remain shared runtime inputs but are not Result Bundle objects; the minimal
+  successful bundle has a hard one-MiB total-byte budget.

@@ -24,3 +24,7 @@ versions produce canonically exact results.
 - Acceptance covers one-session Advances, multi-session catch-up, correction
   replay, runtime-fix replay, blocked recovery, and duplicate delivery while
   ordinary strategy and Alpha updates stay incremental.
+- Historical note: ADR-0144, ADR-0148, and the Bounded Research Storage Spec
+  replace correction-Generation replay with an ordered Dataset Release
+  sequence comparator. Alpha, Labels, orders, and fills may be compared during
+  explicit verification without becoming durable result objects.

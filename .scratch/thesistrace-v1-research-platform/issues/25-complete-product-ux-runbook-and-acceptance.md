@@ -35,3 +35,8 @@ the public API and real browser.
   production Web build, and independent full narrow-screen and desktop
   real-browser flows. Both browser flows click and inspect every public domain
   resource link.
+- Historical note: ADR-0147, the revised V1 Spec, and the Bounded Research
+  Storage Spec supersede Factor daily curves, rejection-event details, and raw
+  artifact download as product requirements. Result views retain Factor
+  summaries, the Strategy Daily Observation series, accepted aggregate metrics,
+  and immutable provenance.

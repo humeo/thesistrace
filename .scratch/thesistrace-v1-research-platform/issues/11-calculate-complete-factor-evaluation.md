@@ -21,3 +21,7 @@ aggregate Factor Evaluation artifacts for all three fixed horizons.
   five average-rank quantiles, Top-Bottom, and complete horizon summaries.
 - Each horizon binds the same Alpha checksum and its own Label checksum, retains
   504 daily rows, and publishes a deterministic result checksum.
+- Historical note: ADR-0147 and the Bounded Research Storage Spec supersede the
+  durable daily-series portion of this issue. Daily Factor observations are
+  still calculated transiently in canonical order, but a completed ResearchRun
+  retains only the accepted per-horizon summaries.

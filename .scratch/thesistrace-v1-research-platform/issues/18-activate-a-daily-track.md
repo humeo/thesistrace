@@ -23,3 +23,7 @@ Bundle.
   origin and terminal stop semantics.
 - Older seeds enqueue their immediate real Release frontier; the Web result
   view can activate, inspect, reload, and stop the Track.
+- Historical note: ADR-0148 and the Bounded Research Storage Spec supersede
+  carrying persistent Alpha or Label history in Activation state. Activation
+  creates a bounded, rebuildable Working Cache only for the new DailyTrack, and
+  stopping the Track removes that non-authoritative cache.

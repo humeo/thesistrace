@@ -23,3 +23,7 @@ Origin and move Head only after complete success.
   Tracking Origin.
 - Generation-bearing manifests and maturations are republished; old Head and
   old Generation stay readable until the new root succeeds atomically.
+- Historical note: ADR-0144 supersedes this issue for historical data
+  corrections. A correction now creates a visible Tracking Correction Boundary
+  in the same Generation and continues from committed state; only a
+  result-changing calculation-kernel correction may rebuild a Generation.

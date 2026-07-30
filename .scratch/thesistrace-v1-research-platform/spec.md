@@ -15,9 +15,10 @@ original backtest.
 
 ThesisTrace starts as a greenfield product. V1 must prove the complete chain
 from Tushare ingestion through immutable Dataset Release, frozen Research
-Definition, Alpha Matrix, Factor Evaluation, Strategy Backtest, and Daily
-Tracking. The same research semantics must produce canonically exact results
-whether replayed in batch or advanced one Research Session at a time.
+Definition, transient Alpha calculation, Factor Evaluation, Strategy Backtest,
+and Daily Tracking. The same research semantics must produce canonically exact
+results whether replayed in batch or advanced one Research Session at a time,
+without turning stock-level intermediates into an unbounded result store.
 
 ## Solution
 
@@ -30,20 +31,33 @@ industry neutralization, and requests Run. The request validates and freezes
 the Draft, pins a concrete Dataset Release and numeric/runtime contracts, then
 creates one ResearchRun.
 
-The ResearchRun evaluates one Alpha Matrix over exactly 756 Research Sessions,
-reports Factor Evaluation and Strategy Backtest over the final 504 sessions,
-and atomically publishes one immutable Result Bundle. From a successful Run,
-the operator can explicitly start one continuous DailyTrack. Each later Dataset
-Release advances that Track through immutable Checkpoints while preserving its
-fixed Tracking Origin, account state, pending labels, rebalance phase, and
-provenance. Historical corrections or result-changing runtime fixes create a
-new fully replayed Tracking Generation instead of mutating prior truth.
+The ResearchRun evaluates transient Alpha Values and Forward Return Labels over
+exactly 756 Research Sessions, reports compact Factor Evaluation summaries and
+Strategy Backtest results over the final 504 sessions, and atomically publishes
+one immutable Result Bundle no larger than 1,048,576 exact bytes. The bundle
+retains the Strategy Daily Observation series but not the Alpha Matrix,
+stock-level Labels, daily Factor observations, Factor curves, or raw execution
+details.
+
+From a successful Run, the operator can explicitly start one continuous
+DailyTrack. Each later Dataset Release incrementally advances that Track through
+immutable Checkpoints while preserving its fixed Tracking Origin, account
+state, rebalance phase, provenance, and bounded Factor Summary Snapshots. A
+latest-only, non-authoritative Working Cache retains only the bounded pending
+Alpha and rolling aggregate state needed for the next Advance and can be
+rebuilt from immutable truth. A historical data correction continues in the
+same Tracking Generation and records a visible Tracking Correction Boundary;
+only a result-changing calculation-kernel correction creates and fully replays
+a new Generation.
 
 The product exposes all authoring, publication, execution, result, diagnostic,
 and tracking workflows through a Web UI backed by public application APIs.
 Fixture-backed acceptance exercises the same APIs, durable metadata store,
-immutable object store, worker lifecycle, and calculation kernel as the running
-product.
+immutable object store, worker lifecycle, calculation kernel, result-size
+budget, and cache-recovery behavior as the running product. V1 defines the
+single-operator quantitative-research product contract; a Hosted V2 deployment
+may wrap those APIs with hosted identity, isolation, scheduling, and operations
+without changing the V1 research semantics.
 
 ## User Stories
 
@@ -92,7 +106,7 @@ product.
 43. As a research author, I want neutralization selectable as `none` or `industry`, so that sector control remains an option within the same run type.
 44. As a research author, I want industry neutralization to demean within historical industry groups after ST and validity gates, so that excluded observations never contaminate another stock's score.
 45. As a research author, I want missing industry membership and groups smaller than two reported as distinct coverage loss, so that neutralization never emits artificial values.
-46. As a research author, I want one Final Alpha Cross-Section formed before labels are joined, so that Factor horizons and Strategy consume exactly the same Alpha Values.
+46. As a research author, I want one transient Final Alpha Cross-Section formed before labels are joined, so that Factor horizons and Strategy consume exactly the same Alpha Values without requiring a durable Alpha Matrix.
 47. As a research author, I want every ResearchRun to use exactly 252 warm-up and 504 reported sessions, so that comparisons use consistent history.
 48. As a research author, I want warm-up inputs to complete Alpha windows without creating reported results or orders, so that calculation history does not leak into performance.
 49. As a research author, I want price-based research to use fixed-anchor Adjusted Research Prices, so that corporate-action adjustment remains continuous as the Research Window moves.
@@ -107,9 +121,9 @@ product.
 58. As a research author, I want daily Rank IC as the primary metric and Pearson IC as secondary, so that ranking quality and magnitude sensitivity are both visible.
 59. As a research author, I want standard average-rank Spearman ties and missing constant-array correlations, so that Rank IC matches standard statistical semantics.
 60. As a research author, I want at least 30 valid Alpha-label pairs before daily IC or Rank IC is calculated, so that very small cross-sections do not appear meaningful.
-61. As a research author, I want the complete daily IC and Rank IC series retained, so that summary values can be inspected and reproduced.
+61. As a research author, I want daily IC, Rank IC, Five-Quantile, and Top-Bottom observations calculated in canonical signal-session order but retained only long enough to produce the Factor summaries, so that factor stability is measured without publishing daily Factor series or curves.
 62. As a research author, I want mean, sample standard deviation, unannualized ICIR, positive fraction, and valid-session count per horizon, so that Factor Evaluation has a complete compact summary.
-63. As a research author, I want five daily Alpha quantile returns and Top-Bottom Return, so that monotonicity and separation are visible beyond correlation.
+63. As a research author, I want five Alpha-quantile returns and Top-Bottom Return calculated per valid signal session and reported as per-horizon averages, so that monotonicity and separation remain visible without retaining their daily curves.
 64. As a research author, I want equal Alpha ties kept in one quantile by average rank, so that row order never splits equivalent signals.
 65. As a research author, I want quantile results to require 30 valid pairs and allow empty groups, so that the report does not manufacture balanced samples.
 66. As a research author, I want Factor diagnostics kept separate from executable Strategy portfolios, so that Top-Bottom Return does not imply shorting or trading costs.
@@ -157,25 +171,25 @@ product.
 108. As a research author, I want daily Actual Holdings Count plus mean, minimum, maximum, and ending values, so that blocked orders and candidate shortages are visible.
 109. As a research author, I want daily Maximum Single-Name Weight plus period maximum and ending values, so that realized concentration is visible without enforcing a cap.
 110. As a research author, I want daily Cash Ratio plus mean, maximum, and ending values, so that under-investment is visible without adding a target.
-111. As a research author, I want upper-limit buy, lower-limit sell, and suspension rejection counts with event details, so that market-state execution failures are separated.
-112. As a research author, I want insufficient cash, board-lot, candidate shortage, and ineligibility diagnostics separate from Market Rejections, so that missing orders are explained accurately.
+111. As a research author, I want upper-limit buy, lower-limit sell, and suspension rejection counts in the Strategy summary, so that market-state execution failures are separated without retaining rejection-event details.
+112. As a research author, I want bounded reason counts for insufficient cash, board-lot, candidate shortage, and ineligibility kept separate from Market Rejections, so that missing orders are explained without persisting raw order diagnostics.
 113. As the operator, I want each ResearchRun persisted through queued, running, succeeded, failed, or cancelled states, so that execution survives page reloads and failures are visible.
 114. As the operator, I want transient ResearchRun retries recorded as Attempts under the same Run, so that infrastructure retries do not change frozen inputs.
 115. As the operator, I want a user rerun to create a new ResearchRun, so that prior results and diagnostics remain immutable.
 116. As the operator, I want repeated Run requests protected by an idempotency key, so that delivery retries cannot start duplicate work.
-117. As the operator, I want a ResearchRun to succeed only after one complete immutable Result Bundle is atomically published, so that the UI never treats partial output as truth.
+117. As the operator, I want a ResearchRun to succeed only after one complete immutable Result Bundle of at most 1,048,576 exact bytes is atomically published, so that the UI never treats partial or oversized output as truth.
 118. As the operator, I want the Result Manifest to bind definition, release, numeric contract, calculation kernel, build, objects, and checksums, so that reproduction has a single authoritative root.
-119. As a research author, I want reports and charts derived from the Result Bundle rather than separate result stores, so that presentation cannot silently diverge from data.
+119. As a research author, I want reports and Strategy charts derived from the Result Bundle rather than separate result stores, so that presentation cannot silently diverge from retained truth or imply that excluded Factor curves exist.
 120. As the operator, I want to inspect failed and cancelled Attempt diagnostics without exposing partial success, so that operational debugging does not weaken result semantics.
 121. As the operator, I want to start a DailyTrack explicitly from a successful ResearchRun, so that continuous tracking never begins from an incomplete result.
 122. As the operator, I want the Activation Dataset Release fixed to the seed Run's Release regardless of when I click Start, so that wall-clock delay cannot change the account path.
 123. As the operator, I want Generation 0 rooted in the seed Result Bundle and kernel version, so that activation reuses verified historical work without copying or mutation.
 124. As the operator, I want an older seed Run to catch up through actual Release predecessors, so that missed calendar time is replayed rather than skipped.
 125. As the operator, I want a scheduled final seed signal retained only when its execution Research Session is after the Activation Release, so that finite-run cutoff and continuous tracking meet deterministically.
-126. As the operator, I want DailyTrack to retain its original all-cash baseline, schedule anchor, holdings, cash, costs, Benchmark, pending labels, and rebalance phase, so that it is one continuous simulated account.
+126. As the operator, I want DailyTrack to retain its original all-cash baseline, schedule anchor, holdings, cash, costs, Benchmark, bounded pending-label state, and rebalance phase, so that it is one continuous simulated account.
 127. As the operator, I want each new Research Session processed Open first and close second, so that pending orders execute before the new Alpha signal is created.
 128. As the operator, I want an active DailyTrack to continue beyond the standard Run's terminal cutoff, so that each valid tracking signal can wait for its future Open.
-129. As the operator, I want to stop a DailyTrack without deleting its Head or history, so that future Advances cease while published truth remains available.
+129. As the operator, I want to stop a DailyTrack without deleting its Head or immutable history while deleting its rebuildable Working Cache, so that future Advances cease and non-authoritative storage is reclaimed without losing published truth.
 130. As the operator, I want each Track Advance identified by Track, Generation, and target Release, so that repeated delivery is idempotent.
 131. As the operator, I want failed or cancelled Advance Attempts to leave a retryable blocked Advance, so that transient execution failure does not create another logical update.
 132. As the operator, I want a successful Advance to atomically publish one immutable Tracking Checkpoint, so that Head never points at partial state.
@@ -183,69 +197,78 @@ product.
 134. As the operator, I want a blocked frontier resolved before later Releases advance in that Generation, so that session order cannot be skipped.
 135. As the operator, I want a catch-up Release processed session-by-session in chronological order inside one Advance, so that observations retain real provenance without invented Releases.
 136. As a research author, I want pending 1-, 5-, and 20-session labels resolved at `t+2`, `t+6`, and `t+21`, so that Daily Tracking follows the same Factor timing as batch evaluation.
-137. As a research author, I want matured labels append immutable events for valid returns, terminal -100%, and governed unavailability, so that earlier Result Bundles and Checkpoints never change.
-138. As a research author, I want Daily Tracking append daily IC, Rank IC, quantile, and Top-Bottom observations when labels mature, so that predictive performance stays current.
+137. As a research author, I want matured Labels consumed transiently as valid returns, terminal -100%, or governed unavailability and then discarded at stock level, so that earlier Result Bundles and Checkpoints remain unchanged without accumulating Label events.
+138. As a research author, I want Daily Tracking calculate daily IC, Rank IC, quantile, and Top-Bottom observations when Labels mature and keep them only in the bounded rolling Working Cache, so that predictive summaries stay current without publishing Factor curves.
 139. As a research author, I want each Checkpoint publish Factor Summary Snapshots over the latest 504 signal sessions, so that continuous tracking retains the standard report-window scale.
-140. As the operator, I want historical corrections that affect a Track to create a new Generation replayed from Tracking Origin, so that append-only state never hides changed history.
-141. As the operator, I want corrected replay based on the corrected cumulative Dataset Release rather than the old seed state, so that every dependency is recalculated consistently.
-142. As the operator, I want a new Generation root to have no predecessor and to record the superseded Generation and Head, so that branching provenance is explicit.
-143. As the operator, I want old Generations queryable after Head moves, so that as-known results remain reproducible.
-144. As the operator, I want provenance-bearing events and summaries republished for a replay Generation, so that content reuse never binds new results to old Release identities.
-145. As the operator, I want a result-changing runtime fix to create and fully replay a new Generation at the current Head Release, so that one Generation never mixes calculation kernels.
+140. As the operator, I want a historical correction that affects a Track to continue through an ordinary Advance in the same Generation, so that adding one corrected Release does not force a full replay.
+141. As the operator, I want the first Advance using corrected data to record a visible Tracking Correction Boundary and its target Dataset Release, so that the intentional as-operated discontinuity remains auditable.
+142. As the operator, I want previously published Strategy observations, Factor summaries, pending decisions, and account state left unchanged across a historical correction, so that immutable history is not silently repaired.
+143. As the operator, I want the ordered Dataset Release identities bound by the Checkpoint chain to define correction-aware reproduction, so that verification applies each Release at the same Advance boundary.
+144. As the operator, I want corrected historical inputs used only for values first calculated at or after the Tracking Correction Boundary, so that old committed signals still execute as committed.
+145. As the operator, I want only a result-changing calculation-kernel correction to create and fully replay a new Generation at the current Head Release, so that one Generation never mixes calculation kernels while data corrections remain inexpensive.
 146. As the operator, I want the DailyTrack's Numeric Execution Contract fixed and each Generation's calculation kernel version fixed, so that a single batch oracle can reproduce the chain.
 147. As the operator, I want integer, Decimal, and binary64 values canonically serialized for checksums, so that cross-process equality does not depend on display formatting.
 148. As the operator, I want negative binary64 zero normalized and non-finite numeric results rejected, so that checksum equality is canonical.
-149. As the operator, I want explicit equivalence verification to replay from the same Tracking Origin and target Release, so that batch and incremental outputs can be compared exactly.
+149. As the operator, I want explicit equivalence verification to replay from the same Tracking Origin and ordered Dataset Release sequence, so that batch and incremental outputs can be compared exactly across correction boundaries.
 150. As the operator, I want equivalence failure to fail verification rather than pass under tolerance, so that the primary V1 correctness invariant remains strict.
 151. As the operator, I want normal daily Advances to avoid a full-history batch replay, so that correctness verification does not make every post-close update unnecessarily expensive.
 152. As the operator, I want the Workspace UI to list and inspect Dataset Releases, Drafts, frozen Definitions, ResearchRuns, Result Bundles, DailyTracks, Advances, and Checkpoints, so that every domain resource is navigable.
 153. As a research author, I want the editor to show inline structural, semantic, field-binding, and lookback errors before Run, so that invalid research is easy to correct.
 154. As a research author, I want the result view to separate Factor Evaluation from Strategy Backtest while showing their shared Alpha and provenance, so that predictive and portfolio conclusions are not conflated.
-155. As a research author, I want charts and tables for daily Factor observations, quantile returns, NAV, Benchmark, drawdown, Turnover, holdings, concentration, cash, costs, and rejections, so that the complete result is inspectable.
-156. As the operator, I want the DailyTrack view to show current Head, Generation, lag, blocked frontier, latest factor summary, account state, and recent events, so that ongoing research health is visible without a separate monitoring product.
+155. As a research author, I want Factor summary tables and Strategy charts and tables for NAV, Benchmark, drawdown, Turnover, holdings, concentration, cash, costs, and rejection counts, so that retained conclusions are inspectable without Factor curves or rejection-event details.
+156. As the operator, I want the DailyTrack view to show current Head, Generation, lag, blocked frontier, Correction Boundaries, latest Factor summary, and account state, so that ongoing research health is visible without exposing the Working Cache or low-level execution events.
 157. As the operator, I want API and UI errors to preserve stable reason codes without exposing source tokens or internals, so that failures are actionable and safe.
 158. As the operator, I want Tushare credentials supplied through deployment configuration rather than stored in Research Definitions or result artifacts, so that reproducibility does not leak secrets.
 159. As the operator, I want deterministic fixture data to run the complete product chain without a live Tushare account, so that CI and local verification do not depend on vendor availability.
 160. As the operator, I want a documented single-node startup and post-close operating procedure, so that I can bootstrap, run research, start tracking, publish later sessions, and inspect failures.
+161. As the operator, I want active DailyTracks constrained by the Active DailyTrack Limit, so that incremental tracking remains bounded on V1 capacity.
+162. As the operator, I want each active DailyTrack Working Cache bounded to pending Alpha for approximately 21 signal sessions and at most 1,512 rolling Factor observation rows, so that daily advancement does not retain full history.
+163. As the operator, I want a missing, interrupted, or basis-mismatched Working Cache discarded and rebuilt from immutable Checkpoints and their ordered Dataset Releases, so that cache loss affects latency but never result truth.
+164. As a research author, I want the Strategy Daily Observation series retained while Alpha Values, stock-level Labels, daily Factor observations, raw orders, fills, and rejection details remain transient, so that the report keeps useful portfolio history within a bounded storage contract.
 
 ## Implementation Decisions
 
-- Implement V1 as a single-node modular monolith with one public application API, one Web UI, one persistent worker, one transactional metadata database, and one local immutable object store. These processes share domain modules and a single calculation kernel rather than duplicating research logic.
-- Use Python managed by `uv` for Tushare ingestion, validation, immutable publication, formula evaluation, vectorized Factor calculations, Decimal Strategy accounting, job execution, and the HTTP API. Use TypeScript managed by `bun` for the Web UI. Do not add Qlib, a Qlib Provider, Redis, Celery, Kafka, or a multi-service control plane.
-- Use a transactional embedded relational database for mutable control-plane records and lifecycle transitions. Store accepted source payloads, Canonical data partitions, Release manifests, Result Bundles, and Tracking artifacts as immutable content-addressed objects with SHA-256 identities. A manifest commit and mutable head update occur transactionally only after every referenced object exists.
+- Treat V1 as the single-operator quantitative-research product contract exposed through one public application API and one Web UI. Its reference deployment remains a single-node modular monolith with one persistent worker, one transactional metadata database, and one local immutable object store; a Hosted V2 wrapper may replace deployment infrastructure without changing V1 research behavior.
+- Use Python managed by `uv` for Tushare ingestion, validation, immutable publication, formula evaluation, vectorized Factor calculations, Decimal Strategy accounting, job execution, and the HTTP API. Use TypeScript managed by `bun` for the Web UI. The V1 research core does not depend on Qlib or a Qlib Provider.
+- Use a transactional relational database for mutable control-plane records and lifecycle transitions. Store accepted source payloads, Canonical data partitions, Release manifests, Result Bundles, and immutable Tracking artifacts as content-addressed objects with SHA-256 identities. A manifest commit and mutable head update occur transactionally only after every referenced object exists.
+- Keep manifests, configuration, provenance, and bounded summaries in canonical JSON. Store Canonical Market Data and every retained table whose rows grow with Research Sessions, instruments, Rebalances, or aggregate events as partitioned Parquet with ZSTD compression. This spec does not choose the retained Source Evidence payload encoding.
 - Keep Dataset Release as a cumulative logical snapshot whose physical manifest may reference its predecessor plus new or corrected objects. Resolve Release state through deterministic predecessor traversal with cached indexes; never materialize mutable “latest” tables as result truth.
 - Provide a Tushare source adapter limited to the exact V1 contracts. It reads its token from deployment configuration, applies request throttling and deterministic pagination, preserves accepted source responses, and returns explicit typed source records. Research and tracking code never call the adapter.
 - Model Canonical data as versioned Dataset Families for Instrument Identity, Research Calendar, EOD Price, Adjustment Factor, Trading State, Universe Base Pool, Liquidity Universe, ST designation, SW2021 classification, and price limits. Financial, futures, options, and convertible-bond families are not created in V1.
 - Publish exactly one stable Field Catalog and schema registry for the V1 fields. A frozen Research Definition stores the resolved stable field identities while authors use short catalog names.
 - Represent Research Definition as a versioned structured JSON document with a mutable Draft and immutable frozen versions. Validation is split into structural checks, Alpha parsing and lookback analysis, Dataset Release availability checks, field binding, and cross-field semantic checks. It creates no separately persisted compiled representation.
 - Implement Alpha Expression as a restricted parser and evaluator with an explicit grammar, allowlist, function registry, missingness propagation, and deterministic ordered window access. The parser may build an in-memory syntax tree for evaluation but that tree is not a domain artifact or stored plan.
-- Use one ordered research kernel that accepts an immutable Release view and frozen Definition and emits the Alpha Matrix, labels, Factor artifacts, Strategy artifacts, diagnostics, and terminal state. Batch ResearchRun and DailyTrack replay call this kernel through the same session-level operations.
+- Use one ordered research kernel that accepts an immutable Release view and frozen Definition, calculates stock-level Alpha Values and Forward Return Labels transiently, and emits retained Factor summaries, Strategy Daily Observations, bounded Strategy aggregates, diagnostics summaries, and Terminal Strategy State. Batch ResearchRun and DailyTrack advancement call the same session-level operations.
 - Use columnar in-memory calculations for Alpha and Factor cross-sections, but enforce canonical Instrument Identity ordering before every tie-sensitive or checksum-sensitive operation.
 - Use standard binary64 operations for Alpha and statistical outputs under the pinned calculation-kernel semantic version. Use the fixed Decimal context for all Strategy decisions and accounting. Store Missing as explicit validity and reason data, never NaN in authoritative artifacts.
-- Implement Strategy as an event-producing state machine around the Open NAV Cycle. Orders, Child Orders, fills, rejections, diagnostics, position changes, cash changes, NAV observations, and terminal write-offs are immutable events from which the terminal state is reproducible.
+- Implement Strategy as a deterministic state machine around the Open NAV Cycle. Orders, Child Orders, fills, rejection details, and low-level diagnostics are transient execution state; the Result Bundle retains the Strategy summary, Strategy Daily Observation series, bounded Rebalance and execution aggregates, Terminal Positions, and Terminal Strategy State needed for reporting and tracking.
 - Persist ResearchRun and Tracking Advance execution Attempts separately from their logical parent lifecycle. Workers claim jobs transactionally, heartbeat, honor cancellation, recover abandoned running attempts, and publish results only on complete success.
 - Expose API resources for Workspace summary, Field Catalog, Dataset Bootstrap and Publication, Dataset Releases, Research Definition Drafts and validation, ResearchRuns and Attempts, Result Bundle views, DailyTracks, Advances, Checkpoints, and equivalence verification.
-- Keep the Web UI resource-oriented: data status, research editor, run list/detail, Factor result, Strategy result, DailyTrack list/detail, and operational diagnostics. UI views read authoritative API resources and never calculate domain results independently.
-- A Dataset Publication commit may enqueue Advances for every active DailyTrack, but it never waits for them. Workers process each Track's Release frontier in order and expose lag or blocking state.
-- Generation 0 starts at the seed Result Bundle. Correction and runtime-fix Generations use a predecessor-free replay root and atomically replace Tracking Head only after their complete replay and equivalence checks succeed.
+- Keep the Web UI resource-oriented: data status, research editor, run list/detail, Factor summaries, Strategy results, DailyTrack list/detail, and operational diagnostics. UI views read authoritative API resources and never calculate domain results independently. The UI does not expose daily Factor curves or raw rejection-event details, and does expose the retained Strategy Daily Observation series.
+- A successful ResearchRun publishes exactly one minimal Result Bundle containing its canonical Result Manifest and provenance, three Factor Evaluation summaries, one Strategy summary, one ZSTD Parquet Strategy Daily Observation table, bounded ZSTD Parquet Rebalance and execution aggregate tables, one ZSTD Parquet Terminal Positions table, and bounded Terminal Strategy State. The exact bytes of all Run-owned manifest and payload objects must total no more than 1,048,576 bytes; publication fails rather than dropping required output or persisting excluded intermediates elsewhere.
+- A Dataset Publication commit may enqueue Advances for every active DailyTrack, but it never waits for them. Workers process each Track's Release frontier in order and expose lag or blocking state. The Active DailyTrack Limit governs admission; a blocked frontier still counts as active until its Track is stopped.
+- Create a latest-only, non-authoritative Working Cache only when a successful ResearchRun seeds a DailyTrack. It contains pending Final Alpha Cross-Sections for at most the approximately 21 sessions needed to mature the longest Label and at most 1,512 rolling aggregate Factor observation rows for the latest 504 signal sessions and three horizons. Normal Advances calculate only newly added sessions, read at most 252 Canonical sessions for a new Alpha, evict stock-level Alpha after its 20-session Label matures, and retain only the resulting Factor Summary Snapshot in the immutable Checkpoint.
+- Bind each Working Cache to the DailyTrack, Generation, immutable basis Checkpoint and checksum, frozen Definition, calculation-kernel version, Numeric Execution Contract, and basis Dataset Release. A missing, interrupted, or mismatched cache is discarded and rebuilt over the same bounded windows from the immutable Activation and Checkpoint chain using its exact ordered Dataset Release sequence. Stopping a DailyTrack deletes the Working Cache after preserving the immutable Head and history.
+- Generation 0 starts at the seed Result Bundle. A historical data correction advances in the same Generation from the current Head, preserves all previously committed results, and marks the first affected Checkpoint as a Tracking Correction Boundary bound to its target Dataset Release. Only a result-changing calculation-kernel correction creates a predecessor-free Generation root, fully replays from the Tracking Origin, and atomically replaces the Head after complete publication and equivalence verification.
 - Version and record source contracts, Dataset Schemas, research semantics, Numeric Execution Contract, calculation kernel semantics, and runtime build identity independently. A compatibility declaration may change only the build identity inside one Generation.
 - Provide deterministic seed fixtures spanning at least 756 Research Sessions, more than 30 instruments, all four supported boards, suspensions, partial suspensions, ST transitions, industry transitions, price limits, delisting, liquidity ties, Alpha ties, missing labels, child-order splits, and one historical correction. The fixture generator may create more instruments for cutoff tests without requiring full live-market scale.
-- Make external representations stable and versioned. API errors and artifact records use explicit reason codes matching the domain glossary. Display rounding and localization stay outside authoritative calculations and checksums.
+- Make external representations stable and versioned. API errors and retained artifact records use explicit reason codes matching the domain glossary. Display rounding and localization stay outside authoritative calculations and checksums.
 - Ship a reproducible local command that starts the API, worker, and Web UI; a fixture bootstrap command; a live Tushare bootstrap/publication command; schema migrations; and an operator runbook.
 
 ## Testing Decisions
 
-- Primary acceptance seam: exercise the public application API against the real metadata database, immutable object store, worker, and deterministic Tushare fixture. One scenario must bootstrap and publish a Release, validate/freeze/run a Draft, inspect the Result Bundle, start a DailyTrack, publish later sessions, advance the Track, and prove canonical Batch-Incremental Equivalence.
-- Browser acceptance seam: drive the running Web Workspace through data status, research authoring, Run, Factor/Strategy result inspection, DailyTrack start, later publication, and updated tracking state. Browser assertions cover user-visible behavior and resource navigation, not DOM implementation details.
-- Calculation seam: focused table-driven tests call the public calculation-kernel boundary for Alpha, label, Factor, Strategy, and numeric edge cases. Tests assert domain events, result objects, and canonical checksums rather than private helper calls.
+- Primary acceptance seam: exercise the public application API against the real metadata database, immutable object store, worker, Working Cache store, and deterministic Tushare fixture. One scenario must bootstrap and publish a Release, validate/freeze/run a Draft, inspect the bounded Result Bundle, start a DailyTrack, publish later sessions, advance the Track incrementally, lose and rebuild its cache, cross a historical correction, and prove canonical Batch-Incremental Equivalence using the Checkpoint chain's ordered Dataset Release sequence.
+- Browser acceptance seam: drive the running Web Workspace through data status, research authoring, Run, Factor-summary and Strategy-result inspection, DailyTrack start, later publication, and updated tracking state. Assert that Strategy daily history and accepted summaries are visible while daily Factor curves and rejection-event details are absent. Browser assertions cover user-visible behavior and resource navigation, not DOM implementation details.
+- Calculation seam: focused table-driven tests call the public calculation-kernel boundary for Alpha, Label, Factor, Strategy, and numeric edge cases. Tests assert retained summaries, Strategy observations, terminal state, and canonical checksums rather than private helper calls or the persistence of transient calculations.
 - Dataset publication tests cover root and incremental Releases, predecessor and correction manifests, object reuse, atomic failure, catch-up sessions, source/canonical separation, field/schema immutability, suspension evidence, Base Pool evidence, Universe ranking, adjustment anchors, and no historical scan on the normal daily path.
 - Research Definition tests cover Draft mutation, Run-time freeze, idempotent Run creation, `latest` resolution, field binding, complete validation errors, Alpha grammar, function allowlist, literal windows, composed lookback, fixed defaults recorded explicitly, and immutability after later edits.
-- Factor tests cover exact next-open labels, censoring and terminal loss, shared Final Alpha Cross-Section, neutralization gates, Rank IC and IC sample rules, average-rank ties, quantile assignment, empty groups, daily series, and per-horizon aggregates.
-- Strategy tests cover the all-cash boundary, Rebalance schedule, terminal cutoff, Open NAV ordering, Net-only decisions, sell-before-buy, board lots, child orders, costs, blocked-order cancellation, retained positions, suspended valuation, terminal write-off, Benchmark, all metrics, and Decimal residuals.
-- Lifecycle tests cover persistent Run and Advance identities, Attempt retries, cancellation, abandoned-worker recovery, atomic Result Bundle and Checkpoint publication, Head stability on failure, stopped Tracks, Release frontier ordering, and idempotent delivery.
-- Tracking tests compare normal incremental advancement with a batch oracle from the same Origin, then repeat through catch-up publication, historical correction Generation, runtime-fix Generation, label maturation, 504-session summary rollover, and canonical serialization.
-- Good tests assert observable domain and API behavior from the highest relevant boundary. Private data structures, SQL statement shape, storage layout details, framework components, and incidental execution order outside the accepted domain sequence are not test contracts.
-- The repo has no prior implementation tests. ADRs and the domain glossary are the prior art; the new API acceptance seam becomes the primary executable specification.
+- Factor tests cover exact next-open Labels, censoring and terminal loss, shared transient Final Alpha Cross-Section, neutralization gates, Rank IC and IC sample rules, average-rank ties, quantile assignment, empty groups, canonical daily calculation order, and per-horizon summary aggregates. They also prove that stock-level Alpha and Labels and daily Factor observations are absent from the published Result Bundle.
+- Strategy tests cover the all-cash boundary, Rebalance schedule, terminal cutoff, Open NAV ordering, Net-only decisions, sell-before-buy, board lots, child orders, costs, blocked-order cancellation, retained positions, suspended valuation, terminal write-off, Benchmark, all accepted metrics, Strategy Daily Observations, and Decimal residuals. Raw orders, fills, rejection details, and redundant daily series remain transient even when their bounded summary counts are asserted.
+- Result-storage contract tests enumerate every ResearchRun-owned object, reject excluded object kinds, sum exact manifest and payload bytes, and fail publication above 1,048,576 bytes. Capacity tests use the production canonical JSON and Parquet writer rather than estimating serialized size from an alternate representation.
+- Lifecycle tests cover persistent Run and Advance identities, Attempt retries, cancellation, abandoned-worker recovery, atomic Result Bundle and Checkpoint publication, Head stability on failure, the Active DailyTrack Limit, stopped-Track cache deletion, Release frontier ordering, and idempotent delivery.
+- Tracking tests compare normal incremental advancement with an explicit batch oracle from the same Origin and ordered Dataset Release sequence. They cover catch-up publication, Label maturation and Alpha eviction, 504-session Factor-summary rollover, missing and mismatched cache rebuilds, interrupted cache writes, a historical correction boundary within the same Generation without full replay, and a result-changing calculation-kernel correction that alone creates and replays a new Generation.
+- Good tests assert observable domain, API, manifest, and cache-recovery behavior from the highest relevant boundary. Private data structures, SQL statement shape, framework components, and incidental execution order outside the accepted domain sequence are not test contracts.
+- Existing deterministic fixture, API lifecycle acceptance, and Run-storage capacity checks are prior art. The revised public API acceptance seam becomes the primary executable specification, while focused production-writer and cache-recovery tests cover contracts that cannot be proved from UI output alone.
 - Run focused tests and static checks throughout implementation, then the complete backend, frontend, API acceptance, and browser acceptance suites before code review and commit.
 
 ## Out of Scope
@@ -254,18 +277,29 @@ product.
 - Financial statement ingestion or Alpha fields, complete financial revision reconstruction, futures, options, convertible bonds, B-shares, Beijing exchange securities, funds, preferred shares, and non-CNY markets.
 - Qlib, Qlib Provider generation, Qlib `.bin` files, or a custom Qlib adapter.
 - AI Chat, AI-generated Alpha workflows, MCP, arbitrary Python or SQL strategies, user-defined formula functions, optimizer portfolios, risk models, shorting, leverage, and external index benchmarks.
-- Users, Organizations, Tenants, membership, sharing, RBAC, hosted multi-user collaboration, or application-owned authentication.
+- Defining Users, Organizations, Tenants, membership, sharing, RBAC, hosted multi-user collaboration, or application-owned authentication inside the V1 research core. A Hosted V2 product may wrap the V1 APIs with these concerns under its own contract.
 - Multiple market-data vendors, fallback providers, source reconciliation, automatic complete-history correction scans, or correction-only Dataset Releases.
 - Company-action event reconstruction, broker-exact cash/share accounting, tax-lot accounting, or separate dividend and split ledgers.
-- Multiple deployment nodes, distributed queues, external object storage, high-availability failover, horizontal scaling, or production cloud infrastructure.
+- Choosing multiple deployment nodes, distributed queues, external object storage, high-availability failover, horizontal scaling, or production cloud infrastructure as part of the V1 quantitative-research contract.
 - Arbitrary Research Windows, arbitrary Factor horizons, arbitrary Initial Cash, configurable risk-free rates, configurable transaction-cost schedules, position caps, or multiple Strategy types.
 - Complex monitoring dashboards, paging, alerts, notification delivery, and automatic live scheduling beyond the single-node post-close publication process.
+- Persisting or displaying Alpha Matrices, stock-level Forward Return Labels, daily Factor observation series or curves, target-weight histories, raw orders, Child Orders, fills, rejection-event details, or duplicate Strategy daily series outside the canonical Strategy Daily Observation table.
+- Automatically replaying a DailyTrack from its Tracking Origin because a normal Dataset Release contains an accepted historical data correction.
+- Treating the non-authoritative DailyTrack Working Cache as immutable result truth, a user-visible Factor curve, or part of the per-ResearchRun one-MiB Result Bundle.
 
 ## Further Notes
 
-- `CONTEXT.md` is the ubiquitous-language source of truth. Accepted ADR-0001
-  through ADR-0109 define V1 behavior; superseded ADR-0003, ADR-0004,
-  ADR-0017, and ADR-0021 are historical context only.
+- `CONTEXT.md` is the ubiquitous-language source of truth. Accepted ADRs
+  through ADR-0148 define the current V1 research, bounded-storage, correction,
+  and Daily Tracking behavior; an ADR marked superseded is historical context
+  only.
+- The `bounded-research-storage` spec owns the cross-cutting physical storage,
+  production-writer, exact-byte-budget, Working Cache ownership, and cleanup
+  acceptance contracts summarized here.
+- The `hosted-platform-v2` spec owns hosted identity, isolation, quotas,
+  scheduling, deployment, and operations. It wraps rather than redefines this
+  spec's market, Alpha, Factor, Strategy, Result Bundle, and DailyTrack
+  semantics.
 - Exact reproducibility is defined by immutable input identity, pinned semantic
   versions, canonical serialization, deterministic ordering, and shared kernel
   behavior. It is not defined by report screenshots or tolerance-only numeric

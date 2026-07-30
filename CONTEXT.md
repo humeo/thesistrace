@@ -5,6 +5,8 @@ strategy backtests, and continuous daily research tracking.
 
 ## Language
 
+### Hosted Platform
+
 **V1 Workspace**:
 The historical user-visible boundary of one V1 deployment for one operator. It
 has no User, tenant ownership, membership, sharing, or RBAC model.
@@ -17,11 +19,8 @@ _Avoid_: Tenant, account, operator
 
 **Operator**:
 The trusted human responsible for running the Hosted Platform V2 deployment.
-The Operator deploys and migrates services, issues Registration Invitations,
-applies Quota Profile overrides, manages secrets and backups, performs disaster
-recovery, and reviews platform-wide health. Operator authority is an
-administrative deployment boundary and does not make the Operator the owner of
-a User's Personal Workspace or research resources.
+This administrative authority does not make the Operator the owner of a User's
+Personal Workspace or research resources.
 _Avoid_: User, Personal Workspace member, Worker service identity, tenant admin
 
 **Personal Workspace**:
@@ -34,22 +33,6 @@ _Avoid_: User, Organization, shared project, V1 Workspace
 The named set of resource and admission limits assigned to one Personal
 Workspace. It is independent of pricing, payment, or subscription status.
 _Avoid_: Billing plan, account balance, Compute capacity
-
-**Request Rate Limit**:
-A short-window abuse and overload control applied to HTTP requests. Cloudflare
-applies coarse unauthenticated limits by public route and client IP, while the
-ThesisTrace API applies authenticated limits by User and Personal Workspace. It
-does not allocate stored capacity or durable Compute work and is not a Quota
-Profile dimension.
-_Avoid_: Quota Profile, Compute concurrency, Personal Workspace storage limit
-
-**Resource Exhaustion Failure**:
-The terminal execution classification `RESOURCE_EXHAUSTED`, recorded after an
-accepted Compute or Publication Activity exceeds its container resource
-envelope twice. It identifies platform capacity or implementation failure, not
-a User quota violation, disk-pressure admission rejection, validation error, or
-unsuccessful investment result.
-_Avoid_: QUOTA_EXCEEDED, retryable infrastructure event, Alpha failure
 
 **Resource Tombstone**:
 The permanent minimal record left when a terminal private research resource is
@@ -67,37 +50,8 @@ _Avoid_: Workspace membership invitation, login token, resource permission
 The operational truth of whether the hosted services can safely accept,
 schedule, execute, persist, and serve work. It covers Auth, API, PostgreSQL,
 object storage, Temporal, workers, Dataset Publication, Activity heartbeats and
-timeouts, Task Queues, and capacity pressure. Host CPU and memory are evidence,
-not the whole definition.
+timeouts, Task Queues, and capacity pressure rather than host metrics alone.
 _Avoid_: Host monitoring alone, Data Health, Quantitative Semantic Health
-
-**Service Liveness**:
-The cheap, dependency-independent evidence that one process is alive and able
-to make internal progress. It never writes a Storage probe or declares
-PostgreSQL, Temporal, Tushare, or telemetry healthy.
-_Avoid_: Service Readiness, System Health, dependency check
-
-**Service Readiness**:
-The evidence that one service instance and its required internal dependencies
-can safely receive that service's traffic or work. Optional external telemetry
-and Tushare availability do not determine whole-platform Readiness.
-_Avoid_: Service Liveness, Data Health, automatic restart signal
-
-**Temporal Workflow Execution**:
-The infrastructure execution coordinator linked to one finite Dataset
-Publication, ResearchRun, Tracking Advance, equivalence-verification, or
-maintenance-only Tracking Generation rebuild operation. It carries only opaque
-resource identities, hashes, and small orchestration state; PostgreSQL remains
-the product-state authority and bulk data remains in object storage.
-_Avoid_: ResearchRun, domain truth, Alpha Matrix, permanent DailyTrack
-
-**Compute Priority**:
-The dispatch tier attached to a normal Compute Activity on the shared Temporal
-Task Queue. P1 is reserved for automatic Tracking Advances, while P3 covers
-ResearchRuns and explicit equivalence verification. Priority is evaluated
-before equal-weight Personal Workspace fairness and never preempts a running
-Activity.
-_Avoid_: Quota Profile, Compute concurrency, Dataset Publication priority
 
 **Data Health**:
 The quality and timeliness of the path from Tushare inputs to an immutable
@@ -109,12 +63,12 @@ _Avoid_: Successful HTTP request, System Health, Alpha performance
 **Quantitative Semantic Health**:
 The evidence that research computation continues to honor its frozen domain,
 numeric, and reproducibility contracts across Alpha Matrix, Factor Evaluation,
-Strategy Backtest, and Daily Tracking. It includes deterministic regression
-evidence, coverage and missing-reason behavior, accounting invariants,
-canonical checksums, and Batch-Incremental Equivalence. It does not promise
-that an Alpha remains profitable. Historical-correction boundaries and
-release-sequence equivalence are separate visible evidence.
+Strategy Backtest, and Daily Tracking. It covers deterministic regression,
+accounting, checksum, missingness, and Batch-Incremental Equivalence evidence
+without promising that an Alpha remains profitable.
 _Avoid_: Investment-performance guarantee, System Health, Data Health
+
+### Research and Alpha
 
 **Investment Hypothesis**:
 A human-readable claim about a market relationship that motivates an Alpha.
@@ -134,20 +88,20 @@ Evaluation preserves the resulting metric signs.
 _Avoid_: Automatic factor reversal, absolute IC, inferred direction
 
 **Alpha Expression**:
-The bounded numeric formula embedded in a Research Definition. V1 permits
+The bounded numeric formula embedded in a Research Definition, composed only of
 Canonical Market Data Field References, numeric literals, parentheses,
-arithmetic, and a closed set of built-in functions; it does not permit Python,
-SQL, arbitrary code, or user-defined functions. It is validated and evaluated
-without creating a separate compiled domain artifact.
+arithmetic, and the V1 Alpha Function Set. It excludes Python, SQL, arbitrary
+code, and user-defined functions and is evaluated without a separate compiled
+domain artifact.
 _Avoid_: Research DSL, Python strategy, SQL query, compiled plan
 
 **V1 Alpha Function Set**:
 The closed Alpha Expression operation set: arithmetic; `abs`, `log`, and
 `sign`; `lag`, `delta`, and `pct_change`; and `ts_mean`, `ts_sum`, `ts_std`,
-`ts_min`, and `ts_max`. Every time-series or rolling `n` must be an integer
-literal from 1 through 252. Industry Neutralization is applied after expression
-evaluation. V1 has no conditional, regression, correlation, or cross-sectional
-functions.
+`ts_min`, and `ts_max`, with every time-series or rolling `n` restricted to an
+integer literal from 1 through 252. It excludes conditional, regression,
+correlation, and cross-sectional functions, and any selected Industry
+Neutralization follows expression evaluation.
 _Avoid_: Extensible function registry, user-defined function, strategy rule
 
 **Alpha Numeric Semantics**:
@@ -161,109 +115,87 @@ implementation-default rounding
 
 **Numeric Execution Contract**:
 The versioned V1 numeric boundary pinned by a frozen Research Definition and
-DailyTrack. Exact integer quantities remain integers; Strategy decision and
-accounting arithmetic uses the fixed 34-digit, half-even
-`accounting_decimal_v1` context without cent quantization; and declared
-binary64 outputs use IEEE 754. Canonical checksums encode normalized integer and
-decimal values and binary64 bytes rather than UI-formatted numbers. V1 records
-the supported contract automatically at Definition freeze; the user does not
-configure it. Finite decimal division may create a deterministic last-digit
-execution-rounding residual; V1 does not add a balancing account or classify
-that residual as Transaction Cost.
+DailyTrack. It fixes integer, 34-digit half-even Decimal, binary64, residual,
+and canonical-checksum semantics independently of UI formatting.
 _Avoid_: Runtime default precision, report formatting, tolerance-based equality
 
 **Effective Alpha Lookback**:
 The farthest market-session distance required by an Alpha Expression after
-accounting for nested lag and rolling functions. V1 permits at most 252 market
-sessions. A rolling length `n` includes `t-n+1` through `t`, whereas lag `n`
-addresses `t-n`; validation composes those offsets through nested functions.
-Missing observations do not extend the window, and a definition over the limit
-cannot be frozen. For example, `pct_change($close_adj, 252)` validly reads the
-current and 252-prior Research Sessions. The three-year Research Input History
-therefore supplies approximately 252 warm-up sessions before the 504-session
-Factor report window.
+accounting for nested lag and rolling functions. V1 permits at most 252
+Research Sessions, and missing observations do not extend that window.
 _Avoid_: Largest individual function argument, last valid observations,
 automatic data-range expansion
 
 **Missing Alpha Value**:
 The absence of a usable Alpha score caused by missing formula inputs, an
 incomplete rolling window, division by zero, an invalid logarithm, NaN, or
-infinity under Alpha Numeric Semantics. V1 does not fill or skip such inputs.
-A complete `ts_std(x,1)` validly returns zero. The instrument is excluded before
-that session's Final Alpha Cross-Section and the coverage loss is reported.
+infinity under Alpha Numeric Semantics. It is excluded before the Final Alpha
+Cross-Section and reported as coverage loss rather than filled.
 _Avoid_: Zero Alpha Value, forward-filled score, partial-window result
 
 **Alpha Values**:
 The deterministic instrument-by-session scores calculated inside a
-ResearchRun or Tracking Advance. An Alpha Value for session `t` is produced
-after that session closes from data and Universe Membership available through
-`t`. A frozen Research Definition selects either no neutralization or industry
-neutralization. The selected option determines the one Final Alpha
-Cross-Section consumed by Strategy and every Factor Evaluation horizon; it
-does not create a second run type or parallel result branch. V1 does not
-automatically winsorize, clip, rank-transform, or standardize the scores.
-Alpha Values are calculation intermediates rather than permanent
-ResearchRun results.
+ResearchRun or Tracking Advance after each Research Session closes. The frozen
+neutralization option determines the one transient Final Alpha Cross-Section
+shared by Strategy and Factor Evaluation.
 _Avoid_: Alpha, factor definition, trading signal
 
 **Alpha Matrix**:
 The logical collection of Final Alpha Cross-Sections evaluated during one
-execution. Factor Evaluation and Strategy Backtest consume the same
-cross-section for a signal session rather than applying different
-transformations. An Alpha Matrix is transient and is never published in a
-Result Bundle or Tracking Checkpoint.
+execution. It is transient, shared by Factor Evaluation and Strategy Backtest,
+and never published in a Result Bundle or Tracking Checkpoint.
 _Avoid_: Durable result object, raw expression output, Strategy signal table,
 vendor factor table
 
+### Daily Tracking
+
+**Active DailyTrack Limit**:
+The deployment-neutral admission boundary for active DailyTracks in either a
+V1 Workspace or a hosted Personal Workspace. Its hard value is recorded by
+ADR-0117; a blocked active Track counts and a stopped Track does not.
+_Avoid_: Quota Profile, total DailyTrack history, Compute concurrency
+
 **Daily Tracking**:
 The V1 process that incrementally advances an explicitly active DailyTrack
-after each successful Dataset Release. It calculates only the newly required
-Final Alpha Cross-Sections, resolves newly mature Labels, updates the rolling
-Factor summary, and advances the simulated Strategy from its prior terminal
-state through the new Research Sessions. It publishes only immutable summaries,
-retained Strategy observations, and terminal state. It does not send
-notifications or execute real trades.
+after each successful Dataset Release. It publishes immutable summaries,
+retained Strategy observations, and terminal state without full replay,
+notifications, or real trading.
 _Avoid_: Full daily batch replay, persisted Alpha history, live trading,
 alerting product
 
 **DailyTrack**:
 The stable identity of one continuous, fixed-inception Daily Tracking stream
-explicitly started from a successful seed ResearchRun. It pins the seed
-Definition semantics, numeric contract, and Tracking Origin; its Activation
-Dataset Release is exactly the seed Run's Release, and each Tracking Advance
-separately binds one later Dataset Release. It is `active` from creation until
-an operator terminally marks it `stopped`; a stopped Track retains its Head but
-does not advance or resume in V1. Editing or rerunning research never mutates
-an existing DailyTrack. One Workspace may have at most 10 active DailyTracks;
-an active Track still counts while its frontier Tracking Advance is blocked,
-whereas a stopped Track does not.
+explicitly started from a successful seed ResearchRun. It pins its Definition,
+numeric contract, Tracking Origin, and Activation Dataset Release until it is
+terminally stopped; editing or rerunning research never mutates it.
 _Avoid_: ResearchRun, rolling backtest, mutable latest Definition
+
+**Working Cache**:
+The latest-only, non-authoritative Pending Alpha and rolling Factor aggregate
+state used to advance one active DailyTrack incrementally. It is bounded,
+fenced, rebuildable from immutable truth, and deleted when the Track stops.
+_Avoid_: Tracking Checkpoint, Result Bundle, Factor curve, permanent Alpha store
 
 **Tracking Origin**:
 The seed ResearchRun's original `R1` Research Session coordinate, all-cash
 baseline, Research Window schedule anchor, and frozen Definition semantics from
-which the DailyTrack reference oracle begins. Market data is resolved through
-the ordered Dataset Release sequence bound by the Activation Checkpoint and
-later Tracking Checkpoints, not frozen into the Origin or replaced
-retroactively by the Head Release. It never rolls forward with the latest
-504-session Research Window.
+which the DailyTrack reference oracle begins. Its market data follows the
+ordered Dataset Release sequence bound by Checkpoints rather than rolling
+forward with the latest Research Window.
 _Avoid_: Activation date only, latest rolling R1, Tracking Head
 
 **Activation Checkpoint**:
 Generation 0's root immutable DailyTrack state. It has no predecessor, binds
 the seed Run's Dataset Release, references the seed Result Bundle, and carries
 its Terminal Strategy State, Rebalance phase, and any bounded scheduled
-final-session signal whose execution Research Session is later than that
-Release. It carries no Alpha or Label history.
+final-session signal, but no Alpha or Label history.
 _Avoid_: New all-cash baseline, copied Result Bundle, pending Label store,
 historical fake Update
 
 **Tracking Advance**:
 One idempotent execution for a `(DailyTrack, Tracking Generation, target
-Dataset Release)`. It remains pending or blocked across failed execution
-Attempts and becomes terminal only on success. It processes every new Research
-Session in order and publishes one Tracking Checkpoint only on complete
-success.
+Dataset Release)`. It survives failed Attempts, processes new Research Sessions
+in order, and publishes one Tracking Checkpoint only on complete success.
 _Avoid_: ResearchRun rerun, Dataset Publication, partial result
 
 **Tracking Advance Attempt**:
@@ -274,14 +206,9 @@ _Avoid_: New Tracking Advance, ResearchRun Attempt, partial Checkpoint
 
 **Tracking Checkpoint**:
 The immutable authoritative manifest and state published by a successful
-Tracking Advance. It binds its Generation, same-Generation predecessor or null
-Generation root, target release, processed sessions, Factor Summary Snapshot,
-newly retained Strategy observations and aggregates, Terminal Strategy State,
-versions, and checksums. Its predecessor chain and each target release form the
-authoritative ordered Release sequence, and it identifies a Tracking Correction
-Boundary when applicable. It never contains Alpha Values, Forward Return
-Labels, raw orders, or fills. A mutable Tracking Head only points to one
-Checkpoint.
+Tracking Advance. It binds provenance, the ordered Dataset Release sequence,
+Factor Summary Snapshot, retained Strategy deltas, and Terminal Strategy State
+without Alpha Values, stock-level Labels, raw orders, or fills.
 _Avoid_: Mutable tracker row, attempt log, Result Bundle extension
 
 **Tracking Head**:
@@ -291,22 +218,18 @@ current view but never edits any Checkpoint or observation.
 _Avoid_: Result truth, mutable Checkpoint, Dataset latest
 
 **Tracking Generation**:
-One immutable DailyTrack result branch. Normal Advances append within a
-Generation, including an Advance whose Dataset Release contains an accepted
-historical correction. Each Generation pins one calculation-kernel semantic
-version under the DailyTrack's Numeric Execution Contract and has exactly one
-predecessor-free root Checkpoint. A result-changing runtime fix requires a new
-fully executed Generation. The prior as-known Generation remains queryable and
-unchanged.
+One immutable DailyTrack result branch whose Advances share one calculation
+kernel and Numeric Execution Contract. Historical data corrections remain
+within it, while a result-changing kernel correction creates a new fully
+executed Generation without mutating the prior branch.
 _Avoid_: Dataset correction boundary, partial patch, Dataset Release
 
 **Tracking Correction Boundary**:
 A successful Tracking Advance whose target Dataset Release contains an
 accepted historical correction that affects the DailyTrack's dependency
-closure. It continues from the prior Checkpoint in the same Generation,
-preserves every previously published observation and account state, and uses
-the corrected Release only for results first published by this and later
-Advances. It is visible provenance, not a replay or historical rewrite.
+closure. It continues in the same Generation, preserves prior results, and
+applies the correction only to results first calculated at or after that
+visible boundary.
 _Avoid_: New Tracking Generation, corrected backtest, in-place mutation
 
 **Batch-Incremental Equivalence**:
@@ -314,15 +237,13 @@ The core V1 correctness invariant that a reference execution and
 session-by-session Daily Tracking from the same Tracking Origin, research
 semantics, ordered Advance Dataset Release sequence, Generation-pinned
 calculation kernel, and DailyTrack-pinned Numeric Execution Contract produce
-canonically exact Factor summaries, Strategy Daily Observations, Strategy
-aggregates, and Terminal Strategy State. Intermediate Alpha Values, matured
-Labels, orders, and fills may be regenerated and compared by an explicit
-equivalence test but need not be durable results. After a Tracking Correction
-Boundary, a calculation that applies only the latest corrected Release from the
-Origin is a counterfactual, not the comparator. A standard rolling 504-session
-ResearchRun is not the comparator for a later continuous DailyTrack.
+canonically exact retained results. An explicit verification may regenerate
+intermediates, but neither a latest-Release-only replay nor a rolling
+ResearchRun is the correction-aware comparator.
 _Avoid_: Persisted-intermediate requirement, latest-Release-only replay,
 tolerance-only comparison, latest rolling Run, two calculation kernels
+
+### Strategy Execution
 
 **Strategy**:
 Rules that translate Alpha Values into portfolio targets and changes over time.
@@ -333,17 +254,17 @@ _Avoid_: Alpha, factor, investment hypothesis
 
 **Strategy Candidate Order**:
 The deterministic total order `final_alpha DESC, instrument_id ASC` applied to
-eligible target candidates at a scheduled Rebalance. V1 cuts the first
-`holdings_count` targets from it and reuses it for buy-deficit priority after
-sells. Its identity tie-break is Strategy-specific and never splits equal Alpha
-Values across Factor quantiles.
+eligible target candidates at a scheduled Rebalance, used both to select the
+first `holdings_count` targets and to prioritize buy deficits after sells. Its
+identity tie-break is Strategy-specific and never splits equal Alpha Values
+across Factor quantiles.
 _Avoid_: Database row order, source-response order, Factor average rank
 
 **Holdings Count**:
-The explicit `holdings_count` in a frozen V1 Research Definition. It is an
-integer from 1 through 100, cannot exceed the selected Liquidity Universe size,
-and defines the maximum number of Top-N equal-weight targets. A shortage of
-eligible candidates produces fewer targets and residual cash.
+The explicit integer `holdings_count` from 1 through 100 in a frozen V1
+Research Definition, bounded by the selected Liquidity Universe size and
+defining the maximum number of Top-N equal-weight targets. Fewer eligible
+candidates produce fewer targets and residual cash.
 _Avoid_: Runtime default, percentage cutoff, guaranteed filled positions
 
 **Initial Cash**:
@@ -357,58 +278,53 @@ _Avoid_: Runtime default, portfolio NAV, deployable cash after trades
 **Rebalance**:
 A scheduled Strategy decision that recalculates the complete Top-N equal-weight
 target from that signal session's Alpha Values and first attempts the resulting
-orders at the next session's open. Intermediate Alpha snapshots remain Factor
-Evaluation inputs and are neither queued nor formed into overlapping Strategy
-cohorts. A scheduled signal creates orders only if both its execution open and
-one later holding-valuation open remain inside the Research Window.
+orders at the next session's open, provided both that open and one later
+holding-valuation open remain inside the Research Window. Intermediate Alpha
+snapshots remain Factor Evaluation inputs rather than queued or overlapping
+Strategy cohorts.
 _Avoid_: Delayed execution of every signal, daily signal cohort, Factor label
 
 **Target Portfolio**:
 The ideal equal-weight values calculated at a scheduled execution open by
-dividing pre-trade Net NAV by the number of selected Top-N targets. V1 executes
-eligible sells first and then buys target deficits in Strategy Candidate Order,
-using Net Cash after each fill and its costs without allowing negative cash.
-Execution constraints may make Actual Holdings differ from this target.
+dividing pre-trade Net NAV by the number of selected Top-N targets. It is
+translated into eligible sells followed by buy deficits in Strategy Candidate
+Order without negative cash, so execution constraints may leave Actual Holdings
+different from the target.
 _Avoid_: Actual Holdings, guaranteed allocation, Factor quantile
 
 **Actual Holdings**:
 The positions and cash remaining after applying order eligibility, costs, and
-rounding to a Target Portfolio. Each position has one integer Execution Share
-Quantity for order rules and one Adjusted Holding Units balance for research
-valuation. Target and actual weights are runtime inputs to execution and
-metrics, not separately retained histories. The Result Bundle keeps daily
-portfolio aggregates and every Terminal Position rather than presenting
-blocked or unaffordable orders as filled.
+rounding to a Target Portfolio. The Result Bundle retains daily aggregates and
+Terminal Positions rather than target-weight history or unfilled orders.
 _Avoid_: Target Portfolio, pending order, ideal equal weight
 
 **Execution Share Quantity**:
-The non-negative integer quantity changed by filled Strategy orders. V1 uses it
-for Board-Lot Rounding, Child Orders, Raw Market Price notional, and execution
-constraints. It is an execution ledger coordinate, not a claim that V1
-reconstructs broker shares through company actions.
+The non-negative integer share coordinate changed by filled Strategy orders and
+used for Board-Lot Rounding, Child Orders, Raw Market Price notional, and
+execution constraints. It is distinct from Adjusted Holding Units and does not
+claim to reconstruct broker shares through company actions.
 _Avoid_: Adjusted Holding Units, broker share balance, market volume
 
 **Adjusted Holding Units**:
 The possibly fractional quantity used to value an Actual Holding as
-`units * Adjusted Research Price`. A buy adds
-`Execution Shares / Adjustment Scale`; a partial sell removes units in
-proportion to the Execution Shares sold. The balance captures adjusted
-total-return valuation without company-action events.
+`units * Adjusted Research Price`, with buys adding `Execution Shares /
+Adjustment Scale` and partial sells removing units in proportion to Execution
+Shares sold. It represents adjusted total-return valuation rather than broker
+shares or a company-action event ledger.
 _Avoid_: Execution Share Quantity, Raw Market Price order quantity, stock split
 
 **Research Settlement**:
-The cash value transferred by a synthetic Strategy sale. It equals the
-Adjusted Holding Units removed multiplied by current Adjusted Research Price;
-Raw Market Price notional still controls order rules and Transaction Costs.
-Research Settlement realizes adjusted total return and is not broker sale
-proceeds.
+The synthetic cash value transferred by a Strategy sale, equal to removed
+Adjusted Holding Units multiplied by current Adjusted Research Price. It
+realizes adjusted total return rather than broker proceeds, while Raw Market
+Price notional remains the basis for order rules and Transaction Costs.
 _Avoid_: Raw notional, company-action event, broker cash settlement
 
 **Actual Holdings Count**:
 The number of instruments with positive Execution Share Quantity after each
-open execution cycle. It excludes cash, includes retained off-target positions,
-and may exceed Holdings Count. V1 retains the daily series plus mean, minimum,
-maximum, and ending values.
+open execution cycle, excluding cash but including retained off-target
+positions, so it may exceed Holdings Count. V1 retains its daily series plus
+mean, minimum, maximum, and ending values.
 _Avoid_: Holdings Count target, eligible candidate count, order count
 
 **Maximum Single-Name Weight**:
@@ -418,45 +334,43 @@ value without enforcing it as a Strategy position limit.
 _Avoid_: Target equal weight, configured cap, largest order weight
 
 **Cash Ratio**:
-Post-trade Net Cash divided by Net NAV on one open. It is a deployment result,
-not a target. V1 derives each daily value from the retained Strategy Daily
-Observation and reports its mean, period maximum with date, and ending value;
-it does not retain a duplicate Cash Ratio series.
+Post-trade Net Cash divided by Net NAV on one open. V1 derives it from Strategy
+Daily Observations and retains only its summary aggregates, not a duplicate
+series or target.
 _Avoid_: Cash target, unfilled ratio, Initial Cash
 
 **Valuation Carry**:
 The last valid Adjusted Research Price carried solely to mark a confirmed
-full-session-suspended Actual Holding for Strategy NAV. It gives zero return
-until a real post-suspension mark appears and is never exposed as Canonical
-Market Data, Alpha input, Forward Return Label, or execution price. A partial
-suspension with a valid daily bar never uses it.
+full-session-suspended Actual Holding for Strategy NAV, giving zero return until
+a real post-suspension mark appears. It is never Canonical Market Data, an Alpha
+input, a Forward Return Label, or an execution price, and a partial suspension
+with a valid daily bar never uses it.
 _Avoid_: Forward fill, synthetic market bar, executable price
 
 **Terminal Delisting Write-Off**:
 The conservative Strategy accounting event applied only when an Actual Holding
 has no required daily Open, is not governed by confirmed full-session
 suspension, and has explicit effective terminal-delisting evidence in the
-pinned Dataset Release. It removes the position at zero value and zero proceeds.
-It creates no order, fill, Transaction Cost, Turnover, or Market Rejection, and
-does not represent an observed zero-price trade.
+pinned Dataset Release. It removes the position at zero value and zero proceeds
+without creating an order, fill, Transaction Cost, Turnover, Market Rejection,
+or observed zero-price trade.
 _Avoid_: Forced sell, suspended-price carry, unexplained missing-data fallback
 
 **Terminal Delisting Return**:
 The synthetic `-100%` return produced only after a valid starting Adjusted
 Research Price when explicit terminal delisting makes the required Benchmark
-or Forward Return Label ending Open unavailable. A missing Label entry Open
-cannot use this convention because it has no return base. Status resolution is
-an on-demand local lookup, and zero is not a Canonical market price.
+or Forward Return Label ending Open unavailable. It cannot apply to a missing
+Label entry Open, relies on an on-demand local status lookup, and never treats
+zero as a Canonical market price.
 _Avoid_: Observed zero-price trade, suspension carry, missing-entry return
 
 **Board-Lot Rounding**:
 The conversion of a buy value deficit or proportional sell-value reduction into
-a legal integer Execution Share Quantity. Buys use Raw Market Price; sells use
-the current Execution Shares-to-adjusted-value proportion. Main-board and
+a legal integer Execution Share Quantity using Raw Market Price for buys and the
+current Execution Shares-to-adjusted-value proportion for sells. Main-board and
 ChiNext buys and partial sells use 100-share multiples; STAR Market buys require
-at least 200 shares and then permit one-share increments. Complete liquidation
-sells the entire remaining Execution Share Quantity, including an odd-lot
-remainder. Below-minimum orders are omitted.
+at least 200 shares and then permit one-share increments; complete liquidation
+sells any odd-lot remainder; below-minimum orders are omitted.
 _Avoid_: Fractional share, universal 100-share rule, rounded target value
 
 **Child Order**:
@@ -469,12 +383,11 @@ _Avoid_: Partial fill, replacement order, independent execution time
 **Transaction Costs**:
 The fixed V1 deductions applied to each filled order: 0.0003 all-in broker
 commission on both sides with a CNY 5 minimum, 0.00001 transfer fee on both
-sides, and 0.0005 stamp duty on sells. Regulatory and exchange handling fees
-are included in the all-in commission and are not deducted separately. The
-cost base is Execution Share Quantity multiplied by Raw Market Price even when
-a sell's synthetic Research Settlement differs. V1 uses decimal arithmetic
-without per-order or per-Child-Order rounding to CNY 0.01; two-decimal report
-formatting never changes accounting state.
+sides, and 0.0005 stamp duty on sells, with regulatory and exchange handling
+fees included in commission rather than deducted separately. Their base is
+Execution Share Quantity multiplied by Raw Market Price, and decimal accounting
+uses no per-order or per-Child-Order CNY 0.01 rounding despite two-decimal report
+formatting.
 _Avoid_: Slippage, market impact, double-counted regulatory fee, hidden rate
 
 **Transaction Cost Return Drag**:
@@ -498,54 +411,49 @@ between scheduled Strategy signal sessions.
 _Avoid_: Natural-day interval, fixed 1/5/20 enumeration, holding cohort
 
 **Open Execution Model**:
-The V1 rule that attempts a Strategy order at the next session's Raw Market
-Price open, meaning that instrument's first traded daily price rather than a
-fixed 09:30 timestamp. Only full-session suspension blocks both sides; an
-upper-limit open blocks a buy and a lower-limit open blocks a sell. Every other
-eligible order, including one after a partial opening suspension, fills
-completely at the open without queue, partial-fill, capacity, impact, or
-slippage simulation. Unknown or invalid open data fails Publication or
-ResearchRun rather than blocking an order. This is a synthetic Backtest fill
-assumption, not an exchange-native market-at-open order.
+The synthetic V1 fill contract that attempts a Strategy order at the next
+session's Raw Market Price open, meaning the instrument's first traded daily
+price rather than a fixed 09:30 timestamp. It fully fills every otherwise
+eligible order without queue, partial-fill, capacity, impact, or slippage;
+full-session suspension blocks both sides, an upper-limit open blocks a buy, a
+lower-limit open blocks a sell, and unknown or invalid open data fails
+Publication or ResearchRun.
 _Avoid_: Adjusted execution price, intraday fill model, guaranteed limit fill
 
 **Blocked Order**:
 A Strategy order that cannot execute at its one scheduled open under the Open
-Execution Model. V1 cancels it without retry or candidate substitution: a
-blocked buy leaves cash, while a blocked sell leaves the position unchanged.
-Only a later scheduled Rebalance may create a new order.
+Execution Model. It is cancelled without retry or candidate substitution, so a
+blocked buy leaves cash, a blocked sell leaves the position, and only a later
+scheduled Rebalance may create a new order.
 _Avoid_: Pending order, partial fill, next-ranked replacement
 
 **Market Rejection**:
 One created logical order blocked by `upper_limit_buy`, `lower_limit_sell`, or
-confirmed `full_session_suspended` with no daily open. V1 retains daily and
-period reason-specific counts, aggregating Child Orders and calculating no
-unfilled ratio. It does not retain order-level rejection details.
+confirmed `full_session_suspended` with no daily open. V1 retains bounded
+reason counts but no order-level rejection details or unfilled ratio.
 _Avoid_: Insufficient cash, below-board-lot omission, data-quality error
 
 **Trading State**:
 The one Canonical `equity.trading_state` value for an active instrument and
 Research Session: `normal`, `open_suspended_partial`,
-`after_open_suspended`, or `full_session_suspended`.
-Both partial states retain a first traded daily Open. Only
-`full_session_suspended` is a Market Rejection input, permits an absent daily
-bar, and uses Valuation Carry.
+`after_open_suspended`, or `full_session_suspended`. Both partial states retain
+a first traded daily Open, while only `full_session_suspended` is a Market
+Rejection input, permits an absent daily bar, and uses Valuation Carry.
 _Avoid_: Missing-data fallback, pending order state, inferred zero turnover
 
 **Held Missing-Open Resolution**:
 The conditional local lookup path entered only for an Actual Holding without a
-required daily Open. It checks Canonical full-session suspension first,
-terminal-delisting evidence second, and otherwise reports unexplained data
-loss. A valid daily Open bypasses the path, and ResearchRun never calls Tushare
-per instrument.
+required daily Open, checking Canonical full-session suspension first,
+terminal-delisting evidence second, and otherwise reporting unexplained data
+loss. A valid daily Open bypasses it, and ResearchRun never calls Tushare per
+instrument.
 _Avoid_: Daily delisting scan, remote runtime lookup, missing-price zero fill
 
 **Execution Diagnostic**:
 A runtime-classified reason why a target or order was not created, such as
 insufficient cash, a below-minimum Board Lot, insufficient candidates, or
-ineligibility. It is distinct from a Market Rejection and from an
-unexplained-data failure. V1 may retain bounded reason aggregates but no
-per-order diagnostic ledger.
+ineligibility. It is distinct from a Market Rejection and may survive only as
+a bounded aggregate.
 _Avoid_: Blocked Order, successful fill, silent omission
 
 **Existing-Position Eligibility**:
@@ -555,51 +463,41 @@ the Top-N target set. Failure gives it a zero target at that Rebalance but never
 causes an unscheduled liquidation.
 _Avoid_: New-buy eligibility, immediate forced sale, permanent eligibility
 
+### Research Lifecycle and Factor Evaluation
+
 **Research Definition**:
 A versioned structured document that completely describes one research,
 including its Investment Hypothesis, data, universe, period, Alpha, evaluation
-rules, Strategy, execution, and costs. The editor maintains a mutable Draft.
-Requesting Run validates it, resolves its concrete Dataset Release and field
-bindings, and creates an immutable frozen version consumed directly by the new
-ResearchRun. There is no separate user-visible Freeze action.
+rules, Strategy, execution, and costs. Requesting Run validates the current
+Draft and creates the immutable frozen version consumed by one ResearchRun.
 _Avoid_: ResearchSpec, Research DSL, Compiled Research Plan, mutable run settings
 
 **Research Definition Draft**:
-The mutable authoring revision in the V1 editor. A Run request either fails
-validation and leaves it editable or creates a separate immutable frozen
-Research Definition version. Editing later cannot modify a prior Run's frozen
-input.
+The mutable authoring revision in the V1 editor from which a valid Run request
+creates a separate immutable frozen Research Definition version. Failed
+validation leaves it editable, and later edits cannot change a prior Run's
+frozen input.
 _Avoid_: Frozen definition, ResearchRun, compiled plan
 
 **ResearchRun**:
 One execution of a frozen Research Definition pinned to one Dataset Release
-that produces separate Factor Evaluation and Strategy Backtest conclusions. It
-cannot mix a calendar, Universe, Canonical field object, Adjustment Anchor, or
-Adjustment Factor from another release. Its persistent lifecycle is
-`queued -> running -> succeeded | failed | cancelled`. Transient infrastructure
-retries are attempts under the same Run; a user rerun creates a new Run, and
-idempotent creation prevents duplicate Runs from one repeated request. A
-standard Run remains one rolling 756-input/504-report snapshot; a successful
-Run may explicitly seed a separate continuous DailyTrack.
+that produces Factor Evaluation and Strategy Backtest conclusions. It has a
+durable lifecycle, treats retries as Attempts, and may seed a DailyTrack only
+after publishing a complete Result Bundle.
 _Avoid_: Research Definition, factor evaluation, backtest
 
 **ResearchRun Attempt**:
-One infrastructure execution attempt belonging to an existing ResearchRun.
-Retrying a transient failure may create another Attempt without changing the
-Run identity or its frozen inputs. A user-requested rerun is a new ResearchRun,
-not another Attempt.
+One infrastructure execution attempt belonging to an existing ResearchRun,
+whose transient retry may create another Attempt without changing the Run
+identity or frozen inputs. A user-requested rerun is a new ResearchRun rather
+than another Attempt.
 _Avoid_: ResearchRun, user rerun, modified run input
 
 **Result Bundle**:
-The immutable minimal and authoritative result of one successful ResearchRun.
-Its Result Manifest binds provenance plus checksummed Factor summaries,
-Strategy summary, Strategy Daily Observations, bounded rebalance and execution
-aggregates, Terminal Positions, and Terminal Strategy State. It excludes Alpha
-Values, Forward Return Labels, daily Factor observations, raw orders and fills,
-and duplicated derived series. UI and reports are derived views. The complete
-ResearchRun-owned bundle is atomically published and must not exceed
-`1,048,576` exact bytes. A DailyTrack Activation Checkpoint may reference the
-bundle but never extends or mutates it.
+The immutable, minimal, at-most-`1,048,576`-byte authoritative result of one
+successful ResearchRun. It retains Factor summaries, Strategy results and
+continuation state while excluding Alpha Values, stock-level Labels, daily
+Factor observations, and raw execution details.
 _Avoid_: Alpha store, UI cache, partial report, mutable result, attempt
 diagnostics
 
@@ -619,10 +517,9 @@ _Avoid_: Factor curve, Alpha Matrix, Strategy Backtest, factor return
 
 **Label Maturation**:
 The calculation point when one pending signal-session and horizon Label becomes
-resolvable because its nominal exit Research Session `t+1+h` has entered the
-pinned Dataset Release. The governed outcome may be a return, `-100%` terminal
-loss, or unavailable. Daily Tracking uses it to update the Factor Summary
-Snapshot; it is not a persisted Label event or Alpha record.
+resolvable because its nominal exit Research Session has entered the pinned
+Dataset Release. Daily Tracking consumes its governed outcome to update a
+Factor Summary Snapshot without persisting a stock-level event.
 _Avoid_: Stored Label row, in-place Label update, signal-date rewrite
 
 **Factor Summary Snapshot**:
@@ -635,11 +532,11 @@ daily IC result
 
 **Rank IC**:
 The daily cross-sectional standard Spearman correlation between valid final
-Alpha Values and one Forward Return Label horizon. Exact ties receive their
-average ascending rank and are never broken by instrument identity or row
-order. A constant Alpha or label array produces no Rank IC. It is V1's primary
-Factor Evaluation metric and is aggregated across sessions without pooling
-stock-day rows.
+Alpha Values and one Forward Return Label horizon, with exact ties receiving
+their average ascending rank rather than an identity or row-order tie-break. It
+is V1's primary Factor Evaluation metric, yields no value for a constant Alpha
+or Label array, and is aggregated across sessions without pooling stock-day
+rows.
 _Avoid_: Pearson IC, time-series correlation, pooled correlation
 
 **IC**:
@@ -656,11 +553,10 @@ _Avoid_: Annualized strategy information ratio, t-statistic, pooled IC
 
 **Effective Factor Sample**:
 The instruments produced by one signal session's Final Alpha Cross-Section that
-also have a valid Forward Return Label for one horizon. Label availability is
-filtered independently per horizon and never changes the Final Alpha
-Cross-Section. V1 requires at least 30 and non-constant Alpha and label
-cross-sections to calculate that session's IC and Rank IC; otherwise the metric
-is missing as sample-insufficient.
+also have a valid Forward Return Label for one independently filtered horizon,
+without changing that Final Alpha Cross-Section. V1 requires at least 30 pairs
+and non-constant Alpha and Label cross-sections for IC and Rank IC; otherwise
+the session metric is sample-insufficient.
 _Avoid_: Universe Membership, Strategy holdings, filled missing observation
 
 **Final Alpha Cross-Section**:
@@ -675,12 +571,10 @@ _Avoid_: Horizon-specific Alpha, raw expression output, Effective Factor Sample
 **Five-Quantile Return**:
 The equal-weight Forward Return Label of each of five approximately equal-count
 groups formed daily by sorting the Effective Factor Sample from lowest Alpha
-Values in Q1 to highest in Q5. Equal Alpha Values receive a common average rank
-`r` and enter `ceil(5 * r / N)` for sample size `N`. They therefore remain in
-one group, so group sizes may differ or a group may be empty. V1 performs no
-balancing pass. V1 requires at least 30 valid Alpha-and-label pairs for the
-complete session-horizon quantile result; otherwise it is missing. It is a
-Factor diagnostic, not a portfolio NAV.
+Values in Q1 to highest in Q5. Equal values share average rank `r` and group
+`ceil(5 * r / N)`, so groups may differ or be empty without rebalancing; fewer
+than 30 valid pairs make the complete session-horizon result missing, and the
+result is a Factor diagnostic rather than portfolio NAV.
 _Avoid_: Sorting by future return, Strategy holding, cumulative backtest return
 
 **Top-Bottom Return**:
@@ -691,51 +585,29 @@ costs.
 _Avoid_: Executable long-short portfolio, Strategy excess return, net return
 
 **Forward Return Label**:
-The Adjusted Research Price return paired with an Alpha Value for session `t`.
-For a horizon of `h` market sessions, it starts at the `t+1` open and ends at
-the `t+1+h` open. V1 Factor Evaluation always produces the 1-, 5-, and
-20-session labels. The label is attributed to signal session `t` but becomes
-resolvable only when the nominal exit Research Session `t+1+h` enters the
-Dataset Release. An observation without both required Opens has no ordinary
-return Label for that horizon, subject only to the governed terminal-delisting
-zero below.
-Missing label availability excludes the instrument only from that horizon's
-Effective Factor Sample; it does not change the Final Alpha Cross-Section.
-V1 records `right_censored_by_release_end` or
-`confirmed_market_open_unavailable` for expected unavailability; an
-`unexplained_missing_or_invalid_data` condition fails Publication or
-ResearchRun rather than becoming ordinary coverage loss. With a 504-session
-Research Window ending at the pinned release, each instrument has at most 502,
-498, and 483 labeled signal sessions for the 1-, 5-, and 20-session horizons
-before other coverage loss. A partial suspension with a valid daily bar
-supplies its first traded `open`; only full-session suspension makes that
-coordinate unavailable. After a valid entry Open, explicit terminal delisting
-on or before the exit supplies a synthetic zero terminal value and a `-100%`
-Label. Terminal delisting before the entry leaves the Label unavailable.
-During Daily Tracking, its 1-, 5-, and 20-session horizons mature respectively
-at Research Sessions `t+2`, `t+6`, and `t+21`. The corresponding aggregate
-Factor observation is calculated without appending a durable stock-level Label
-or Label Maturation event.
+The Adjusted Research Price return attributed to Alpha signal session `t`,
+starting at the `t+1` Open and ending at the `t+1+h` Open for the fixed
+1-, 5-, or 20-session horizon. Governed suspension, censoring, missingness, and
+terminal-delisting rules determine availability, and the stock-level Label is
+discarded after its Factor aggregate is calculated.
 _Avoid_: Same-close return, implicit horizon, close-to-close default,
 Alpha-recalculation input
 
+### Strategy Results
+
 **Strategy Backtest**:
 The result that assesses the historical portfolio outcome produced by applying
-a Strategy, execution assumptions, and costs to Alpha Values. V1 first attempts
-orders from `Alpha[t]` at the next session's Raw Market Price open, accrues
-holding performance between successive opens from Adjusted Research Price, and
-uses dual-unit synthetic research settlement rather than reconstructing
-company-action cash and share events. It reports Gross and Net NAV from one
-actual fill path, with Net NAV as the primary result.
+a Strategy, next-open execution, costs, and adjusted valuation to Alpha Values.
+It reports Gross and Net NAV from one actual fill path, with Net NAV as the
+primary result.
 _Avoid_: Factor Evaluation, Alpha, broker account statement
 
 **Strategy Daily Observation**:
 The retained minimal Strategy result for one Research Session. It records Gross
 NAV, Net NAV, Benchmark NAV, Net Cash, session Transaction Costs, Actual
 Holdings Count, Maximum Single-Name Weight, and the three Market Rejection
-counts needed to render the confirmed return, risk, deployment, cost, and
-execution metrics. Cash Ratio and Drawdown are derived from these retained
-coordinates rather than stored as duplicate daily series.
+counts needed to derive the accepted report without duplicate Cash Ratio or
+Drawdown series.
 _Avoid_: Position history, target-weight history, order ledger, fill ledger
 
 **Terminal Strategy State**:
@@ -748,10 +620,8 @@ _Avoid_: Strategy Daily Observation, Result Bundle history, broker account
 
 **Gross NAV**:
 Gross Cash plus every Actual Holding's Adjusted Holding Units multiplied by its
-Adjusted Research Price, before Transaction Costs. It uses the same fill
-quantities as Net NAV and isolates cost drag without rerunning a separate
-cost-free Strategy that could choose different quantities. It is reporting-only
-and never feeds a target, order, affordability decision, holding, or weight.
+Adjusted Research Price, before Transaction Costs. It shares Net NAV's fill
+path but is reporting-only and never changes Strategy decisions.
 _Avoid_: Net NAV, independent Backtest, Target Portfolio value
 
 **Net NAV**:
@@ -820,38 +690,27 @@ _Avoid_: Close NAV, pre-trade return series, intraday marking
 **Backtest Start Baseline**:
 The all-cash observation at the first Research Window open: Gross NAV and Net
 NAV are Initial Cash, Benchmark NAV is 1, and Actual Holdings are empty. The
-first Research Window close supplies the first Strategy signal and the next
-open supplies the first deployment. The intervening Net Return contains only
-initial Transaction Costs; Gross and Benchmark returns are zero.
+first close supplies the first signal and the next Open the first deployment.
 _Avoid_: Warm-up position, pre-cost starting NAV, first holding return
 
 **Terminal Valuation**:
 The final Research Window open, when V1 values carried Actual Holdings and
 records the final Strategy Daily Observation and Terminal Strategy State
-without a Rebalance. The Strategy does not use a signal that would execute at
-this open, because no reported holding interval would follow, and it does not
-force liquidation or deduct hypothetical exit costs. This is a finite
-ResearchRun boundary; an active DailyTrack continues beyond it under its
-Activation Checkpoint.
+without a Rebalance, forced liquidation, or hypothetical exit costs. It ends a
+finite ResearchRun while an active DailyTrack continues beyond it.
 _Avoid_: Final Rebalance, forced liquidation, post-window valuation
 
 **Strategy Benchmark**:
-The daily equal-weight return of the Liquidity Universe selected by the same
-frozen Research Definition. It is the comparison series for a Strategy
-Backtest, not an external index selected implicitly by the runtime. Universe
-Membership produced after signal session `t` applies to the return from the
-`t+1` open to the `t+2` open, matching the Strategy holding interval.
-Benchmark NAV is 1 at the Backtest Start Baseline and remains flat through the
-initial-deployment open; its first market return begins with the first Strategy
-holding interval.
-Confirmed suspended members remain in the equal-weight denominator with zero
-return only for `full_session_suspended` until a valid Adjusted Research Price
-reappears; their weight is not redistributed. A partial suspension with a valid
-bar uses its observed return. After a valid starting mark, explicit terminal
-delisting at a missing ending Open supplies a synthetic zero value and a
-`-100%` member return. The lookup occurs only for a missing required Open and
-uses local Dataset Release evidence.
+The comparison series that starts at NAV 1 and applies equal-weight daily
+returns of the frozen Research Definition's Liquidity Universe over the same
+next-open holding intervals as the Strategy, remaining flat through the
+initial-deployment open. It retains confirmed full-session-suspended members
+with zero return and no weight redistribution, uses observed partial-suspension
+returns, applies `-100%` only for locally evidenced terminal delisting after a
+valid starting mark, and never substitutes an external index.
 _Avoid_: Implicit benchmark, default CSI 300, unrelated market index
+
+### Dataset and Market Data
 
 **End-of-Day Research**:
 Research over completed Shanghai or Shenzhen A-share market sessions using
@@ -872,15 +731,11 @@ _Avoid_: Calendar day, source row, intraday session
 
 **Research Window**:
 The final 504 completed Research Sessions reported by V1 Factor Evaluation and
-Strategy Backtest. The immediately preceding 252 completed Research Sessions are
-calculation-only warm-up inputs and are not part of the reported interval.
-Release-owned Adjustment Anchors may predate both periods without becoming
-research observations. Warm-up inputs may complete the first Alpha Expression
-but their Alpha Values never create Strategy orders. Its final session is the
-Strategy Terminal Valuation; Factor Evaluation independently retains signal
-sessions according to each Forward Return Label's availability. This fixed
-window belongs to a standard ResearchRun; a DailyTrack keeps its original
-Tracking Origin and continuous account state rather than rolling to a new R1.
+Strategy Backtest, following 252 calculation-only warm-up sessions whose Alpha
+Values never create Strategy orders and any earlier release-owned Adjustment
+Anchors. It ends at Strategy Terminal Valuation, retains Factor signals
+according to Label availability, and remains a fixed ResearchRun window rather
+than rolling a DailyTrack away from its original Tracking Origin.
 _Avoid_: Complete market history, warm-up period, unbounded date range
 
 **Research Input History**:
@@ -890,37 +745,16 @@ _Avoid_: Research Window, complete market history, report period
 
 **Dataset Release**:
 A platform-owned, immutable manifest for one validated market-data snapshot,
-available read-only to every Personal Workspace. It is a cumulative logical
-snapshot from Dataset Bootstrap through its final Research Session and binds the
-exact Research Calendar, Universe snapshots, Canonical Dataset Schemas and
-immutable Physical Data Objects, Adjustment Anchors, Adjustment Factors, and
-other required dated families. Its manifest records its direct predecessor,
-appended session range, and accepted historical correction change-set with
-affected logical keys or ranges. The physical encoding may remain a small
-predecessor-linked delta rather than copying all history. The Bootstrap Release
-is the chain root with no predecessor, the complete bootstrapped calendar as its
-appended range, and an empty correction change-set; every later Release names
-one predecessor. Factor Evaluation, Strategy Backtest, Alpha generation and
-validation, collaboration, and reproduction resolve data through this one
-snapshot. A ResearchRun pins one release, while each Tracking Advance separately
-pins its target release without modifying the DailyTrack's seed Definition.
-`latest` may select a release before freezing but is never itself a reproducible
-identity.
+available read-only to every Personal Workspace. It binds one cumulative
+logical snapshot, its predecessor and correction change-set, and the immutable
+data identities used by ResearchRuns and Tracking Advances.
 _Avoid_: Workspace-owned dataset, mutable dataset, latest dataset, runtime cache
 
 **Dataset Publication**:
 The platform-operated post-close process attempted only when a newly completed
-Research Session extends the latest release. Personal Workspaces may consume its
-Dataset Releases but do not publish them. It makes a new Dataset Release
-available after all required daily inputs, pending accepted historical
-corrections, and quality checks succeed. A correction without a new Research
-Session waits for the next normal attempt. V1 incrementally fetches the new
-session and does not re-scan the complete three-year history for corrections
-after every close. After consecutive failures, one successful release catches
-up to the latest completed session without manufacturing intermediate releases.
-Failure leaves the previous latest release unchanged. A committed release may
-enqueue independent active DailyTrack Advances, but Publication never waits for
-or rolls back because of their outcome.
+Research Session extends the latest release. It atomically publishes validated
+incremental or catch-up data and accepted corrections without waiting for
+independent DailyTrack Advances.
 _Avoid_: Data fetch, partial update, in-place dataset mutation,
 correction-only release
 
@@ -933,9 +767,9 @@ _Avoid_: Daily publication, correction scan, Dataset Release
 
 **Canonical Market Data**:
 The source-neutral fields and time semantics produced from validated upstream
-responses and published through a Dataset Release. Canonical fields use stable
-system names, types, and normalized units rather than Tushare's transport
-representation. Research definitions never depend on a vendor's field names or
+responses and published through a Dataset Release, using stable system names,
+types, and normalized units rather than Tushare's transport representation.
+Research Definitions depend on this contract rather than vendor field names or
 transport.
 _Avoid_: Tushare response, vendor schema, runtime API data
 
@@ -948,10 +782,9 @@ fixed-anchor Adjusted Research Prices.
 _Avoid_: Tushare daily response, qfq table, user-selected field subset
 
 **Raw Market Price**:
-The unadjusted nominal OHLC price in CNY for one instrument and market session.
-Its daily `open` is the instrument's first traded price for the session and may
-occur after 09:30. Raw Market Price is used by execution-price conditions and
-real-market execution constraints.
+The unadjusted nominal OHLC price in CNY for one instrument and market session,
+whose daily `open` is the first traded session price and may occur after 09:30.
+It supplies execution-price conditions and real-market execution constraints.
 _Avoid_: Adjusted Research Price, qfq price, hfq price
 
 **Adjusted Research Price**:
@@ -964,17 +797,17 @@ _Avoid_: Raw Market Price, CNY quote, dynamic qfq, hfq history
 
 **Adjustment Anchor**:
 The immutable per-instrument record of `instrument_id`, `anchor_session`, and
-`anchor_adjustment_factor` bound by Dataset Release. Its session is the first
-post-listing session with both a valid raw daily bar and Source Adjustment
-Factor. It may predate Research Input History and never belongs to Strategy or
-Research Window.
+`anchor_adjustment_factor` bound by Dataset Release, using the first post-listing
+session with both a valid raw daily bar and Source Adjustment Factor. It may
+predate Research Input History and belongs to neither Strategy nor Research
+Window.
 _Avoid_: Rolling-window base date, Strategy parameter, import timestamp
 
 **Source Adjustment Factor**:
 The positive, finite, dimensionless decimal `adj_factor` value accepted from
-Tushare in the dated `equity.adjustment_factor` Dataset Family. It is an input
-to the Adjustment Scale, not itself an adjusted market price. A daily bar
-without its valid same-session factor prevents Dataset Publication.
+Tushare in the dated `equity.adjustment_factor` Dataset Family and used as an
+input to Adjustment Scale rather than as an adjusted market price. Its valid
+same-session presence is required for every daily bar in Dataset Publication.
 _Avoid_: Adjustment Scale, adjusted price
 
 **Adjustment Scale**:
@@ -1000,18 +833,16 @@ _Avoid_: Dataset Schema selector, source documentation, physical table browser
 **Field Definition**:
 The immutable meaning of one stable `field_id`, including its type, unit,
 primary-key grain, and information-availability semantics. Adding a field
-creates a new Dataset Schema version. Correcting values keeps the definition
-and enters the next new-session Dataset Release; changing meaning requires a
-new `field_id`.
+creates a new Dataset Schema version, correcting values preserves the definition
+in a later Dataset Release, and changing meaning requires a new `field_id`.
 _Avoid_: Mutable field meaning, source column name, corrected data value
 
 **Field Reference**:
-A short Alpha-authorable canonical name. V1 permits exactly `$open_adj`,
-`$high_adj`, `$low_adj`, `$close_adj`, `$volume_shares`, and
-`$turnover_amount_cny`. Field Catalog provides discovery and completion for
-that subset while still listing non-authorable execution and provenance
-fields. Validation records the resolved stable `field_id` inside the same
-frozen Research Definition; it does not produce a separate compiled artifact.
+A short Alpha-authorable Canonical Market Data name, restricted in V1 to
+`$open_adj`, `$high_adj`, `$low_adj`, `$close_adj`, `$volume_shares`, and
+`$turnover_amount_cny`. Field Catalog exposes this subset and validation records
+the resolved stable `field_id` in the frozen Research Definition without a
+separate compiled artifact.
 _Avoid_: Vendor field name, manually authored long identifier, compiled plan
 
 **Dataset Schema**:
@@ -1020,9 +851,9 @@ Dataset Release binds its exact version; a user does not select it separately.
 _Avoid_: Field Catalog, Dataset Release, Research Definition parameter
 
 **Physical Data Object**:
-An immutable partition or content-addressed object containing actual data.
-Dataset Releases reuse existing objects and add only new or corrected objects,
-rather than duplicating the complete historical dataset.
+An immutable data partition or content-addressed object identified by its exact
+bytes under the recorded writer contract. Dataset Releases reuse it rather than
+duplicating unchanged history.
 _Avoid_: Dataset Release, mutable latest table, full daily copy
 
 **Dataset Family**:
@@ -1034,25 +865,21 @@ _Avoid_: Source API, one universal wide table, storage partition
 
 **Instrument Identity**:
 The minimal shared identity referenced by all Dataset Families:
-`instrument_id`, asset type, exchange, symbol, lifecycle, and Tushare code.
-`instrument_id` is the deterministic, readable `{asset_type}:{ts_code}`, not a
-random UUID. V1 instantiates it only for ordinary CNY-denominated A-shares on
-the SSE Main Board, SZSE Main Board, ChiNext, and STAR Market; future asset
-families reuse the identity without placing their asset-specific attributes in
-the common contract.
+`instrument_id`, asset type, exchange, symbol, lifecycle, and Tushare code, with
+the deterministic readable ID `{asset_type}:{ts_code}` rather than a random
+UUID. V1 instantiates it only for ordinary CNY-denominated A-shares on the SSE
+Main Board, SZSE Main Board, ChiNext, and STAR Market, while future asset
+families reuse the identity without adding asset-specific attributes.
 _Avoid_: Random UUID, surrogate-ID mapping table, asset-specific contract terms,
 general provider registry
 
 **Point-in-Time Financial Data**:
-The future `equity.financial_pit` Dataset Family, not implemented in V1, keyed
-and timestamped so a research session can use only financial facts available by
-that session. It is separate from `equity.eod_price` rather than appended as
-daily-bar columns. A disclosure with a precise publication time becomes
-available according to that time; when only its publication date is known, it
-becomes available on the next market session. Source-provided versions and
-changed later pulls are retained without overwriting earlier Dataset Releases.
-Revision coverage is reported as incomplete when Tushare does not expose the
-required history.
+The future non-V1 `equity.financial_pit` Dataset Family, separate from
+`equity.eod_price` and keyed by availability time so research sees only facts
+available by each session, with date-only disclosures becoming available on the
+next market session. It retains Tushare-provided versions without overwriting
+earlier Dataset Releases and marks revision coverage incomplete when Tushare
+lacks the required history.
 _Avoid_: Current financial snapshot, future backfill, invented revision history,
 OHLCV extension
 
@@ -1072,49 +899,45 @@ futures, options, and convertible bonds are documented extension boundaries
 and are not ingested or exposed in V1.
 _Avoid_: Financial-data implementation, non-equity asset ingestion, intraday data
 
+### Universe and Industry
+
 **Universe Base Pool**:
 The point-in-time ordinary-A-share membership snapshot that Dataset Publication
-produces for an `as_of_date` before liquidity ranking. It covers the SSE Main
-Board, SZSE Main Board, ChiNext, and STAR Market and excludes B-shares, Chinese
-depositary receipts, Beijing Stock Exchange securities, funds, bonds including
-convertible bonds, preferred shares, and other non-ordinary-equity instruments.
-The Liquidity Universe consumes this snapshot and does not interpret listing
-statuses or maintain listing-lifecycle intervals. A security that later delists
-remains in snapshots from its former listed period; current listing status is
-never backfilled into history. Dataset Publication builds the snapshot from
-accepted Tushare `stock_basic`, dated `bak_basic`, `daily`, and `suspend_d`
-evidence and fails if required membership remains ambiguous. ST and `*ST`
-status does not alter this pool.
+produces for an `as_of_date` before liquidity ranking, covering the SSE Main
+Board, SZSE Main Board, ChiNext, and STAR Market while excluding B-shares,
+Chinese depositary receipts, Beijing Stock Exchange securities, funds, bonds,
+preferred shares, and other non-ordinary equities. It preserves former-period
+membership without current-status backfill, ignores ST and `*ST`, and derives
+unambiguous membership from accepted Tushare `stock_basic`, dated `bak_basic`,
+`daily`, and `suspend_d` evidence rather than interpreting lifecycle intervals
+inside the Liquidity Universe.
 _Avoid_: Current-listed-only stock list, Research Eligibility, all Tushare
 instruments
 
 **Liquidity Universe**:
 A versioned rule that ranks instruments in the Universe Base Pool by their mean
 daily turnover amount over the trailing 20 completed market sessions and
-selects the top 300, 1000, 2000, or 3000 instruments. The rule is fixed; its
-membership is recalculated after each market session closes. Its ranking pool
-contains instruments active on that date with sufficient history for the
-liquidity measure. It sorts the mean descending and breaks an exact tie by
-`instrument_id` ascending before applying the Top-N cutoff. ST policy,
-suspension, and price-limit state are downstream research or execution
-constraints and do not redefine the Universe.
+selects the top 300, 1000, 2000, or 3000 active instruments with sufficient
+history, ordering mean descending and exact ties by `instrument_id` ascending.
+Its membership is recalculated after each market session closes, while ST,
+suspension, and price-limit policies remain downstream research or execution
+constraints.
 _Avoid_: Static stock list, index constituents, research eligibility filter,
 tradability filter
 
 **Liquidity Rank**:
 The unique one-based position of an instrument in one `as_of_date` liquidity
-ordering. V1 sorts trailing-20-session mean `turnover_amount_cny` descending,
-then `instrument_id` ascending only for exact score ties. Top 300, 1000, 2000,
-and 3000 memberships are cut from this same total ordering, so they are
-deterministically nested.
+ordering, sorted by trailing-20-session mean `turnover_amount_cny` descending
+and exact ties by `instrument_id` ascending. Top 300, 1000, 2000, and 3000
+memberships are cut from this same ordering and are therefore deterministically
+nested.
 _Avoid_: Shared rank, source-response order, independent Top-N sorts
 
 **Liquidity Observation Window**:
 The 20 completed market sessions ending on a Universe snapshot's `as_of_date`.
-A confirmed full-session suspension contributes zero turnover amount; a partial
-suspension with a valid bar contributes its observed amount. An unexplained
-missing observation remains invalid and is never converted to zero. An
-instrument with fewer than 20 post-listing sessions is not ranked.
+A confirmed full-session suspension contributes zero turnover, a partial
+suspension contributes its observed amount, an unexplained missing observation
+remains invalid, and fewer than 20 post-listing sessions prevent ranking.
 _Avoid_: Last 20 non-missing observations, silent zero fill, variable lookback
 
 **Universe Membership**:
@@ -1134,25 +957,18 @@ backfill
 
 **Industry Classification**:
 The SW2021 L1, L2, and L3 industries assigned to an instrument for a historical
-market session. Dataset Releases retain the classification version and
-historical membership as `[valid_from, valid_to_exclusive)` intervals. Exactly
-one path may cover an instrument-date; overlaps fail Dataset Publication and a
-source gap remains Missing without extending or backfilling another interval.
-Industry neutralization defaults to L1; a Research Definition may explicitly
-select L2 or L3. Research must not apply today's industry classification to
-past sessions.
+market session, retained by Dataset Release as versioned
+`[valid_from, valid_to_exclusive)` intervals with exactly one path per
+instrument-date and no gap backfill. Research never applies current
+classification to history, and Industry Neutralization defaults to L1 unless a
+Research Definition selects L2 or L3.
 _Avoid_: Current-industry field, Liquidity Universe, industry quota
 
 **Industry Neutralization**:
-An Alpha-processing option in a Research Definition. `none` emits the Alpha's
-scores directly; `industry` emits industry-neutralized scores. Either choice is
-executed by the same ResearchRun and produces one set of Alpha Values. The
-`industry` option operates on valid Alpha Expression outputs remaining after
-point-in-time ST exclusion and subtracts, for each market session, the
-equal-weight mean of the instrument's selected industry from that instrument's
-output. An instrument without a valid historical industry classification for
-that session is excluded before the Final Alpha Cross-Section and reported as
-missing coverage; it is not assigned to an `UNKNOWN` industry or backfilled
-with its current classification. An industry group with fewer than two valid
-instruments is excluded before demeaning and reported as insufficient.
+The Research Definition option that emits either unchanged scores for `none` or
+one same-Run score set demeaned by each instrument's selected historical
+industry after point-in-time ST exclusion for `industry`. Missing historical
+classification and groups with fewer than two valid instruments are excluded
+before the Final Alpha Cross-Section rather than assigned `UNKNOWN`, backfilled,
+or emitted as a second result branch.
 _Avoid_: Separate run type, automatic neutralization, two result branches
