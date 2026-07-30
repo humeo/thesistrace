@@ -30,5 +30,7 @@ ADR-0081 makes Net Cash and Net NAV the only accounting state used for target
 sizing, order sizing, affordability, and actual weights. Gross values never
 feed a Strategy decision.
 
-ADR-0099 commits both complete NAV series and their supporting result objects
-inside the immutable ResearchRun Result Bundle before the Run can succeed.
+ADR-0099 and ADR-0147 commit both complete NAV series as columns of the
+Strategy Daily Observation table, plus bounded cost aggregates and Terminal
+Strategy State, before the Run can succeed. Raw orders, child orders, and fills
+are runtime intermediates and are not supporting Result Bundle objects.

@@ -28,14 +28,27 @@ Starting creates Tracking Generation 0 and its root Activation Checkpoint with
 `predecessor = none`, pins the calculation-kernel semantic version recorded by
 the seed Result Manifest, then initializes Tracking Head to that root. The
 Activation Checkpoint references and reuses the seed Result Bundle's checksummed
-Alpha Matrix and terminal accounting state. If later real Dataset Releases
-already exist when the operator starts the Track, Advances catch up from the
-seed Release through their predecessor order; activation never jumps directly
-to current `latest`. User-visible Daily Tracking begins at activation, and V1
-does not pretend that the historical sessions inside the seed run were
-separately available DailyTrack updates.
+terminal accounting and position state, Rebalance phase, and any bounded
+pending Strategy signal; the seed has no persistent Alpha Matrix or Forward
+Return Label artifact. Activation initializes ADR-0148's latest-only Pending
+Alpha Cache and Rolling Factor Observation Cache exactly once through bounded
+deterministic calculation from the seed Dataset Release: at most the latest 21
+signal-session Final Alpha Cross-Sections and the latest 504 signal sessions
+for three Factor horizons. A ResearchRun that has not seeded a DailyTrack never
+stores or prebuilds this cache. Cache initialization failure does not corrupt
+the immutable Activation Checkpoint and must be retried before the first
+Advance can use the cache.
+
+If later real Dataset Releases already exist when the operator starts the
+Track, Advances catch up from the seed Release through their predecessor order;
+activation never jumps directly to current `latest`. User-visible Daily
+Tracking begins at activation, and V1 does not pretend that the historical
+sessions inside the seed run were separately available DailyTrack updates.
 
 A new DailyTrack is `active`. An operator may terminally change it to `stopped`,
 which prevents new Advances and automatic retries without changing its Head or
 published Checkpoints. V1 does not resume a stopped Track; any later tracking
-request starts from another successful ResearchRun and new DailyTrack.
+request starts from another successful ResearchRun and new DailyTrack. One
+Workspace permits at most 10 active DailyTracks. An active Track consumes one
+slot even while its frontier Advance is blocked; a stopped Track consumes no
+slot. A start request at the limit fails without changing another Track.

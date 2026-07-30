@@ -15,6 +15,8 @@ Candidate shortages, Blocked Orders, Board-Lot Rounding, incomplete allocation
 after sells, Transaction Costs, and the non-negative-cash constraint can all
 leave cash.
 
-Strategy Backtest retains the daily series and reports its arithmetic mean,
-Research Window maximum with the corresponding date, and ending value. V1 does
-not enforce a separate cash target.
+Strategy Backtest derives the daily series from the Net Cash and Net NAV
+columns retained in Strategy Daily Observations and reports its arithmetic
+mean, Research Window maximum with the corresponding date, and ending value.
+It does not store a duplicate Cash Ratio series or enforce a separate cash
+target.
