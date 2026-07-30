@@ -26,8 +26,10 @@ export THESISTRACE_HOME='/absolute/path/to/thesistrace-data'
 make dev
 ```
 
-The directory contains `metadata.sqlite3` and content-addressed objects. They
-are one backup and recovery unit.
+The directory contains `metadata.sqlite3`, content-addressed immutable
+`objects/`, and the latest-only `working-cache/`. Metadata and immutable
+objects are the authoritative backup unit. The Working Cache is disposable
+and is rebuilt from Checkpoints and their ordered Dataset Releases.
 
 Verify the process boundary:
 
@@ -52,7 +54,10 @@ curl -X POST http://127.0.0.1:8000/api/v1/dataset-releases/bootstrap \
 ```
 
 The result is one immutable root Dataset Release with 756 Research Sessions.
-Repeating the same idempotency key returns the same Release.
+Canonical tables that grow with `session × instrument` are partitioned
+Parquet with ZSTD compression; the Release manifest, schema, provenance, and
+small summaries remain canonical JSON. Repeating the same idempotency key
+returns the same Release.
 
 ## 3. Live Tushare Bootstrap
 
@@ -140,8 +145,15 @@ In the Web Workspace:
 3. Save the Draft if an editable checkpoint is useful.
 4. Select **运行研究**. This atomically validates the Draft, freezes a version,
    pins the current Release, and queues one ResearchRun.
-5. Wait for `SUCCEEDED`, then inspect Factor, Strategy, provenance, diagnostics,
-   daily charts, and the immutable artifact downloads.
+5. Wait for `SUCCEEDED`, then inspect Factor summaries, Strategy results,
+   provenance, diagnostics, and retained Strategy daily charts and tables.
+
+Every successful Result Bundle is limited to `1,048,576` exact logical bytes.
+It retains three Factor summaries, Strategy summary and Daily Observations,
+bounded rebalance/execution aggregates, Terminal Positions, Terminal Strategy
+State, diagnostics, and provenance. Stock-level Alpha, stock-level Labels,
+daily Factor curves, raw orders, fills, rejection details, and raw object
+downloads are not product results.
 
 `queued` and `running` Runs can be cancelled in **运行与追踪记录**. Terminal Runs
 can be rerun; rerun creates a new Run identity but preserves the frozen inputs.
@@ -162,15 +174,31 @@ After each later Release, inspect:
 - matured Label event count;
 - Attempts and stable failure reason codes.
 
+An accepted historical correction does not rewrite prior observations and
+does not create a replay Generation. The affected Advance stays in the current
+Generation, records one visible Correction Boundary, directly follows the
+prior Head, and calculates only newly appended sessions against the corrected
+Release. Only a result-changing calculation-kernel upgrade creates a new
+Generation and a full replay root.
+
+The latest-only Working Cache contains at most 21 pending Alpha
+cross-sections and 1,512 rolling Factor rows. It is not authoritative. If it
+is missing, corrupt, interrupted, or bound to the wrong Head, the Worker
+discards it and rebuilds the bounded state from immutable Checkpoints and
+their exact ordered Dataset Release sequence before continuing.
+
 Select **停止追踪** to prevent future Advances. Existing Generations,
-Checkpoints, account state, and evidence remain immutable and readable.
+Checkpoints, account state, and evidence remain immutable and readable. Stop
+durably fences writers and schedules idempotent Working Cache deletion;
+startup reconciliation removes a cache left behind by an interrupted cleanup.
 
 ## 7. Backup
 
-Back up metadata and objects together. Prefer stopping API and Worker briefly,
-then copy the whole configured `THESISTRACE_HOME` directory with filesystem
-snapshot tooling. If downtime is not possible, create a consistent SQLite
-backup first and then snapshot the immutable object directory:
+Back up metadata and immutable objects together. Prefer stopping API and Worker
+briefly, then snapshot `metadata.sqlite3` and `objects/` from the configured
+`THESISTRACE_HOME`. Do not treat `working-cache/` as backup truth. If downtime
+is not possible, create a consistent SQLite backup first and then snapshot the
+immutable object directory:
 
 ```sh
 sqlite3 /absolute/path/to/thesistrace-data/metadata.sqlite3 \
@@ -183,6 +211,10 @@ Verify that the backup contains:
 - `objects/sha256/`;
 - `objects/manifests/`.
 
+The backup does not need `working-cache/`; active Tracks rebuild it after
+restore. The Tushare source evidence encoding remains outside this V1 storage
+decision.
+
 The Tushare token is not part of a backup and must be restored separately
 through deployment configuration.
 
@@ -190,7 +222,8 @@ through deployment configuration.
 
 1. Stop the failed processes without deleting the Workspace.
 2. Restore `metadata.sqlite3` and the matching objects from the same backup.
-3. Start API and Worker against that directory.
+3. Remove any untrusted restored `working-cache/`, then start API and Worker
+   against that directory.
 4. Check `/api/v1/health`, then inspect Run Attempts and Track Advances.
 
 On startup, the worker marks stale running Attempts with
@@ -218,10 +251,11 @@ make check
 ```
 
 This runs backend lint and tests, TypeScript checking, the production Web
-build, and a real-browser fixture flow. The browser flow covers Bootstrap,
-Draft, frozen Definition, ResearchRun, Factor/Strategy result, artifact
-navigation, DailyTrack activation, later Release publication, Track advance,
-narrow-screen reload, and stop.
+build, and desktop plus narrow-screen real-browser fixture flows. The browser
+flow covers Bootstrap, Draft, frozen Definition, ResearchRun, bounded
+Factor/Strategy results, resource provenance, DailyTrack activation, later
+Release publication, Correction Boundary, explicit equivalence verification,
+and stop.
 
 Canonical Batch-Incremental Equivalence is also available for a Track:
 
@@ -230,4 +264,10 @@ curl -X POST \
   http://127.0.0.1:8000/api/v1/daily-tracks/TRACK_ID/verify-equivalence
 ```
 
-An equivalence mismatch is a failed verification, not a warning.
+Verification replays from the current Generation root through the exact
+ordered Dataset Release identities recorded by its Checkpoint chain. It uses
+the same calculation seam as ordinary Advances but never writes Alpha, Labels,
+daily Factor, order, or fill intermediates. Success and failure leave the Head,
+immutable objects, and Working Cache unchanged. `EQUIVALENCE_MISMATCH` reports
+the first stable divergent coordinate and is a failed verification, not a
+warning.

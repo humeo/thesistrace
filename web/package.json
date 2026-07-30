@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "THESISTRACE_HOME=../.local concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
-    "dev:test": "bun run reset:test && THESISTRACE_HOME=.test-workspace TUSHARE_TOKEN= concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "dev:test": "bun run reset:test && THESISTRACE_HOME=.test-workspace TUSHARE_TOKEN= THESISTRACE_API_PORT=8100 THESISTRACE_WEB_PORT=5273 concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
     "reset:test": "bun e2e/reset-workspace.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",

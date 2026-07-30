@@ -1803,7 +1803,8 @@ function OperationsLedger() {
                   </code>
                   <small>
                     {track.generations.length} generation ·{" "}
-                    {track.checkpoints.length} checkpoint · lag {pending + blocked}
+                    {track.checkpoints.length} checkpoint · lag {pending + blocked} ·
+                    blocked {blocked}
                   </small>
                   <ol className="attempt-list" aria-label={`${track.id} resources`}>
                     {track.generations.map((generation) => (

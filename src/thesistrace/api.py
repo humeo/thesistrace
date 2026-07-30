@@ -1,3 +1,4 @@
+import os
 from datetime import UTC, date, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -760,4 +761,8 @@ def probe_object_store(root: Path) -> bool:
 
 
 def main() -> None:
-    uvicorn.run(create_app(settings_from_environment()), host="127.0.0.1", port=8000)
+    uvicorn.run(
+        create_app(settings_from_environment()),
+        host="127.0.0.1",
+        port=int(os.environ.get("THESISTRACE_API_PORT", "8000")),
+    )

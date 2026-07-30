@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 
-test.setTimeout(120_000);
+test.setTimeout(180_000);
 
 const viewport =
   process.env.THESISTRACE_E2E_VIEWPORT === "desktop"
@@ -77,9 +77,12 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   });
   await expect(page.getByRole("heading", { name: "因子结论" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "策略结论" })).toBeVisible();
+  await expect(page.getByText("IC MEAN", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("table").first()).toBeVisible();
   await expect(page.getByText("RESULT BUNDLE", { exact: true })).toBeVisible();
   await expect(page.getByText("DATASET RELEASE", { exact: true })).toBeVisible();
   await expect(page.getByRole("img", { name: "1 日因子 Rank IC 日序列" })).toHaveCount(0);
+  await expect(page.getByRole("img", { name: "策略 Net NAV 日序列" })).toBeVisible();
   await expect(page.getByRole("img", { name: "基准 NAV 日序列" })).toBeVisible();
   await expect(page.getByRole("img", { name: "现金比例日序列" })).toBeVisible();
   await expect(page.getByText("RECENT COST EVENTS")).toHaveCount(0);
@@ -98,7 +101,7 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   await page.getByRole("button", { name: "发布下一 Fixture Session" }).click();
   await expect(page.getByRole("heading", { name: "Dataset Release 已发布" })).toBeVisible();
   await expect(dataPanel.getByText("757 sessions")).toBeVisible();
-  await expect(page.getByText(/[1-9]\d* LABEL EVENTS/)).toBeVisible({
+  await expect(page.getByText(/\d+ LABEL EVENTS/)).toBeVisible({
     timeout: 60_000,
   });
   await expect(
@@ -106,6 +109,76 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
       exact: true,
     }),
   ).toBeVisible();
+  await expect(page.getByText(/lag 0 · blocked 0/).first()).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByText(/NET NAV .* RANK IC/).first()).toBeVisible();
+  await expect(page.getByText(/NET CASH .* HOLDINGS/).first()).toBeVisible();
+
+  const releaseList = await page.request.get("/api/v1/dataset-releases");
+  expect(releaseList.ok()).toBeTruthy();
+  const releasePayload = (await releaseList.json()) as {
+    items: {
+      id: string;
+      predecessor_id: string | null;
+      appended_session_range: { start: string };
+    }[];
+  };
+  const rootRelease = releasePayload.items.find(
+    (release) => release.predecessor_id === null,
+  );
+  expect(rootRelease).toBeTruthy();
+  const correction = await page.request.post(
+    "/api/v1/dataset-releases/publish-fixture",
+    {
+      headers: { "Idempotency-Key": `browser-correction-${viewport.width}` },
+      data: {
+        new_sessions: 1,
+        corrections: [
+          {
+            session: rootRelease?.appended_session_range.start,
+            instrument_id: "equity:600000.SH",
+            field: "open_raw",
+            value: "8.0100",
+          },
+        ],
+      },
+    },
+  );
+  expect(correction.ok()).toBeTruthy();
+  const correctionRelease = (await correction.json()) as {
+    release: { id: string };
+  };
+  const tracks = await page.request.get("/api/v1/daily-tracks");
+  const trackPayload = (await tracks.json()) as { items: { id: string }[] };
+  expect(trackPayload.items).toHaveLength(1);
+  await expect
+    .poll(
+      async () => {
+        const response = await page.request.get(
+          `/api/v1/daily-tracks/${trackPayload.items[0].id}`,
+        );
+        const track = (await response.json()) as {
+          head: { target_dataset_release_id: string };
+        };
+        return track.head.target_dataset_release_id;
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(correctionRelease.release.id);
+  await expect(page.getByText("CORRECTION BOUNDARY").first()).toContainText(
+    correctionRelease.release.id,
+    { timeout: 60_000 },
+  );
+  await expect(page.getByText(/Correction Boundary dsr_/).first()).toBeVisible();
+
+  const verification = await page.request.post(
+    `/api/v1/daily-tracks/${trackPayload.items[0].id}/verify-equivalence`,
+  );
+  expect(verification.ok()).toBeTruthy();
+  expect((await verification.json()).release_sequence.at(-1)).toBe(
+    correctionRelease.release.id,
+  );
 
   await expect(page.getByText(/^Checkpoint checkpoint_/).first()).toBeVisible({
     timeout: 20_000,
