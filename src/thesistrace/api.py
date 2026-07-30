@@ -118,6 +118,10 @@ def create_app(
             raise HTTPException(status_code=404, detail="frozen definition not found")
         return frozen
 
+    @app.get("/api/v1/research-definition-versions")
+    def list_research_definition_versions() -> dict[str, object]:
+        return {"items": store.list_frozen_research_definitions()}
+
     @app.get("/api/v1/research-runs")
     def list_research_runs() -> dict[str, object]:
         return {"items": store.list_research_runs()}
@@ -330,6 +334,10 @@ def create_app(
             status_code=201 if created else 200,
             content={"status": "succeeded", "release": release},
         )
+
+    @app.get("/api/v1/dataset-releases")
+    def list_dataset_releases() -> dict[str, object]:
+        return {"items": store.list_dataset_releases()}
 
     @app.get("/api/v1/dataset-releases/{release_id}")
     def get_dataset_release(release_id: str) -> dict[str, object]:

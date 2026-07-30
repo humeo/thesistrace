@@ -148,6 +148,7 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         current_view = client.get(f"/api/v1/daily-tracks/{track_id}/current").json()
         assert current_view["checkpoint"]["id"] == current["head"]["id"]
         assert len(current_view["factor_summary"]["horizons"]["1"]["daily"]) == 504
+        assert current_view["recent_label_maturation"]["events"]
         head_manifest = objects.read_json(current["head"]["manifest_sha256"])
         assert head_manifest["processed_sessions"] == [
             "2026-07-30",

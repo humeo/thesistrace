@@ -76,6 +76,10 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
 
         assert completed["status"] == "succeeded"
         assert completed["result_bundle_id"].startswith("result_")
+        assert [
+            item["id"]
+            for item in client.get("/api/v1/research-definition-versions").json()["items"]
+        ] == [requested["frozen_definition"]["id"]]
         detail = client.get(f"/api/v1/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
         assert [attempt["status"] for attempt in detail["attempts"]] == ["succeeded"]

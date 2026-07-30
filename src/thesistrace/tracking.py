@@ -279,6 +279,11 @@ class DailyTrackingService:
             if isinstance(objects, dict) and "factor_summary" in objects
             else "factor_evaluation"
         )
+        label_maturation = (
+            self._read_result_object(objects, "label_maturation")
+            if isinstance(objects, dict) and "label_maturation" in objects
+            else {"events": []}
+        )
         return {
             "daily_track": {
                 "id": track["id"],
@@ -289,6 +294,7 @@ class DailyTrackingService:
             "checkpoint": manifest,
             "factor_summary": self._read_result_object(objects, factor_kind),
             "strategy": self._read_result_object(objects, "strategy_backtest"),
+            "recent_label_maturation": label_maturation,
         }
 
     def stop(self, track_id: str) -> dict[str, object] | None:

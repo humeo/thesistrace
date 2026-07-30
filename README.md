@@ -24,6 +24,11 @@ make dev
 Open `http://127.0.0.1:5173`. Local metadata and immutable objects are stored
 under `.local/` and survive process restarts.
 
+The complete startup, publication, research, tracking, backup, and recovery
+procedure is in the [V1 operator runbook](docs/runbook/v1-operations.md).
+Live Tushare Bootstrap has a separate
+[credential and acceptance guide](docs/runbook/tushare-live-bootstrap.md).
+
 Run the current backend, frontend, and browser acceptance checks with:
 
 ```sh

@@ -18,10 +18,11 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
 
   await page.getByRole("button", { name: "发布 Fixture Bootstrap" }).click();
 
+  const dataPanel = page.locator("#data");
   await expect(page.getByRole("heading", { name: "Fixture Bootstrap 已发布" })).toBeVisible();
-  await expect(page.getByText("756 sessions")).toBeVisible();
-  await expect(page.getByText("ROOT", { exact: true })).toBeVisible();
-  await expect(page.getByText("2 immutable objects")).toBeVisible();
+  await expect(dataPanel.getByText("756 sessions")).toBeVisible();
+  await expect(dataPanel.getByText("ROOT", { exact: true })).toBeVisible();
+  await expect(dataPanel.getByText("2 immutable objects")).toBeVisible();
   await expect(page.getByRole("heading", { name: "标准研究数据契约" })).toBeVisible();
   await expect(page.getByText("open_adj", { exact: true })).toBeVisible();
   await expect(page.getByText("TOP 300 · TOP 1000 · TOP 2000 · TOP 3000")).toBeVisible();
@@ -29,20 +30,54 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByText("FULL SESSION SUSPENSION · 1")).toBeVisible();
 
   await expect(page.getByRole("heading", { name: "Research Definition" })).toBeVisible();
+  const definitionPanel = page.locator("#definitions");
   await page.getByLabel("研究假设").fill("过去 20 日上涨的股票，未来收益更高。");
   await page.getByRole("button", { name: "保存 Draft" }).click();
-  await expect(page.getByText("DRAFT SAVED")).toBeVisible();
+  await expect(definitionPanel.getByText("DRAFT SAVED")).toBeVisible();
   await page.getByRole("button", { name: "运行研究" }).click();
-  await expect(page.getByText("RUN QUEUED")).toBeVisible();
+  await expect(definitionPanel.getByText("RUN QUEUED")).toBeVisible();
   await expect(page.getByText("FROZEN VERSION 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Freeze" })).toHaveCount(0);
-  await expect(page.getByText("SUCCEEDED")).toBeVisible({ timeout: 20_000 });
+  await expect(definitionPanel.getByText("SUCCEEDED")).toBeVisible({
+    timeout: 20_000,
+  });
   await expect(page.getByRole("heading", { name: "因子结论" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "策略结论" })).toBeVisible();
   await expect(page.getByText("RESULT BUNDLE", { exact: true })).toBeVisible();
   await expect(page.getByText("DATASET RELEASE", { exact: true })).toBeVisible();
+  await expect(page.getByRole("img", { name: "1 日因子 IC 日序列" })).toBeVisible();
+  await expect(page.getByText("AUTHORITATIVE ARTIFACTS")).toBeVisible();
+  await expect
+    .poll(() => page.locator(".artifact-links a").count())
+    .toBeGreaterThanOrEqual(7);
+  await expect(page.getByRole("heading", { name: "运行与追踪记录" })).toBeVisible();
+  await expect(page.getByText("DATASET RELEASES", { exact: true })).toBeVisible();
+  await expect(page.getByText("DEFINITIONS", { exact: true })).toBeVisible();
+  await expect(page.getByText("RESEARCH RUNS", { exact: true })).toBeVisible();
   await expect(page.getByText("NOT ACTIVATED")).toBeVisible();
   await page.getByRole("button", { name: "开始每日追踪" }).click();
   await expect(page.getByText("ACTIVE", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "停止追踪" })).toBeVisible();
+
+  await page.getByRole("button", { name: "发布下一 Fixture Session" }).click();
+  await expect(page.getByRole("heading", { name: "Dataset Release 已发布" })).toBeVisible();
+  await expect(dataPanel.getByText("757 sessions")).toBeVisible();
+  await expect(page.getByText(/[1-9]\d* LABEL EVENTS/)).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(
+    page.getByRole("group", { name: "Dataset Releases" }).getByText("2", {
+      exact: true,
+    }),
+  ).toBeVisible();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "研究工作台" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "因子结论" })).toBeVisible({
+    timeout: 20_000,
+  });
+  await expect(page.getByText("ACTIVE", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "停止追踪" }).click();
+  await expect(page.getByText("STOPPED", { exact: true })).toBeVisible();
 });

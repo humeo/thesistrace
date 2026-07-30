@@ -253,6 +253,21 @@ class MetadataStore:
             return None
         return dict(json.loads(str(row["manifest_json"])))
 
+    def list_dataset_releases(self) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT manifest_json
+                FROM dataset_releases
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+        return [
+            dict(json.loads(str(row["manifest_json"])))
+            for row in rows
+            if row["manifest_json"] is not None
+        ]
+
     def dataset_release_for_idempotency_key(self, key: str) -> dict[str, object] | None:
         with self.connect() as connection:
             row = connection.execute(
@@ -503,6 +518,21 @@ class MetadataStore:
             "content_hash": str(row["content_hash"]),
             "created_at": str(row["created_at"]),
         }
+
+    def list_frozen_research_definitions(self) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id
+                FROM research_definitions
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+        return [
+            frozen
+            for row in rows
+            if (frozen := self.frozen_research_definition(str(row["id"]))) is not None
+        ]
 
     def research_run(self, run_id: str) -> dict[str, object] | None:
         with self.connect() as connection:

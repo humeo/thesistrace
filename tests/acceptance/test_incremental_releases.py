@@ -96,5 +96,8 @@ def test_incremental_catchup_and_correction_releases_form_one_immutable_chain(
             f"/api/v1/dataset-releases/{corrected['id']}/data-contract"
         ).json()
         assert latest_contract["calendar"]["session_count"] == 761
+        assert [
+            release["id"] for release in client.get("/api/v1/dataset-releases").json()["items"]
+        ] == [root["id"], daily["id"], catchup["id"], corrected["id"]]
         assert client.get("/api/v1/dataset-releases/root-does-not-exist").status_code == 404
         assert client.get(f"/api/v1/dataset-releases/{root['id']}").json() == root

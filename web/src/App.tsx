@@ -72,11 +72,18 @@ type ResearchResult = {
     dataset_release: { id: string };
     definition: { id: string; content_hash: string };
     calculation_kernel: string;
+    objects: Record<string, { kind: string; sha256: string; bytes: number }>;
   };
   factor_evaluation: {
     horizons: Record<
       string,
       {
+        daily: {
+          session: string;
+          ic: number | null;
+          rank_ic: number | null;
+          top_bottom_return: number | null;
+        }[];
         summary: {
           ic: { mean: number | null; icir: number | null };
           rank_ic: { mean: number | null; icir: number | null };
@@ -86,15 +93,49 @@ type ResearchResult = {
     >;
   };
   strategy_backtest: {
+    daily: {
+      session: string;
+      net_nav: string;
+      benchmark_nav: string;
+      holdings_count: number;
+      maximum_single_name_weight: number;
+      cash_ratio: number;
+    }[];
+    rejections: { session: string; reason: string; instrument_id: string }[];
     metrics: {
+      gross_cumulative_return: number;
       net_cumulative_return: number;
       net_cagr: number | null;
+      gross_cagr: number | null;
       benchmark_cumulative_return: number;
       annualized_excess_return: number | null;
-      maximum_drawdown: { value: number };
+      maximum_drawdown: {
+        value: number;
+        series: { session: string; drawdown: number }[];
+      };
+      annualized_volatility: number | null;
       sharpe: number | null;
-      turnover: { annualized: number | null };
-      transaction_costs: { cumulative_amount: number };
+      calmar: number | null;
+      turnover: {
+        annualized: number | null;
+        events: { session: string; value: number }[];
+      };
+      transaction_costs: {
+        cumulative_amount: number;
+        ratio: number;
+        return_drag: number;
+      };
+      holdings_count: { mean: number; ending: number };
+      maximum_single_name_weight: {
+        period_maximum: { value: number; session: string };
+        ending: number;
+      };
+      cash_ratio: {
+        mean: number;
+        maximum: { value: number; session: string };
+        ending: number;
+      };
+      market_rejections: Record<string, number>;
     };
   };
 };
@@ -112,25 +153,35 @@ export default function App() {
 
   useEffect(() => {
     const controller = new AbortController();
+    let loaded = false;
 
-    Promise.all([
-      fetch("/api/v1/workspace", { signal: controller.signal }).then(assertResponse),
-      fetch("/api/v1/health", { signal: controller.signal }).then(assertResponse),
-    ])
-      .then(async ([workspaceResponse, healthResponse]) => {
+    async function refreshWorkspace() {
+      try {
+        const [workspaceResponse, healthResponse] = await Promise.all([
+          fetch("/api/v1/workspace", { signal: controller.signal }).then(assertResponse),
+          fetch("/api/v1/health", { signal: controller.signal }).then(assertResponse),
+        ]);
         const [workspace, health] = await Promise.all([
           workspaceResponse.json() as Promise<Workspace>,
           healthResponse.json() as Promise<Health>,
         ]);
+        loaded = true;
         setState({ status: "ready", workspace, health });
-      })
-      .catch((error: unknown) => {
+      } catch (error: unknown) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
-          setState({ status: "error" });
+          if (!loaded) {
+            setState({ status: "error" });
+          }
         }
-      });
+      }
+    }
 
-    return () => controller.abort();
+    void refreshWorkspace();
+    const interval = window.setInterval(() => void refreshWorkspace(), 2_000);
+    return () => {
+      window.clearInterval(interval);
+      controller.abort();
+    };
   }, []);
 
   async function bootstrapFixture() {
@@ -166,6 +217,39 @@ export default function App() {
     }
   }
 
+  async function publishFixtureSession() {
+    if (state.status !== "ready") {
+      return;
+    }
+    setPublication("running");
+    try {
+      const response = await fetch("/api/v1/dataset-releases/publish-fixture", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": crypto.randomUUID(),
+        },
+        body: JSON.stringify({ new_sessions: 1, corrections: [] }),
+      }).then(assertResponse);
+      const payload = (await response.json()) as { release: DatasetRelease };
+      setState({
+        status: "ready",
+        health: state.health,
+        workspace: {
+          ...state.workspace,
+          latest_dataset_release: payload.release,
+          resource_counts: {
+            ...state.workspace.resource_counts,
+            dataset_releases: state.workspace.resource_counts.dataset_releases + 1,
+          },
+        },
+      });
+      setPublication("idle");
+    } catch {
+      setPublication("failed");
+    }
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -184,6 +268,22 @@ export default function App() {
         <a className="rail-link active" href="#workspace">
           <Layers3 size={17} aria-hidden="true" />
           工作台
+        </a>
+        <a className="rail-link" href="#data">
+          <Database size={17} aria-hidden="true" />
+          数据
+        </a>
+        <a className="rail-link" href="#definitions">
+          <FlaskConical size={17} aria-hidden="true" />
+          研究
+        </a>
+        <a className="rail-link" href="#operations">
+          <Activity size={17} aria-hidden="true" />
+          运行记录
+        </a>
+        <a className="rail-link" href="#tracking">
+          <Radio size={17} aria-hidden="true" />
+          每日追踪
         </a>
         <span className="rail-rule" />
         <div className="rail-meta">
@@ -233,7 +333,7 @@ export default function App() {
             </section>
 
             <div className="workspace-grid">
-              <section className="release-panel">
+              <section className="release-panel" id="data">
                 <div className="section-heading">
                   <div>
                     <p className="eyebrow">CURRENT DATA TRUTH</p>
@@ -266,7 +366,11 @@ export default function App() {
                     </div>
                   </div>
                 ) : (
-                  <ReleaseSummary release={state.workspace.latest_dataset_release} />
+                  <ReleaseSummary
+                    release={state.workspace.latest_dataset_release}
+                    publication={publication}
+                    onPublishFixtureSession={publishFixtureSession}
+                  />
                 )}
                 <div className="truth-note">
                   <span>TRUTH POLICY</span>
@@ -294,6 +398,7 @@ export default function App() {
               <>
                 <DataContractPanel releaseId={state.workspace.latest_dataset_release.id} />
                 <ResearchDefinitionEditor />
+                <OperationsLedger />
               </>
             )}
 
@@ -501,7 +606,7 @@ function ResearchDefinitionEditor() {
   }
 
   return (
-    <section className="definition-panel">
+    <section className="definition-panel" id="definitions">
       <div className="section-heading">
         <div>
           <p className="eyebrow">AUTHORING / ONE STRUCTURED INPUT</p>
@@ -625,30 +730,40 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
   } | null>(null);
   const [trackingError, setTrackingError] = useState(false);
   const [trackingView, setTrackingView] = useState<{
-    checkpoint: { id: string; kind: string };
+    checkpoint: { id: string; kind: string; processed_sessions?: string[] };
+    factor_summary: {
+      horizons: Record<
+        string,
+        { summary: { rank_ic: { mean: number | null } } }
+      >;
+    };
     strategy: {
       daily: { net_nav: string; session: string }[];
     };
+    recent_label_maturation: { events: { horizon: number }[] };
   } | null>(null);
 
   useEffect(() => {
-    fetch("/api/v1/daily-tracks")
-      .then(assertResponse)
-      .then((response) => response.json())
-      .then(
-        (payload: {
+    async function refreshTrack() {
+      try {
+        const response = await fetch("/api/v1/daily-tracks").then(assertResponse);
+        const payload = (await response.json()) as {
           items: ({
             seed_run_id: string;
           } & NonNullable<typeof track>)[];
-        }) => {
-          setTrack(
-            payload.items.find(
-              (item) => item.seed_run_id === result.manifest.research_run_id,
-            ) ?? null,
-          );
-        },
-      )
-      .catch(() => setTrackingError(true));
+        };
+        setTrack(
+          payload.items.find(
+            (item) => item.seed_run_id === result.manifest.research_run_id,
+          ) ?? null,
+        );
+      } catch {
+        setTrackingError(true);
+      }
+    }
+    void refreshTrack();
+    const interval = window.setInterval(() => void refreshTrack(), 2_000);
+    return () => window.clearInterval(interval);
   }, [result.manifest.research_run_id]);
 
   useEffect(() => {
@@ -656,12 +771,20 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
       setTrackingView(null);
       return;
     }
-    fetch(`/api/v1/daily-tracks/${track.id}/current`)
-      .then(assertResponse)
-      .then((response) => response.json())
-      .then(setTrackingView)
-      .catch(() => setTrackingError(true));
-  }, [track]);
+    async function refreshCurrent() {
+      try {
+        const response = await fetch(
+          `/api/v1/daily-tracks/${track?.id}/current`,
+        ).then(assertResponse);
+        setTrackingView(await response.json());
+      } catch {
+        setTrackingError(true);
+      }
+    }
+    void refreshCurrent();
+    const interval = window.setInterval(() => void refreshCurrent(), 2_000);
+    return () => window.clearInterval(interval);
+  }, [track?.id]);
 
   async function activateTracking() {
     try {
@@ -695,7 +818,7 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
   }
 
   return (
-    <section className="result-panel" aria-label="ResearchRun 结果">
+    <section className="result-panel" id="runs" aria-label="ResearchRun 结果">
       <div className="result-provenance">
         <div>
           <span>RESULT BUNDLE</span>
@@ -763,7 +886,127 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
           </div>
         </div>
       </div>
-      <div className="tracking-control">
+      <div className="result-evidence">
+        <div>
+          <span>1D DAILY IC</span>
+          <Sparkline
+            values={result.factor_evaluation.horizons["1"].daily.map(
+              (item) => item.ic,
+            )}
+            label="1 日因子 IC 日序列"
+          />
+        </div>
+        <div>
+          <span>NET NAV</span>
+          <Sparkline
+            values={result.strategy_backtest.daily.map((item) =>
+              Number(item.net_nav),
+            )}
+            label="策略 Net NAV 日序列"
+          />
+        </div>
+        <div>
+          <span>DRAWDOWN</span>
+          <Sparkline
+            values={metrics.maximum_drawdown.series.map((item) => item.drawdown)}
+            label="策略回撤日序列"
+          />
+        </div>
+        <div>
+          <span>TOP−BOTTOM / 1D</span>
+          <Sparkline
+            values={result.factor_evaluation.horizons["1"].daily.map(
+              (item) => item.top_bottom_return,
+            )}
+            label="1 日五分组 Top-Bottom 日序列"
+          />
+        </div>
+        <div>
+          <span>TURNOVER</span>
+          <Sparkline
+            values={metrics.turnover.events.map((item) => item.value)}
+            label="调仓换手率序列"
+          />
+        </div>
+        <div>
+          <span>HOLDINGS</span>
+          <Sparkline
+            values={result.strategy_backtest.daily.map(
+              (item) => item.holdings_count,
+            )}
+            label="实际持仓数量日序列"
+          />
+        </div>
+      </div>
+      <div className="metric-register">
+        <Metric
+          label="GROSS RETURN"
+          value={formatPercent(metrics.gross_cumulative_return)}
+        />
+        <Metric label="GROSS CAGR" value={formatPercent(metrics.gross_cagr)} />
+        <Metric
+          label="EXCESS CAGR"
+          value={formatPercent(metrics.annualized_excess_return)}
+        />
+        <Metric
+          label="VOLATILITY"
+          value={formatPercent(metrics.annualized_volatility)}
+        />
+        <Metric label="CALMAR" value={formatNumber(metrics.calmar)} />
+        <Metric
+          label="TURNOVER"
+          value={formatPercent(metrics.turnover.annualized)}
+        />
+        <Metric
+          label="COST RATIO"
+          value={formatPercent(metrics.transaction_costs.ratio)}
+        />
+        <Metric
+          label="RETURN DRAG"
+          value={formatPercent(metrics.transaction_costs.return_drag)}
+        />
+        <Metric
+          label="HOLDINGS / END"
+          value={`${metrics.holdings_count.mean.toFixed(1)} / ${metrics.holdings_count.ending}`}
+        />
+        <Metric
+          label="MAX NAME WEIGHT"
+          value={formatPercent(
+            metrics.maximum_single_name_weight.period_maximum.value,
+          )}
+        />
+        <Metric
+          label="CASH / END"
+          value={formatPercent(metrics.cash_ratio.ending)}
+        />
+        <Metric
+          label="REJECTIONS"
+          value={String(
+            Object.values(metrics.market_rejections).reduce(
+              (total, value) => total + value,
+              0,
+            ),
+          )}
+        />
+      </div>
+      <div className="artifact-register">
+        <div>
+          <span>AUTHORITATIVE ARTIFACTS</span>
+          <small>下载的是 Result Manifest 索引的原始 JSON，不由页面重算。</small>
+        </div>
+        <div className="artifact-links">
+          {Object.entries(result.manifest.objects).map(([kind, artifact]) => (
+            <a
+              key={kind}
+              href={`/api/v1/objects/${artifact.sha256}`}
+              download={`${kind}.json`}
+            >
+              {kind.replaceAll("_", " ")}
+            </a>
+          ))}
+        </div>
+      </div>
+      <div className="tracking-control" id="tracking">
         <div>
           <span>DAILY TRACKING</span>
           {track ? (
@@ -777,7 +1020,12 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
                 <small>
                   HEAD {trackingView.checkpoint.id} ·{" "}
                   {trackingView.strategy.daily.at(-1)?.session} · NET NAV{" "}
-                  {trackingView.strategy.daily.at(-1)?.net_nav}
+                  {trackingView.strategy.daily.at(-1)?.net_nav} · RANK IC{" "}
+                  {formatNumber(
+                    trackingView.factor_summary.horizons["1"]?.summary.rank_ic.mean ??
+                      null,
+                  )}{" "}
+                  · {trackingView.recent_label_maturation.events.length} LABEL EVENTS
                 </small>
               )}
             </>
@@ -814,6 +1062,312 @@ function Metric({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function OperationsLedger() {
+  const [releases, setReleases] = useState<DatasetRelease[]>([]);
+  const [drafts, setDrafts] = useState<
+    { id: string; state: string; updated_at: string; content: { title?: string } }[]
+  >([]);
+  const [frozenDefinitions, setFrozenDefinitions] = useState<
+    {
+      id: string;
+      draft_id: string;
+      version: number;
+      content_hash: string;
+      content: { title?: string };
+    }[]
+  >([]);
+  const [runs, setRuns] = useState<
+    {
+      id: string;
+      status: RunStatus;
+      definition_version_id: string;
+      dataset_release_id: string;
+      result_bundle_id: string | null;
+      attempts: {
+        ordinal: number;
+        status: string;
+        diagnostic: { reason_code?: string; message?: string } | null;
+      }[];
+    }[]
+  >([]);
+  const [tracks, setTracks] = useState<
+    {
+      id: string;
+      status: string;
+      current_generation_id: string;
+      head_checkpoint_id: string;
+      generations: { id: string; reason: string }[];
+      advances: { id: string; status: string; target_dataset_release_id: string }[];
+      checkpoints: { id: string; target_dataset_release_id: string }[];
+    }[]
+  >([]);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 2_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  async function refresh() {
+    try {
+      const [
+        releaseResponse,
+        draftResponse,
+        frozenResponse,
+        runResponse,
+        trackResponse,
+      ] = await Promise.all([
+        fetch("/api/v1/dataset-releases").then(assertResponse),
+        fetch("/api/v1/research-definitions").then(assertResponse),
+        fetch("/api/v1/research-definition-versions").then(assertResponse),
+        fetch("/api/v1/research-runs").then(assertResponse),
+        fetch("/api/v1/daily-tracks").then(assertResponse),
+      ]);
+      const [
+        releasePayload,
+        draftPayload,
+        frozenPayload,
+        runPayload,
+        trackPayload,
+      ] = await Promise.all([
+        releaseResponse.json(),
+        draftResponse.json(),
+        frozenResponse.json(),
+        runResponse.json(),
+        trackResponse.json(),
+      ]);
+      setReleases(releasePayload.items);
+      setDrafts(draftPayload.items);
+      setFrozenDefinitions(frozenPayload.items);
+      setRuns(runPayload.items);
+      setTracks(trackPayload.items);
+      setLoaded(true);
+    } catch {
+      setLoaded(true);
+    }
+  }
+
+  async function cancelRun(runId: string) {
+    await fetch(`/api/v1/research-runs/${runId}/cancel`, {
+      method: "POST",
+    }).then(assertResponse);
+    await refresh();
+  }
+
+  async function rerun(runId: string) {
+    await fetch(`/api/v1/research-runs/${runId}/rerun`, {
+      method: "POST",
+      headers: { "Idempotency-Key": crypto.randomUUID() },
+    }).then(assertResponse);
+    await refresh();
+  }
+
+  return (
+    <section className="operations-panel" id="operations">
+      <div className="section-heading">
+        <div>
+          <p className="eyebrow">DURABLE RESOURCE HISTORY</p>
+          <h2>运行与追踪记录</h2>
+        </div>
+        <span className="contract-version">IMMUTABLE LEDGER</span>
+      </div>
+      {!loaded ? (
+        <p className="ledger-empty">正在读取 Runs 与 DailyTracks…</p>
+      ) : releases.length === 0 &&
+        drafts.length === 0 &&
+        frozenDefinitions.length === 0 &&
+        runs.length === 0 &&
+        tracks.length === 0 ? (
+        <p className="ledger-empty">
+          尚无运行记录。保存 Draft 并运行后，这里会展示 frozen Definition、Attempt 和
+          Result Bundle。
+        </p>
+      ) : (
+        <>
+          <div className="ledger-columns resource-ledger">
+            <div>
+              <span className="ledger-title">DATASET RELEASES</span>
+              {releases.map((release) => (
+                <article className="ledger-row" key={release.id}>
+                  <div>
+                    <strong>{release.id}</strong>
+                    <span className="ledger-status succeeded">published</span>
+                  </div>
+                  <code>
+                    {release.predecessor_id ?? "ROOT"} · {release.session_count} sessions
+                  </code>
+                  <small>
+                    {release.objects.length} objects · manifest{" "}
+                    {release.manifest_sha256.slice(0, 12)}
+                  </small>
+                </article>
+              ))}
+            </div>
+            <div>
+              <span className="ledger-title">DEFINITIONS</span>
+              {drafts.map((draft) => (
+                <article className="ledger-row" key={draft.id}>
+                  <div>
+                    <strong>{draft.content.title ?? draft.id}</strong>
+                    <span className="ledger-status">{draft.state}</span>
+                  </div>
+                  <code>{draft.id}</code>
+                </article>
+              ))}
+              {frozenDefinitions.map((definition) => (
+                <article className="ledger-row" key={definition.id}>
+                  <div>
+                    <strong>
+                      {definition.content.title ?? definition.id} · v
+                      {definition.version}
+                    </strong>
+                    <span className="ledger-status succeeded">frozen</span>
+                  </div>
+                  <code>
+                    {definition.id} · {definition.content_hash.slice(0, 12)}
+                  </code>
+                  <small>source Draft {definition.draft_id}</small>
+                </article>
+              ))}
+            </div>
+          </div>
+          <div className="ledger-columns">
+          <div>
+            <span className="ledger-title">RESEARCH RUNS</span>
+            {runs.map((run) => {
+              const latestAttempt = run.attempts.at(-1);
+              return (
+                <article className="ledger-row" key={run.id}>
+                  <div>
+                    <strong>{run.id}</strong>
+                    <span className={`ledger-status ${run.status}`}>
+                      {run.status}
+                    </span>
+                  </div>
+                  <code>
+                    {run.definition_version_id} · {run.dataset_release_id}
+                  </code>
+                  <small>
+                    {run.result_bundle_id
+                      ? `Result Bundle ${run.result_bundle_id}`
+                      : "Result Bundle pending"}
+                  </small>
+                  <ol className="attempt-list" aria-label={`${run.id} Attempts`}>
+                    {run.attempts.map((attempt) => (
+                      <li key={attempt.ordinal}>
+                        Attempt {attempt.ordinal} · {attempt.status}
+                      </li>
+                    ))}
+                  </ol>
+                  {latestAttempt?.diagnostic && (
+                    <p className="ledger-diagnostic">
+                      {latestAttempt.diagnostic.reason_code ?? "DIAGNOSTIC"} ·{" "}
+                      {latestAttempt.diagnostic.message}
+                    </p>
+                  )}
+                  <div className="ledger-actions">
+                    {(run.status === "queued" || run.status === "running") && (
+                      <button
+                        type="button"
+                        onClick={() => void cancelRun(run.id)}
+                      >
+                        取消
+                      </button>
+                    )}
+                    {(run.status === "succeeded" ||
+                      run.status === "failed" ||
+                      run.status === "cancelled") && (
+                      <button type="button" onClick={() => void rerun(run.id)}>
+                        重新运行
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+          <div>
+            <span className="ledger-title">DAILY TRACKS</span>
+            {tracks.map((track) => {
+              const blocked = track.advances.filter(
+                (advance) => advance.status === "blocked",
+              ).length;
+              const pending = track.advances.filter(
+                (advance) =>
+                  advance.status === "pending" || advance.status === "running",
+              ).length;
+              return (
+                <article className="ledger-row" key={track.id}>
+                  <div>
+                    <strong>{track.id}</strong>
+                    <span className={`ledger-status ${track.status}`}>
+                      {track.status}
+                    </span>
+                  </div>
+                  <code>
+                    HEAD {track.head_checkpoint_id} · {track.current_generation_id}
+                  </code>
+                  <small>
+                    {track.generations.length} generation ·{" "}
+                    {track.checkpoints.length} checkpoint · lag {pending + blocked}
+                  </small>
+                  {blocked > 0 && (
+                    <p className="ledger-diagnostic">
+                      BLOCKED_FRONTIER · Worker 将在同一 Advance 身份下重试
+                    </p>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function Sparkline({
+  values,
+  label,
+}: {
+  values: (number | null)[];
+  label: string;
+}) {
+  const finite = values.filter(
+    (value): value is number => value !== null && Number.isFinite(value),
+  );
+  if (finite.length < 2) {
+    return <div className="chart-empty">INSUFFICIENT DATA</div>;
+  }
+  const minimum = Math.min(...finite);
+  const maximum = Math.max(...finite);
+  const spread = maximum - minimum || 1;
+  const points = values
+    .map((value, index) =>
+      value === null || !Number.isFinite(value)
+        ? null
+        : `${(index / Math.max(1, values.length - 1)) * 100},${
+            34 - ((value - minimum) / spread) * 32
+          }`,
+    )
+    .filter((value): value is string => value !== null)
+    .join(" ");
+  return (
+    <svg
+      className="sparkline"
+      viewBox="0 0 100 36"
+      role="img"
+      aria-label={label}
+      preserveAspectRatio="none"
+    >
+      <line x1="0" y1="34" x2="100" y2="34" />
+      <polyline points={points} />
+    </svg>
   );
 }
 
@@ -889,13 +1443,25 @@ function DataContractPanel({ releaseId }: { releaseId: string }) {
   );
 }
 
-function ReleaseSummary({ release }: { release: DatasetRelease }) {
+function ReleaseSummary({
+  release,
+  publication,
+  onPublishFixtureSession,
+}: {
+  release: DatasetRelease;
+  publication: "idle" | "running" | "failed";
+  onPublishFixtureSession: () => Promise<void>;
+}) {
   return (
     <div className="release-summary">
       <div className="release-lead">
         <span className="release-status">PUBLISHED</span>
         <div>
-          <h3>Fixture Bootstrap 已发布</h3>
+          <h3>
+            {release.predecessor_id === null
+              ? "Fixture Bootstrap 已发布"
+              : "Dataset Release 已发布"}
+          </h3>
           <code>{release.id}</code>
         </div>
       </div>
@@ -924,6 +1490,24 @@ function ReleaseSummary({ release }: { release: DatasetRelease }) {
       <div className="manifest-line">
         <span>MANIFEST</span>
         <code>{release.manifest_sha256.slice(0, 24)}…</code>
+      </div>
+      <div className="release-actions">
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={() => void onPublishFixtureSession()}
+          disabled={publication === "running"}
+        >
+          {publication === "running"
+            ? "正在发布…"
+            : "发布下一 Fixture Session"}
+        </button>
+        <small>验收数据路径；生产发布使用 Tushare 运维接口。</small>
+        {publication === "failed" && (
+          <span className="publication-error" role="alert">
+            发布失败；latest 数据版本未改变。
+          </span>
+        )}
       </div>
     </div>
   );
