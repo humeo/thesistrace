@@ -2,7 +2,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -89,6 +89,18 @@ class MetadataStore:
                     run_id TEXT NOT NULL REFERENCES research_runs(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS research_run_attempts (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL REFERENCES research_runs(id),
+                    ordinal INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    heartbeat_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    diagnostic_json TEXT,
+                    UNIQUE(run_id, ordinal)
+                );
+
                 CREATE TABLE IF NOT EXISTS daily_tracks (
                     id TEXT PRIMARY KEY
                 );
@@ -116,6 +128,11 @@ class MetadataStore:
                 ("dataset_release_id", "TEXT"),
                 ("status", "TEXT"),
                 ("created_at", "TEXT"),
+                ("updated_at", "TEXT"),
+                ("started_at", "TEXT"),
+                ("completed_at", "TEXT"),
+                ("result_bundle_id", "TEXT"),
+                ("result_manifest_sha256", "TEXT"),
             ):
                 self._ensure_column(connection, "research_runs", column, definition)
 
@@ -311,7 +328,9 @@ class MetadataStore:
             existing = connection.execute(
                 """
                 SELECT run.id AS run_id, run.definition_version_id, run.dataset_release_id,
-                       run.status, run.created_at, definition.draft_id, definition.version,
+                       run.status, run.created_at, run.updated_at, run.started_at,
+                       run.completed_at, run.result_bundle_id,
+                       run.result_manifest_sha256, definition.draft_id, definition.version,
                        definition.content_json, definition.content_hash,
                        definition.created_at AS definition_created_at
                 FROM research_run_idempotency AS request
@@ -351,10 +370,10 @@ class MetadataStore:
             connection.execute(
                 """
                 INSERT INTO research_runs
-                    (id, definition_version_id, dataset_release_id, status, created_at)
-                VALUES (?, ?, ?, 'queued', ?)
+                    (id, definition_version_id, dataset_release_id, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'queued', ?, ?)
                 """,
-                (run_id, frozen_id, dataset_release_id, now),
+                (run_id, frozen_id, dataset_release_id, now, now),
             )
             connection.execute(
                 """
@@ -378,6 +397,11 @@ class MetadataStore:
             "dataset_release_id": dataset_release_id,
             "status": "queued",
             "created_at": now,
+            "updated_at": now,
+            "started_at": None,
+            "completed_at": None,
+            "result_bundle_id": None,
+            "result_manifest_sha256": None,
         }
         return frozen, run, True
 
@@ -402,6 +426,358 @@ class MetadataStore:
             "content_hash": str(row["content_hash"]),
             "created_at": str(row["created_at"]),
         }
+
+    def research_run(self, run_id: str) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, definition_version_id, dataset_release_id, status,
+                       created_at, updated_at, started_at, completed_at,
+                       result_bundle_id, result_manifest_sha256
+                FROM research_runs
+                WHERE id = ?
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            attempts = connection.execute(
+                """
+                SELECT id, run_id, ordinal, status, started_at, heartbeat_at,
+                       completed_at, diagnostic_json
+                FROM research_run_attempts
+                WHERE run_id = ?
+                ORDER BY ordinal
+                """,
+                (run_id,),
+            ).fetchall()
+        run = self._run_from_row(row)
+        run["attempts"] = [self._attempt_from_row(attempt) for attempt in attempts]
+        return run
+
+    def list_research_runs(self) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id
+                FROM research_runs
+                ORDER BY created_at, id
+                """
+            ).fetchall()
+        return [run for row in rows if (run := self.research_run(str(row["id"]))) is not None]
+
+    def next_queued_research_run_id(self) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id
+                FROM research_runs
+                WHERE status = 'queued'
+                ORDER BY created_at, id
+                LIMIT 1
+                """
+            ).fetchone()
+        return None if row is None else str(row["id"])
+
+    def recover_abandoned_research_runs(
+        self,
+        *,
+        stale_after_seconds: int,
+    ) -> list[str]:
+        cutoff = (datetime.now(UTC) - timedelta(seconds=stale_after_seconds)).isoformat()
+        now = datetime.now(UTC).isoformat()
+        diagnostic = json.dumps(
+            {
+                "reason_code": "ABANDONED_ATTEMPT",
+                "message": "worker heartbeat expired before publication",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            rows = connection.execute(
+                """
+                SELECT attempt.id, attempt.run_id
+                FROM research_run_attempts AS attempt
+                JOIN research_runs AS run ON run.id = attempt.run_id
+                WHERE attempt.status = 'running'
+                  AND run.status = 'running'
+                  AND attempt.heartbeat_at < ?
+                ORDER BY attempt.started_at, attempt.id
+                """,
+                (cutoff,),
+            ).fetchall()
+            run_ids = [str(row["run_id"]) for row in rows]
+            for row in rows:
+                connection.execute(
+                    """
+                    UPDATE research_run_attempts
+                    SET status = 'failed', completed_at = ?,
+                        diagnostic_json = ?
+                    WHERE id = ? AND status = 'running'
+                    """,
+                    (now, diagnostic, str(row["id"])),
+                )
+                connection.execute(
+                    """
+                    UPDATE research_runs
+                    SET status = 'queued', updated_at = ?, completed_at = NULL
+                    WHERE id = ? AND status = 'running'
+                    """,
+                    (now, str(row["run_id"])),
+                )
+        return run_ids
+
+    def claim_research_run(
+        self,
+        run_id: str,
+    ) -> tuple[dict[str, object], dict[str, object]] | None:
+        now = datetime.now(UTC).isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM research_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(run_id)
+            if row["status"] != "queued":
+                return None
+            ordinal = (
+                int(
+                    connection.execute(
+                        """
+                        SELECT COALESCE(MAX(ordinal), 0)
+                        FROM research_run_attempts
+                        WHERE run_id = ?
+                        """,
+                        (run_id,),
+                    ).fetchone()[0]
+                )
+                + 1
+            )
+            attempt_id = f"attempt_{uuid4().hex[:20]}"
+            connection.execute(
+                """
+                UPDATE research_runs
+                SET status = 'running',
+                    started_at = COALESCE(started_at, ?),
+                    updated_at = ?
+                WHERE id = ? AND status = 'queued'
+                """,
+                (now, now, run_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO research_run_attempts
+                    (id, run_id, ordinal, status, started_at, heartbeat_at)
+                VALUES (?, ?, ?, 'running', ?, ?)
+                """,
+                (attempt_id, run_id, ordinal, now, now),
+            )
+        run = self.research_run(run_id)
+        if run is None:
+            raise RuntimeError("claimed ResearchRun disappeared")
+        return run, dict(run["attempts"][-1])
+
+    def finish_research_run_attempt(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        retryable: bool,
+        diagnostic: dict[str, object],
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic_json = json.dumps(
+            diagnostic,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            attempt = connection.execute(
+                """
+                SELECT status
+                FROM research_run_attempts
+                WHERE id = ? AND run_id = ?
+                """,
+                (attempt_id, run_id),
+            ).fetchone()
+            if attempt is None:
+                raise KeyError(attempt_id)
+            if attempt["status"] == "running":
+                connection.execute(
+                    """
+                    UPDATE research_run_attempts
+                    SET status = 'failed', completed_at = ?, heartbeat_at = ?,
+                        diagnostic_json = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, diagnostic_json, attempt_id),
+                )
+                next_status = "queued" if retryable else "failed"
+                connection.execute(
+                    """
+                    UPDATE research_runs
+                    SET status = ?, updated_at = ?,
+                        completed_at = CASE WHEN ? = 'failed' THEN ? ELSE NULL END
+                    WHERE id = ? AND status = 'running'
+                    """,
+                    (next_status, now, next_status, now, run_id),
+                )
+        run = self.research_run(run_id)
+        if run is None:
+            raise KeyError(run_id)
+        return run
+
+    def publish_research_run_success(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        result_bundle_id: str,
+        result_manifest_sha256: str,
+    ) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            run = connection.execute(
+                "SELECT status FROM research_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            attempt = connection.execute(
+                "SELECT status FROM research_run_attempts WHERE id = ? AND run_id = ?",
+                (attempt_id, run_id),
+            ).fetchone()
+            if (
+                run is None
+                or attempt is None
+                or run["status"] != "running"
+                or attempt["status"] != "running"
+            ):
+                return False
+            connection.execute(
+                """
+                UPDATE research_run_attempts
+                SET status = 'succeeded', completed_at = ?, heartbeat_at = ?
+                WHERE id = ?
+                """,
+                (now, now, attempt_id),
+            )
+            connection.execute(
+                """
+                UPDATE research_runs
+                SET status = 'succeeded', updated_at = ?, completed_at = ?,
+                    result_bundle_id = ?, result_manifest_sha256 = ?
+                WHERE id = ? AND status = 'running'
+                """,
+                (
+                    now,
+                    now,
+                    result_bundle_id,
+                    result_manifest_sha256,
+                    run_id,
+                ),
+            )
+        return True
+
+    def cancel_research_run(self, run_id: str) -> dict[str, object] | None:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = json.dumps(
+            {"reason_code": "CANCELLED", "message": "cancelled by operator"},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT status FROM research_runs WHERE id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["status"] in {"queued", "running"}:
+                connection.execute(
+                    """
+                    UPDATE research_runs
+                    SET status = 'cancelled', updated_at = ?, completed_at = ?
+                    WHERE id = ?
+                    """,
+                    (now, now, run_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE research_run_attempts
+                    SET status = 'cancelled', completed_at = ?, heartbeat_at = ?,
+                        diagnostic_json = ?
+                    WHERE run_id = ? AND status = 'running'
+                    """,
+                    (now, now, diagnostic, run_id),
+                )
+        return self.research_run(run_id)
+
+    def create_research_rerun(
+        self,
+        source_run_id: str,
+        idempotency_key: str,
+    ) -> tuple[dict[str, object], bool]:
+        now = datetime.now(UTC).isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT run.id, run.definition_version_id, run.dataset_release_id,
+                       run.status, run.created_at, run.updated_at, run.started_at,
+                       run.completed_at, run.result_bundle_id,
+                       run.result_manifest_sha256
+                FROM research_run_idempotency AS request
+                JOIN research_runs AS run ON run.id = request.run_id
+                WHERE request.idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                return self._run_from_row(existing), False
+            source = connection.execute(
+                """
+                SELECT definition_version_id, dataset_release_id
+                FROM research_runs
+                WHERE id = ?
+                """,
+                (source_run_id,),
+            ).fetchone()
+            if source is None:
+                raise KeyError(source_run_id)
+            run_id = f"run_{uuid4().hex[:20]}"
+            connection.execute(
+                """
+                INSERT INTO research_runs
+                    (id, definition_version_id, dataset_release_id, status,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, 'queued', ?, ?)
+                """,
+                (
+                    run_id,
+                    str(source["definition_version_id"]),
+                    str(source["dataset_release_id"]),
+                    now,
+                    now,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO research_run_idempotency (idempotency_key, run_id)
+                VALUES (?, ?)
+                """,
+                (idempotency_key, run_id),
+            )
+        run = self.research_run(run_id)
+        if run is None:
+            raise RuntimeError("created ResearchRun disappeared")
+        return run, True
 
     @staticmethod
     def _ensure_column(
@@ -444,5 +820,54 @@ class MetadataStore:
             "dataset_release_id": str(row["dataset_release_id"]),
             "status": str(row["status"]),
             "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"] or row["created_at"]),
+            "started_at": (str(row["started_at"]) if row["started_at"] is not None else None),
+            "completed_at": (str(row["completed_at"]) if row["completed_at"] is not None else None),
+            "result_bundle_id": (
+                str(row["result_bundle_id"]) if row["result_bundle_id"] is not None else None
+            ),
+            "result_manifest_sha256": (
+                str(row["result_manifest_sha256"])
+                if row["result_manifest_sha256"] is not None
+                else None
+            ),
         }
         return frozen, run
+
+    @staticmethod
+    def _run_from_row(row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "id": str(row["id"]),
+            "definition_version_id": str(row["definition_version_id"]),
+            "dataset_release_id": str(row["dataset_release_id"]),
+            "status": str(row["status"]),
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"] or row["created_at"]),
+            "started_at": (str(row["started_at"]) if row["started_at"] is not None else None),
+            "completed_at": (str(row["completed_at"]) if row["completed_at"] is not None else None),
+            "result_bundle_id": (
+                str(row["result_bundle_id"]) if row["result_bundle_id"] is not None else None
+            ),
+            "result_manifest_sha256": (
+                str(row["result_manifest_sha256"])
+                if row["result_manifest_sha256"] is not None
+                else None
+            ),
+        }
+
+    @staticmethod
+    def _attempt_from_row(row: sqlite3.Row) -> dict[str, object]:
+        return {
+            "id": str(row["id"]),
+            "run_id": str(row["run_id"]),
+            "ordinal": int(row["ordinal"]),
+            "status": str(row["status"]),
+            "started_at": str(row["started_at"]),
+            "heartbeat_at": str(row["heartbeat_at"]),
+            "completed_at": (str(row["completed_at"]) if row["completed_at"] is not None else None),
+            "diagnostic": (
+                json.loads(str(row["diagnostic_json"]))
+                if row["diagnostic_json"] is not None
+                else None
+            ),
+        }

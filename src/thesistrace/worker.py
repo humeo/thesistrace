@@ -1,15 +1,22 @@
 import argparse
+import logging
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 from thesistrace.config import settings_from_environment
+from thesistrace.datasets import DatasetPublisher
+from thesistrace.objects import ImmutableObjectStore
+from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
+
+logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the ThesisTrace worker")
     parser.add_argument("--metadata", type=Path)
+    parser.add_argument("--objects", type=Path)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--interval", type=float, default=5.0)
     return parser
@@ -17,10 +24,26 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    metadata_path = args.metadata or settings_from_environment().metadata_path
+    settings = settings_from_environment()
+    metadata_path = args.metadata or settings.metadata_path
+    object_root = args.objects or settings.object_root
     store = MetadataStore(metadata_path)
     store.initialize()
+    objects = ImmutableObjectStore(object_root)
+    runs = ResearchRunService(
+        store,
+        DatasetPublisher(store, objects),
+        objects,
+    )
     while True:
+        store.record_worker_heartbeat(datetime.now(UTC))
+        try:
+            store.recover_abandoned_research_runs(
+                stale_after_seconds=settings.worker_stale_after_seconds
+            )
+            runs.execute_next()
+        except Exception:
+            logger.exception("ResearchRun worker iteration failed")
         store.record_worker_heartbeat(datetime.now(UTC))
         if args.once:
             return
@@ -28,4 +51,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
     main()

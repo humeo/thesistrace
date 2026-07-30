@@ -462,6 +462,7 @@ def run_strategy(
         for instrument_id, position in sorted(positions.items())
     ]
     payload = {
+        "alpha_checksum": alpha_matrix["checksum"],
         "initial_cash_cny": canonical_decimal(INITIAL_CASH),
         "daily": daily,
         "positions": positions_payload,

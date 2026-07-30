@@ -36,4 +36,9 @@ test("shows the real empty workspace and dependency health", async ({ page }) =>
   await expect(page.getByText("RUN QUEUED")).toBeVisible();
   await expect(page.getByText("FROZEN VERSION 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Freeze" })).toHaveCount(0);
+  await expect(page.getByText("SUCCEEDED")).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole("heading", { name: "因子结论" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "策略结论" })).toBeVisible();
+  await expect(page.getByText("RESULT BUNDLE")).toBeVisible();
+  await expect(page.getByText("DATASET RELEASE", { exact: true })).toBeVisible();
 });

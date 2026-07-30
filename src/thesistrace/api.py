@@ -11,6 +11,7 @@ from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
 from thesistrace.objects import ImmutableObjectStore
+from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
 from thesistrace.tushare_source import (
     HttpTushareTransport,
@@ -51,6 +52,7 @@ def create_app(
     objects = ImmutableObjectStore(settings.object_root)
     publisher = DatasetPublisher(store, objects)
     definitions = ResearchDefinitionService(store, publisher)
+    research_runs = ResearchRunService(store, publisher, objects)
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
@@ -108,6 +110,48 @@ def create_app(
         if frozen is None:
             raise HTTPException(status_code=404, detail="frozen definition not found")
         return frozen
+
+    @app.get("/api/v1/research-runs")
+    def list_research_runs() -> dict[str, object]:
+        return {"items": store.list_research_runs()}
+
+    @app.get("/api/v1/research-runs/{run_id}")
+    def get_research_run(run_id: str) -> dict[str, object]:
+        run = store.research_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return run
+
+    @app.get("/api/v1/research-runs/{run_id}/result")
+    def get_research_run_result(run_id: str) -> dict[str, object]:
+        try:
+            result = research_runs.result_view(run_id)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="ResearchRun not found") from error
+        if result is None:
+            raise HTTPException(
+                status_code=409,
+                detail="ResearchRun has no successful Result Bundle",
+            )
+        return result
+
+    @app.post("/api/v1/research-runs/{run_id}/cancel")
+    def cancel_research_run(run_id: str) -> dict[str, object]:
+        run = store.cancel_research_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return run
+
+    @app.post("/api/v1/research-runs/{run_id}/rerun")
+    def rerun_research(
+        run_id: str,
+        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
+    ) -> JSONResponse:
+        try:
+            run, created = store.create_research_rerun(run_id, idempotency_key)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail="ResearchRun not found") from error
+        return JSONResponse(status_code=202 if created else 200, content=run)
 
     @app.get("/api/v1/health")
     def get_health() -> dict[str, object]:

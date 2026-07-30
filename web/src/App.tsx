@@ -63,6 +63,41 @@ type WorkspaceState =
   | { status: "ready"; workspace: Workspace; health: Health }
   | { status: "error" };
 
+type RunStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+
+type ResearchResult = {
+  manifest: {
+    id: string;
+    dataset_release: { id: string };
+    definition: { id: string; content_hash: string };
+    calculation_kernel: string;
+  };
+  factor_evaluation: {
+    horizons: Record<
+      string,
+      {
+        summary: {
+          ic: { mean: number | null; icir: number | null };
+          rank_ic: { mean: number | null; icir: number | null };
+          top_bottom_return: number | null;
+        };
+      }
+    >;
+  };
+  strategy_backtest: {
+    metrics: {
+      net_cumulative_return: number;
+      net_cagr: number | null;
+      benchmark_cumulative_return: number;
+      annualized_excess_return: number | null;
+      maximum_drawdown: { value: number };
+      sharpe: number | null;
+      turnover: { annualized: number | null };
+      transaction_costs: { cumulative_amount: number };
+    };
+  };
+};
+
 const resources = [
   { key: "dataset_releases", label: "Dataset Releases", icon: Database },
   { key: "research_definitions", label: "Research Definitions", icon: FlaskConical },
@@ -302,10 +337,15 @@ function ResearchDefinitionEditor() {
   const [form, setForm] = useState<DefinitionForm>(initialDefinition);
   const [draftId, setDraftId] = useState<string | null>(null);
   const [status, setStatus] = useState<
-    "idle" | "saving" | "saved" | "running" | "queued" | "error"
+    "idle" | "saving" | "saved" | "running" | RunStatus | "error"
   >("idle");
   const [frozenVersion, setFrozenVersion] = useState<number | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
+  const [result, setResult] = useState<ResearchResult | null>(null);
+
+  useEffect(() => {
+    void restoreLatestRun();
+  }, []);
 
   function content() {
     return {
@@ -380,12 +420,82 @@ function ResearchDefinitionEditor() {
       }
       const payload = (await response.json()) as {
         frozen_definition: { version: number };
+        run: { id: string; status: RunStatus };
       };
       setFrozenVersion(payload.frozen_definition.version);
       setStatus("queued");
+      setResult(null);
+      await waitForRun(payload.run.id);
     } catch {
       setStatus("error");
       setErrors(["ResearchRun 创建失败"]);
+    }
+  }
+
+  async function waitForRun(runId: string) {
+    for (;;) {
+      await delay(500);
+      const runResponse = await fetch(`/api/v1/research-runs/${runId}`).then(
+        assertResponse,
+      );
+      const run = (await runResponse.json()) as {
+        status: RunStatus;
+        attempts: {
+          diagnostic: { message?: string } | null;
+        }[];
+      };
+      setStatus(run.status);
+      if (run.status === "succeeded") {
+        const resultResponse = await fetch(
+          `/api/v1/research-runs/${runId}/result`,
+        ).then(assertResponse);
+        setResult((await resultResponse.json()) as ResearchResult);
+        return;
+      }
+      if (run.status === "failed" || run.status === "cancelled") {
+        const message = run.attempts.at(-1)?.diagnostic?.message;
+        setErrors([message ?? `ResearchRun ${run.status}`]);
+        return;
+      }
+    }
+  }
+
+  async function restoreLatestRun() {
+    try {
+      const response = await fetch("/api/v1/research-runs").then(assertResponse);
+      const payload = (await response.json()) as {
+        items: {
+          id: string;
+          definition_version_id: string;
+          status: RunStatus;
+          attempts: {
+            diagnostic: { message?: string } | null;
+          }[];
+        }[];
+      };
+      const run = payload.items.at(-1);
+      if (!run) {
+        return;
+      }
+      const frozenResponse = await fetch(
+        `/api/v1/research-definition-versions/${run.definition_version_id}`,
+      ).then(assertResponse);
+      const frozen = (await frozenResponse.json()) as { version: number };
+      setFrozenVersion(frozen.version);
+      setStatus(run.status);
+      if (run.status === "succeeded") {
+        const resultResponse = await fetch(
+          `/api/v1/research-runs/${run.id}/result`,
+        ).then(assertResponse);
+        setResult((await resultResponse.json()) as ResearchResult);
+      } else if (run.status === "queued" || run.status === "running") {
+        await waitForRun(run.id);
+      } else {
+        const message = run.attempts.at(-1)?.diagnostic?.message;
+        setErrors([message ?? `ResearchRun ${run.status}`]);
+      }
+    } catch {
+      setErrors(["最近一次 ResearchRun 状态读取失败"]);
     }
   }
 
@@ -396,15 +506,7 @@ function ResearchDefinitionEditor() {
           <p className="eyebrow">AUTHORING / ONE STRUCTURED INPUT</p>
           <h2>Research Definition</h2>
         </div>
-        <span className="draft-state">
-          {status === "queued"
-            ? "RUN QUEUED"
-            : status === "saved"
-              ? "DRAFT SAVED"
-              : status === "error"
-                ? "NEEDS ATTENTION"
-                : "DRAFT"}
-        </span>
+        <span className="draft-state">{definitionStatusLabel(status)}</span>
       </div>
       <div className="definition-grid">
         <label className="form-field title-field">
@@ -496,12 +598,102 @@ function ResearchDefinitionEditor() {
         <button type="button" className="secondary-button" onClick={handleSave}>
           保存 Draft
         </button>
-        <button type="button" className="bootstrap-button" onClick={handleRun}>
+        <button
+          type="button"
+          className="bootstrap-button"
+          onClick={handleRun}
+          disabled={status === "queued" || status === "running"}
+        >
           运行研究
           <ArrowUpRight size={16} aria-hidden="true" />
         </button>
       </div>
+      {result && <ResearchResultPanel result={result} />}
     </section>
+  );
+}
+
+function ResearchResultPanel({ result }: { result: ResearchResult }) {
+  const metrics = result.strategy_backtest.metrics;
+  return (
+    <section className="result-panel" aria-label="ResearchRun 结果">
+      <div className="result-provenance">
+        <div>
+          <span>RESULT BUNDLE</span>
+          <code>{result.manifest.id}</code>
+        </div>
+        <div>
+          <span>DATASET RELEASE</span>
+          <code>{result.manifest.dataset_release.id}</code>
+        </div>
+        <div>
+          <span>FROZEN DEFINITION</span>
+          <code>{result.manifest.definition.id}</code>
+        </div>
+        <div>
+          <span>KERNEL</span>
+          <code>{result.manifest.calculation_kernel}</code>
+        </div>
+      </div>
+      <div className="result-columns">
+        <div className="result-conclusion">
+          <p className="eyebrow">FACTOR EVALUATION</p>
+          <h3>因子结论</h3>
+          <div className="factor-horizons">
+            {["1", "5", "20"].map((horizon) => {
+              const summary = result.factor_evaluation.horizons[horizon].summary;
+              return (
+                <div key={horizon}>
+                  <strong>{horizon}D</strong>
+                  <Metric label="IC MEAN" value={formatNumber(summary.ic.mean)} />
+                  <Metric
+                    label="RANK IC"
+                    value={formatNumber(summary.rank_ic.mean)}
+                  />
+                  <Metric
+                    label="TOP−BOTTOM"
+                    value={formatPercent(summary.top_bottom_return)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="result-conclusion">
+          <p className="eyebrow">STRATEGY BACKTEST</p>
+          <h3>策略结论</h3>
+          <div className="strategy-metrics">
+            <Metric
+              label="NET RETURN"
+              value={formatPercent(metrics.net_cumulative_return)}
+            />
+            <Metric label="NET CAGR" value={formatPercent(metrics.net_cagr)} />
+            <Metric
+              label="BENCHMARK"
+              value={formatPercent(metrics.benchmark_cumulative_return)}
+            />
+            <Metric
+              label="MAX DRAWDOWN"
+              value={formatPercent(metrics.maximum_drawdown.value)}
+            />
+            <Metric label="SHARPE" value={formatNumber(metrics.sharpe)} />
+            <Metric
+              label="COST CNY"
+              value={metrics.transaction_costs.cumulative_amount.toFixed(2)}
+            />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="result-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 
@@ -656,4 +848,29 @@ function assertResponse(response: Response): Response {
     throw new Error(`Workspace request failed with ${response.status}`);
   }
   return response;
+}
+
+function formatPercent(value: number | null): string {
+  return value === null ? "—" : `${(value * 100).toFixed(2)}%`;
+}
+
+function definitionStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    queued: "RUN QUEUED",
+    running: "RUNNING",
+    succeeded: "SUCCEEDED",
+    failed: "FAILED",
+    cancelled: "CANCELLED",
+    saved: "DRAFT SAVED",
+    error: "NEEDS ATTENTION",
+  };
+  return labels[status] ?? "DRAFT";
+}
+
+function formatNumber(value: number | null): string {
+  return value === null ? "—" : value.toFixed(4);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
