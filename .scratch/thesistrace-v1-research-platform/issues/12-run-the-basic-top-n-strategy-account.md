@@ -6,12 +6,20 @@ Cycles.
 
 **Blocked by:** 04 — Publish Calendar, Universe, Industry, and Field Catalog; 08 — Fix numeric execution and canonical serialization; 09 — Evaluate Alpha Expressions and Alpha Matrices.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] The account begins at the first report-window Open with CNY 10,000,000, no holdings, and Benchmark NAV 1.
-- [ ] Warm-up Alpha never creates an order; the first report-window close creates the first eligible signal.
-- [ ] Rebalance Interval supports every integer from 1 through 20 and preserves one fixed phase.
-- [ ] Candidates order by descending final Alpha then ascending Instrument Identity and select at most the explicit 1-to-100 Holdings Count.
-- [ ] Pre-trade Net NAV sets equal target values; sells occur before buys and every decision uses Net state.
-- [ ] Integer Execution Shares and fractional Adjusted Holding Units evolve through one deterministic account state.
-- [ ] The final finite ResearchRun Open values holdings without forced liquidation or a terminal Rebalance.
+- [x] The account begins at the first report-window Open with CNY 10,000,000, no holdings, and Benchmark NAV 1.
+- [x] Warm-up Alpha never creates an order; the first report-window close creates the first eligible signal.
+- [x] Rebalance Interval supports every integer from 1 through 20 and preserves one fixed phase.
+- [x] Candidates order by descending final Alpha then ascending Instrument Identity and select at most the explicit 1-to-100 Holdings Count.
+- [x] Pre-trade Net NAV sets equal target values; sells occur before buys and every decision uses Net state.
+- [x] Integer Execution Shares and fractional Adjusted Holding Units evolve through one deterministic account state.
+- [x] The final finite ResearchRun Open values holdings without forced liquidation or a terminal Rebalance.
+
+## Comments
+
+- Added the deterministic all-cash-to-terminal Open NAV state machine with one
+  fixed rebalance phase, Top-N targets, Net-only decisions, and dual-unit
+  holdings.
+- Strategy output retains target and actual weights, orders, fills, daily
+  accounting observations, terminal positions, and a canonical checksum.

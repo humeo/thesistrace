@@ -6,13 +6,20 @@ next-open execution coordinate.
 
 **Blocked by:** 03 — Publish Canonical EOD Price, adjustment, and Trading State; 12 — Run the basic Top-N Strategy Account.
 
-**Status:** ready-for-agent
+**Status:** resolved
 
-- [ ] Main Board and ChiNext quantities use 100-share increments; STAR buys and partial sells follow their 200-share minimum and one-share increment.
-- [ ] Complete liquidation may sell an odd-lot remainder and orders below their legal minimum are not created.
-- [ ] Board-specific single-order caps split logical orders into legal Child Orders.
-- [ ] Full-session suspension, upper-limit buys, and lower-limit sells block one logical order and cancel it without retry or substitution.
-- [ ] Every eligible Child Order fills completely at the valid Raw Market Price Open with no slippage, participation, or partial-fill model.
-- [ ] Commission minimum, transfer fee, and sell stamp duty apply per Child Order using Raw Notional and unquantized Decimal arithmetic.
-- [ ] Buy affordability is recalculated after each prior fill and cost and never makes Net Cash negative.
-- [ ] Market Rejections and non-order diagnostics retain separate reason-coded event details.
+- [x] Main Board and ChiNext quantities use 100-share increments; STAR buys and partial sells follow their 200-share minimum and one-share increment.
+- [x] Complete liquidation may sell an odd-lot remainder and orders below their legal minimum are not created.
+- [x] Board-specific single-order caps split logical orders into legal Child Orders.
+- [x] Full-session suspension, upper-limit buys, and lower-limit sells block one logical order and cancel it without retry or substitution.
+- [x] Every eligible Child Order fills completely at the valid Raw Market Price Open with no slippage, participation, or partial-fill model.
+- [x] Commission minimum, transfer fee, and sell stamp duty apply per Child Order using Raw Notional and unquantized Decimal arithmetic.
+- [x] Buy affordability is recalculated after each prior fill and cost and never makes Net Cash negative.
+- [x] Market Rejections and non-order diagnostics retain separate reason-coded event details.
+
+## Comments
+
+- Added legal board-lot conversion, capped Child Orders, per-child Decimal
+  costs, binary-search affordability, and sell-before-buy execution.
+- Logical orders, Child Orders, fills, three market rejection types, and
+  non-order diagnostics remain separately inspectable.
