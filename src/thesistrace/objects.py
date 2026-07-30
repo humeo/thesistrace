@@ -148,8 +148,19 @@ class ImmutableObjectStore:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def stage(self, run_id: str, attempt_id: str) -> "StagedObjectStore":
-        return StagedObjectStore(self, run_id=run_id, attempt_id=attempt_id)
+    def stage(
+        self,
+        run_id: str,
+        attempt_id: str,
+        *,
+        cleanup_uncommitted_payloads: bool = False,
+    ) -> "StagedObjectStore":
+        return StagedObjectStore(
+            self,
+            run_id=run_id,
+            attempt_id=attempt_id,
+            cleanup_uncommitted_payloads=cleanup_uncommitted_payloads,
+        )
 
     @contextmanager
     def publication_guard(self, run_id: str) -> Iterator[None]:
@@ -195,14 +206,14 @@ class ImmutableObjectStore:
                                 journal.get("manifest_sha256")
                                 != committed_manifest_sha256
                             ):
-                                self._remove_uncommitted_private_paths(journal)
+                                self._remove_uncommitted_paths(journal)
                         shutil.rmtree(stage_root, ignore_errors=True)
                 if run_root.exists() and not any(run_root.iterdir()):
                     run_root.rmdir()
             finally:
                 fcntl.flock(publication_lock.fileno(), fcntl.LOCK_UN)
 
-    def _remove_uncommitted_private_paths(
+    def _remove_uncommitted_paths(
         self,
         journal: dict[str, object],
     ) -> None:
@@ -214,6 +225,40 @@ class ImmutableObjectStore:
                 raise ParquetContractError("staged publication path is invalid")
             destination = self.root / relative
             destination.unlink(missing_ok=True)
+        candidate_paths = journal.get("candidate_paths", [])
+        if not isinstance(candidate_paths, list):
+            raise ParquetContractError("staged publication journal is invalid")
+        referenced_digests = self._committed_object_digests()
+        for relative in reversed(candidate_paths):
+            if not isinstance(relative, str):
+                raise ParquetContractError("staged publication path is invalid")
+            parts = Path(relative).parts
+            if len(parts) != 3 or parts[0] != "sha256":
+                raise ParquetContractError("staged candidate path is invalid")
+            digest = Path(parts[-1]).stem
+            if digest not in referenced_digests:
+                (self.root / relative).unlink(missing_ok=True)
+
+    def _committed_object_digests(self) -> set[str]:
+        digests: set[str] = set()
+        manifests_root = self.root / "manifests"
+        if not manifests_root.exists():
+            return digests
+
+        def collect(value: object) -> None:
+            if isinstance(value, dict):
+                digest = value.get("sha256")
+                if isinstance(digest, str):
+                    digests.add(digest)
+                for nested in value.values():
+                    collect(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    collect(nested)
+
+        for manifest_path in manifests_root.glob("*.json"):
+            collect(_read_stage_json(manifest_path))
+        return digests
 
     def path_for(self, digest: str) -> Path:
         return self.root / "sha256" / digest[:2] / f"{digest}.json"
@@ -262,10 +307,12 @@ class StagedObjectStore:
         *,
         run_id: str,
         attempt_id: str,
+        cleanup_uncommitted_payloads: bool,
     ) -> None:
         self.destination = destination
         self.run_id = run_id
         self.attempt_id = attempt_id
+        self.cleanup_uncommitted_payloads = cleanup_uncommitted_payloads
         self.stage_lock = None
         self.promotion_started = False
         self.promotion_resolved = False
@@ -305,6 +352,19 @@ class StagedObjectStore:
     def put_manifest(self, resource_id: str, value: object) -> None:
         self.writer.put_manifest(resource_id, value)
 
+    def read_json(self, digest: str) -> object:
+        return self.destination.read_json(digest)
+
+    def read_parquet_bytes(self, digest: str) -> bytes:
+        return self.destination.read_parquet_bytes(digest)
+
+    def read_parquet(
+        self,
+        digest: str,
+        contract: ParquetWriterContract,
+    ) -> pa.Table:
+        return self.destination.read_parquet(digest, contract)
+
     @contextmanager
     def publication(self, *, manifest_sha256: str) -> Iterator[None]:
         self.destination.root.mkdir(parents=True, exist_ok=True)
@@ -326,11 +386,24 @@ class StagedObjectStore:
                         self.destination.root / source.relative_to(self.root)
                     ).exists()
                 ]
+                candidate_paths = (
+                    [
+                        str(source.relative_to(self.root))
+                        for source in sources
+                        if source.relative_to(self.root).parts[0] == "sha256"
+                        if not (
+                            self.destination.root / source.relative_to(self.root)
+                        ).exists()
+                    ]
+                    if self.cleanup_uncommitted_payloads
+                    else []
+                )
                 journal = {
                     "run_id": self.run_id,
                     "attempt_id": self.attempt_id,
                     "manifest_sha256": manifest_sha256,
                     "private_paths": private_paths,
+                    "candidate_paths": candidate_paths,
                 }
                 _write_stage_json(self.root / ".publication.json", journal)
                 self.promotion_started = True

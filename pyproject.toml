@@ -20,6 +20,7 @@ thesistrace-operator = "thesistrace.operator:main"
 thesistrace-worker = "thesistrace.worker:main"
 thesistrace-execution-relay = "thesistrace.hosted.execution_relay:main"
 thesistrace-temporal-worker = "thesistrace.hosted.temporal_worker:main"
+thesistrace-data-worker = "thesistrace.hosted.data_worker:main"
 
 [dependency-groups]
 dev = [

@@ -32,9 +32,25 @@ class ObjectStoreStagePort(ObjectWriterPort, Protocol):
 
     def publication(self, *, manifest_sha256: str) -> AbstractContextManager[None]: ...
 
+    def read_json(self, digest: str) -> object: ...
+
+    def read_parquet_bytes(self, digest: str) -> bytes: ...
+
+    def read_parquet(
+        self,
+        digest: str,
+        contract: ParquetWriterContract,
+    ) -> pa.Table: ...
+
 
 class ObjectStorePort(ObjectWriterPort, Protocol):
-    def stage(self, run_id: str, attempt_id: str) -> ObjectStoreStagePort: ...
+    def stage(
+        self,
+        run_id: str,
+        attempt_id: str,
+        *,
+        cleanup_uncommitted_payloads: bool = False,
+    ) -> ObjectStoreStagePort: ...
 
     def publication_guard(self, run_id: str) -> AbstractContextManager[None]: ...
 

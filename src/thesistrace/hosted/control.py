@@ -1,3 +1,4 @@
+import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
@@ -224,6 +225,98 @@ class PostgresControlMetadataStore(MetadataStore):
             """,
             (completed_at, resource_kind, resource_id),
         )
+
+    def _lock_dataset_publication_slot(
+        self,
+        connection: PostgresConnectionAdapter,
+    ) -> None:
+        connection.execute(
+            """
+            SELECT pg_advisory_xact_lock(
+                hashtextextended('dataset-publication-slot', 0)
+            )
+            """
+        )
+
+    def request_dataset_publication(
+        self,
+        record: dict[str, object],
+        audit_event: dict[str, object] | None,
+    ) -> tuple[dict[str, object], bool]:
+        if audit_event is not None or record.get("trigger_kind") != "schedule":
+            raise PermissionError(
+                "Data role can only request validated scheduled publications"
+            )
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT publication_id, created
+                FROM thesistrace_control.request_scheduled_dataset_publication(
+                    ?, ?, ?, ?::jsonb, ?, ?
+                )
+                """,
+                (
+                    record["id"],
+                    record["request_version"],
+                    record["kind"],
+                    json.dumps(
+                        record["parameters"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    record["idempotency_key"],
+                    record["created_at"],
+                ),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("Scheduled Dataset Publication was not created")
+            publication = self._dataset_publication(
+                connection,
+                str(row["publication_id"]),
+            )
+            if publication is None:
+                raise RuntimeError("Scheduled Dataset Publication disappeared")
+            return publication, bool(row["created"])
+
+    def _lock_dataset_publication(
+        self,
+        connection: PostgresConnectionAdapter,
+        publication_id: str,
+    ) -> None:
+        connection.execute(
+            """
+            SELECT id
+            FROM dataset_publications
+            WHERE id = ?
+            FOR UPDATE
+            """,
+            (publication_id,),
+        )
+
+    def _lock_dataset_publication_request(
+        self,
+        connection: PostgresConnectionAdapter,
+        idempotency_key: str,
+    ) -> None:
+        connection.execute(
+            """
+            SELECT pg_advisory_xact_lock(
+                hashtextextended('dataset-publication-request:' || ?, 0)
+            )
+            """,
+            (idempotency_key,),
+        )
+
+    def source_authorization_is_authorized(self) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT thesistrace_control.hosted_tushare_authorized()
+                    AS authorized
+                """
+            ).fetchone()
+        return bool(row and row["authorized"])
 
 
 __all__ = ["PostgresControlMetadataStore"]

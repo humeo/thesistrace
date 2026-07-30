@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -108,6 +108,72 @@ class MetadataStore:
                 CREATE TABLE IF NOT EXISTS publication_idempotency (
                     idempotency_key TEXT PRIMARY KEY,
                     release_id TEXT NOT NULL REFERENCES dataset_releases(id)
+                );
+
+                CREATE TABLE IF NOT EXISTS dataset_publications (
+                    id TEXT PRIMARY KEY,
+                    request_version TEXT NOT NULL CHECK (request_version = 'v1'),
+                    kind TEXT NOT NULL CHECK (
+                        kind IN (
+                            'fixture_bootstrap',
+                            'fixture_increment',
+                            'live_bootstrap',
+                            'live_increment'
+                        )
+                    ),
+                    parameters_json TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    trigger_kind TEXT NOT NULL CHECK (
+                        trigger_kind IN ('operator', 'schedule')
+                    ),
+                    status TEXT NOT NULL CHECK (
+                        status IN (
+                            'queued',
+                            'running',
+                            'succeeded',
+                            'failed',
+                            'cancelled'
+                        )
+                    ),
+                    result_release_id TEXT REFERENCES dataset_releases(id),
+                    result_manifest_sha256 TEXT,
+                    diagnostic_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS dataset_publication_attempts (
+                    id TEXT PRIMARY KEY,
+                    publication_id TEXT NOT NULL
+                        REFERENCES dataset_publications(id),
+                    ordinal INTEGER NOT NULL,
+                    status TEXT NOT NULL CHECK (
+                        status IN ('running', 'succeeded', 'failed', 'cancelled')
+                    ),
+                    diagnostic_json TEXT,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    UNIQUE (publication_id, ordinal)
+                );
+
+                CREATE TABLE IF NOT EXISTS platform_execution_outbox (
+                    id TEXT PRIMARY KEY,
+                    resource_kind TEXT NOT NULL
+                        CHECK (resource_kind = 'dataset_publication'),
+                    resource_id TEXT NOT NULL
+                        REFERENCES dataset_publications(id),
+                    status TEXT NOT NULL CHECK (
+                        status IN ('pending', 'dispatched')
+                    ),
+                    created_at TEXT NOT NULL,
+                    dispatched_at TEXT,
+                    UNIQUE (resource_kind, resource_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS tracking_release_triggers (
+                    release_id TEXT PRIMARY KEY REFERENCES dataset_releases(id),
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'dispatched')),
+                    created_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS research_definitions (
@@ -343,6 +409,14 @@ class MetadataStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def source_authorization_is_authorized(self) -> bool:
+        declaration = self.latest_source_authorization()
+        return bool(
+            declaration
+            and declaration.get("source") == "tushare"
+            and declaration.get("scope") == "hosted-shared-dataset-releases"
+        )
+
     def list_management_audit_events(self) -> list[dict[str, object]]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -409,6 +483,667 @@ class MetadataStore:
                 for table in RESOURCE_TABLES
             }
 
+    def request_dataset_publication(
+        self,
+        record: dict[str, object],
+        audit_event: dict[str, object] | None,
+    ) -> tuple[dict[str, object], bool]:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication_request(
+                connection,
+                str(record["idempotency_key"]),
+            )
+            existing = connection.execute(
+                """
+                SELECT id
+                FROM dataset_publications
+                WHERE idempotency_key = ?
+                """,
+                (record["idempotency_key"],),
+            ).fetchone()
+            if existing is not None:
+                publication = self._dataset_publication(
+                    connection,
+                    str(existing["id"]),
+                )
+                if publication is None:
+                    raise RuntimeError("Dataset Publication disappeared")
+                return publication, False
+            connection.execute(
+                """
+                INSERT INTO dataset_publications (
+                    id,
+                    request_version,
+                    kind,
+                    parameters_json,
+                    idempotency_key,
+                    trigger_kind,
+                    status,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)
+                """,
+                (
+                    record["id"],
+                    record["request_version"],
+                    record["kind"],
+                    json.dumps(
+                        record["parameters"],
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    record["idempotency_key"],
+                    record["trigger_kind"],
+                    record["created_at"],
+                    record["updated_at"],
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO platform_execution_outbox (
+                    id,
+                    resource_kind,
+                    resource_id,
+                    status,
+                    created_at
+                )
+                VALUES (?, 'dataset_publication', ?, 'pending', ?)
+                """,
+                (
+                    f"outbox_{record['id']}",
+                    record["id"],
+                    record["created_at"],
+                ),
+            )
+            if audit_event is not None:
+                self._insert_management_audit_event(connection, audit_event)
+            publication = self._dataset_publication(
+                connection,
+                str(record["id"]),
+            )
+            if publication is None:
+                raise RuntimeError("Dataset Publication was not created")
+            return publication, True
+
+    def dataset_publication_for_idempotency_key(
+        self,
+        idempotency_key: str,
+    ) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id
+                FROM dataset_publications
+                WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            return (
+                None
+                if row is None
+                else self._dataset_publication(connection, str(row["id"]))
+            )
+
+    def dataset_publication(
+        self,
+        publication_id: str,
+    ) -> dict[str, object] | None:
+        with self.connect() as connection:
+            return self._dataset_publication(connection, publication_id)
+
+    def claim_dataset_publication(
+        self,
+        publication_id: str,
+    ) -> tuple[dict[str, object], dict[str, object]] | None:
+        now = datetime.now(UTC).isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication_slot(connection)
+            row = connection.execute(
+                """
+                SELECT status
+                FROM dataset_publications
+                WHERE id = ?
+                """,
+                (publication_id,),
+            ).fetchone()
+            if row is None or row["status"] != "queued":
+                return None
+            running = connection.execute(
+                """
+                SELECT id
+                FROM dataset_publications
+                WHERE status = 'running'
+                LIMIT 1
+                """
+            ).fetchone()
+            if running is not None:
+                return None
+            ordinal = int(
+                connection.execute(
+                    """
+                    SELECT count(*)
+                    FROM dataset_publication_attempts
+                    WHERE publication_id = ?
+                    """,
+                    (publication_id,),
+                ).fetchone()[0]
+            ) + 1
+            attempt_id = f"dpa_{uuid4().hex[:20]}"
+            connection.execute(
+                """
+                UPDATE dataset_publications
+                SET status = 'running',
+                    diagnostic_json = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'queued'
+                """,
+                (now, publication_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO dataset_publication_attempts (
+                    id,
+                    publication_id,
+                    ordinal,
+                    status,
+                    started_at
+                )
+                VALUES (?, ?, ?, 'running', ?)
+                """,
+                (attempt_id, publication_id, ordinal, now),
+            )
+            publication = self._dataset_publication(connection, publication_id)
+            if publication is None:
+                raise RuntimeError("Dataset Publication disappeared")
+            attempt = publication["attempts"][-1]
+            if not isinstance(attempt, dict):
+                raise RuntimeError("Dataset Publication Attempt is invalid")
+            return publication, attempt
+
+    def prepare_dataset_publication_redelivery(
+        self,
+        publication_id: str,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = {
+            "reason_code": "ACTIVITY_REDELIVERED",
+            "message": "the prior Dataset Publication delivery ended before publication",
+        }
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication(connection, publication_id)
+            row = connection.execute(
+                "SELECT status FROM dataset_publications WHERE id = ?",
+                (publication_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(publication_id)
+            if row["status"] == "running":
+                connection.execute(
+                    """
+                    UPDATE dataset_publication_attempts
+                    SET status = 'failed',
+                        diagnostic_json = ?,
+                        finished_at = ?
+                    WHERE publication_id = ?
+                      AND status = 'running'
+                    """,
+                    (
+                        json.dumps(diagnostic, sort_keys=True, separators=(",", ":")),
+                        now,
+                        publication_id,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE dataset_publications
+                    SET status = 'queued',
+                        diagnostic_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        json.dumps(diagnostic, sort_keys=True, separators=(",", ":")),
+                        now,
+                        publication_id,
+                    ),
+                )
+            publication = self._dataset_publication(connection, publication_id)
+            if publication is None:
+                raise KeyError(publication_id)
+            return publication
+
+    def finish_dataset_publication_attempt(
+        self,
+        *,
+        publication_id: str,
+        attempt_id: str,
+        retryable: bool,
+        diagnostic: dict[str, object],
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        next_status = "queued" if retryable else "failed"
+        diagnostic_json = json.dumps(
+            diagnostic,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication(connection, publication_id)
+            updated = connection.execute(
+                """
+                UPDATE dataset_publication_attempts
+                SET status = 'failed',
+                    diagnostic_json = ?,
+                    finished_at = ?
+                WHERE id = ?
+                  AND publication_id = ?
+                  AND status = 'running'
+                """,
+                (diagnostic_json, now, attempt_id, publication_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("Dataset Publication Attempt fence failed")
+            updated = connection.execute(
+                """
+                UPDATE dataset_publications
+                SET status = ?,
+                    diagnostic_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'running'
+                """,
+                (next_status, diagnostic_json, now, publication_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("Dataset Publication fence failed")
+            publication = self._dataset_publication(connection, publication_id)
+            if publication is None:
+                raise KeyError(publication_id)
+            return publication
+
+    def request_dataset_publication_cancellation(
+        self,
+        publication_id: str,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = {
+            "reason_code": "CANCELLED",
+            "message": "Dataset Publication was cancelled",
+        }
+        diagnostic_json = json.dumps(
+            diagnostic,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication(connection, publication_id)
+            connection.execute(
+                """
+                UPDATE dataset_publication_attempts
+                SET status = 'cancelled',
+                    diagnostic_json = ?,
+                    finished_at = ?
+                WHERE publication_id = ?
+                  AND status = 'running'
+                """,
+                (diagnostic_json, now, publication_id),
+            )
+            connection.execute(
+                """
+                UPDATE dataset_publications
+                SET status = 'cancelled',
+                    diagnostic_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status IN ('queued', 'running')
+                """,
+                (diagnostic_json, now, publication_id),
+            )
+            publication = self._dataset_publication(connection, publication_id)
+            if publication is None:
+                raise KeyError(publication_id)
+            return publication
+
+    def cancel_dataset_publication(
+        self,
+        *,
+        publication_id: str,
+        attempt_id: str,
+    ) -> dict[str, object]:
+        del attempt_id
+        return self.request_dataset_publication_cancellation(publication_id)
+
+    def fail_dataset_publication_delivery(
+        self,
+        publication_id: str,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = {
+            "reason_code": "ACTIVITY_DELIVERY_FAILED",
+            "message": "Dataset Publication Activity delivery was exhausted",
+        }
+        diagnostic_json = json.dumps(
+            diagnostic,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication(connection, publication_id)
+            row = connection.execute(
+                "SELECT status FROM dataset_publications WHERE id = ?",
+                (publication_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(publication_id)
+            if row["status"] not in {"succeeded", "failed", "cancelled"}:
+                connection.execute(
+                    """
+                    UPDATE dataset_publication_attempts
+                    SET status = 'failed',
+                        diagnostic_json = ?,
+                        finished_at = ?
+                    WHERE publication_id = ?
+                      AND status = 'running'
+                    """,
+                    (diagnostic_json, now, publication_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE dataset_publications
+                    SET status = 'failed',
+                        diagnostic_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (diagnostic_json, now, publication_id),
+                )
+            publication = self._dataset_publication(connection, publication_id)
+            if publication is None:
+                raise KeyError(publication_id)
+            return publication
+
+    def fail_dataset_publication_resource_exhaustion(
+        self,
+        publication_id: str,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = {
+            "reason_code": "RESOURCE_EXHAUSTED",
+            "message": "accepted Data Worker resource envelope was exhausted",
+        }
+        diagnostic_json = json.dumps(
+            diagnostic,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication(connection, publication_id)
+            row = connection.execute(
+                "SELECT status FROM dataset_publications WHERE id = ?",
+                (publication_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(publication_id)
+            if row["status"] not in {"succeeded", "failed", "cancelled"}:
+                connection.execute(
+                    """
+                    UPDATE dataset_publication_attempts
+                    SET status = 'failed',
+                        diagnostic_json = ?,
+                        finished_at = ?
+                    WHERE publication_id = ?
+                      AND status = 'running'
+                    """,
+                    (diagnostic_json, now, publication_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE dataset_publications
+                    SET status = 'failed',
+                        diagnostic_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (diagnostic_json, now, publication_id),
+                )
+            publication = self._dataset_publication(connection, publication_id)
+            if publication is None:
+                raise KeyError(publication_id)
+            return publication
+
+    def publish_dataset_publication_success(
+        self,
+        *,
+        publication_id: str,
+        attempt_id: str,
+        release: dict[str, object],
+        idempotency_key: str,
+        cancellation_requested: Callable[[], bool] | None = None,
+    ) -> bool:
+        now = datetime.now(UTC).isoformat()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self._lock_dataset_publication(connection, publication_id)
+            publication = connection.execute(
+                """
+                SELECT status
+                FROM dataset_publications
+                WHERE id = ?
+                """,
+                (publication_id,),
+            ).fetchone()
+            attempt = connection.execute(
+                """
+                SELECT status
+                FROM dataset_publication_attempts
+                WHERE id = ?
+                  AND publication_id = ?
+                """,
+                (attempt_id, publication_id),
+            ).fetchone()
+            if (
+                publication is None
+                or publication["status"] != "running"
+                or attempt is None
+                or attempt["status"] != "running"
+            ):
+                return False
+            if cancellation_requested is not None and cancellation_requested():
+                diagnostic = {
+                    "reason_code": "CANCELLED",
+                    "message": "Dataset Publication was cancelled",
+                }
+                diagnostic_json = json.dumps(
+                    diagnostic,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                connection.execute(
+                    """
+                    UPDATE dataset_publication_attempts
+                    SET status = 'cancelled',
+                        diagnostic_json = ?,
+                        finished_at = ?
+                    WHERE id = ?
+                      AND publication_id = ?
+                      AND status = 'running'
+                    """,
+                    (
+                        diagnostic_json,
+                        now,
+                        attempt_id,
+                        publication_id,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE dataset_publications
+                    SET status = 'cancelled',
+                        diagnostic_json = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                      AND status = 'running'
+                    """,
+                    (diagnostic_json, now, publication_id),
+                )
+                return False
+            committed_release, _created = self._publish_dataset_release(
+                connection,
+                release,
+                idempotency_key,
+            )
+            updated_attempt = connection.execute(
+                """
+                UPDATE dataset_publication_attempts
+                SET status = 'succeeded',
+                    finished_at = ?
+                WHERE id = ?
+                  AND publication_id = ?
+                  AND status = 'running'
+                """,
+                (now, attempt_id, publication_id),
+            )
+            if updated_attempt.rowcount != 1:
+                raise RuntimeError("Dataset Publication Attempt fence failed")
+            updated = connection.execute(
+                """
+                UPDATE dataset_publications
+                SET status = 'succeeded',
+                    result_release_id = ?,
+                    result_manifest_sha256 = ?,
+                    diagnostic_json = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'running'
+                """,
+                (
+                    committed_release["id"],
+                    committed_release["manifest_sha256"],
+                    now,
+                    publication_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("Dataset Publication fence failed")
+            return True
+
+    def tracking_release_trigger(
+        self,
+        release_id: str,
+    ) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT release_id, status, created_at
+                FROM tracking_release_triggers
+                WHERE release_id = ?
+                """,
+                (release_id,),
+            ).fetchone()
+        return None if row is None else dict(row)
+
+    def _lock_dataset_publication_slot(self, connection) -> None:
+        del connection
+
+    def _lock_dataset_publication(
+        self,
+        connection,
+        publication_id: str,
+    ) -> None:
+        del connection, publication_id
+
+    def _lock_dataset_publication_request(
+        self,
+        connection,
+        idempotency_key: str,
+    ) -> None:
+        del connection, idempotency_key
+
+    @staticmethod
+    def _dataset_publication(
+        connection,
+        publication_id: str,
+    ) -> dict[str, object] | None:
+        row = connection.execute(
+            """
+            SELECT
+                id,
+                request_version,
+                kind,
+                parameters_json,
+                idempotency_key,
+                trigger_kind,
+                status,
+                result_release_id,
+                result_manifest_sha256,
+                diagnostic_json,
+                created_at,
+                updated_at
+            FROM dataset_publications
+            WHERE id = ?
+            """,
+            (publication_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        attempts = connection.execute(
+            """
+            SELECT
+                id,
+                publication_id,
+                ordinal,
+                status,
+                diagnostic_json,
+                started_at,
+                finished_at
+            FROM dataset_publication_attempts
+            WHERE publication_id = ?
+            ORDER BY ordinal
+            """,
+            (publication_id,),
+        ).fetchall()
+        return {
+            **dict(row),
+            "parameters": MetadataStore._decode_json(
+                row["parameters_json"]
+            ),
+            "diagnostic": (
+                None
+                if row["diagnostic_json"] is None
+                else MetadataStore._decode_json(row["diagnostic_json"])
+            ),
+            "attempts": [
+                {
+                    **dict(attempt),
+                    "diagnostic": (
+                        None
+                        if attempt["diagnostic_json"] is None
+                        else MetadataStore._decode_json(
+                            attempt["diagnostic_json"]
+                        )
+                    ),
+                }
+                for attempt in attempts
+            ],
+        }
+
+    @staticmethod
+    def _decode_json(value: object) -> object:
+        if isinstance(value, (dict, list)):
+            return value
+        return json.loads(str(value))
+
     def latest_dataset_release(self) -> dict[str, object] | None:
         with self.connect() as connection:
             row = connection.execute(
@@ -468,54 +1203,81 @@ class MetadataStore:
         release: dict[str, object],
         idempotency_key: str,
     ) -> tuple[dict[str, object], bool]:
-        release_id = str(release["id"])
-        manifest_json = json.dumps(
-            release, ensure_ascii=False, sort_keys=True, separators=(",", ":")
-        )
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            existing = connection.execute(
-                """
-                SELECT release.manifest_json
-                FROM publication_idempotency AS request
-                JOIN dataset_releases AS release ON release.id = request.release_id
-                WHERE request.idempotency_key = ?
-                """,
-                (idempotency_key,),
-            ).fetchone()
-            if existing is not None and existing["manifest_json"] is not None:
-                return dict(json.loads(str(existing["manifest_json"]))), False
-            pointer = connection.execute(
-                "SELECT release_id FROM dataset_release_pointer WHERE singleton = 1"
-            ).fetchone()
-            current_release_id = None if pointer is None else str(pointer["release_id"])
-            expected_predecessor = release.get("predecessor_id")
-            if current_release_id != expected_predecessor:
-                raise DatasetPublicationConflict(
-                    "latest Dataset Release changed during publication"
-                )
-            connection.execute(
-                """
-                INSERT INTO dataset_releases (id, manifest_json, created_at)
-                VALUES (?, ?, ?)
-                """,
-                (release_id, manifest_json, str(release["created_at"])),
+            return self._publish_dataset_release(
+                connection,
+                release,
+                idempotency_key,
             )
-            connection.execute(
-                """
-                INSERT INTO dataset_release_pointer (singleton, release_id)
-                VALUES (1, ?)
-                ON CONFLICT(singleton) DO UPDATE SET release_id = excluded.release_id
-                """,
-                (release_id,),
+
+    @staticmethod
+    def _publish_dataset_release(
+        connection,
+        release: dict[str, object],
+        idempotency_key: str,
+    ) -> tuple[dict[str, object], bool]:
+        existing = connection.execute(
+            """
+            SELECT release.manifest_json
+            FROM publication_idempotency AS request
+            JOIN dataset_releases AS release ON release.id = request.release_id
+            WHERE request.idempotency_key = ?
+            """,
+            (idempotency_key,),
+        ).fetchone()
+        if existing is not None and existing["manifest_json"] is not None:
+            return dict(json.loads(str(existing["manifest_json"]))), False
+        pointer = connection.execute(
+            "SELECT release_id FROM dataset_release_pointer WHERE singleton = 1"
+        ).fetchone()
+        current_release_id = None if pointer is None else str(pointer["release_id"])
+        expected_predecessor = release.get("predecessor_id")
+        if current_release_id != expected_predecessor:
+            raise DatasetPublicationConflict(
+                "latest Dataset Release changed during publication"
             )
-            connection.execute(
-                """
-                INSERT INTO publication_idempotency (idempotency_key, release_id)
-                VALUES (?, ?)
-                """,
-                (idempotency_key, release_id),
+        release_id = str(release["id"])
+        manifest_json = json.dumps(
+            release,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        connection.execute(
+            """
+            INSERT INTO dataset_releases (id, manifest_json, created_at)
+            VALUES (?, ?, ?)
+            """,
+            (release_id, manifest_json, str(release["created_at"])),
+        )
+        connection.execute(
+            """
+            INSERT INTO dataset_release_pointer (singleton, release_id)
+            VALUES (1, ?)
+            ON CONFLICT(singleton) DO UPDATE SET release_id = excluded.release_id
+            """,
+            (release_id,),
+        )
+        connection.execute(
+            """
+            INSERT INTO publication_idempotency (idempotency_key, release_id)
+            VALUES (?, ?)
+            """,
+            (idempotency_key, release_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO tracking_release_triggers (
+                release_id,
+                status,
+                created_at
             )
+            VALUES (?, 'pending', ?)
+            ON CONFLICT(release_id) DO NOTHING
+            """,
+            (release_id, str(release["created_at"])),
+        )
         return release, True
 
     def last_worker_heartbeat(self) -> datetime | None:

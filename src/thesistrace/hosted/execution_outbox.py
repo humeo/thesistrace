@@ -8,7 +8,7 @@ class PostgresExecutionOutbox:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
 
-    def pending(self, *, limit: int = 25) -> list[dict[str, str]]:
+    def pending(self, *, limit: int = 25) -> list[dict[str, str | None]]:
         with psycopg.connect(self.database_url, row_factory=hybrid_row) as connection:
             connection.execute("BEGIN")
             connection.execute(
@@ -24,7 +24,11 @@ class PostgresExecutionOutbox:
         return [
             {
                 "outbox_id": str(row["outbox_id"]),
-                "workspace_id": str(row["workspace_id"]),
+                "workspace_id": (
+                    None
+                    if row["workspace_id"] is None
+                    else str(row["workspace_id"])
+                ),
                 "resource_kind": str(row["resource_kind"]),
                 "resource_id": str(row["resource_id"]),
             }
@@ -48,3 +52,20 @@ def require_research_entry(entry: dict[str, str]) -> tuple[str, str, str]:
     if entry["resource_kind"] not in {"research_run", "research_run_cancel"}:
         raise ValueError(f"unsupported execution resource: {entry['resource_kind']}")
     return entry["resource_kind"], entry["workspace_id"], entry["resource_id"]
+
+
+def require_execution_entry(
+    entry: dict[str, str | None],
+) -> tuple[str, str | None, str]:
+    resource_kind = str(entry["resource_kind"])
+    if resource_kind == "dataset_publication":
+        if entry["workspace_id"] is not None:
+            raise ValueError("Dataset Publication cannot belong to a Workspace")
+        return resource_kind, None, str(entry["resource_id"])
+    if entry["workspace_id"] is None:
+        raise ValueError("Research execution requires a Workspace")
+    research_entry = {
+        key: str(entry[key])
+        for key in ("resource_kind", "workspace_id", "resource_id")
+    }
+    return require_research_entry(research_entry)

@@ -124,7 +124,7 @@ def test_hosted_processes_use_explicit_database_and_worker_roles() -> None:
     assert services["api"]["environment"]["THESISTRACE_RUNTIME_MODE"] == "hosted"
     assert services["api"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "api"
     assert services["data-worker"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "data"
-    assert services["data-worker"]["command"][1:3] == ["--role", "data"]
+    assert services["data-worker"]["command"] == ["thesistrace-data-worker"]
     assert services["execution-relay"]["environment"]["THESISTRACE_DATABASE_ROLE"] == "relay"
     assert services["execution-relay"]["command"][0] == "thesistrace-execution-relay"
     for name in {

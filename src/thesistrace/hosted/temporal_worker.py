@@ -1,53 +1,21 @@
 import asyncio
-import contextvars
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from threading import Event, Thread
 
 from temporalio import activity
 from temporalio.client import Client
 from temporalio.exceptions import ApplicationError
 from temporalio.worker import Worker
 
-from thesistrace.activity_contract import CooperativeActivityCancellation
 from thesistrace.config import settings_from_environment
 from thesistrace.datasets import DatasetPublisher
+from thesistrace.hosted.activity_heartbeat import ActivityHeartbeat
 from thesistrace.hosted.research_workflow import RESEARCH_TASK_QUEUE, ResearchWorkflow
 from thesistrace.research_runs import ResearchRunService, recover_staged_research_run
 from thesistrace.runtime import build_runtime
 from thesistrace.tenancy import workspace_execution
 
 logger = logging.getLogger(__name__)
-
-
-class ActivityHeartbeat:
-    def __init__(self, interval: float = 10.0) -> None:
-        self.interval = interval
-        self.stop_event = Event()
-        context = contextvars.copy_context()
-        self.thread = Thread(
-            target=lambda: context.run(self._run),
-            name="research-activity-heartbeat",
-            daemon=True,
-        )
-
-    def __enter__(self) -> "ActivityHeartbeat":
-        activity.heartbeat({"stage": "started"})
-        self.thread.start()
-        return self
-
-    def checkpoint(self, stage: str) -> None:
-        if activity.is_cancelled():
-            raise CooperativeActivityCancellation
-        activity.heartbeat({"stage": stage})
-
-    def __exit__(self, _type, _value, _traceback) -> None:
-        self.stop_event.set()
-        self.thread.join(timeout=self.interval + 1)
-
-    def _run(self) -> None:
-        while not self.stop_event.wait(self.interval):
-            activity.heartbeat({"stage": "running"})
 
 
 @activity.defn(name="execute_research_run")

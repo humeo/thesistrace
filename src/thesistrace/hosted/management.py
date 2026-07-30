@@ -57,6 +57,15 @@ class PostgresManagementStore:
             ).fetchone()
         return self._serialize_row(row)
 
+    def source_authorization_is_authorized(self) -> bool:
+        declaration = self.latest_source_authorization()
+        return bool(
+            declaration
+            and declaration.get("source") == "tushare"
+            and declaration.get("scope")
+            == "hosted-shared-dataset-releases"
+        )
+
     def list_management_audit_events(self) -> list[dict[str, object]]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             rows = connection.execute(
@@ -143,6 +152,97 @@ class PostgresManagementStore:
                 self._insert_audit_event(connection, audit_event)
         return profile
 
+    def request_dataset_publication(
+        self,
+        record: dict[str, object],
+        audit_event: dict[str, object] | None,
+    ) -> tuple[dict[str, object], bool]:
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtextextended(
+                            'dataset-publication-request:' || %s,
+                            0
+                        )
+                    )
+                    """,
+                    (record["idempotency_key"],),
+                )
+                existing = connection.execute(
+                    """
+                    SELECT *
+                    FROM thesistrace_product.dataset_publications
+                    WHERE idempotency_key = %s
+                    """,
+                    (record["idempotency_key"],),
+                ).fetchone()
+                if existing is not None:
+                    return self._publication_row(existing), False
+                connection.execute(
+                    """
+                    INSERT INTO thesistrace_product.dataset_publications (
+                        id,
+                        request_version,
+                        kind,
+                        parameters_json,
+                        idempotency_key,
+                        trigger_kind,
+                        status,
+                        created_at,
+                        updated_at
+                    )
+                    VALUES (
+                        %s, %s, %s, %s::jsonb, %s, %s, 'queued', %s, %s
+                    )
+                    """,
+                    (
+                        record["id"],
+                        record["request_version"],
+                        record["kind"],
+                        json.dumps(
+                            record["parameters"],
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        record["idempotency_key"],
+                        record["trigger_kind"],
+                        record["created_at"],
+                        record["updated_at"],
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO thesistrace_product.platform_execution_outbox (
+                        id,
+                        resource_kind,
+                        resource_id,
+                        status,
+                        created_at
+                    )
+                    VALUES (%s, 'dataset_publication', %s, 'pending', %s)
+                    """,
+                    (
+                        f"outbox_{record['id']}",
+                        record["id"],
+                        record["created_at"],
+                    ),
+                )
+                if audit_event is not None:
+                    self._insert_audit_event(connection, audit_event)
+                created = connection.execute(
+                    """
+                    SELECT *
+                    FROM thesistrace_product.dataset_publications
+                    WHERE id = %s
+                    """,
+                    (record["id"],),
+                ).fetchone()
+                if created is None:
+                    raise RuntimeError("Dataset Publication was not created")
+                return self._publication_row(created), True
+
     @staticmethod
     def _insert_audit_event(
         connection: psycopg.Connection,
@@ -184,3 +284,19 @@ class PostgresManagementStore:
             key: value.isoformat() if hasattr(value, "isoformat") else value
             for key, value in row.items()
         }
+
+    @staticmethod
+    def _publication_row(row: dict[str, object]) -> dict[str, object]:
+        value = {
+            key: item.isoformat() if hasattr(item, "isoformat") else item
+            for key, item in row.items()
+        }
+        parameters = value.get("parameters_json")
+        value["parameters"] = (
+            dict(parameters)
+            if isinstance(parameters, dict)
+            else json.loads(str(parameters))
+        )
+        value["attempts"] = []
+        value["diagnostic"] = value.get("diagnostic_json")
+        return value

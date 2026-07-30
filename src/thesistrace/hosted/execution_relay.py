@@ -7,9 +7,14 @@ from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
 from thesistrace.config import settings_from_environment
+from thesistrace.hosted.dataset_publication_workflow import (
+    DATASET_PUBLICATION_TASK_QUEUE,
+    DatasetPublicationWorkflow,
+    dataset_publication_workflow_id,
+)
 from thesistrace.hosted.execution_outbox import (
     PostgresExecutionOutbox,
-    require_research_entry,
+    require_execution_entry,
 )
 from thesistrace.hosted.research_workflow import (
     RESEARCH_TASK_QUEUE,
@@ -28,20 +33,35 @@ async def relay_once(
 ) -> int:
     dispatched = 0
     for entry in outbox.pending(limit=limit):
-        resource_kind, workspace_id, run_id = require_research_entry(entry)
-        if resource_kind == "research_run":
+        resource_kind, workspace_id, resource_id = require_execution_entry(entry)
+        if resource_kind == "dataset_publication":
+            try:
+                await client.start_workflow(
+                    DatasetPublicationWorkflow.run,
+                    {"publication_id": resource_id},
+                    id=dataset_publication_workflow_id(resource_id),
+                    task_queue=DATASET_PUBLICATION_TASK_QUEUE,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                )
+            except WorkflowAlreadyStartedError:
+                pass
+        elif resource_kind == "research_run":
+            if workspace_id is None:
+                raise ValueError("ResearchRun execution requires a Workspace")
             try:
                 await client.start_workflow(
                     ResearchWorkflow.run,
-                    {"workspace_id": workspace_id, "run_id": run_id},
-                    id=research_workflow_id(run_id),
+                    {"workspace_id": workspace_id, "run_id": resource_id},
+                    id=research_workflow_id(resource_id),
                     task_queue=RESEARCH_TASK_QUEUE,
                     id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
                 )
             except WorkflowAlreadyStartedError:
                 pass
         else:
-            handle = client.get_workflow_handle(research_workflow_id(run_id))
+            handle = client.get_workflow_handle(
+                research_workflow_id(resource_id)
+            )
             await handle.cancel()
         outbox.mark_dispatched(entry["outbox_id"])
         dispatched += 1

@@ -12,6 +12,11 @@ from thesistrace.management import (
     SourceAuthorizationService,
     build_management_store,
 )
+from thesistrace.platform_publications import (
+    DatasetPublicationRequestError,
+    DatasetPublicationRequestService,
+    DatasetPublicationRequestStore,
+)
 from thesistrace.provisioning import (
     ProvisioningError,
     RegistrationService,
@@ -71,6 +76,33 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
     )
     quota_override.add_argument("--max-private-storage-bytes", type=int)
+
+    publications = resources.add_parser("dataset-publication")
+    publication_commands = publications.add_subparsers(
+        dest="command",
+        required=True,
+    )
+    publication_request = publication_commands.add_parser("request")
+    publication_request.add_argument("--actor", required=True)
+    publication_request.add_argument(
+        "--request-version",
+        choices=("v1",),
+        default="v1",
+    )
+    publication_request.add_argument(
+        "--kind",
+        choices=(
+            "fixture_bootstrap",
+            "fixture_increment",
+            "live_bootstrap",
+            "live_increment",
+        ),
+        required=True,
+    )
+    publication_request.add_argument("--idempotency-key", required=True)
+    publication_request.add_argument("--as-of")
+    publication_request.add_argument("--new-sessions", type=int)
+    publication_request.add_argument("--corrections-json", default="[]")
     return parser
 
 
@@ -80,6 +112,7 @@ def run(
     settings: Settings | None = None,
     registration_service: RegistrationService | None = None,
     quota_service: QuotaProfileService | None = None,
+    publication_request_service: DatasetPublicationRequestService | None = None,
 ) -> int:
     arguments = build_parser().parse_args(argv)
     active_settings = settings or settings_from_environment()
@@ -88,6 +121,56 @@ def run(
         local_store.initialize()
     management_store = build_management_store(active_settings, local_store)
     service = SourceAuthorizationService(management_store)
+
+    if arguments.resource == "dataset-publication":
+        publications = (
+            publication_request_service
+            or DatasetPublicationRequestService(
+                cast(DatasetPublicationRequestStore, management_store),
+                service,
+            )
+        )
+        try:
+            parameters = _publication_parameters(arguments)
+            publication, created = publications.request(
+                actor=arguments.actor,
+                request_version=arguments.request_version,
+                kind=arguments.kind,
+                parameters=parameters,
+                idempotency_key=arguments.idempotency_key,
+            )
+        except (DatasetPublicationRequestError, ValueError) as error:
+            print(
+                json.dumps(
+                    {
+                        "reason_code": (
+                            error.reason_code
+                            if isinstance(
+                                error,
+                                DatasetPublicationRequestError,
+                            )
+                            else "DATASET_PUBLICATION_PARAMETERS_INVALID"
+                        ),
+                        "message": str(error),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        print(
+            json.dumps(
+                {
+                    "created": created,
+                    "publication": publication,
+                },
+                default=_json_default,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
 
     if arguments.resource == "quota":
         if quota_service is None and not active_settings.database_url:
@@ -246,3 +329,20 @@ def _json_default(value: object) -> object:
     if hasattr(value, "isoformat"):
         return value.isoformat()
     raise TypeError(f"cannot serialize {type(value).__name__}")
+
+
+def _publication_parameters(arguments: argparse.Namespace) -> dict[str, object]:
+    if arguments.kind == "fixture_bootstrap":
+        return {"fixture": "v1"}
+    if arguments.kind == "fixture_increment":
+        try:
+            corrections = json.loads(arguments.corrections_json)
+        except json.JSONDecodeError as error:
+            raise ValueError("corrections must be valid JSON") from error
+        if not isinstance(corrections, list):
+            raise ValueError("corrections must be a JSON list")
+        return {
+            "new_sessions": arguments.new_sessions,
+            "corrections": corrections,
+        }
+    return {"as_of": arguments.as_of}

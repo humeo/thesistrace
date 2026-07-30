@@ -302,7 +302,7 @@ services:
 
   data-worker:
     <<: *worker
-    command: ["thesistrace-worker", "--role", "data", "--interval", "2"]
+    command: ["thesistrace-data-worker"]
     environment:
       <<: *app-environment
       THESISTRACE_DATABASE_ROLE: data

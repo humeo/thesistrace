@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -31,9 +32,18 @@ class DatasetPublisher:
         self,
         metadata: ControlMetadataPort,
         objects: ObjectStorePort,
+        *,
+        release_committer: Callable[
+            [dict[str, object], str],
+            tuple[dict[str, object], bool],
+        ]
+        | None = None,
     ) -> None:
         self.metadata = metadata
         self.objects = objects
+        self.release_committer = (
+            release_committer or metadata.publish_dataset_release
+        )
 
     def bootstrap(self, idempotency_key: str, fixture: str) -> tuple[dict[str, object], bool]:
         existing = self.metadata.dataset_release_for_idempotency_key(idempotency_key)
@@ -106,7 +116,7 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        return self.metadata.publish_dataset_release(release, idempotency_key)
+        return self.release_committer(release, idempotency_key)
 
     def data_contract(self, release: dict[str, object]) -> dict[str, object]:
         canonical = self.materialize_canonical(release)
@@ -412,7 +422,7 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        return self.metadata.publish_dataset_release(release, idempotency_key)
+        return self.release_committer(release, idempotency_key)
 
     def publish_increment_documents(
         self,
@@ -496,7 +506,7 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        return self.metadata.publish_dataset_release(release, idempotency_key)
+        return self.release_committer(release, idempotency_key)
 
     def materialize_canonical(self, release: dict[str, object]) -> dict[str, object]:
         objects = release.get("objects")
