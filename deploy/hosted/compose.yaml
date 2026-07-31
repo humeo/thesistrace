@@ -698,6 +698,7 @@ services:
       THESISTRACE_PUBLIC_ORIGIN_INSECURE: ${THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE:-false}
       THESISTRACE_RELEASE_FRESHNESS_MAX_SECONDS: ${THESISTRACE_RELEASE_FRESHNESS_MAX_SECONDS:-345600}
       THESISTRACE_DISK_WARNING_PERCENT: ${THESISTRACE_DISK_WARNING_PERCENT:-70}
+      THESISTRACE_BACKUP_STATUS_FILE: /run/thesistrace-backup/backup-status.json
     depends_on:
       <<: *release-dependency
     extra_hosts:
@@ -720,8 +721,94 @@ services:
       - observability
       - storage
       - tushare-egress
+    volumes:
+      - ${THESISTRACE_BACKUP_STATUS_DIR:-.hosted/backup-health}:/run/thesistrace-backup:ro
     secrets:
       - health_database_password
+
+  backup-tool:
+    image: thesistrace/app:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
+    profiles: [operator]
+    command: ["python", "-m", "thesistrace.hosted.backup_cli"]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [DAC_READ_SEARCH]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    network_mode: none
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - postgres-data:/backup/source/postgres-data:ro
+      - temporal-data:/backup/source/temporal-data:ro
+      - immutable-objects:/backup/source/immutable-objects:ro
+      - insforge-storage:/backup/source/insforge-storage:ro
+      - ${THESISTRACE_RELEASE_BUNDLE_DIR:-.hosted/releases}:/backup/source/release-state:ro
+      - ${THESISTRACE_RECOVERY_DIR:-.hosted/recovery}:/backup/source/secret-recovery:ro
+      - ${THESISTRACE_OFF_NODE_BACKUP_DIR:-.hosted/off-node-backups}:/backup/off-node
+      - ${THESISTRACE_BACKUP_STATUS_DIR:-.hosted/backup-health}:/backup/status
+    secrets:
+      - backup_passphrase
+    restart: "no"
+    logging: *bounded-logging
+
+  restore-tool:
+    image: thesistrace/app:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
+    profiles: [operator]
+    command: ["python", "-m", "thesistrace.hosted.backup_cli"]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    network_mode: none
+    tmpfs:
+      - /tmp:size=256m,mode=1777
+    volumes:
+      - postgres-data:/restore/volumes/postgres-data
+      - temporal-data:/restore/volumes/temporal-data
+      - immutable-objects:/restore/volumes/immutable-objects
+      - insforge-storage:/restore/volumes/insforge-storage
+      - working-cache:/restore/working-cache
+      - ${THESISTRACE_RELEASE_BUNDLE_DIR:-.hosted/releases}:/restore/metadata/release-state
+      - ${THESISTRACE_RECOVERY_DIR:-.hosted/recovery}:/restore/secrets
+      - ${THESISTRACE_SECRET_DIR:-.hosted/secrets}:/restore/secret-files
+      - ${THESISTRACE_OFF_NODE_BACKUP_DIR:-.hosted/off-node-backups}:/backup/off-node:ro
+    secrets:
+      - backup_passphrase
+      - recovery_passphrase
+    restart: "no"
+    logging: *bounded-logging
+
+  restore-gate:
+    image: thesistrace/app:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
+    profiles: [operator]
+    command: ["python", "-m", "thesistrace.hosted.backup_cli", "verify-restore"]
+    user: "0:0"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    environment:
+      THESISTRACE_DATABASE_HOST: postgres
+      THESISTRACE_DATABASE_PORT: "5432"
+      THESISTRACE_DATABASE_USER: ${POSTGRES_USER:-postgres}
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
+      THESISTRACE_OBJECT_STORE_ROOT: /var/lib/thesistrace/objects
+    networks: [control]
+    volumes:
+      - immutable-objects:/var/lib/thesistrace/objects:ro
+      - ${THESISTRACE_BACKUP_STATUS_DIR:-.hosted/backup-health}:/run/thesistrace-backup
+    secrets:
+      - postgres_password
+    restart: "no"
+    logging: *bounded-logging
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.136.0
@@ -855,6 +942,10 @@ secrets:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_data_token
   tushare_token:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/tushare_token
+  backup_passphrase:
+    file: ${THESISTRACE_BACKUP_PASSPHRASE_FILE:-.hosted/backup-passphrase}
+  recovery_passphrase:
+    file: ${THESISTRACE_RECOVERY_PASSPHRASE_FILE:-.hosted/recovery-passphrase}
 
 networks:
   edge:

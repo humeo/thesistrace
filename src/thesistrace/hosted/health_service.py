@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlparse
 
@@ -28,6 +29,7 @@ from temporalio.client import Client
 
 from thesistrace.config import database_url_from_environment
 from thesistrace.fixture import build_fixture
+from thesistrace.hosted.backup_operations import read_backup_health
 from thesistrace.hosted.compute_dispatch import (
     COMPUTE_WORKFLOW_TASK_QUEUE,
     P1_ACTIVITY_TASK_QUEUE,
@@ -315,6 +317,8 @@ def create_health_app(
         system_checks["disk_pressure"] = bool(storage_pressure.get("below_warning", False))
         worker_slots_ready = int(dependencies.get("worker_slots_ready", 0))
         system_checks["workflow_capacity"] = worker_slots_ready == 4
+        backup = mapping(dependencies.get("backup"))
+        system_checks["backup"] = bool(backup.get("healthy", False))
         data_checks = {
             "tushare": bool(dependencies.get("tushare", False)),
             "release_freshness": bool(data_values.get("release_present", False))
@@ -353,6 +357,12 @@ def create_health_app(
                     "outbox_data_pending": system_values.get("task_queue_data_pending", 0),
                     "outbox_tracking_pending": system_values.get("task_queue_tracking_pending", 0),
                     "storage_used_ratio": storage_pressure.get("used_ratio", -1.0),
+                    "backup_last_success_age_seconds": backup.get(
+                        "last_success_age_seconds", -1.0
+                    ),
+                    "backup_last_attempt_succeeded": backup.get(
+                        "last_attempt_succeeded", False
+                    ),
                     **temporal_queue_measurements(dependencies),
                 },
             ),
@@ -480,6 +490,14 @@ def default_dependency_status(store: HealthSnapshotStore) -> dict[str, object]:
         "tushare": tushare_available,
         "worker_slots_ready": worker_slots_ready,
         "storage_pressure": storage_pressure_snapshot,
+        "backup": lambda: read_backup_health(
+            Path(
+                os.environ.get(
+                    "THESISTRACE_BACKUP_STATUS_FILE",
+                    "/run/thesistrace-backup/backup-status.json",
+                )
+            )
+        ),
     }
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=len(checks),

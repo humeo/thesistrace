@@ -128,6 +128,85 @@ mount. Never log its plaintext, include the passphrase beside it, or commit
 either artifact. Secret rotation is a coordinated release operation; do not
 edit one generated role file while dependent services are running.
 
+## Coordinated off-node backup and restore
+
+Hosted V2 uses a cold, coordinated recovery set rather than independent live
+copies. The launcher enters maintenance, drains Activities, closes the public
+Origin, and stops every writer before reading the product PostgreSQL volume,
+the Temporal persistence and Visibility volume, immutable objects, InsForge
+Storage, the exact Release Bundle state, and the already encrypted secret
+recovery bundle. The resulting streaming AES-GCM artifact is published with a
+`complete` manifest only after its checksum is durable. This deliberately
+accepts a short maintenance window; zero-downtime backup is outside V2.
+
+Mount separately administered off-node storage at an absolute path outside the
+repository and `$THESISTRACE_HOST_STATE_DIR`. Keep the backup encryption
+passphrase outside both the Hosted node state and backup target. Initialize the
+mount once, then create a manual recovery set:
+
+```sh
+export THESISTRACE_HOST_STATE_DIR=/var/lib/thesistrace-hosted
+export THESISTRACE_BACKUP_PASSPHRASE_FILE=/root/thesistrace-backup-passphrase
+export THESISTRACE_RECOVERY_PASSPHRASE_FILE=/root/thesistrace-recovery-passphrase
+make hosted-backup-target-init TARGET=/mnt/off-node/thesistrace
+make hosted-backup
+```
+
+The initialization marker is an explicit mount contract, not proof that a
+local directory is remote. The Operator must verify the mounted filesystem and
+its independent failure domain. A missing marker, a path under the repository
+or Hosted state, a missing physical database, mismatched Release Bundle, or
+missing encrypted secret recovery file prevents a successful manifest. The
+System Health `backup` check reports the latest attempt and the age of the last
+success without changing API readiness. Complete recovery sets older than
+seven days expire after each successful run; failed or partial temporary files
+are never advertised as recoverable.
+
+Install the supplied systemd timer on a host whose checkout is
+`/opt/thesistrace`, or substitute the actual absolute checkout path in the
+service first:
+
+```sh
+sudo install -m 0644 deploy/hosted/systemd/thesistrace-backup.service \
+  /etc/systemd/system/thesistrace-backup.service
+sudo install -m 0644 deploy/hosted/systemd/thesistrace-backup.timer \
+  /etc/systemd/system/thesistrace-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now thesistrace-backup.timer
+```
+
+The persistent timer runs at 00:00, 06:00, 12:00, and 18:00 with a bounded
+five-minute spread. Inspect `systemctl status thesistrace-backup.timer`, the
+latest off-node complete manifest, and System Health at least once per calendar
+day.
+
+Restore only the latest complete recovery set unless the incident record
+justifies an older set:
+
+```sh
+make hosted-restore BACKUP_ID=backup_YYYYMMDDTHHMMSSZ_xxxxxxxxxxxx
+```
+
+Restore is destructive to the four authoritative named volumes and clears the
+disposable Working Cache. It keeps `edge` stopped, authenticates and checksums
+the encrypted set, restores the separately encrypted role secrets, selects the
+recovered Release Bundle, and refuses to continue if its exact locked images
+are unavailable. It starts PostgreSQL, Temporal, private Storage, and API
+internally; API startup reconciles all pending Resource Tombstones. The restore
+gate then requires no Tombstone-owned or unreferenced index rows, no resurrected
+private resource, complete Personal Workspace RLS, a valid latest Dataset
+Release pointer, and exact size and SHA-256 for every indexed object. Bytes that
+exist only in an unexpired backup have no live metadata reference and remain
+unreachable. Workers and schedules resume only after this gate; the public
+Origin opens last and must pass smoke.
+
+For every launch recovery exercise, retain evidence with the selected backup
+time, incident detection time, restore start/end time, restored Dataset
+Release, object count, and public-Origin smoke result. Acceptance is a latest
+complete backup no older than six hours, daily detection no later than 24
+hours, and completed recovery within eight hours. Backup existence alone is
+not recovery evidence.
+
 ## Cloudflare and origin edge
 
 Production uses one proxied Cloudflare DNS record. Before the first public

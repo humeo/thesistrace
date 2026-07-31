@@ -639,8 +639,16 @@ def test_custom_images_and_launcher_use_the_immutable_release_bundle_id() -> Non
         ).stdout
     )
 
-    assert compose.count("image: thesistrace/") == 5
-    assert compose.count("THESISTRACE_RELEASE_IMAGE_TAG") == 5
+    custom_image_lines = [
+        line.strip()
+        for line in compose.splitlines()
+        if line.strip().startswith("image: thesistrace/")
+    ]
+    assert custom_image_lines
+    assert all(
+        "${THESISTRACE_RELEASE_IMAGE_TAG:-dev}" in line
+        for line in custom_image_lines
+    )
     assert model["services"]["release-gate"]["environment"][
         "THESISTRACE_RELEASE_BUNDLE_ID"
     ] == "bundle-test"

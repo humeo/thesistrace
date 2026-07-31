@@ -78,6 +78,11 @@ def healthy_dependencies() -> dict[str, object]:
             "below_warning": True,
             "used_ratio": 0.25,
         },
+        "backup": {
+            "healthy": True,
+            "last_attempt_succeeded": True,
+            "last_success_age_seconds": 60.0,
+        },
         "temporal_queues": {
             "pollers_ready": True,
             "task_queue_compute_workflow_backlog": 0,
@@ -273,6 +278,29 @@ def test_disk_warning_degrades_only_system_health_without_killing_readiness() ->
         assert system["checks"]["disk_pressure"] is False
         assert system["measurements"]["storage_used_ratio"] == 0.71
         assert client.get("/health/data").json()["status"] == "available"
+
+
+def test_backup_failure_is_visible_without_blocking_unrelated_readiness() -> None:
+    dependencies = healthy_dependencies()
+    dependencies["backup"] = {
+        "healthy": False,
+        "last_attempt_succeeded": False,
+        "last_success_age_seconds": 3600.0,
+    }
+    app = create_health_app(
+        StubHealthStore(),
+        dependency_status=lambda: dependencies,
+        semantic_state=complete_semantic_state(),
+        run_regression_on_startup=False,
+    )
+    with TestClient(app) as client:
+        assert client.get("/ready").status_code == 200
+        system = client.get("/health/system").json()
+        assert system["status"] == "degraded"
+        assert system["checks"]["backup"] is False
+        assert system["measurements"]["backup_last_success_age_seconds"] == 3600.0
+        assert client.get("/health/data").json()["status"] == "available"
+        assert client.get("/health/quantitative").json()["status"] == "available"
         assert client.get("/health/quantitative").json()["status"] == "available"
 
 

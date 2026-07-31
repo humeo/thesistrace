@@ -15,6 +15,8 @@ def compose_model() -> dict[str, object]:
             str(ROOT),
             "-f",
             str(COMPOSE),
+            "--profile",
+            "operator",
             "config",
             "--format",
             "json",
@@ -56,6 +58,8 @@ def test_hosted_stack_declares_the_complete_pinned_topology() -> None:
         "prometheus",
         "grafana",
         "health-service",
+        "backup-tool",
+        "restore-gate",
     }
     assert required <= services.keys()
 
@@ -257,7 +261,7 @@ def test_five_workers_have_isolated_single_slot_container_boundaries() -> None:
     assert "max_concurrent_activities=1" in data_worker
 
 
-def test_private_object_store_is_the_only_immutable_volume_owner() -> None:
+def test_private_object_store_is_the_only_steady_immutable_volume_owner() -> None:
     services = compose_model()["services"]
     immutable_owners = {
         name
@@ -267,7 +271,18 @@ def test_private_object_store_is_the_only_immutable_volume_owner() -> None:
             for volume in service.get("volumes", [])
         )
     }
-    assert immutable_owners == {"object-store", "volume-permissions"}
+    assert immutable_owners == {
+        "object-store",
+        "volume-permissions",
+        "backup-tool",
+        "restore-tool",
+        "restore-gate",
+    }
+    assert {
+        name
+        for name in immutable_owners
+        if not services[name].get("profiles")
+    } == {"object-store", "volume-permissions"}
     storage = services["object-store"]
     assert storage["user"] == "10005:10005"
     assert storage["read_only"] is True
@@ -357,6 +372,77 @@ def test_steady_services_use_distinct_identities_and_secrets() -> None:
         assert f"move_secret_to_file {secret} " in launcher
     assert "seal-recovery" in launcher
     assert "THESISTRACE_HOST_STATE_DIR" in launcher
+
+
+def test_backup_and_restore_are_bounded_operator_only_surfaces() -> None:
+    services = compose_model()["services"]
+    backup = services["backup-tool"]
+    assert backup["profiles"] == ["operator"]
+    assert backup["network_mode"] == "none"
+    assert backup["user"] == "0:0"
+    assert backup["read_only"] is True
+    assert backup["cap_drop"] == ["ALL"]
+    assert backup["cap_add"] == ["DAC_READ_SEARCH"]
+    assert "/var/run/docker.sock" not in json.dumps(backup)
+    mounted = {
+        (volume["source"], volume["target"], volume.get("read_only", False))
+        for volume in backup["volumes"]
+    }
+    assert {
+        ("postgres-data", "/backup/source/postgres-data", True),
+        ("temporal-data", "/backup/source/temporal-data", True),
+        ("immutable-objects", "/backup/source/immutable-objects", True),
+        ("insforge-storage", "/backup/source/insforge-storage", True),
+    } <= mounted
+
+    restore = services["restore-tool"]
+    assert restore["cap_drop"] == ["ALL"]
+    assert restore["cap_add"] == ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+
+    restore_gate = services["restore-gate"]
+    assert restore_gate["profiles"] == ["operator"]
+    assert restore_gate["read_only"] is True
+    assert restore_gate["cap_drop"] == ["ALL"]
+    assert set(restore_gate["networks"]) == {"control"}
+    assert any(
+        volume["source"] == "immutable-objects"
+        and volume["target"] == "/var/lib/thesistrace/objects"
+        and volume["read_only"] is True
+        for volume in restore_gate["volumes"]
+    )
+
+    health = services["health-service"]
+    assert health["environment"]["THESISTRACE_BACKUP_STATUS_FILE"] == (
+        "/run/thesistrace-backup/backup-status.json"
+    )
+    assert any(
+        volume["target"] == "/run/thesistrace-backup"
+        and volume["read_only"] is True
+        for volume in health["volumes"]
+    )
+
+
+def test_backup_schedule_and_launcher_enforce_the_recovery_gate() -> None:
+    timer = (ROOT / "deploy/hosted/systemd/thesistrace-backup.timer").read_text()
+    assert "OnCalendar=*-*-* 00,06,12,18:00:00" in timer
+    assert "Persistent=true" in timer
+
+    launcher = (ROOT / "scripts/hosted-stack").read_text()
+    assert "backup-target-init)" in launcher
+    assert "backup)" in launcher
+    assert "restore)" in launcher
+    assert "compose stop --timeout 30 edge" in launcher
+    assert "python -m thesistrace.hosted.backup_cli verify-restore" in launcher
+    assert "restore-release-modes --release-state" in launcher
+    restore_section = launcher.split("restore_backup()", 1)[1].split(
+        "action=", 1
+    )[0]
+    assert restore_section.index('. "$env_file"') < restore_section.index(
+        '"$root/scripts/hosted-smoke.py"'
+    )
+    assert launcher.index("compose stop --timeout 30 edge") < launcher.index(
+        "python -m thesistrace.hosted.backup_cli verify-restore"
+    )
 
 
 def test_one_shot_migrations_gate_every_public_or_steady_application_service() -> None:

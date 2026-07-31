@@ -12,6 +12,8 @@ compose_file="$root/deploy/hosted/compose.yaml"
 release_config_root="$root/deploy/hosted"
 release_manifest="$root/deploy/hosted/release.json"
 release_state="$state_dir/releases"
+backup_status_dir="$state_dir/backup-health"
+recovery_dir="$state_dir/recovery"
 
 random_secret() {
     openssl rand -hex 32
@@ -116,8 +118,9 @@ prepare() {
         } >"$env_file"
     fi
     umask 077
-    mkdir -p "$secret_dir" "$state_dir/recovery"
-    chmod 700 "$secret_dir" "$state_dir/recovery"
+    mkdir -p "$secret_dir" "$recovery_dir" "$backup_status_dir"
+    chmod 700 "$secret_dir" "$recovery_dir"
+    chmod 755 "$backup_status_dir"
     mkdir -p "$state_dir/origin-tls"
     append_value_if_missing THESISTRACE_EDGE_TRUSTED_PROXIES private_ranges
     append_value_if_missing THESISTRACE_ORIGIN_TLS internal
@@ -165,14 +168,39 @@ prepare() {
         random_secret >"$recovery_passphrase"
     fi
     chmod 600 "$recovery_passphrase"
+    backup_passphrase="${THESISTRACE_BACKUP_PASSPHRASE_FILE:-$state_dir/backup-passphrase}"
+    if [ ! -f "$backup_passphrase" ]; then
+        umask 077
+        mkdir -p "$(dirname -- "$backup_passphrase")"
+        random_secret >"$backup_passphrase"
+    fi
+    chmod 600 "$backup_passphrase"
     if [ ! -x "$root/.venv/bin/python" ]; then
         echo "run 'uv sync --frozen' before operating the Hosted stack" >&2
         exit 1
     fi
     "$root/.venv/bin/python" -m thesistrace.hosted.release_cli seal-recovery \
         --secret-root "$secret_dir" \
-        --output "$state_dir/recovery/current.recovery" \
+        --output "$recovery_dir/current.recovery" \
         --passphrase-file "$recovery_passphrase" >/dev/null
+}
+
+configured_backup_target() {
+    target="${THESISTRACE_OFF_NODE_BACKUP_DIR:-$(environment_value THESISTRACE_OFF_NODE_BACKUP_DIR)}"
+    if [ -z "$target" ]; then
+        echo "THESISTRACE_OFF_NODE_BACKUP_DIR is required" >&2
+        return 1
+    fi
+    case "$target" in
+        /*) ;;
+        *)
+            echo "THESISTRACE_OFF_NODE_BACKUP_DIR must be absolute" >&2
+            return 1
+            ;;
+    esac
+    THESISTRACE_OFF_NODE_BACKUP_DIR="$target"
+    export THESISTRACE_OFF_NODE_BACKUP_DIR
+    printf '%s\n' "$target"
 }
 
 select_release() {
@@ -269,8 +297,15 @@ compose() {
     THESISTRACE_SECRET_DIR="$secret_dir"
     THESISTRACE_RELEASE_BUNDLE_DIR="$release_state"
     THESISTRACE_RELEASE_CONFIG_ROOT="$release_config_root"
+    THESISTRACE_RECOVERY_DIR="$recovery_dir"
+    THESISTRACE_BACKUP_STATUS_DIR="$backup_status_dir"
+    THESISTRACE_BACKUP_PASSPHRASE_FILE="${THESISTRACE_BACKUP_PASSPHRASE_FILE:-$state_dir/backup-passphrase}"
+    THESISTRACE_RECOVERY_PASSPHRASE_FILE="${THESISTRACE_RECOVERY_PASSPHRASE_FILE:-$state_dir/recovery-passphrase}"
     export THESISTRACE_SECRET_DIR THESISTRACE_RELEASE_BUNDLE_DIR
     export THESISTRACE_RELEASE_CONFIG_ROOT
+    export THESISTRACE_RECOVERY_DIR THESISTRACE_BACKUP_STATUS_DIR
+    export THESISTRACE_BACKUP_PASSPHRASE_FILE
+    export THESISTRACE_RECOVERY_PASSPHRASE_FILE
     site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
     case "$site_address" in
         https://localhost*)
@@ -322,6 +357,112 @@ recreate_steady_services() {
     compose up --no-start --force-recreate --no-build --no-deps \
         execution-relay data-worker \
         compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+}
+
+stop_for_cold_snapshot() {
+    compose stop --timeout 30 edge
+    compose stop --timeout 30 \
+        api health-service insforge deno postgrest object-store temporal \
+        tushare-egress otel-collector prometheus grafana \
+        postgres temporal-postgres
+}
+
+restart_after_cold_snapshot() {
+    compose up --detach --wait --no-build
+    exit_maintenance
+}
+
+create_backup() {
+    configured_backup_target >/dev/null
+    backup_target="$THESISTRACE_OFF_NODE_BACKUP_DIR"
+    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-check \
+        --target "$backup_target" \
+        --repository-root "$root" \
+        --state-root "$state_dir" >/dev/null
+    enter_maintenance
+    stop_for_cold_snapshot
+    backup_result=0
+    compose --profile operator run --rm --no-deps -T backup-tool \
+        python -m thesistrace.hosted.backup_cli create \
+        --target /backup/off-node \
+        --source-root /backup/source \
+        --release-bundle-id "$release_bundle_id" \
+        --passphrase-file /run/secrets/backup_passphrase \
+        --status-path /backup/status/backup-status.json \
+        || backup_result="$?"
+    restart_result=0
+    restart_after_cold_snapshot || restart_result="$?"
+    if [ "$backup_result" -ne 0 ]; then
+        return "$backup_result"
+    fi
+    return "$restart_result"
+}
+
+restore_backup() {
+    backup_id="$1"
+    restore_started_at="$(date -u '+%Y-%m-%dT%H:%M:%S+00:00')"
+    incident_at="${THESISTRACE_RECOVERY_INCIDENT_AT:-$restore_started_at}"
+    detected_at="${THESISTRACE_RECOVERY_DETECTED_AT:-$restore_started_at}"
+    case "$backup_id" in
+        backup_[0-9A-Za-z_]*) ;;
+        *)
+            echo "backup ID is invalid" >&2
+            return 2
+            ;;
+    esac
+    configured_backup_target >/dev/null
+    backup_target="$THESISTRACE_OFF_NODE_BACKUP_DIR"
+    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-check \
+        --target "$backup_target" \
+        --repository-root "$root" \
+        --state-root "$state_dir" >/dev/null
+    manifest="$backup_target/$backup_id.json"
+    if [ ! -f "$manifest" ]; then
+        echo "complete recovery set is unavailable: $backup_id" >&2
+        return 1
+    fi
+    enter_maintenance
+    stop_for_cold_snapshot
+    compose --profile operator run --rm --no-deps -T restore-tool \
+        python -m thesistrace.hosted.backup_cli restore \
+        --manifest "/backup/off-node/$backup_id.json" \
+        --restore-root /restore \
+        --working-cache /restore/working-cache \
+        --secret-root /restore/secret-files \
+        --backup-passphrase-file /run/secrets/backup_passphrase \
+        --recovery-passphrase-file /run/secrets/recovery_passphrase
+    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
+        restore-release-modes --release-state "$release_state"
+    select_current_release
+    release_images verify-images
+    validate_public_edge
+    compose up --detach --wait --no-build postgres temporal-postgres
+    compose up --detach --wait --no-build \
+        insforge-migrations temporal-schema temporal-namespace \
+        thesistrace-migrations release-gate
+    compose up --detach --wait --no-build \
+        temporal postgrest deno insforge object-store tushare-egress \
+        otel-collector prometheus grafana
+    compose up --detach --wait --no-build api health-service
+    compose --profile operator run --rm --no-deps -T restore-gate \
+        python -m thesistrace.hosted.backup_cli verify-restore \
+        --output /run/thesistrace-backup/restore-verification.json
+    exit_maintenance
+    compose up --detach --wait --no-build edge
+    set -a
+    . "$env_file"
+    set +a
+    "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
+    restore_completed_at="$(date -u '+%Y-%m-%dT%H:%M:%S+00:00')"
+    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli record-exercise \
+        --manifest "$manifest" \
+        --verification "$backup_status_dir/restore-verification.json" \
+        --evidence-dir "$backup_status_dir/recovery-exercises" \
+        --incident-at "$incident_at" \
+        --detected-at "$detected_at" \
+        --restore-started-at "$restore_started_at" \
+        --restore-completed-at "$restore_completed_at" \
+        --public-origin-smoke
 }
 
 action="${1:-up}"
@@ -429,8 +570,27 @@ case "$action" in
         recreate_steady_services
         exit_maintenance
         ;;
+    backup-target-init)
+        prepare
+        target="${2:?usage: scripts/hosted-stack backup-target-init /absolute/off-node/path}"
+        "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-init \
+            --target "$target" \
+            --repository-root "$root" \
+            --state-root "$state_dir"
+        set_environment_value THESISTRACE_OFF_NODE_BACKUP_DIR "$target"
+        ;;
+    backup)
+        prepare
+        ensure_release
+        create_backup
+        ;;
+    restore)
+        prepare
+        ensure_release
+        restore_backup "${2:?usage: scripts/hosted-stack restore BACKUP_ID}"
+        ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|dispatch-probe|operator|maintenance-enter|maintenance-exit|rollback}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|dispatch-probe|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

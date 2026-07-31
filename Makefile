@@ -1,4 +1,4 @@
-.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-config hosted-dispatch-probe hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback
+.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-config hosted-dispatch-probe hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore
 
 dev:
 	bun run --cwd web dev
@@ -42,3 +42,12 @@ hosted-maintenance-exit:
 
 hosted-rollback:
 	./scripts/hosted-stack rollback
+
+hosted-backup-target-init:
+	./scripts/hosted-stack backup-target-init $(TARGET)
+
+hosted-backup:
+	./scripts/hosted-stack backup
+
+hosted-restore:
+	./scripts/hosted-stack restore $(BACKUP_ID)
