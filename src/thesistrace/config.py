@@ -23,6 +23,10 @@ class Settings:
     compute_workflow_poller: bool = True
     object_store_url: str | None = None
     object_store_token: str | None = None
+    api_rate_limit_window_seconds: int = 60
+    api_user_request_limit: int = 120
+    api_workspace_request_limit: int = 240
+    api_mutation_request_limit: int = 30
 
 
 def settings_from_environment() -> Settings:
@@ -70,5 +74,26 @@ def settings_from_environment() -> Settings:
         ),
         object_store_token=os.environ.get(
             "THESISTRACE_OBJECT_STORE_TOKEN"
+        ),
+        api_rate_limit_window_seconds=int(
+            os.environ.get(
+                "THESISTRACE_API_RATE_LIMIT_WINDOW_SECONDS",
+                "60",
+            )
+        ),
+        api_user_request_limit=int(
+            os.environ.get("THESISTRACE_API_USER_REQUEST_LIMIT", "120")
+        ),
+        api_workspace_request_limit=int(
+            os.environ.get(
+                "THESISTRACE_API_WORKSPACE_REQUEST_LIMIT",
+                "240",
+            )
+        ),
+        api_mutation_request_limit=int(
+            os.environ.get(
+                "THESISTRACE_API_MUTATION_REQUEST_LIMIT",
+                "30",
+            )
         ),
     )

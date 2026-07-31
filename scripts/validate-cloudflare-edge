@@ -1,0 +1,43 @@
+#!/bin/sh
+set -eu
+
+site_address="$1"
+trusted_proxies="$2"
+origin_tls="$3"
+tls_dir="$4"
+approved_ranges_file="$5"
+
+case "$site_address" in
+    https://localhost|https://localhost:*)
+        exit 0
+        ;;
+    https://*)
+        ;;
+    *)
+        echo "public edge requires an https Origin" >&2
+        exit 1
+        ;;
+esac
+
+configured_ranges="$(
+    printf '%s\n' "$trusted_proxies" \
+        | tr '[:space:]' '\n' \
+        | sed '/^$/d' \
+        | LC_ALL=C sort
+)"
+approved_ranges="$(
+    sed '/^$/d' "$approved_ranges_file" | LC_ALL=C sort
+)"
+if [ -z "$configured_ranges" ] || [ "$configured_ranges" != "$approved_ranges" ]; then
+    echo "public edge requires the exact approved Cloudflare CIDR set" >&2
+    exit 1
+fi
+
+if [ "$origin_tls" = "internal" ]; then
+    echo "public edge refuses the local-only internal TLS issuer" >&2
+    exit 1
+fi
+if [ ! -s "$tls_dir/cert.pem" ] || [ ! -s "$tls_dir/key.pem" ]; then
+    echo "public edge requires cert.pem and key.pem for Full (strict) origin TLS" >&2
+    exit 1
+fi

@@ -20,6 +20,35 @@ append_secret_if_missing() {
     fi
 }
 
+append_value_if_missing() {
+    name="$1"
+    value="$2"
+    if ! grep -q "^${name}=" "$env_file"; then
+        echo "${name}=${value}" >>"$env_file"
+    fi
+}
+
+environment_value() {
+    name="$1"
+    sed -n "s/^${name}=//p" "$env_file" | tail -n 1
+}
+
+validate_public_edge() {
+    site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
+    tls_dir="$(environment_value THESISTRACE_ORIGIN_TLS_DIR)"
+    if [ -z "$tls_dir" ]; then
+        tls_dir="$state_dir/origin-tls"
+    elif [ "${tls_dir#/}" = "$tls_dir" ]; then
+        tls_dir="$root/$tls_dir"
+    fi
+    sh "$root/scripts/validate-cloudflare-edge" \
+        "$site_address" \
+        "$(environment_value THESISTRACE_EDGE_TRUSTED_PROXIES)" \
+        "$(environment_value THESISTRACE_ORIGIN_TLS)" \
+        "$tls_dir" \
+        "$root/deploy/hosted/cloudflare-proxy-ranges.txt"
+}
+
 prepare() {
     mkdir -p "$state_dir"
     if [ ! -d "$insforge_dir/.git" ]; then
@@ -54,6 +83,9 @@ prepare() {
         } >"$env_file"
     fi
     umask 077
+    mkdir -p "$state_dir/origin-tls"
+    append_value_if_missing THESISTRACE_EDGE_TRUSTED_PROXIES private_ranges
+    append_value_if_missing THESISTRACE_ORIGIN_TLS internal
     append_secret_if_missing THESISTRACE_API_DATABASE_PASSWORD
     append_secret_if_missing THESISTRACE_RELAY_DATABASE_PASSWORD
     append_secret_if_missing THESISTRACE_DATA_DATABASE_PASSWORD
@@ -83,6 +115,7 @@ case "$action" in
         ;;
     up)
         prepare
+        validate_public_edge
         compose up --build --detach --wait
         ;;
     down)
@@ -91,6 +124,7 @@ case "$action" in
         ;;
     restart)
         prepare
+        validate_public_edge
         compose down
         compose up --build --detach --wait
         ;;

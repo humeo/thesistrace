@@ -28,6 +28,69 @@ The generated state is under `.hosted/` and is ignored by Git. Production
 operators must replace `THESISTRACE_SITE_ADDRESS=https://localhost` in
 `.hosted/hosted.env` with the Cloudflare-proxied hostname before launch.
 
+## Cloudflare and origin edge
+
+Production uses one proxied Cloudflare DNS record. Before the first public
+launch, the Operator must complete all of the following as one change:
+
+1. Install a valid public or Cloudflare Origin CA certificate for the proxied
+   hostname as `.hosted/origin-tls/cert.pem` and its key as
+   `.hosted/origin-tls/key.pem`. Remove the local-only
+   `THESISTRACE_ORIGIN_TLS=internal` override so Compose uses those two files.
+2. Replace the local-only
+   `THESISTRACE_EDGE_TRUSTED_PROXIES=private_ranges` override with the exact
+   Cloudflare IPv4 and IPv6 ranges declared by
+   `deploy/hosted/cloudflare-proxy-ranges.txt`. The launcher refuses a public
+   hostname unless the configured set is exactly equal to that allowlist;
+   partial and overbroad sets are rejected. Compare the canonical file with
+   `https://www.cloudflare.com/ips-v4/` and
+   `https://www.cloudflare.com/ips-v6/` immediately before every edge release.
+3. Set the Cloudflare zone SSL/TLS mode to **Full (strict)**. A Flexible or
+   non-strict mode is not an accepted deployment.
+4. Apply `deploy/hosted/cloudflare-origin-firewall.nft` on the origin host only
+   after verifying it preserves the host's separate SSH/management policy. The
+   dedicated table accepts ports 80 and 443 from the recorded Cloudflare ranges
+   and drops every other Web source on both the host `input` path and Docker's
+   DNAT `forward` path; it does not change non-Web ports. Docker-published ports
+   are forwarded before ordinary host-input filtering, so both hooks are
+   required. Validate and exercise this rule on the Linux origin host; Docker
+   Desktop is not equivalent evidence for the host firewall.
+5. Create Cloudflare WAF rate-limiting rules from
+   `deploy/hosted/cloudflare-waf-rate-limits.json`. The paths are intentionally
+   limited by client IP at Cloudflare because registration, login, verification,
+   and recovery occur before ThesisTrace has an authenticated User.
+
+Caddy independently rejects an immediate peer outside the same Cloudflare
+ranges, enables right-to-left strict proxy parsing, accepts client identity only
+from `CF-Connecting-IP`, and removes that header before proxying internally.
+This is defense in depth; it does not replace the host firewall. The production
+Web build and `/api/v1/*` are served through Caddy, while only the explicitly
+listed InsForge Auth routes are proxied. There is no edge route for InsForge
+Storage, object manifests, signed URLs, administration, PostgreSQL, Temporal,
+Workers, Prometheus, Grafana, or OpenTelemetry.
+
+The API separately enforces a 60-second authenticated window. Defaults are 120
+requests per verified User, 240 per Personal Workspace, and 30 state-changing
+requests per User and Workspace. A rejection is `429 REQUEST_RATE_LIMITED` with
+`Retry-After`; it is not `QUOTA_EXCEEDED` or `DISK_PRESSURE`.
+
+After launch, verify the public hostname returns a Cloudflare `CF-Ray` response
+header and the product smoke passes. From a host outside Cloudflare, a direct
+`curl --resolve <hostname>:443:<origin-ip> https://<hostname>/` must fail at the
+firewall or return Caddy `403`. The following public paths must return `404` and
+must never disclose an object key, SHA-256 manifest identity, filesystem path,
+bucket operation, or signed URL:
+
+```text
+/api/storage/*
+/api/v1/objects/*
+/api/auth/admin/*
+```
+
+The launcher deliberately writes `internal` and `private_ranges` overrides for
+the localhost development stack. Those values are not production defaults and
+must never be carried to a public hostname.
+
 ## Source authorization declaration
 
 Possessing a Tushare token does not open hosted live Dataset Publication.

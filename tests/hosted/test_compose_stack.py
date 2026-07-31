@@ -86,7 +86,11 @@ def test_only_edge_binds_host_ports_and_it_serves_the_static_build() -> None:
     assert "root * /srv" in caddyfile
     assert "reverse_proxy api:8000" in caddyfile
     assert "reverse_proxy insforge:7130" in caddyfile
-    assert "/api/storage" not in caddyfile
+    assert "@private_edge_paths" in caddyfile
+    assert "/api/storage/*" in caddyfile
+    assert "/api/v1/objects/*" in caddyfile
+    assert "/api/auth/admin/*" in caddyfile
+    assert "handle @private_edge_paths" in caddyfile
 
 
 def test_private_services_use_internal_networks_and_persistent_named_volumes() -> None:
@@ -395,3 +399,93 @@ def test_public_origin_smoke_uses_no_private_service_address() -> None:
         "grafana:3000",
     ):
         assert private_address not in smoke
+
+
+def test_edge_accepts_only_verified_cloudflare_proxies_with_strict_tls() -> None:
+    expected_ranges = set(
+        (
+            ROOT / "deploy" / "hosted" / "cloudflare-proxy-ranges.txt"
+        ).read_text().splitlines()
+    )
+    edge = compose_model()["services"]["edge"]
+    assert set(
+        edge["environment"]["THESISTRACE_EDGE_TRUSTED_PROXIES"].split()
+    ) == expected_ranges
+    assert edge["environment"]["THESISTRACE_ORIGIN_TLS"] == (
+        "/run/secrets/origin-tls/cert.pem "
+        "/run/secrets/origin-tls/key.pem"
+    )
+    assert edge["read_only"] is True
+    assert edge["cap_drop"] == ["ALL"]
+    assert {port["target"] for port in edge["ports"]} == {8080, 8443}
+    assert any(
+        volume["target"] == "/run/secrets/origin-tls"
+        and volume["read_only"] is True
+        for volume in edge["volumes"]
+    )
+
+    caddyfile = (ROOT / "deploy" / "hosted" / "Caddyfile").read_text()
+    assert "http_port 8080" in caddyfile
+    assert "https_port 8443" in caddyfile
+    assert "trusted_proxies static {$THESISTRACE_EDGE_TRUSTED_PROXIES}" in caddyfile
+    assert "trusted_proxies_strict" in caddyfile
+    assert "client_ip_headers CF-Connecting-IP" in caddyfile
+    assert "@untrusted_origin not remote_ip {$THESISTRACE_EDGE_TRUSTED_PROXIES}" in caddyfile
+    assert "handle @untrusted_origin" in caddyfile
+    assert "respond 403" in caddyfile
+    assert "tls {$THESISTRACE_ORIGIN_TLS}" in caddyfile
+
+    edge_dockerfile = (
+        ROOT / "deploy" / "hosted" / "Dockerfile.edge"
+    ).read_text()
+    assert "setcap -r /usr/bin/caddy" in edge_dockerfile
+
+
+def test_api_and_cloudflare_limits_are_declared_at_the_identity_owning_layer() -> None:
+    model = compose_model()
+    api_environment = model["services"]["api"]["environment"]
+    assert api_environment["THESISTRACE_API_RATE_LIMIT_WINDOW_SECONDS"] == "60"
+    assert api_environment["THESISTRACE_API_USER_REQUEST_LIMIT"] == "120"
+    assert api_environment["THESISTRACE_API_WORKSPACE_REQUEST_LIMIT"] == "240"
+    assert api_environment["THESISTRACE_API_MUTATION_REQUEST_LIMIT"] == "30"
+
+    policy = json.loads(
+        (
+            ROOT
+            / "deploy"
+            / "hosted"
+            / "cloudflare-waf-rate-limits.json"
+        ).read_text()
+    )
+    assert policy["characteristic"] == "ip"
+    protected_paths = {
+        path
+        for rule in policy["rules"]
+        for path in rule["paths"]
+    }
+    assert protected_paths == {
+        "/api/auth/users",
+        "/api/auth/sessions",
+        "/api/auth/email/send-verification",
+        "/api/auth/email/verify",
+        "/api/auth/email/verify-link",
+        "/api/auth/email/send-reset-password",
+        "/api/auth/email/exchange-reset-password-token",
+        "/api/auth/email/reset-password",
+        "/api/auth/email/reset-password-link",
+    }
+    assert all(rule["period_seconds"] == 60 for rule in policy["rules"])
+    assert all(rule["requests"] > 0 for rule in policy["rules"])
+
+
+def test_origin_firewall_policy_allows_cloudflare_web_ingress_only() -> None:
+    policy = (
+        ROOT / "deploy" / "hosted" / "cloudflare-origin-firewall.nft"
+    ).read_text()
+    assert "set cloudflare_ipv4" in policy
+    assert "set cloudflare_ipv6" in policy
+    assert "tcp dport { 80, 443 } ip saddr @cloudflare_ipv4 accept" in policy
+    assert "tcp dport { 80, 443 } ip6 saddr @cloudflare_ipv6 accept" in policy
+    assert "tcp dport { 80, 443 } drop" in policy
+    assert "type filter hook forward" in policy
+    assert "ct status dnat ct original proto-dst { 80, 443 }" in policy

@@ -8,5 +8,6 @@ COPY web ./
 RUN bun run build
 
 FROM caddy:2.10.2-alpine
+RUN setcap -r /usr/bin/caddy
 COPY deploy/hosted/Caddyfile /etc/caddy/Caddyfile
 COPY --from=web-build /src/web/dist /srv

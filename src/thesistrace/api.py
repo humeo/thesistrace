@@ -26,6 +26,7 @@ from thesistrace.provisioning import (
     build_registration_service,
 )
 from thesistrace.quota import QuotaExceededError
+from thesistrace.rate_limits import ApiRateLimiter, RateLimitRejection
 from thesistrace.research_runs import (
     ResearchRunService,
     recover_staged_research_run,
@@ -106,6 +107,21 @@ def deletion_response(tombstone: dict[str, object]) -> JSONResponse:
             "deleted_at": tombstone["deleted_at"],
             "cleanup_status": "scheduled",
         },
+    )
+
+
+def rate_limit_response(rejection: RateLimitRejection) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={
+            "detail": {
+                "reason_code": "REQUEST_RATE_LIMITED",
+                "message": "request rate limit exceeded",
+                "dimension": rejection.dimension,
+                "retry_after_seconds": rejection.retry_after_seconds,
+            }
+        },
+        headers={"Retry-After": str(rejection.retry_after_seconds)},
     )
 
 
@@ -252,6 +268,12 @@ def create_app(
             settings=settings,
             source_authorization=source_authorization,
         )
+    rate_limiter = ApiRateLimiter(
+        window_seconds=settings.api_rate_limit_window_seconds,
+        user_request_limit=settings.api_user_request_limit,
+        workspace_request_limit=settings.api_workspace_request_limit,
+        mutation_request_limit=settings.api_mutation_request_limit,
+    )
 
     @app.middleware("http")
     async def authenticate_product_request(request: Request, call_next):
@@ -326,9 +348,21 @@ def create_app(
             registration.resolve_identity,
             request.state.identity.subject,
         )
+        product_identity = request.state.product_identity
+        rejection = rate_limiter.check(
+            subject=request.state.identity.subject,
+            workspace_id=(
+                None
+                if product_identity is None
+                else product_identity.workspace_id
+            ),
+            state_changing=request.method not in {"GET", "HEAD", "OPTIONS"},
+        )
+        if rejection is not None:
+            return rate_limit_response(rejection)
         if (
             request.url.path not in {"/api/v1/session", "/api/v1/provision"}
-            and request.state.product_identity is None
+            and product_identity is None
         ):
             return JSONResponse(
                 status_code=403,
