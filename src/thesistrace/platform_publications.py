@@ -287,25 +287,28 @@ class DatasetPublicationService:
                 ) as staged:
                     release = self._build_candidate(publication, staged)
                     self.progress("validated")
-                    with staged.publication(
-                        manifest_sha256=str(release["manifest_sha256"])
-                    ):
-                        published = (
-                            self.metadata.publish_dataset_publication_success(
-                                publication_id=publication_id,
-                                attempt_id=attempt_id,
-                                release=release,
-                                idempotency_key=str(
-                                    publication["idempotency_key"]
-                                ),
-                                storage_objects=publication_storage_objects(
-                                    release
-                                ),
-                                cancellation_requested=self.cancellation_requested,
+                    with self.metadata.storage_mutation_fence():
+                        with staged.publication(
+                            manifest_sha256=str(release["manifest_sha256"])
+                        ):
+                            published = (
+                                self.metadata.publish_dataset_publication_success(
+                                    publication_id=publication_id,
+                                    attempt_id=attempt_id,
+                                    release=release,
+                                    idempotency_key=str(
+                                        publication["idempotency_key"]
+                                    ),
+                                    storage_objects=publication_storage_objects(
+                                        release
+                                    ),
+                                    cancellation_requested=(
+                                        self.cancellation_requested
+                                    ),
+                                )
                             )
-                        )
-                        if not published:
-                            raise DatasetPublicationFenced
+                            if not published:
+                                raise DatasetPublicationFenced
         except DatasetPublicationFenced:
             return self.recover(publication_id)
         except CooperativeActivityCancellation:

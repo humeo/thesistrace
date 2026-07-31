@@ -1,3 +1,4 @@
+import fcntl
 import json
 import sqlite3
 from collections.abc import Callable, Iterator
@@ -341,6 +342,52 @@ class MetadataStore:
                     status TEXT NOT NULL,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
                     requested_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    last_error TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS stored_objects (
+                    object_key TEXT PRIMARY KEY,
+                    sha256 TEXT NOT NULL,
+                    compressed_bytes INTEGER NOT NULL,
+                    object_kind TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS storage_references (
+                    owner_scope TEXT NOT NULL,
+                    workspace_id TEXT,
+                    resource_kind TEXT NOT NULL,
+                    resource_id TEXT NOT NULL,
+                    object_key TEXT NOT NULL REFERENCES stored_objects(object_key),
+                    created_at TEXT NOT NULL,
+                    UNIQUE (
+                        owner_scope,
+                        workspace_id,
+                        resource_kind,
+                        resource_id,
+                        object_key
+                    )
+                );
+
+                CREATE TABLE IF NOT EXISTS resource_tombstones (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL,
+                    resource_kind TEXT NOT NULL,
+                    resource_id TEXT NOT NULL,
+                    authoritative_manifest_sha256 TEXT,
+                    actor TEXT NOT NULL,
+                    deleted_at TEXT NOT NULL,
+                    UNIQUE (workspace_id, resource_kind, resource_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS resource_cleanup_jobs (
+                    tombstone_id TEXT PRIMARY KEY
+                        REFERENCES resource_tombstones(id),
+                    daily_track_id TEXT,
+                    fencing_token INTEGER,
+                    status TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 0,
                     completed_at TEXT,
                     last_error TEXT
                 );
@@ -1548,6 +1595,26 @@ class MetadataStore:
                 idempotency_key,
             )
 
+    def publish_dataset_release_with_storage(
+        self,
+        release: dict[str, object],
+        idempotency_key: str,
+        storage_objects: list[dict[str, object]],
+    ) -> tuple[dict[str, object], bool]:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.commit_platform_storage_references(
+                connection,
+                resource_kind="dataset_release",
+                resource_id=str(release["id"]),
+                objects=storage_objects,
+            )
+            return self._publish_dataset_release(
+                connection,
+                release,
+                idempotency_key,
+            )
+
     @staticmethod
     def _publish_dataset_release(
         connection,
@@ -1905,9 +1972,25 @@ class MetadataStore:
         resource_id: str,
         objects: list[dict[str, object]],
     ) -> int:
-        """Local V1 has no hosted private-storage quota."""
-        del connection, resource_kind, resource_id
-        return sum(int(value["bytes"]) for value in objects)
+        return self._commit_storage_references(
+            connection,
+            owner_scope="workspace",
+            workspace_id="local",
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            objects=objects,
+        )
+
+    @contextmanager
+    def storage_mutation_fence(self) -> Iterator[None]:
+        path = self.path.with_suffix(f"{self.path.suffix}.storage.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def commit_platform_storage_references(
         self,
@@ -1917,9 +2000,442 @@ class MetadataStore:
         resource_id: str,
         objects: list[dict[str, object]],
     ) -> int:
-        """Local V1 has no hosted platform object index."""
-        del connection, resource_kind, resource_id
-        return sum(int(value["bytes"]) for value in objects)
+        return self._commit_storage_references(
+            connection,
+            owner_scope="platform",
+            workspace_id=None,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            objects=objects,
+        )
+
+    @staticmethod
+    def _commit_storage_references(
+        connection,
+        *,
+        owner_scope: str,
+        workspace_id: str | None,
+        resource_kind: str,
+        resource_id: str,
+        objects: list[dict[str, object]],
+    ) -> int:
+        now = datetime.now(UTC).isoformat()
+        for value in objects:
+            connection.execute(
+                """
+                INSERT INTO stored_objects (
+                    object_key, sha256, compressed_bytes,
+                    object_kind, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(object_key) DO NOTHING
+                """,
+                (
+                    value["object_key"],
+                    value["sha256"],
+                    int(value["bytes"]),
+                    value["kind"],
+                    now,
+                ),
+            )
+            stored = connection.execute(
+                """
+                SELECT sha256, compressed_bytes, object_kind
+                FROM stored_objects
+                WHERE object_key = ?
+                """,
+                (value["object_key"],),
+            ).fetchone()
+            if (
+                stored is None
+                or stored["sha256"] != value["sha256"]
+                or int(stored["compressed_bytes"]) != int(value["bytes"])
+                or stored["object_kind"] != value["kind"]
+            ):
+                raise RuntimeError(
+                    "Stored object identity conflicts with byte accounting"
+                )
+            connection.execute(
+                """
+                INSERT INTO storage_references (
+                    owner_scope, workspace_id, resource_kind,
+                    resource_id, object_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    owner_scope,
+                    workspace_id,
+                    resource_kind,
+                    resource_id,
+                    value["object_key"],
+                    now,
+                ),
+            )
+        row = connection.execute(
+            """
+            SELECT COALESCE(sum(stored.compressed_bytes), 0) AS used_bytes
+            FROM stored_objects AS stored
+            WHERE EXISTS (
+                SELECT 1
+                FROM storage_references AS reference
+                WHERE reference.owner_scope = ?
+                  AND reference.workspace_id IS ?
+                  AND reference.object_key = stored.object_key
+            )
+            """,
+            (owner_scope, workspace_id),
+        ).fetchone()
+        return 0 if row is None else int(row["used_bytes"])
+
+    def request_resource_deletion(
+        self,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        actor: str,
+        deleted_at: str,
+    ) -> dict[str, object] | None:
+        if resource_kind not in {"research_run", "daily_track"}:
+            raise ValueError("unsupported private resource kind")
+        tombstone_id = f"tombstone_{uuid4().hex}"
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if resource_kind == "research_run":
+                row = connection.execute(
+                    """
+                    SELECT status, result_bundle_id,
+                           result_manifest_sha256
+                    FROM research_runs
+                    WHERE id = ?
+                    """,
+                    (resource_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                if row["status"] not in {"succeeded", "failed", "cancelled"}:
+                    raise ValueError("RESOURCE_NOT_TERMINAL")
+                retained = connection.execute(
+                    "SELECT 1 FROM daily_tracks WHERE seed_run_id = ? LIMIT 1",
+                    (resource_id,),
+                ).fetchone()
+                if retained is not None:
+                    raise ValueError("RESOURCE_RETAINED")
+                if row["result_bundle_id"] is not None:
+                    indexed = connection.execute(
+                        """
+                        SELECT 1
+                        FROM storage_references
+                        WHERE owner_scope = 'workspace'
+                          AND workspace_id = 'local'
+                          AND resource_kind = 'research_run'
+                          AND resource_id = ?
+                        LIMIT 1
+                        """,
+                        (resource_id,),
+                    ).fetchone()
+                    if indexed is None:
+                        raise ValueError("RESOURCE_STORAGE_UNINDEXED")
+                manifest_sha256 = row["result_manifest_sha256"]
+                fencing_token = None
+                daily_track_id = None
+            else:
+                row = connection.execute(
+                    """
+                    SELECT track.status, track.fencing_token,
+                           checkpoint.manifest_sha256
+                    FROM daily_tracks AS track
+                    LEFT JOIN tracking_checkpoints AS checkpoint
+                      ON checkpoint.id = track.head_checkpoint_id
+                    WHERE track.id = ?
+                    """,
+                    (resource_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                if row["status"] != "stopped":
+                    raise ValueError("RESOURCE_NOT_TERMINAL")
+                unindexed = connection.execute(
+                    """
+                    SELECT 1
+                    FROM tracking_checkpoints AS checkpoint
+                    WHERE checkpoint.daily_track_id = ?
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM storage_references AS reference
+                          WHERE reference.owner_scope = 'workspace'
+                            AND reference.workspace_id = 'local'
+                            AND reference.resource_kind = 'tracking_checkpoint'
+                            AND reference.resource_id = checkpoint.id
+                      )
+                    LIMIT 1
+                    """,
+                    (resource_id,),
+                ).fetchone()
+                if unindexed is not None:
+                    raise ValueError("RESOURCE_STORAGE_UNINDEXED")
+                manifest_sha256 = row["manifest_sha256"]
+                fencing_token = int(row["fencing_token"])
+                daily_track_id = resource_id
+
+            connection.execute(
+                """
+                INSERT INTO resource_tombstones (
+                    id, workspace_id, resource_kind, resource_id,
+                    authoritative_manifest_sha256, actor, deleted_at
+                ) VALUES (?, 'local', ?, ?, ?, ?, ?)
+                """,
+                (
+                    tombstone_id,
+                    resource_kind,
+                    resource_id,
+                    manifest_sha256,
+                    actor,
+                    deleted_at,
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO resource_cleanup_jobs (
+                    tombstone_id, daily_track_id, fencing_token, status
+                ) VALUES (?, ?, ?, 'pending')
+                """,
+                (tombstone_id, daily_track_id, fencing_token),
+            )
+
+            if resource_kind == "research_run":
+                self._move_storage_references(
+                    connection,
+                    tombstone_id=tombstone_id,
+                    resource_kind="research_run",
+                    resource_ids=[resource_id],
+                    deleted_at=deleted_at,
+                )
+                connection.execute(
+                    "DELETE FROM research_run_attempts WHERE run_id = ?",
+                    (resource_id,),
+                )
+                connection.execute(
+                    "DELETE FROM research_run_idempotency WHERE run_id = ?",
+                    (resource_id,),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM daily_track_activation_reservations
+                    WHERE seed_run_id = ?
+                    """,
+                    (resource_id,),
+                )
+                connection.execute(
+                    "DELETE FROM research_runs WHERE id = ?",
+                    (resource_id,),
+                )
+            else:
+                checkpoint_ids = [
+                    str(value["id"])
+                    for value in connection.execute(
+                        """
+                        SELECT id FROM tracking_checkpoints
+                        WHERE daily_track_id = ?
+                        """,
+                        (resource_id,),
+                    ).fetchall()
+                ]
+                self._move_storage_references(
+                    connection,
+                    tombstone_id=tombstone_id,
+                    resource_kind="tracking_checkpoint",
+                    resource_ids=checkpoint_ids,
+                    deleted_at=deleted_at,
+                )
+                connection.execute(
+                    "DELETE FROM tracking_execution_outbox WHERE daily_track_id = ?",
+                    (resource_id,),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM tracking_advance_attempts
+                    WHERE advance_id IN (
+                        SELECT id FROM tracking_advances
+                        WHERE daily_track_id = ?
+                    )
+                    """,
+                    (resource_id,),
+                )
+                for table in (
+                    "tracking_equivalence_requests",
+                    "tracking_generation_rebuilds",
+                    "tracking_advances",
+                    "tracking_checkpoints",
+                    "tracking_generations",
+                ):
+                    connection.execute(
+                        f"DELETE FROM {table} WHERE daily_track_id = ?",
+                        (resource_id,),
+                    )
+                connection.execute(
+                    """
+                    DELETE FROM daily_track_activation_idempotency
+                    WHERE daily_track_id = ?
+                    """,
+                    (resource_id,),
+                )
+                connection.execute(
+                    "DELETE FROM working_cache_deletions WHERE daily_track_id = ?",
+                    (resource_id,),
+                )
+                connection.execute(
+                    "DELETE FROM daily_tracks WHERE id = ?",
+                    (resource_id,),
+                )
+
+        return {
+            "id": tombstone_id,
+            "workspace_id": "local",
+            "resource_kind": resource_kind,
+            "resource_id": resource_id,
+            "authoritative_manifest_sha256": manifest_sha256,
+            "actor": actor,
+            "deleted_at": deleted_at,
+        }
+
+    @staticmethod
+    def _move_storage_references(
+        connection,
+        *,
+        tombstone_id: str,
+        resource_kind: str,
+        resource_ids: list[str],
+        deleted_at: str,
+    ) -> None:
+        for resource_id in resource_ids:
+            connection.execute(
+                """
+                INSERT INTO storage_references (
+                    owner_scope, workspace_id, resource_kind,
+                    resource_id, object_key, created_at
+                )
+                SELECT DISTINCT owner_scope, workspace_id,
+                       'resource_tombstone', ?, object_key, ?
+                FROM storage_references
+                WHERE owner_scope = 'workspace'
+                  AND workspace_id = 'local'
+                  AND resource_kind = ?
+                  AND resource_id = ?
+                ON CONFLICT DO NOTHING
+                """,
+                (
+                    tombstone_id,
+                    deleted_at,
+                    resource_kind,
+                    resource_id,
+                ),
+            )
+            connection.execute(
+                """
+                DELETE FROM storage_references
+                WHERE owner_scope = 'workspace'
+                  AND workspace_id = 'local'
+                  AND resource_kind = ?
+                  AND resource_id = ?
+                """,
+                (resource_kind, resource_id),
+            )
+
+    def pending_resource_cleanups(self) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT job.tombstone_id, tombstone.resource_kind,
+                       tombstone.resource_id, job.daily_track_id,
+                       job.fencing_token, job.attempt_count,
+                       job.last_error
+                FROM resource_cleanup_jobs AS job
+                JOIN resource_tombstones AS tombstone
+                  ON tombstone.id = job.tombstone_id
+                WHERE job.status = 'pending'
+                ORDER BY tombstone.deleted_at, job.tombstone_id
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def resource_cleanup_candidates(self, tombstone_id: str) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT own.object_key
+                FROM storage_references AS own
+                WHERE own.owner_scope = 'workspace'
+                  AND own.workspace_id = 'local'
+                  AND own.resource_kind = 'resource_tombstone'
+                  AND own.resource_id = ?
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM storage_references AS retained
+                      WHERE retained.object_key = own.object_key
+                        AND NOT (
+                            retained.owner_scope = own.owner_scope
+                            AND retained.workspace_id = own.workspace_id
+                            AND retained.resource_kind = own.resource_kind
+                            AND retained.resource_id = own.resource_id
+                        )
+                  )
+                ORDER BY own.object_key
+                """,
+                (tombstone_id,),
+            ).fetchall()
+        return [str(row["object_key"]) for row in rows]
+
+    def complete_resource_cleanup(
+        self,
+        tombstone_id: str,
+        completed_at: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """
+                DELETE FROM storage_references
+                WHERE owner_scope = 'workspace'
+                  AND workspace_id = 'local'
+                  AND resource_kind = 'resource_tombstone'
+                  AND resource_id = ?
+                """,
+                (tombstone_id,),
+            )
+            connection.execute(
+                """
+                DELETE FROM stored_objects
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM storage_references
+                    WHERE storage_references.object_key = stored_objects.object_key
+                )
+                """
+            )
+            connection.execute(
+                """
+                UPDATE resource_cleanup_jobs
+                SET status = 'completed', attempt_count = attempt_count + 1,
+                    completed_at = ?, last_error = NULL
+                WHERE tombstone_id = ? AND status = 'pending'
+                """,
+                (completed_at, tombstone_id),
+            )
+
+    def fail_resource_cleanup(
+        self,
+        tombstone_id: str,
+        error: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE resource_cleanup_jobs
+                SET attempt_count = attempt_count + 1,
+                    last_error = ?
+                WHERE tombstone_id = ? AND status = 'pending'
+                """,
+                (error, tombstone_id),
+            )
 
     def _lock_idempotent_admission(
         self,

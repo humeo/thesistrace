@@ -454,6 +454,17 @@ def create_object_store_app(
             media_type="application/vnd.apache.parquet",
         )
 
+    @app.delete("/v1/storage-objects")
+    async def delete_storage_object(
+        request: Request,
+    ) -> dict[str, bool]:
+        require_role(request, {"api"})
+        body = await request.json()
+        object_key = body.get("object_key")
+        if not isinstance(object_key, str):
+            raise HTTPException(status_code=422)
+        return {"deleted": store.delete_storage_object(object_key)}
+
     @app.post("/v1/stages/{run_id}/attempts/{attempt_id}")
     async def open_stage(
         run_id: str,

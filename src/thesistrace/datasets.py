@@ -27,6 +27,7 @@ from thesistrace.fixture import (
 )
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import ControlMetadataPort, ObjectStorePort
+from thesistrace.storage_admission import publication_storage_objects
 
 
 class InvalidFixtureError(ValueError):
@@ -47,9 +48,7 @@ class DatasetPublisher:
     ) -> None:
         self.metadata = metadata
         self.objects = objects
-        self.release_committer = (
-            release_committer or metadata.publish_dataset_release
-        )
+        self.release_committer = release_committer
 
     def bootstrap(self, idempotency_key: str, fixture: str) -> tuple[dict[str, object], bool]:
         existing = self.metadata.dataset_release_for_idempotency_key(idempotency_key)
@@ -70,6 +69,32 @@ class DatasetPublisher:
         )
 
     def bootstrap_documents(
+        self,
+        idempotency_key: str,
+        *,
+        source: dict[str, object],
+        canonical: dict[str, object],
+        source_kind: str,
+        source_schema: str,
+    ) -> tuple[dict[str, object], bool]:
+        if self.release_committer is not None:
+            return self._bootstrap_documents(
+                idempotency_key,
+                source=source,
+                canonical=canonical,
+                source_kind=source_kind,
+                source_schema=source_schema,
+            )
+        with self.metadata.storage_mutation_fence():
+            return self._bootstrap_documents(
+                idempotency_key,
+                source=source,
+                canonical=canonical,
+                source_kind=source_kind,
+                source_schema=source_schema,
+            )
+
+    def _bootstrap_documents(
         self,
         idempotency_key: str,
         *,
@@ -122,7 +147,7 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        return self.release_committer(release, idempotency_key)
+        return self._commit_release(release, idempotency_key)
 
     def data_contract(self, release: dict[str, object]) -> dict[str, object]:
         canonical = self.materialize_canonical(release)
@@ -157,6 +182,26 @@ class DatasetPublisher:
         }
 
     def publish_fixture_increment(
+        self,
+        idempotency_key: str,
+        *,
+        new_sessions: int,
+        corrections: list[dict[str, str]],
+    ) -> tuple[dict[str, object], bool]:
+        if self.release_committer is not None:
+            return self._publish_fixture_increment(
+                idempotency_key,
+                new_sessions=new_sessions,
+                corrections=corrections,
+            )
+        with self.metadata.storage_mutation_fence():
+            return self._publish_fixture_increment(
+                idempotency_key,
+                new_sessions=new_sessions,
+                corrections=corrections,
+            )
+
+    def _publish_fixture_increment(
         self,
         idempotency_key: str,
         *,
@@ -428,9 +473,32 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        return self.release_committer(release, idempotency_key)
+        return self._commit_release(release, idempotency_key)
 
     def publish_increment_documents(
+        self,
+        idempotency_key: str,
+        *,
+        source: dict[str, object],
+        canonical_delta: dict[str, object],
+        source_schema: str,
+    ) -> tuple[dict[str, object], bool]:
+        if self.release_committer is not None:
+            return self._publish_increment_documents(
+                idempotency_key,
+                source=source,
+                canonical_delta=canonical_delta,
+                source_schema=source_schema,
+            )
+        with self.metadata.storage_mutation_fence():
+            return self._publish_increment_documents(
+                idempotency_key,
+                source=source,
+                canonical_delta=canonical_delta,
+                source_schema=source_schema,
+            )
+
+    def _publish_increment_documents(
         self,
         idempotency_key: str,
         *,
@@ -512,7 +580,20 @@ class DatasetPublisher:
             "manifest_sha256": release_digest,
         }
         self.objects.put_manifest(str(release["id"]), release)
-        return self.release_committer(release, idempotency_key)
+        return self._commit_release(release, idempotency_key)
+
+    def _commit_release(
+        self,
+        release: dict[str, object],
+        idempotency_key: str,
+    ) -> tuple[dict[str, object], bool]:
+        if self.release_committer is not None:
+            return self.release_committer(release, idempotency_key)
+        return self.metadata.publish_dataset_release_with_storage(
+            release,
+            idempotency_key,
+            publication_storage_objects(release),
+        )
 
     def materialize_canonical(self, release: dict[str, object]) -> dict[str, object]:
         objects = release.get("objects")

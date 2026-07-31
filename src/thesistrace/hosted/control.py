@@ -2,6 +2,7 @@ import json
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from psycopg import sql
@@ -79,6 +80,21 @@ class PostgresControlMetadataStore(MetadataStore):
 
     def initialize(self) -> None:
         return None
+
+    @contextmanager
+    def storage_mutation_fence(self) -> Iterator[None]:
+        with psycopg.connect(self.database_url) as connection:
+            connection.execute(
+                "SELECT pg_advisory_lock(hashtextextended(%s, 0))",
+                ("thesistrace:storage-mutations",),
+            )
+            try:
+                yield
+            finally:
+                connection.execute(
+                    "SELECT pg_advisory_unlock(hashtextextended(%s, 0))",
+                    ("thesistrace:storage-mutations",),
+                )
 
     def next_dataset_release_on_path(
         self,
@@ -353,6 +369,102 @@ class PostgresControlMetadataStore(MetadataStore):
         if row is None:
             raise RuntimeError("platform storage indexing returned no result")
         return int(row["used_bytes"])
+
+    def request_resource_deletion(
+        self,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        actor: str,
+        deleted_at: str,
+    ) -> dict[str, object] | None:
+        tombstone_id = f"tombstone_{uuid4().hex}"
+        try:
+            with self.connect() as connection:
+                row = connection.execute(
+                    """
+                    SELECT tombstone_id, workspace_id, resource_kind,
+                           resource_id, authoritative_manifest_sha256,
+                           actor, deleted_at
+                    FROM thesistrace_control.request_resource_deletion(
+                        ?, ?, ?, ?, ?::timestamptz
+                    )
+                    """,
+                    (
+                        tombstone_id,
+                        resource_kind,
+                        resource_id,
+                        actor,
+                        deleted_at,
+                    ),
+                ).fetchone()
+        except psycopg.Error as error:
+            message = error.diag.message_primary or str(error)
+            if message in {
+                "RESOURCE_NOT_TERMINAL",
+                "RESOURCE_RETAINED",
+                "RESOURCE_STORAGE_UNINDEXED",
+            }:
+                raise ValueError(message) from error
+            raise
+        if row is None:
+            return None
+        result = dict(row)
+        result["id"] = result.pop("tombstone_id")
+        result["deleted_at"] = str(result["deleted_at"])
+        return result
+
+    def pending_resource_cleanups(self) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT tombstone_id, resource_kind, resource_id,
+                       daily_track_id, fencing_token,
+                       attempt_count, last_error
+                FROM thesistrace_control.pending_resource_cleanups()
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def resource_cleanup_candidates(self, tombstone_id: str) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT object_key
+                FROM thesistrace_control.resource_cleanup_candidates(?)
+                    AS candidate(object_key)
+                """,
+                (tombstone_id,),
+            ).fetchall()
+        return [str(row["object_key"]) for row in rows]
+
+    def complete_resource_cleanup(
+        self,
+        tombstone_id: str,
+        completed_at: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                SELECT thesistrace_control.complete_resource_cleanup(
+                    ?, ?::timestamptz
+                )
+                """,
+                (tombstone_id, completed_at),
+            )
+
+    def fail_resource_cleanup(
+        self,
+        tombstone_id: str,
+        error: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                SELECT thesistrace_control.fail_resource_cleanup(?, ?)
+                """,
+                (tombstone_id, error),
+            )
 
     def _lock_idempotent_admission(
         self,

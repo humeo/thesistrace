@@ -418,7 +418,10 @@ class DailyTrackingService:
                         1,
                         stopped=False,
                     )
-                    with self.metadata.connect() as connection:
+                    with (
+                        self.metadata.storage_mutation_fence(),
+                        self.metadata.connect() as connection,
+                    ):
                         connection.execute("BEGIN IMMEDIATE")
                         self.metadata.lock_daily_track_activation(
                             connection
@@ -2105,10 +2108,13 @@ class DailyTrackingService:
                         progress=progress,
                     )
                     report_progress(progress, "calculated")
-                    with staged_objects.publication(
-                        manifest_sha256=str(
-                            checkpoint["manifest_sha256"]
-                        )
+                    with (
+                        self.metadata.storage_mutation_fence(),
+                        staged_objects.publication(
+                            manifest_sha256=str(
+                                checkpoint["manifest_sha256"]
+                            )
+                        ),
                     ):
                         report_progress(progress, "before-publication")
                         self._publish_advance_success(

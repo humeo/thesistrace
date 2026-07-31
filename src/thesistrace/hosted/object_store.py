@@ -249,6 +249,14 @@ class RemoteObjectStore:
             )
         return table
 
+    def delete_storage_object(self, object_key: str) -> bool:
+        response = self._request(
+            "DELETE",
+            "/v1/storage-objects",
+            json={"object_key": object_key},
+        )
+        return bool(response.json()["deleted"])
+
     def _put_bytes(
         self,
         path: str,

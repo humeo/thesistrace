@@ -132,23 +132,30 @@ class ResearchRunService:
                             artifacts=artifacts,
                         )
                         staged_objects.put_manifest(str(manifest["id"]), manifest)
-                        with staged_objects.publication(
-                            manifest_sha256=str(manifest_object["sha256"])
-                        ):
-                            published = self.metadata.publish_research_run_success(
-                                run_id=run_id,
-                                attempt_id=attempt_id,
-                                result_bundle_id=str(manifest["id"]),
-                                result_manifest_sha256=str(
+                        with self.metadata.storage_mutation_fence():
+                            with staged_objects.publication(
+                                manifest_sha256=str(
                                     manifest_object["sha256"]
-                                ),
-                                storage_objects=publication_storage_objects(
-                                    manifest,
-                                    manifest_object=manifest_object,
-                                ),
-                            )
-                            if not published:
-                                raise ResearchPublicationFenced
+                                )
+                            ):
+                                published = (
+                                    self.metadata.publish_research_run_success(
+                                        run_id=run_id,
+                                        attempt_id=attempt_id,
+                                        result_bundle_id=str(manifest["id"]),
+                                        result_manifest_sha256=str(
+                                            manifest_object["sha256"]
+                                        ),
+                                        storage_objects=(
+                                            publication_storage_objects(
+                                                manifest,
+                                                manifest_object=manifest_object,
+                                            )
+                                        ),
+                                    )
+                                )
+                                if not published:
+                                    raise ResearchPublicationFenced
                 except ResearchPublicationFenced:
                     self.objects.recover_staged_publication(
                         run_id,

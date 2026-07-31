@@ -292,6 +292,50 @@ class ImmutableObjectStore:
                 fcntl.flock(stage_lock.fileno(), fcntl.LOCK_EX)
                 fcntl.flock(stage_lock.fileno(), fcntl.LOCK_UN)
 
+    def delete_storage_object(self, object_key: str) -> bool:
+        paths: list[Path]
+        if object_key.startswith("sha256:"):
+            digest = object_key.removeprefix("sha256:")
+            if (
+                len(digest) != 64
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in digest
+                )
+            ):
+                raise ParquetContractError("storage object key is invalid")
+            bucket = self.root / "sha256" / digest[:2]
+            paths = [bucket / f"{digest}.json", bucket / f"{digest}.parquet"]
+        elif object_key.startswith("manifest:"):
+            resource_id = object_key.removeprefix("manifest:")
+            if (
+                not resource_id
+                or "/" in resource_id
+                or resource_id in {".", ".."}
+            ):
+                raise ParquetContractError("storage object key is invalid")
+            paths = [self.root / "manifests" / f"{resource_id}.json"]
+        else:
+            raise ParquetContractError("storage object key is invalid")
+
+        lock_path = self.root / "staging" / ".publication.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        deleted = False
+        with lock_path.open("a+b") as lock:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+            try:
+                for path in paths:
+                    if path.exists():
+                        path.unlink()
+                        deleted = True
+                        try:
+                            path.parent.rmdir()
+                        except OSError:
+                            pass
+            finally:
+                fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+        return deleted
+
     def staged_publication_active(self, run_id: str) -> bool:
         run_root = self.root / "staging" / run_id
         if not run_root.exists():

@@ -231,6 +231,42 @@ def test_object_store_tokens_are_role_scoped_and_non_interchangeable(
         api_client.close()
 
 
+def test_only_api_role_can_delete_accounted_storage_objects(
+    tmp_path: Path,
+) -> None:
+    compute_objects, client = remote(tmp_path, role="compute")
+    api_objects = RemoteObjectStore(
+        "http://object-store",
+        TOKENS["api"],
+        client=client,
+    )
+    try:
+        stored = compute_objects.put_json({"delete": True})
+        compute_objects.put_manifest(
+            "result_delete_boundary",
+            {"stored": stored},
+        )
+
+        with pytest.raises(ParquetContractError):
+            compute_objects.delete_storage_object(
+                f"sha256:{stored['sha256']}"
+            )
+
+        assert api_objects.delete_storage_object(
+            "manifest:result_delete_boundary"
+        )
+        assert api_objects.delete_storage_object(
+            f"sha256:{stored['sha256']}"
+        )
+        assert not api_objects.delete_storage_object(
+            f"sha256:{stored['sha256']}"
+        )
+        with pytest.raises(ParquetContractError):
+            api_objects.read_json(str(stored["sha256"]))
+    finally:
+        client.close()
+
+
 def test_active_stage_is_locked_and_owned_by_its_role(
     tmp_path: Path,
 ) -> None:

@@ -1592,6 +1592,29 @@ function OperationsLedger() {
     }
   }
 
+  async function deleteResource(
+    resourceKind: "research-runs" | "daily-tracks",
+    resourceId: string,
+  ) {
+    const noun = resourceKind === "research-runs" ? "ResearchRun" : "DailyTrack";
+    if (!window.confirm(`永久删除 ${noun} ${resourceId}？此操作无法恢复。`)) {
+      return;
+    }
+    ledgerEpoch.current += 1;
+    try {
+      await fetch(`/api/v1/${resourceKind}/${resourceId}`, {
+        method: "DELETE",
+      }).then(assertResponse);
+      ledgerEpoch.current += 1;
+      await refresh();
+    } catch (error: unknown) {
+      ledgerEpoch.current += 1;
+      setOperationError(
+        apiErrorMessage(error, `RESOURCE_DELETE_FAILED · ${noun} 删除失败`),
+      );
+    }
+  }
+
   return (
     <section className="operations-panel" id="operations">
       <div className="section-heading">
@@ -1762,9 +1785,19 @@ function OperationsLedger() {
                     {(run.status === "succeeded" ||
                       run.status === "failed" ||
                       run.status === "cancelled") && (
-                      <button type="button" onClick={() => void rerun(run.id)}>
-                        重新运行
-                      </button>
+                      <>
+                        <button type="button" onClick={() => void rerun(run.id)}>
+                          重新运行
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            void deleteResource("research-runs", run.id)
+                          }
+                        >
+                          永久删除
+                        </button>
+                      </>
                     )}
                   </div>
                 </article>
@@ -1856,6 +1889,18 @@ function OperationsLedger() {
                     <p className="ledger-diagnostic">
                       BLOCKED_FRONTIER · Worker 将在同一 Advance 身份下重试
                     </p>
+                  )}
+                  {track.status === "stopped" && (
+                    <div className="ledger-actions">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void deleteResource("daily-tracks", track.id)
+                        }
+                      >
+                        永久删除
+                      </button>
+                    </div>
                   )}
                 </article>
               );

@@ -55,6 +55,35 @@ class ControlMetadataPort(Protocol):
         completed_at: str,
     ) -> None: ...
 
+    def storage_mutation_fence(
+        self,
+    ) -> AbstractContextManager[None]: ...
+
+    def request_resource_deletion(
+        self,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        actor: str,
+        deleted_at: str,
+    ) -> dict[str, object] | None: ...
+
+    def pending_resource_cleanups(self) -> list[dict[str, object]]: ...
+
+    def resource_cleanup_candidates(self, tombstone_id: str) -> list[str]: ...
+
+    def complete_resource_cleanup(
+        self,
+        tombstone_id: str,
+        completed_at: str,
+    ) -> None: ...
+
+    def fail_resource_cleanup(
+        self,
+        tombstone_id: str,
+        error: str,
+    ) -> None: ...
+
     def active_daily_track_refs(
         self,
         *,
@@ -115,6 +144,13 @@ class ControlMetadataPort(Protocol):
         objects: list[dict[str, object]],
     ) -> int: ...
 
+    def publish_dataset_release_with_storage(
+        self,
+        release: dict[str, object],
+        idempotency_key: str,
+        storage_objects: list[dict[str, object]],
+    ) -> tuple[dict[str, object], bool]: ...
+
 
 class ObjectWriterPort(Protocol):
     def put_json(self, value: object) -> dict[str, object]: ...
@@ -170,6 +206,8 @@ class ObjectStorePort(ObjectWriterPort, Protocol):
 
     def wait_for_staged_publication(self, run_id: str) -> None: ...
 
+    def delete_storage_object(self, object_key: str) -> bool: ...
+
     def read_json(self, digest: str) -> object: ...
 
     def read_parquet_bytes(self, digest: str) -> bytes: ...
@@ -185,6 +223,20 @@ class WorkingCachePort(Protocol):
     def list_track_ids(self) -> list[str]: ...
 
     def delete(self, track_id: str) -> None: ...
+
+    def delete_if_not_newer(
+        self,
+        track_id: str,
+        fencing_token: int,
+    ) -> None: ...
+
+    def advance_fence(
+        self,
+        track_id: str,
+        fencing_token: int,
+        *,
+        stopped: bool,
+    ) -> dict[str, object]: ...
 
 
 class ExecutionDispatchPort(Protocol):

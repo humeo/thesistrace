@@ -30,10 +30,14 @@ from thesistrace.research_runs import (
     ResearchRunService,
     recover_staged_research_run,
 )
+from thesistrace.resource_deletion import (
+    ResourceDeletionError,
+    ResourceDeletionService,
+)
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
 from thesistrace.storage_admission import StorageAdmissionError
-from thesistrace.tenancy import authenticated_subject
+from thesistrace.tenancy import authenticated_subject, verified_subject
 from thesistrace.tracking import (
     DailyTrackingError,
     DailyTrackingService,
@@ -91,6 +95,18 @@ def quota_error_detail(error: QuotaExceededError) -> dict[str, object]:
         "dimension": error.dimension,
         "limit": error.limit,
     }
+
+
+def deletion_response(tombstone: dict[str, object]) -> JSONResponse:
+    return JSONResponse(
+        status_code=202,
+        content={
+            "resource_kind": tombstone["resource_kind"],
+            "resource_id": tombstone["resource_id"],
+            "deleted_at": tombstone["deleted_at"],
+            "cleanup_status": "scheduled",
+        },
+    )
 
 
 def public_dataset_release_view(release: dict[str, object]) -> dict[str, object]:
@@ -211,6 +227,12 @@ def create_app(
     tracking_operations = TrackingOperationService(store, tracking)
     tracking.reconcile_activation_staging()
     tracking.reconcile_cache_deletions()
+    resource_deletion = ResourceDeletionService(
+        store,
+        objects,
+        runtime.working_cache,
+    )
+    resource_deletion.reconcile_pending()
     source_authorization = SourceAuthorizationService(
         build_management_store(settings, store)
     )
@@ -619,6 +641,22 @@ def create_app(
             else run
         )
 
+    @app.delete("/api/v1/research-runs/{run_id}")
+    def delete_research_run(run_id: str) -> JSONResponse:
+        try:
+            tombstone = resource_deletion.delete_research_run(
+                run_id,
+                actor=verified_subject() or "local-user",
+            )
+        except ResourceDeletionError as error:
+            raise HTTPException(
+                status_code=(
+                    404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409
+                ),
+                detail=error_detail(error.reason_code, str(error)),
+            ) from error
+        return deletion_response(tombstone)
+
     @app.post("/api/v1/research-runs/{run_id}/rerun")
     def rerun_research(
         run_id: str,
@@ -785,6 +823,22 @@ def create_app(
         if view is None:
             raise RuntimeError("stopped DailyTrack disappeared")
         return view
+
+    @app.delete("/api/v1/daily-tracks/{track_id}")
+    def delete_daily_track(track_id: str) -> JSONResponse:
+        try:
+            tombstone = resource_deletion.delete_daily_track(
+                track_id,
+                actor=verified_subject() or "local-user",
+            )
+        except ResourceDeletionError as error:
+            raise HTTPException(
+                status_code=(
+                    404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409
+                ),
+                detail=error_detail(error.reason_code, str(error)),
+            ) from error
+        return deletion_response(tombstone)
 
     @app.post("/api/v1/daily-tracks/{track_id}/kernel-upgrade")
     def upgrade_daily_track_kernel(
