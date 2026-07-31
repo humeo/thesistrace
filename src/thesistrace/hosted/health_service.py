@@ -98,11 +98,19 @@ class PostgresHealthSnapshotStore:
             row_factory=dict_row,
         ) as connection:
             row = connection.execute(
-                "SELECT thesistrace_control.operator_health_snapshot() AS snapshot"
+                """
+                SELECT thesistrace_control.operator_health_snapshot() AS snapshot,
+                       thesistrace_control.dataset_release_matches_expected_session()
+                           AS release_session_current
+                """
             ).fetchone()
         if row is None or not isinstance(row["snapshot"], dict):
             raise RuntimeError("operator health snapshot is unavailable")
-        return dict(row["snapshot"])
+        snapshot = dict(row["snapshot"])
+        data = dict(snapshot.get("data", {}))
+        data["release_session_current"] = bool(row["release_session_current"])
+        snapshot["data"] = data
+        return snapshot
 
 
 @dataclass

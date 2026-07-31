@@ -100,9 +100,13 @@ compose() {
     site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
     case "$site_address" in
         https://localhost*)
-            : "${THESISTRACE_HEALTH_PUBLIC_ORIGIN:=https://host.docker.internal:${THESISTRACE_HTTPS_PORT:-443}}"
-            : "${THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST:=localhost}"
-            : "${THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE:=true}"
+            https_port="${THESISTRACE_HTTPS_PORT:-$(environment_value THESISTRACE_HTTPS_PORT)}"
+            health_origin="${THESISTRACE_HEALTH_PUBLIC_ORIGIN:-$(environment_value THESISTRACE_HEALTH_PUBLIC_ORIGIN)}"
+            health_host="${THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST:-$(environment_value THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST)}"
+            health_insecure="${THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE:-$(environment_value THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE)}"
+            THESISTRACE_HEALTH_PUBLIC_ORIGIN="${health_origin:-https://host.docker.internal:${https_port:-443}}"
+            THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST="${health_host:-localhost}"
+            THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE="${health_insecure:-true}"
             export THESISTRACE_HEALTH_PUBLIC_ORIGIN
             export THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST
             export THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE

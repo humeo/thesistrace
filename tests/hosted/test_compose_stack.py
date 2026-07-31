@@ -479,7 +479,22 @@ def test_health_origin_defaults_to_public_site_and_local_override_is_explicit() 
 
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
     assert "https://host.docker.internal:" in launcher
-    assert "THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST:=localhost" in launcher
+    assert "environment_value THESISTRACE_HTTPS_PORT" in launcher
+    assert "environment_value THESISTRACE_HEALTH_PUBLIC_ORIGIN" in launcher
+    assert 'THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST="${health_host:-localhost}"' in launcher
+
+
+def test_health_freshness_uses_latest_scheduled_research_session() -> None:
+    migration = (
+        ROOT
+        / "deploy"
+        / "hosted"
+        / "migrations"
+        / "0020_expected_research_session_health.sql"
+    ).read_text()
+    assert "dataset_release_matches_expected_session" in migration
+    assert "publication.trigger_kind = 'schedule'" in migration
+    assert "publication.kind IN ('live_bootstrap', 'live_increment')" in migration
 
 
 def test_otel_sampling_and_export_failure_are_bounded_and_visible() -> None:
