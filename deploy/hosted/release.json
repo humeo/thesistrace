@@ -1,0 +1,47 @@
+{
+  "manifest_version": 1,
+  "version": "0.1.0",
+  "compatibility_epoch": "hosted-v2-expand-contract-1",
+  "components": {
+    "web": {
+      "version": "0.1.0",
+      "artifact": "thesistrace/edge:{bundle_id}",
+      "source_paths": ["web/src", "web/package.json", "web/bun.lock", "deploy/hosted/Dockerfile.edge"]
+    },
+    "caddy": {
+      "version": "2.10.2",
+      "artifact": "caddy:2.10.2-alpine",
+      "source_paths": ["deploy/hosted/Caddyfile", "deploy/hosted/Dockerfile.edge"]
+    },
+    "api": {
+      "version": "0.1.0",
+      "artifact": "thesistrace/app:{bundle_id}",
+      "source_paths": ["src/thesistrace", "pyproject.toml", "uv.lock", "deploy/hosted/Dockerfile.app"]
+    },
+    "worker": {
+      "version": "0.1.0",
+      "artifact": "thesistrace/app:{bundle_id}",
+      "source_paths": ["src/thesistrace", "pyproject.toml", "uv.lock", "deploy/hosted/Dockerfile.app"]
+    },
+    "insforge": {
+      "version": "2.2.9+baff3e7925430e8779f55b0687d0cf13fe5ab270",
+      "artifact": "thesistrace/insforge:{bundle_id}",
+      "source_paths": ["deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch", "scripts/hosted-stack"]
+    },
+    "temporal": {
+      "version": "1.31.0",
+      "artifact": "temporalio/server:1.31.0",
+      "source_paths": ["deploy/hosted/temporal"]
+    },
+    "product_migrations": {
+      "version": "0021",
+      "artifact": "thesistrace/app:{bundle_id}",
+      "source_paths": ["deploy/hosted/migrations", "src/thesistrace/hosted/migrations.py"]
+    },
+    "configuration": {
+      "version": "hosted-compose-v2",
+      "artifact": "deploy/hosted/compose.yaml",
+      "source_paths": ["deploy/hosted/compose.yaml", "deploy/hosted/Caddyfile", "deploy/hosted/otel-collector.yaml", "deploy/hosted/prometheus.yaml", "deploy/hosted/grafana/provisioning", "docs/runbook/hosted-compose.md"]
+    }
+  }
+}

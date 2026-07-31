@@ -5,6 +5,8 @@ from pathlib import Path
 import psycopg
 from psycopg import sql
 
+from thesistrace.config import database_url_from_environment, environment_value
+
 
 class MigrationError(RuntimeError):
     pass
@@ -98,7 +100,7 @@ def provision_service_role_credentials(
 def main() -> None:
     if os.environ.get("THESISTRACE_INJECT_MIGRATION_FAILURE") == "1":
         raise MigrationError("injected migration failure")
-    database_url = os.environ.get("THESISTRACE_DATABASE_URL")
+    database_url = database_url_from_environment()
     if not database_url:
         raise MigrationError("THESISTRACE_DATABASE_URL is required")
     directory = Path(
@@ -109,10 +111,9 @@ def main() -> None:
     )
     applied = apply_migrations(database_url, directory)
     credentials = {
-        service: os.environ.get(
-            f"THESISTRACE_{service.upper()}_DATABASE_PASSWORD",
-            "",
-        )
+        service: environment_value(
+            f"THESISTRACE_{service.upper()}_DATABASE_PASSWORD"
+        ) or ""
         for service in SERVICE_ROLES
     }
     provision_service_role_credentials(database_url, credentials)

@@ -26,6 +26,7 @@ from temporalio.api.taskqueue.v1 import TaskQueue
 from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
 from temporalio.client import Client
 
+from thesistrace.config import database_url_from_environment
 from thesistrace.fixture import build_fixture
 from thesistrace.hosted.compute_dispatch import (
     COMPUTE_WORKFLOW_TASK_QUEUE,
@@ -726,7 +727,7 @@ def tushare_available() -> bool:
 
 
 def main() -> None:
-    database_url = os.environ.get("THESISTRACE_DATABASE_URL")
+    database_url = database_url_from_environment()
     if not database_url:
         raise RuntimeError("THESISTRACE_DATABASE_URL is required")
     configure_observability("health-service")

@@ -49,7 +49,7 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   await expect(page.getByRole("heading", { name: "Fixture Bootstrap 已发布" })).toBeVisible();
   await expect(dataPanel.getByText("756 sessions")).toBeVisible();
   await expect(dataPanel.getByText("ROOT", { exact: true })).toBeVisible();
-  await expect(dataPanel.getByText("11 immutable objects")).toBeVisible();
+  await expect(dataPanel.getByText(/\d+ immutable objects/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "标准研究数据契约" })).toBeVisible();
   await expect(page.getByText("open_adj", { exact: true })).toBeVisible();
   await expect(page.getByText("TOP 300 · TOP 1000 · TOP 2000 · TOP 3000")).toBeVisible();

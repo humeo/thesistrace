@@ -5,7 +5,7 @@ x-bounded-logging: &bounded-logging
     max-file: "5"
 
 x-app: &app
-  image: thesistrace/app:${THESISTRACE_RELEASE_VERSION:-0.1.0}
+  image: thesistrace/app:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
   environment: &app-environment
     THESISTRACE_RELEASE_VERSION: ${THESISTRACE_RELEASE_VERSION:-0.1.0}
     THESISTRACE_RUNTIME_MODE: ${THESISTRACE_RUNTIME_MODE:-hosted}
@@ -60,16 +60,17 @@ services:
 
   postgres:
     image: ghcr.io/insforge/postgres:v15.13.4
+    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint", "/bin/sh", "-c"]
     command:
-      - postgres
-      - -c
-      - config_file=/etc/postgresql/postgresql.conf
-      - -c
-      - app.encryption_key=${INSFORGE_ENCRYPTION_KEY:-change-me-encryption-key-at-least-32-characters}
+      - >-
+        exec docker-entrypoint.sh postgres
+        -c config_file=/etc/postgresql/postgresql.conf
+        -c app.encryption_key=$$APP_ENCRYPTION_KEY
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGRES_DB: ${POSTGRES_DB:-insforge}
+      APP_ENCRYPTION_KEY_FILE: /run/secrets/insforge_encryption_key
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-insforge}"]
       interval: 3s
@@ -81,6 +82,10 @@ services:
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/db-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/jwt.sql:/docker-entrypoint-initdb.d/02-jwt.sql:ro
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+    secrets:
+      - postgres_password
+      - insforge_encryption_key
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -88,7 +93,7 @@ services:
     image: postgres:16.10-alpine
     environment:
       POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
-      POSTGRES_PASSWORD: ${TEMPORAL_DB_PASSWORD:-change-me}
+      POSTGRES_PASSWORD_FILE: /run/secrets/temporal_database_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${TEMPORAL_DB_USER:-temporal}"]
       interval: 3s
@@ -97,31 +102,34 @@ services:
     networks: [execution]
     volumes:
       - temporal-data:/var/lib/postgresql/data
+    secrets:
+      - temporal_database_password
     restart: unless-stopped
     logging: *bounded-logging
 
   insforge-migrations:
-    image: thesistrace/insforge:2.2.9
+    image: thesistrace/insforge:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
     build:
       context: ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}
       dockerfile: Dockerfile
       target: runner
       args:
         VITE_API_BASE_URL: ${THESISTRACE_SITE_ADDRESS:-https://localhost}
+    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint", "/sbin/tini", "--"]
     command: ["sh", "-c", "cd backend && npm run migrate:up"]
     environment: &insforge-environment
       PORT: "7130"
       API_BASE_URL: ${THESISTRACE_SITE_ADDRESS:-https://localhost}
-      JWT_SECRET: ${INSFORGE_JWT_SECRET:-change-me-jwt-secret-at-least-32-characters}
-      ENCRYPTION_KEY: ${INSFORGE_ENCRYPTION_KEY:-change-me-encryption-key-at-least-32-characters}
+      JWT_SECRET_FILE: /run/secrets/insforge_jwt_secret
+      ENCRYPTION_KEY_FILE: /run/secrets/insforge_encryption_key
       ROOT_ADMIN_USERNAME: ${INSFORGE_ADMIN_USERNAME:-admin}
-      ROOT_ADMIN_PASSWORD: ${INSFORGE_ADMIN_PASSWORD:-change-me}
+      ROOT_ADMIN_PASSWORD_FILE: /run/secrets/insforge_admin_password
       POSTGRES_HOST: postgres
       POSTGRES_PORT: "5432"
       POSTGRES_DB: ${POSTGRES_DB:-insforge}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      DATABASE_URL_FILE: /run/secrets/insforge_database_url
       POSTGREST_BASE_URL: http://postgrest:3000
       DENO_RUNTIME_URL: http://deno:7133
       STORAGE_DIR: /insforge-storage
@@ -132,6 +140,14 @@ services:
       postgres:
         condition: service_healthy
     networks: [control]
+    volumes:
+      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+    secrets:
+      - postgres_password
+      - insforge_jwt_secret
+      - insforge_encryption_key
+      - insforge_admin_password
+      - insforge_database_url
     restart: "no"
     logging: *bounded-logging
 
@@ -141,15 +157,18 @@ services:
       DB_PORT: "5432"
       POSTGRES_SEEDS: temporal-postgres
       POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
-      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:-change-me}
-    entrypoint: ["/bin/sh"]
-    command: ["/bootstrap/setup-postgres.sh"]
+      POSTGRES_PWD_FILE: /run/secrets/temporal_database_password
+    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint"]
+    command: ["/bin/sh", "/bootstrap/setup-postgres.sh"]
     depends_on:
       temporal-postgres:
         condition: service_healthy
     networks: [execution]
     volumes:
       - ./deploy/hosted/temporal:/bootstrap:ro
+      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+    secrets:
+      - temporal_database_password
     restart: "no"
     logging: *bounded-logging
 
@@ -160,7 +179,7 @@ services:
       DB_PORT: "5432"
       POSTGRES_SEEDS: temporal-postgres
       POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
-      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:-change-me}
+      POSTGRES_PWD_FILE: /run/secrets/temporal_database_password
       BIND_ON_IP: 0.0.0.0
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/dynamicconfig.yaml
     depends_on:
@@ -174,6 +193,11 @@ services:
     networks: [execution]
     volumes:
       - ./deploy/hosted/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/dynamicconfig.yaml:ro
+      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint"]
+    command: ["/etc/temporal/entrypoint.sh"]
+    secrets:
+      - temporal_database_password
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -201,12 +225,14 @@ services:
     command: ["python", "-m", "thesistrace.hosted.migrations"]
     environment:
       <<: *app-environment
-      THESISTRACE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
-      THESISTRACE_API_DATABASE_PASSWORD: ${THESISTRACE_API_DATABASE_PASSWORD:-change-me-api-db-password}
-      THESISTRACE_RELAY_DATABASE_PASSWORD: ${THESISTRACE_RELAY_DATABASE_PASSWORD:-change-me-relay-db-password}
-      THESISTRACE_DATA_DATABASE_PASSWORD: ${THESISTRACE_DATA_DATABASE_PASSWORD:-change-me-data-db-password}
-      THESISTRACE_COMPUTE_DATABASE_PASSWORD: ${THESISTRACE_COMPUTE_DATABASE_PASSWORD:-change-me-compute-db-password}
-      THESISTRACE_HEALTH_DATABASE_PASSWORD: ${THESISTRACE_HEALTH_DATABASE_PASSWORD:-change-me-health-db-password}
+      THESISTRACE_DATABASE_USER: ${POSTGRES_USER:-postgres}
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
+      THESISTRACE_API_DATABASE_PASSWORD_FILE: /run/secrets/api_database_password
+      THESISTRACE_RELAY_DATABASE_PASSWORD_FILE: /run/secrets/relay_database_password
+      THESISTRACE_DATA_DATABASE_PASSWORD_FILE: /run/secrets/data_database_password
+      THESISTRACE_COMPUTE_DATABASE_PASSWORD_FILE: /run/secrets/compute_database_password
+      THESISTRACE_HEALTH_DATABASE_PASSWORD_FILE: /run/secrets/health_database_password
       THESISTRACE_INJECT_MIGRATION_FAILURE: ${THESISTRACE_INJECT_MIGRATION_FAILURE:-0}
       THESISTRACE_MIGRATIONS_DIR: /app/deploy/hosted/migrations
     depends_on:
@@ -214,12 +240,22 @@ services:
         condition: service_healthy
       volume-permissions:
         condition: service_completed_successfully
-    networks: [control]
+    networks: [control, execution]
+    secrets:
+      - postgres_password
+      - api_database_password
+      - relay_database_password
+      - data_database_password
+      - compute_database_password
+      - health_database_password
     restart: "no"
 
   release-gate:
     <<: *app
     command: ["python", "-m", "thesistrace.hosted.release_gate"]
+    environment:
+      <<: *app-environment
+      THESISTRACE_RELEASE_BUNDLE_ROOT: /run/thesistrace-release
     depends_on:
       insforge-migrations:
         condition: service_completed_successfully
@@ -228,25 +264,34 @@ services:
       thesistrace-migrations:
         condition: service_completed_successfully
     networks: [control]
+    volumes:
+      - ${THESISTRACE_RELEASE_BUNDLE_DIR:-.hosted/releases}:/run/thesistrace-release:ro
     restart: "no"
 
   postgrest:
     image: postgrest/postgrest:v12.2.12
+    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint"]
+    command: ["postgrest"]
     environment:
-      PGRST_DB_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
+      PGRST_DB_URI_FILE: /run/secrets/insforge_database_url
       PGRST_DB_SCHEMA: public
       PGRST_DB_ANON_ROLE: anon
-      PGRST_JWT_SECRET: ${INSFORGE_JWT_SECRET:-change-me-jwt-secret-at-least-32-characters}
+      PGRST_JWT_SECRET_FILE: /run/secrets/insforge_jwt_secret
     depends_on:
       <<: *release-dependency
       postgres:
         condition: service_healthy
     networks: [control]
+    volumes:
+      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+    secrets:
+      - insforge_database_url
+      - insforge_jwt_secret
     restart: unless-stopped
     logging: *bounded-logging
 
   deno:
-    image: thesistrace/insforge-deno:2.2.9
+    image: thesistrace/insforge-deno:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
     build:
       context: .
       dockerfile: deploy/hosted/Dockerfile.deno
@@ -258,11 +303,24 @@ services:
       POSTGRES_PORT: "5432"
       POSTGRES_DB: ${POSTGRES_DB:-insforge}
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       POSTGREST_BASE_URL: http://postgrest:3000
       WORKER_TIMEOUT_MS: "60000"
-      ENCRYPTION_KEY: ${INSFORGE_ENCRYPTION_KEY:-change-me-encryption-key-at-least-32-characters}
-      JWT_SECRET: ${INSFORGE_JWT_SECRET:-change-me-jwt-secret-at-least-32-characters}
+      ENCRYPTION_KEY_FILE: /run/secrets/insforge_encryption_key
+      JWT_SECRET_FILE: /run/secrets/insforge_jwt_secret
+    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint"]
+    command:
+      [
+        "/tini",
+        "--",
+        "docker-entrypoint.sh",
+        "deno",
+        "run",
+        "--allow-net",
+        "--allow-env",
+        "--allow-read=./worker-template.js",
+        "server.ts",
+      ]
     depends_on:
       <<: *release-dependency
       postgrest:
@@ -273,11 +331,18 @@ services:
       timeout: 3s
       retries: 40
     networks: [control]
+    volumes:
+      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+    secrets:
+      - postgres_password
+      - insforge_encryption_key
+      - insforge_jwt_secret
     restart: unless-stopped
     logging: *bounded-logging
 
   insforge:
-    image: thesistrace/insforge:2.2.9
+    image: thesistrace/insforge:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
+    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint", "/sbin/tini", "--"]
     command: ["npm", "start"]
     environment:
       <<: *insforge-environment
@@ -300,6 +365,13 @@ services:
     volumes:
       - insforge-storage:/insforge-storage
       - insforge-logs:/insforge-logs
+      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+    secrets:
+      - postgres_password
+      - insforge_jwt_secret
+      - insforge_encryption_key
+      - insforge_admin_password
+      - insforge_database_url
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -322,8 +394,7 @@ services:
       THESISTRACE_DISK_WARNING_PERCENT: ${THESISTRACE_DISK_WARNING_PERCENT:-70}
       THESISTRACE_PRIVATE_WRITE_REJECTION_PERCENT: ${THESISTRACE_PRIVATE_WRITE_REJECTION_PERCENT:-80}
       THESISTRACE_ALL_WRITE_REJECTION_PERCENT: ${THESISTRACE_ALL_WRITE_REJECTION_PERCENT:-90}
-      THESISTRACE_OBJECT_STORE_TOKENS: >-
-        {"api":"${THESISTRACE_OBJECT_STORE_API_TOKEN:-change-me-api-object-token}","compute":"${THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN:-change-me-compute-object-token}","data":"${THESISTRACE_OBJECT_STORE_DATA_TOKEN:-change-me-data-object-token}"}
+      THESISTRACE_OBJECT_STORE_TOKENS_FILE: /run/secrets/object_store_tokens
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     depends_on:
       <<: *release-dependency
@@ -345,6 +416,8 @@ services:
       - observability
     volumes:
       - immutable-objects:/var/lib/thesistrace/objects
+    secrets:
+      - object_store_tokens
 
   api:
     <<: *app
@@ -358,10 +431,12 @@ services:
       - /tmp:size=128m,mode=1777
     environment:
       <<: *app-environment
-      THESISTRACE_DATABASE_URL: postgresql://thesistrace_api:${THESISTRACE_API_DATABASE_PASSWORD:-change-me-api-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_DATABASE_USER: thesistrace_api
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/api_database_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: api
       THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
-      THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_API_TOKEN:-change-me-api-object-token}
+      THESISTRACE_OBJECT_STORE_TOKEN_FILE: /run/secrets/object_store_api_token
       THESISTRACE_API_RATE_LIMIT_WINDOW_SECONDS: ${THESISTRACE_API_RATE_LIMIT_WINDOW_SECONDS:-60}
       THESISTRACE_API_USER_REQUEST_LIMIT: ${THESISTRACE_API_USER_REQUEST_LIMIT:-120}
       THESISTRACE_API_WORKSPACE_REQUEST_LIMIT: ${THESISTRACE_API_WORKSPACE_REQUEST_LIMIT:-240}
@@ -376,6 +451,9 @@ services:
       - storage
     volumes:
       - working-cache:/var/lib/thesistrace/working-cache
+    secrets:
+      - api_database_password
+      - object_store_api_token
     healthcheck:
       test:
         [
@@ -400,7 +478,9 @@ services:
       - /tmp:size=64m,mode=1777
     environment:
       <<: *app-environment
-      THESISTRACE_DATABASE_URL: postgresql://thesistrace_relay:${THESISTRACE_RELAY_DATABASE_PASSWORD:-change-me-relay-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_DATABASE_USER: thesistrace_relay
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/relay_database_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: relay
       THESISTRACE_SERVICE_SLOT: relay-1
     depends_on:
@@ -411,6 +491,8 @@ services:
       - control
       - execution
       - observability
+    secrets:
+      - relay_database_password
     healthcheck:
       test:
         [
@@ -458,11 +540,13 @@ services:
     command: ["thesistrace-data-worker"]
     environment:
       <<: *app-environment
-      THESISTRACE_DATABASE_URL: postgresql://thesistrace_data:${THESISTRACE_DATA_DATABASE_PASSWORD:-change-me-data-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_DATABASE_USER: thesistrace_data
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/data_database_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: data
       THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
-      THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_DATA_TOKEN:-change-me-data-object-token}
-      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      THESISTRACE_OBJECT_STORE_TOKEN_FILE: /run/secrets/object_store_data_token
+      TUSHARE_TOKEN_FILE: /run/secrets/tushare_token
       HTTPS_PROXY: http://tushare-egress:8080
       THESISTRACE_SERVICE_SLOT: data-1
     user: "10003:10003"
@@ -482,6 +566,10 @@ services:
         condition: service_healthy
       tushare-egress:
         condition: service_healthy
+    secrets:
+      - data_database_password
+      - object_store_data_token
+      - tushare_token
     healthcheck:
       test:
         [
@@ -500,10 +588,12 @@ services:
       ["thesistrace-temporal-worker"]
     environment: &compute-environment
       <<: *app-environment
-      THESISTRACE_DATABASE_URL: postgresql://thesistrace_compute:${THESISTRACE_COMPUTE_DATABASE_PASSWORD:-change-me-compute-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_DATABASE_USER: thesistrace_compute
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/compute_database_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: compute
       THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
-      THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN:-change-me-compute-object-token}
+      THESISTRACE_OBJECT_STORE_TOKEN_FILE: /run/secrets/object_store_compute_token
       THESISTRACE_COMPUTE_SLOT_PREFERENCE: p1
       THESISTRACE_COMPUTE_WORKFLOW_POLLER: "true"
       THESISTRACE_SERVICE_SLOT: compute-p1-1
@@ -529,6 +619,9 @@ services:
       interval: 5s
       timeout: 10s
       retries: 40
+    secrets: &compute-secrets
+      - compute_database_password
+      - object_store_compute_token
 
   compute-worker-2:
     <<: *worker
@@ -544,6 +637,7 @@ services:
     networks: *compute-networks
     volumes: *compute-volumes
     healthcheck: *compute-healthcheck
+    secrets: *compute-secrets
 
   compute-worker-3:
     <<: *worker
@@ -559,6 +653,7 @@ services:
     networks: *compute-networks
     volumes: *compute-volumes
     healthcheck: *compute-healthcheck
+    secrets: *compute-secrets
 
   compute-worker-4:
     <<: *worker
@@ -575,6 +670,7 @@ services:
     networks: *compute-networks
     volumes: *compute-volumes
     healthcheck: *compute-healthcheck
+    secrets: *compute-secrets
 
   health-service:
     <<: *app
@@ -591,7 +687,9 @@ services:
       - /tmp:size=64m,mode=1777
     environment:
       <<: *app-environment
-      THESISTRACE_DATABASE_URL: postgresql://thesistrace_health:${THESISTRACE_HEALTH_DATABASE_PASSWORD:-change-me-health-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_DATABASE_USER: thesistrace_health
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/health_database_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: health
       THESISTRACE_HEALTH_FAULT_PLANE: ${THESISTRACE_HEALTH_FAULT_PLANE:-}
       THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_HEALTH_PUBLIC_ORIGIN:-${THESISTRACE_SITE_ADDRESS:-https://localhost}}
@@ -621,6 +719,8 @@ services:
       - observability
       - storage
       - tushare-egress
+    secrets:
+      - health_database_password
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.136.0
@@ -656,7 +756,7 @@ services:
     image: grafana/grafana:12.2.0
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana_admin_password
       GF_USERS_ALLOW_SIGN_UP: "false"
     ports:
       - "127.0.0.1:${GRAFANA_HOST_PORT:-3001}:3000"
@@ -670,11 +770,13 @@ services:
     networks:
       - observability
       - operator
+    secrets:
+      - grafana_admin_password
     restart: unless-stopped
     logging: *bounded-logging
 
   edge:
-    image: thesistrace/edge:${THESISTRACE_RELEASE_VERSION:-0.1.0}
+    image: thesistrace/edge:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
     build:
       context: .
       dockerfile: deploy/hosted/Dockerfile.edge
@@ -716,6 +818,42 @@ services:
       retries: 40
     restart: unless-stopped
     logging: *bounded-logging
+
+secrets:
+  postgres_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/postgres_password
+  temporal_database_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/temporal_database_password
+  insforge_jwt_secret:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/insforge_jwt_secret
+  insforge_encryption_key:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/insforge_encryption_key
+  insforge_admin_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/insforge_admin_password
+  insforge_database_url:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/insforge_database_url
+  grafana_admin_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/grafana_admin_password
+  api_database_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/api_database_password
+  relay_database_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/relay_database_password
+  data_database_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/data_database_password
+  compute_database_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/compute_database_password
+  health_database_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/health_database_password
+  object_store_tokens:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_tokens
+  object_store_api_token:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_api_token
+  object_store_compute_token:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_compute_token
+  object_store_data_token:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_data_token
+  tushare_token:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/tushare_token
 
 networks:
   edge:

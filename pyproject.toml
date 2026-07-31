@@ -26,6 +26,7 @@ thesistrace-data-worker = "thesistrace.hosted.data_worker:main"
 thesistrace-object-store = "thesistrace.hosted.object_store_service:main"
 thesistrace-tushare-egress = "thesistrace.hosted.tushare_egress:main"
 thesistrace-health-service = "thesistrace.hosted.health_service:main"
+thesistrace-release = "thesistrace.hosted.release_cli:main"
 
 [dependency-groups]
 dev = [

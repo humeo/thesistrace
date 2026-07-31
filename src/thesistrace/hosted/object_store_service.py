@@ -16,6 +16,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
+from thesistrace.config import environment_value
 from thesistrace.hosted.observability import configure_observability, instrument_http
 from thesistrace.objects import (
     ImmutableObjectStore,
@@ -875,7 +876,7 @@ def main() -> None:
             "/var/lib/thesistrace/objects",
         )
     )
-    raw_tokens = os.environ.get("THESISTRACE_OBJECT_STORE_TOKENS")
+    raw_tokens = environment_value("THESISTRACE_OBJECT_STORE_TOKENS")
     if not raw_tokens:
         raise RuntimeError(
             "THESISTRACE_OBJECT_STORE_TOKENS is required"

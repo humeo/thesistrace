@@ -14,6 +14,11 @@ class PostgresExecutionOutbox:
             connection.execute(
                 sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier("thesistrace_relay"))
             )
+            maintenance = connection.execute(
+                "SELECT thesistrace_control.maintenance_enabled()"
+            ).fetchone()
+            if maintenance is not None and bool(maintenance[0]):
+                return []
             rows = connection.execute(
                 """
                 SELECT outbox_id, workspace_id, resource_kind, resource_id

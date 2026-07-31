@@ -1,7 +1,6 @@
 import json
 import subprocess
 from pathlib import Path
-from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "deploy" / "hosted" / "compose.yaml"
@@ -227,7 +226,7 @@ def test_five_workers_have_isolated_single_slot_container_boundaries() -> None:
         "tushare-egress",
     }
     assert not data.get("volumes")
-    assert "TUSHARE_TOKEN" in data["environment"]
+    assert data["environment"]["TUSHARE_TOKEN_FILE"] == "/run/secrets/tushare_token"
     assert data["environment"]["HTTPS_PROXY"] == (
         "http://tushare-egress:8080"
     )
@@ -315,32 +314,30 @@ def test_steady_services_use_distinct_identities_and_secrets() -> None:
         "data-worker": "thesistrace_data",
         "compute-worker-1": "thesistrace_compute",
     }
-    parsed_urls = {
-        name: urlparse(
-            services[name]["environment"]["THESISTRACE_DATABASE_URL"]
-        )
+    assert {
+        name: services[name]["environment"]["THESISTRACE_DATABASE_USER"]
+        for name in database_services
+    } == database_services
+    database_secret_files = {
+        services[name]["environment"]["THESISTRACE_DATABASE_PASSWORD_FILE"]
         for name in database_services
     }
-    assert {
-        name: parsed.username
-        for name, parsed in parsed_urls.items()
-    } == database_services
-    assert len(
-        {
-            parsed.password
-            for parsed in parsed_urls.values()
-        }
-    ) == len(parsed_urls)
+    assert len(database_secret_files) == len(database_services)
+    assert all(path.startswith("/run/secrets/") for path in database_secret_files)
+    assert all(
+        "THESISTRACE_DATABASE_URL" not in services[name]["environment"]
+        for name in database_services
+    )
 
-    object_tokens = {
-        services[name]["environment"]["THESISTRACE_OBJECT_STORE_TOKEN"]
+    object_token_files = {
+        services[name]["environment"]["THESISTRACE_OBJECT_STORE_TOKEN_FILE"]
         for name in (
             "api",
             "data-worker",
             "compute-worker-1",
         )
     }
-    assert len(object_tokens) == 3
+    assert len(object_token_files) == 3
     assert "THESISTRACE_OBJECT_STORE_TOKEN" not in services[
         "execution-relay"
     ]["environment"]
@@ -357,6 +354,9 @@ def test_steady_services_use_distinct_identities_and_secrets() -> None:
         "THESISTRACE_OBJECT_STORE_DATA_TOKEN",
     }:
         assert f"append_secret_if_missing {secret}" in launcher
+        assert f"move_secret_to_file {secret} " in launcher
+    assert "seal-recovery" in launcher
+    assert "THESISTRACE_HOST_STATE_DIR" in launcher
 
 
 def test_one_shot_migrations_gate_every_public_or_steady_application_service() -> None:

@@ -8,25 +8,112 @@ Grafana, and OpenTelemetry remain on private Compose networks.
 
 ## Start
 
-Docker, Docker Compose, Git, and OpenSSL are required. From the repository root:
+Docker, Docker Compose, Git, OpenSSL, and `uv` are required. Prepare the pinned
+Python environment, then start from the repository root:
 
 ```sh
+uv sync --frozen
 make hosted-up
 ```
 
 That one command checks out the pinned InsForge v2.2.9 source commit, creates a
-mode-600 local environment file with generated secrets on first use, builds
-the static Web and application images, applies the InsForge, Temporal, and
-ThesisTrace migrations, and starts the steady services only after the release
-gate succeeds.
+mode-600 non-secret environment file and separate mode-600 role-secret files,
+builds an immutable content-checked Release Bundle under `.hosted/releases`,
+builds the static Web and application images, applies the InsForge, Temporal,
+and ThesisTrace migrations, and starts the steady services only after the
+release gate succeeds.
 
 The pinned InsForge Deno runtime caches its package dependencies while the
 image is built. Its steady container therefore starts on the private control
 network without runtime package downloads.
 
 The generated state is under `.hosted/` and is ignored by Git. Production
-operators must replace `THESISTRACE_SITE_ADDRESS=https://localhost` in
-`.hosted/hosted.env` with the Cloudflare-proxied hostname before launch.
+operators must place it outside the repository and replace
+`THESISTRACE_SITE_ADDRESS=https://localhost` in `hosted.env` with the
+Cloudflare-proxied hostname before launch:
+
+```sh
+export THESISTRACE_HOST_STATE_DIR=/var/lib/thesistrace-hosted
+export THESISTRACE_RECOVERY_PASSPHRASE_FILE=/root/thesistrace-recovery-passphrase
+make hosted-up
+```
+
+The recovery passphrase path must be on separately protected Operator storage;
+it must not be inside the repository, the Hosted state directory, an image, or
+the off-node backup that contains the encrypted recovery bundle.
+
+## Immutable release and forward deployment
+
+`deploy/hosted/release.json` defines the compatible Web, Caddy, API, Worker,
+InsForge, Temporal, product-migration, and configuration components. The
+launcher hashes every declared source path and installs one read-only bundle at
+`releases/bundles/<bundle-id>/bundle.json`. Custom images use that immutable
+Bundle ID as their Docker tag. `current.json` and `previous.json` retain the
+active and immediately preceding identities; `candidate.json` names a staged
+bundle only until its migrations and release gate succeed. A failed deployment
+never changes `current.json`. Two releases never overwrite the same custom
+image tag.
+
+Use `hosted-up` only for a clean installation or an ordinary restart of the
+same release. Deploy a new release with:
+
+```sh
+make hosted-deploy
+make hosted-smoke
+```
+
+`hosted-deploy` uses the currently active bundle to close heavy-work admission,
+pause Temporal Schedules and the outbox relay, and wait up to 15 minutes for
+production Activities to drain. It then stops all Workers, installs and builds
+the new bundle as the candidate. It executes only the version-pinned InsForge,
+Temporal persistence, Temporal Visibility, and ThesisTrace migration jobs while
+the prior public containers remain present, then requires the release gate to
+succeed. Only after that gate does it replace steady containers, atomically
+promote the candidate to `current.json`, and create the new Workers stopped.
+Workers begin polling only after schedules and admission are restored.
+Migrations are append-only expand-contract changes; application startup never
+applies them implicitly.
+
+If the forward operation fails, the maintenance gate stays closed and Workers
+stay stopped. Do not bypass the gate or edit migration history. Correct the
+release and retry `make hosted-deploy`, or restore the immediately preceding
+compatible bundle with `make hosted-rollback`.
+
+For an explicit maintenance window without a release:
+
+```sh
+make hosted-maintenance-enter
+# perform the bounded operator action
+make hosted-maintenance-exit
+```
+
+The enter command reports whether the Activity drain completed. At the
+15-minute limit, Worker shutdown leaves interrupted Activities nonterminal for
+Temporal redelivery; maintenance never relabels them cancelled, failed, or
+resource-exhausted.
+
+`make hosted-rollback` activates only `previous.json`, recreates the custom
+services from the retained Bundle-ID-tagged images without running a reverse or
+forward migration, and verifies service health before reopening admission. If
+the compatibility epoch differs, the command exits with restore-required and
+leaves maintenance enabled. Use the coordinated restore procedure instead of
+forcing that rollback.
+
+## Service secrets and recovery material
+
+The launcher stores PostgreSQL, API, relay, Data Worker, Compute Worker, Health,
+ObjectStore, InsForge, Grafana, and Tushare credentials as separate host files
+under `$THESISTRACE_HOST_STATE_DIR/secrets`. The directory is mode 700 and each
+file is mode 600. Compose mounts only the role-specific files required by each
+service. `hosted.env`, Compose configuration, image layers, Release Bundles,
+and container configuration contain file paths, never clear secret values.
+
+Every preparation refreshes the encrypted
+`recovery/current.recovery` bundle using AES-GCM and the separately held
+passphrase. The encrypted bundle is recovery input, not an application secret
+mount. Never log its plaintext, include the passphrase beside it, or commit
+either artifact. Secret rotation is a coordinated release operation; do not
+edit one generated role file while dependent services are running.
 
 ## Cloudflare and origin edge
 
@@ -195,8 +282,15 @@ them.
 
 ## Migration failure
 
-Set `THESISTRACE_INJECT_MIGRATION_FAILURE=1` in `.hosted/hosted.env` to exercise
-the failure path. `thesistrace-migrations` exits non-zero, `release-gate` never
-completes, and Compose cannot start the API, Caddy, or Workers. Remove the
-setting and rerun `make hosted-up`; already-applied migration checksums are
+Inject a failure only on a recovery exercise:
+
+```sh
+THESISTRACE_INJECT_MIGRATION_FAILURE=1 make hosted-deploy
+```
+
+`thesistrace-migrations` exits non-zero and `release-gate` never completes. A
+clean installation remains closed. During a forward deployment, the prior
+public service remains authoritative while heavy-work admission and Workers
+remain paused. Remove the injected environment value and retry the deployment,
+or run the compatible rollback. Already-applied migration checksums are
 verified and safe migrations resume idempotently.

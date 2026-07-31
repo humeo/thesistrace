@@ -19,6 +19,10 @@ from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
 from thesistrace.hosted.observability import configure_observability, instrument_http
+from thesistrace.hosted.release_operations import (
+    MaintenanceGate,
+    PostgresMaintenanceGate,
+)
 from thesistrace.management import SourceAuthorizationService, build_management_store
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.provisioning import (
@@ -166,6 +170,36 @@ def public_research_run_view(run: dict[str, object]) -> dict[str, object]:
     return view
 
 
+def is_heavy_work_request(method: str, path: str) -> bool:
+    if method.upper() != "POST":
+        return False
+    exact_paths = {
+        "/api/v1/dataset-releases/bootstrap",
+        "/api/v1/dataset-releases/bootstrap-live",
+        "/api/v1/dataset-releases/publish-fixture",
+        "/api/v1/dataset-releases/publish-live",
+    }
+    if path in exact_paths:
+        return True
+    parts = path.strip("/").split("/")
+    if len(parts) < 4 or parts[:2] != ["api", "v1"]:
+        return False
+    return (
+        parts[2] == "research-definitions" and parts[-1] == "runs"
+    ) or (
+        parts[2] == "research-runs"
+        and parts[-1] in {"rerun", "daily-tracks"}
+    ) or (
+        parts[2] == "daily-tracks"
+        and parts[-1]
+        in {
+            "kernel-upgrade",
+            "verify-equivalence",
+            "rebuild-generation",
+        }
+    )
+
+
 def public_result_view(
     result: dict[str, object],
     *,
@@ -228,6 +262,7 @@ def create_app(
     runtime_ports: RuntimePorts | None = None,
     identity_verifier: IdentityVerifier | None = None,
     registration_service: RegistrationService | None = None,
+    maintenance_gate: MaintenanceGate | None = None,
 ) -> FastAPI:
     runtime = runtime_ports or build_runtime(settings)
     store = runtime.control_metadata
@@ -276,9 +311,39 @@ def create_app(
         workspace_request_limit=settings.api_workspace_request_limit,
         mutation_request_limit=settings.api_mutation_request_limit,
     )
+    effective_maintenance_gate = maintenance_gate
+    if (
+        effective_maintenance_gate is None
+        and settings.runtime_mode == "hosted"
+        and settings.database_url
+    ):
+        effective_maintenance_gate = PostgresMaintenanceGate(
+            settings.database_url
+        )
 
     @app.middleware("http")
     async def authenticate_product_request(request: Request, call_next):
+        if (
+            effective_maintenance_gate is not None
+            and is_heavy_work_request(request.method, request.url.path)
+        ):
+            try:
+                maintenance_enabled = await run_in_threadpool(
+                    effective_maintenance_gate.is_enabled
+                )
+            except Exception:
+                maintenance_enabled = True
+            if maintenance_enabled:
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "detail": error_detail(
+                            "MAINTENANCE_MODE",
+                            "new compute and data work is paused for maintenance",
+                        )
+                    },
+                    headers={"Retry-After": "60"},
+                )
         if settings.runtime_mode == "hosted":
             hidden_hosted_paths = {
                 "/api/v1/dataset-releases/bootstrap",

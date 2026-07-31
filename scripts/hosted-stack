@@ -2,12 +2,15 @@
 set -eu
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
-state_dir="$root/.hosted"
+state_dir="${THESISTRACE_HOST_STATE_DIR:-$root/.hosted}"
 env_file="$state_dir/hosted.env"
+secret_dir="$state_dir/secrets"
 insforge_dir="$state_dir/insforge-v2.2.9"
 insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
 insforge_patch="$root/deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch"
 compose_file="$root/deploy/hosted/compose.yaml"
+release_manifest="$root/deploy/hosted/release.json"
+release_state="$state_dir/releases"
 
 random_secret() {
     openssl rand -hex 32
@@ -28,9 +31,38 @@ append_value_if_missing() {
     fi
 }
 
+move_secret_to_file() {
+    name="$1"
+    file_name="$2"
+    value="$(environment_value "$name")"
+    path="$secret_dir/$file_name"
+    if [ ! -f "$path" ]; then
+        if [ -z "$value" ]; then
+            value="$(random_secret)"
+        fi
+        umask 077
+        printf '%s' "$value" >"$path"
+    fi
+    chmod 600 "$path"
+    temporary="$env_file.secrets.$$"
+    sed "/^${name}=/d" "$env_file" >"$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$env_file"
+}
+
 environment_value() {
     name="$1"
     sed -n "s/^${name}=//p" "$env_file" | tail -n 1
+}
+
+set_environment_value() {
+    name="$1"
+    value="$2"
+    temporary="$env_file.value.$$"
+    sed "/^${name}=/d" "$env_file" >"$temporary"
+    printf '%s=%s\n' "$name" "$value" >>"$temporary"
+    chmod 600 "$temporary"
+    mv "$temporary" "$env_file"
 }
 
 validate_public_edge() {
@@ -83,6 +115,8 @@ prepare() {
         } >"$env_file"
     fi
     umask 077
+    mkdir -p "$secret_dir" "$state_dir/recovery"
+    chmod 700 "$secret_dir" "$state_dir/recovery"
     mkdir -p "$state_dir/origin-tls"
     append_value_if_missing THESISTRACE_EDGE_TRUSTED_PROXIES private_ranges
     append_value_if_missing THESISTRACE_ORIGIN_TLS internal
@@ -94,9 +128,111 @@ prepare() {
     append_secret_if_missing THESISTRACE_OBJECT_STORE_API_TOKEN
     append_secret_if_missing THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN
     append_secret_if_missing THESISTRACE_OBJECT_STORE_DATA_TOKEN
+    move_secret_to_file POSTGRES_PASSWORD postgres_password
+    move_secret_to_file TEMPORAL_DB_PASSWORD temporal_database_password
+    move_secret_to_file INSFORGE_JWT_SECRET insforge_jwt_secret
+    move_secret_to_file INSFORGE_ENCRYPTION_KEY insforge_encryption_key
+    move_secret_to_file INSFORGE_ADMIN_PASSWORD insforge_admin_password
+    move_secret_to_file GRAFANA_ADMIN_PASSWORD grafana_admin_password
+    move_secret_to_file THESISTRACE_API_DATABASE_PASSWORD api_database_password
+    move_secret_to_file THESISTRACE_RELAY_DATABASE_PASSWORD relay_database_password
+    move_secret_to_file THESISTRACE_DATA_DATABASE_PASSWORD data_database_password
+    move_secret_to_file THESISTRACE_COMPUTE_DATABASE_PASSWORD compute_database_password
+    move_secret_to_file THESISTRACE_HEALTH_DATABASE_PASSWORD health_database_password
+    move_secret_to_file THESISTRACE_OBJECT_STORE_API_TOKEN object_store_api_token
+    move_secret_to_file THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN object_store_compute_token
+    move_secret_to_file THESISTRACE_OBJECT_STORE_DATA_TOKEN object_store_data_token
+    move_secret_to_file TUSHARE_TOKEN tushare_token
+    printf '{"api":"%s","compute":"%s","data":"%s"}' \
+        "$(sed -n '1p' "$secret_dir/object_store_api_token")" \
+        "$(sed -n '1p' "$secret_dir/object_store_compute_token")" \
+        "$(sed -n '1p' "$secret_dir/object_store_data_token")" \
+        >"$secret_dir/object_store_tokens"
+    chmod 600 "$secret_dir/object_store_tokens"
+    postgres_user="${POSTGRES_USER:-$(environment_value POSTGRES_USER)}"
+    postgres_database="${POSTGRES_DB:-$(environment_value POSTGRES_DB)}"
+    printf 'postgresql://%s:%s@postgres:5432/%s' \
+        "${postgres_user:-postgres}" \
+        "$(sed -n '1p' "$secret_dir/postgres_password")" \
+        "${postgres_database:-insforge}" \
+        >"$secret_dir/insforge_database_url"
+    chmod 600 "$secret_dir/insforge_database_url"
+    recovery_passphrase="${THESISTRACE_RECOVERY_PASSPHRASE_FILE:-$state_dir/recovery-passphrase}"
+    if [ ! -f "$recovery_passphrase" ]; then
+        umask 077
+        mkdir -p "$(dirname -- "$recovery_passphrase")"
+        random_secret >"$recovery_passphrase"
+    fi
+    chmod 600 "$recovery_passphrase"
+    if [ ! -x "$root/.venv/bin/python" ]; then
+        echo "run 'uv sync --frozen' before operating the Hosted stack" >&2
+        exit 1
+    fi
+    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli seal-recovery \
+        --secret-root "$secret_dir" \
+        --output "$state_dir/recovery/current.recovery" \
+        --passphrase-file "$recovery_passphrase" >/dev/null
+}
+
+select_release() {
+    pointer_name="$1"
+    pointer_path="$release_state/$pointer_name.json"
+    if [ ! -f "$pointer_path" ]; then
+        echo "no $pointer_name Release Bundle is available" >&2
+        exit 1
+    fi
+    THESISTRACE_RELEASE_STATE="$release_state"
+    THESISTRACE_RELEASE_POINTER="$pointer_name"
+    export THESISTRACE_RELEASE_STATE
+    export THESISTRACE_RELEASE_POINTER
+    release_bundle_id="$(sed -n 's/.*"bundle_id":"\([^"]*\)".*/\1/p' "$pointer_path")"
+    release_version="$("$root/.venv/bin/python" -c 'import json, os; from pathlib import Path; root=Path(os.environ["THESISTRACE_RELEASE_STATE"]); pointer=json.loads((root / f"{os.environ['"'"'THESISTRACE_RELEASE_POINTER'"'"']}.json").read_text()); bundle=json.loads((root / "bundles" / pointer["bundle_id"] / "bundle.json").read_text()); print(bundle["version"])')"
+    if [ -z "$release_bundle_id" ] || [ -z "$release_version" ]; then
+        echo "installed Release Bundle has no identity" >&2
+        exit 1
+    fi
+    set_environment_value THESISTRACE_RELEASE_VERSION "$release_version"
+    set_environment_value THESISTRACE_RELEASE_BUNDLE_ID "$release_bundle_id"
+}
+
+select_current_release() {
+    select_release current
+}
+
+install_release() {
+    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli install-bundle \
+        --repository-root "$root" \
+        --state-root "$release_state" \
+        --manifest "$release_manifest" >/dev/null
+    select_current_release
+}
+
+stage_release() {
+    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli stage-bundle \
+        --repository-root "$root" \
+        --state-root "$release_state" \
+        --manifest "$release_manifest" >/dev/null
+    select_release candidate
+}
+
+activate_candidate() {
+    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli \
+        activate-candidate --state-root "$release_state" >/dev/null
+    select_current_release
+}
+
+ensure_release() {
+    if [ -f "$release_state/current.json" ]; then
+        select_current_release
+    else
+        install_release
+    fi
 }
 
 compose() {
+    THESISTRACE_SECRET_DIR="$secret_dir"
+    THESISTRACE_RELEASE_BUNDLE_DIR="$release_state"
+    export THESISTRACE_SECRET_DIR THESISTRACE_RELEASE_BUNDLE_DIR
     site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
     case "$site_address" in
         https://localhost*)
@@ -120,32 +256,84 @@ compose() {
         "$@"
 }
 
+enter_maintenance() {
+    compose run --rm --no-deps -T thesistrace-migrations \
+        python -m thesistrace.hosted.release_cli maintenance-enter \
+        --max-drain-seconds 900
+    compose stop --timeout 30 \
+        execution-relay data-worker \
+        compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+}
+
+exit_maintenance() {
+    compose up --detach --no-deps \
+        execution-relay data-worker \
+        compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+    compose run --rm --no-deps -T thesistrace-migrations \
+        python -m thesistrace.hosted.release_cli maintenance-exit
+}
+
 action="${1:-up}"
 case "$action" in
     init)
         prepare
+        install_release
         ;;
     config)
         prepare
+        ensure_release
         compose config
+        ;;
+    deploy)
+        if [ ! -f "$env_file" ]; then
+            echo "run 'scripts/hosted-stack up' for the clean installation" >&2
+            exit 1
+        fi
+        prepare
+        select_current_release
+        enter_maintenance
+        stage_release
+        validate_public_edge
+        compose build
+        compose up --detach --wait --no-build \
+            insforge-migrations temporal-schema \
+            thesistrace-migrations release-gate
+        compose up --detach --wait --no-build --no-deps \
+            api edge health-service tushare-egress object-store \
+            insforge deno
+        compose up --no-start --force-recreate --no-build --no-deps \
+            execution-relay data-worker \
+            compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+        activate_candidate
+        exit_maintenance
         ;;
     up)
         prepare
-        validate_public_edge
-        compose up --build --detach --wait
+        if [ -f "$release_state/current.json" ]; then
+            ensure_release
+            validate_public_edge
+            compose up --detach --wait --no-build
+        else
+            install_release
+            validate_public_edge
+            compose up --build --detach --wait
+        fi
         ;;
     down)
         prepare
+        ensure_release
         compose down
         ;;
     restart)
         prepare
+        ensure_release
         validate_public_edge
         compose down
-        compose up --build --detach --wait
+        compose up --detach --wait --no-build
         ;;
     smoke)
         prepare
+        select_current_release
         set -a
         . "$env_file"
         set +a
@@ -153,6 +341,7 @@ case "$action" in
         ;;
     dispatch-probe)
         prepare
+        select_current_release
         compose run --rm --no-deps -T \
             --volume "$root:/workspace:ro" \
             --env PYTHONPATH=/workspace/src \
@@ -161,11 +350,38 @@ case "$action" in
         ;;
     operator)
         prepare
+        select_current_release
         shift
         compose exec -T api thesistrace-operator "$@"
         ;;
+    maintenance-enter)
+        prepare
+        select_current_release
+        enter_maintenance
+        ;;
+    maintenance-exit)
+        prepare
+        select_current_release
+        exit_maintenance
+        ;;
+    rollback)
+        prepare
+        select_current_release
+        enter_maintenance
+        "$root/.venv/bin/python" -m thesistrace.hosted.release_cli \
+            activate-previous --state-root "$release_state"
+        select_current_release
+        validate_public_edge
+        compose up --no-start --force-recreate --no-build --no-deps \
+            execution-relay data-worker \
+            compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+        compose up --detach --wait --no-build --no-deps insforge deno
+        compose up --detach --wait --no-build --no-deps \
+            api object-store health-service tushare-egress edge
+        exit_maintenance
+        ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|up|down|restart|smoke|dispatch-probe|operator}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|dispatch-probe|operator|maintenance-enter|maintenance-exit|rollback}" >&2
         exit 2
         ;;
 esac
