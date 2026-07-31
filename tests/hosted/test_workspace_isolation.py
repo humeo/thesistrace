@@ -15,7 +15,11 @@ from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.control import PostgresControlMetadataStore
 from thesistrace.hosted.execution_outbox import PostgresExecutionOutbox
 from thesistrace.hosted.management import PostgresManagementStore
-from thesistrace.hosted.migrations import apply_migrations
+from thesistrace.hosted.migrations import (
+    MigrationError,
+    apply_migrations,
+    provision_service_role_credentials,
+)
 from thesistrace.hosted.provisioning import PostgresProvisioningStore
 from thesistrace.management import HOSTED_TUSHARE_SCOPE, SourceAuthorizationService
 from thesistrace.objects import ImmutableObjectStore
@@ -184,6 +188,38 @@ def bootstrap_shared_release(tmp_path: Path) -> dict[str, object]:
     )
     assert created is True
     return release
+
+
+@pytest.mark.parametrize(
+    "passwords",
+    [
+        {
+            "api": "api-password",
+            "relay": "relay-password",
+            "data": "data-password",
+        },
+        {
+            "api": "api-password",
+            "relay": "",
+            "data": "data-password",
+            "compute": "compute-password",
+        },
+        {
+            "api": "shared-password",
+            "relay": "relay-password",
+            "data": "data-password",
+            "compute": "shared-password",
+        },
+    ],
+)
+def test_service_database_credentials_reject_unsafe_sets(
+    passwords: dict[str, str],
+) -> None:
+    with pytest.raises(MigrationError):
+        provision_service_role_credentials(
+            "postgresql://unused",
+            passwords,
+        )
 
 
 @pytest.mark.skipif(
@@ -1016,3 +1052,48 @@ def test_tracking_operations_share_quota_and_keep_rebuild_operator_only(
             "tracking_generation_rebuild",
             "tracking_generation_rebuild_cancel",
         }
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_service_database_credentials_are_distinct_and_role_bound() -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    passwords = {
+        "api": "acceptance-api-password",
+        "relay": "acceptance-relay-password",
+        "data": "acceptance-data-password",
+        "compute": "acceptance-compute-password",
+    }
+    provision_service_role_credentials(
+        TEST_DATABASE_URL,
+        passwords,
+    )
+    roles = {
+        "api": "thesistrace_api",
+        "relay": "thesistrace_relay",
+        "data": "thesistrace_data",
+        "compute": "thesistrace_compute",
+    }
+    for service, role in roles.items():
+        connection_url = psycopg.conninfo.make_conninfo(
+            TEST_DATABASE_URL,
+            user=role,
+            password=passwords[service],
+        )
+        with psycopg.connect(connection_url) as connection:
+            current = connection.execute(
+                "SELECT current_user"
+            ).fetchone()[0]
+        assert current == role
+
+    wrong_password_url = psycopg.conninfo.make_conninfo(
+        TEST_DATABASE_URL,
+        user=roles["compute"],
+        password=passwords["data"],
+        connect_timeout=2,
+    )
+    with pytest.raises(psycopg.OperationalError):
+        psycopg.connect(wrong_password_url)

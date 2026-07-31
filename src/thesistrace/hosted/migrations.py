@@ -3,10 +3,19 @@ import os
 from pathlib import Path
 
 import psycopg
+from psycopg import sql
 
 
 class MigrationError(RuntimeError):
     pass
+
+
+SERVICE_ROLES = {
+    "api": "thesistrace_api",
+    "relay": "thesistrace_relay",
+    "data": "thesistrace_data",
+    "compute": "thesistrace_compute",
+}
 
 
 def apply_migrations(database_url: str, directory: Path) -> list[str]:
@@ -60,6 +69,31 @@ def apply_migrations(database_url: str, directory: Path) -> list[str]:
     return applied
 
 
+def provision_service_role_credentials(
+    database_url: str,
+    credentials: dict[str, str],
+) -> None:
+    if set(credentials) != set(SERVICE_ROLES):
+        raise MigrationError(
+            "api, relay, data, and compute database passwords are required"
+        )
+    if any(not password for password in credentials.values()):
+        raise MigrationError("service database passwords cannot be empty")
+    if len(set(credentials.values())) != len(credentials):
+        raise MigrationError(
+            "service database passwords must be distinct"
+        )
+    with psycopg.connect(database_url) as connection:
+        with connection.transaction():
+            for service, role in SERVICE_ROLES.items():
+                connection.execute(
+                    sql.SQL("ALTER ROLE {} LOGIN PASSWORD {}").format(
+                        sql.Identifier(role),
+                        sql.Literal(credentials[service]),
+                    )
+                )
+
+
 def main() -> None:
     if os.environ.get("THESISTRACE_INJECT_MIGRATION_FAILURE") == "1":
         raise MigrationError("injected migration failure")
@@ -73,6 +107,14 @@ def main() -> None:
         )
     )
     applied = apply_migrations(database_url, directory)
+    credentials = {
+        service: os.environ.get(
+            f"THESISTRACE_{service.upper()}_DATABASE_PASSWORD",
+            "",
+        )
+        for service in SERVICE_ROLES
+    }
+    provision_service_role_credentials(database_url, credentials)
     print(f"ThesisTrace migrations complete; applied={len(applied)}")
 
 

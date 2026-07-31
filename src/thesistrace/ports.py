@@ -129,6 +129,8 @@ class ObjectStoreStagePort(ObjectWriterPort, Protocol):
 
 
 class ObjectStorePort(ObjectWriterPort, Protocol):
+    def probe(self) -> bool: ...
+
     def stage(
         self,
         run_id: str,

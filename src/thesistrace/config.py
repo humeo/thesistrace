@@ -19,6 +19,8 @@ class Settings:
     insforge_jwt_audience: str = "thesistrace"
     temporal_address: str = "temporal:7233"
     temporal_namespace: str = "thesistrace"
+    object_store_url: str | None = None
+    object_store_token: str | None = None
 
 
 def settings_from_environment() -> Settings:
@@ -51,5 +53,11 @@ def settings_from_environment() -> Settings:
         temporal_namespace=os.environ.get(
             "THESISTRACE_TEMPORAL_NAMESPACE",
             "thesistrace",
+        ),
+        object_store_url=os.environ.get(
+            "THESISTRACE_OBJECT_STORE_URL"
+        ),
+        object_store_token=os.environ.get(
+            "THESISTRACE_OBJECT_STORE_TOKEN"
         ),
     )

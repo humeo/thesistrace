@@ -21,6 +21,8 @@ thesistrace-worker = "thesistrace.worker:main"
 thesistrace-execution-relay = "thesistrace.hosted.execution_relay:main"
 thesistrace-temporal-worker = "thesistrace.hosted.temporal_worker:main"
 thesistrace-data-worker = "thesistrace.hosted.data_worker:main"
+thesistrace-object-store = "thesistrace.hosted.object_store_service:main"
+thesistrace-tushare-egress = "thesistrace.hosted.tushare_egress:main"
 
 [dependency-groups]
 dev = [

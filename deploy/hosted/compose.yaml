@@ -3,25 +3,16 @@ x-app: &app
   environment: &app-environment
     THESISTRACE_RELEASE_VERSION: ${THESISTRACE_RELEASE_VERSION:-0.1.0}
     THESISTRACE_RUNTIME_MODE: ${THESISTRACE_RUNTIME_MODE:-hosted}
-    THESISTRACE_DATABASE_ROLE: ${THESISTRACE_DATABASE_ROLE:-api}
     THESISTRACE_AUTH_MODE: insforge
     THESISTRACE_INSFORGE_JWKS_URL: http://insforge:7130/.well-known/jwks.json
     THESISTRACE_INSFORGE_JWT_ISSUER: insforge
     THESISTRACE_INSFORGE_JWT_AUDIENCE: thesistrace
     THESISTRACE_HOME: /var/lib/thesistrace
     THESISTRACE_API_HOST: 0.0.0.0
-    THESISTRACE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
     THESISTRACE_TEMPORAL_ADDRESS: temporal:7233
     THESISTRACE_TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-thesistrace}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   restart: unless-stopped
-  networks:
-    - control
-    - execution
-    - observability
-  volumes:
-    - app-runtime:/var/lib/thesistrace
-    - immutable-objects:/var/lib/thesistrace/objects
 
 x-release-dependency: &release-dependency
   release-gate:
@@ -30,6 +21,13 @@ x-release-dependency: &release-dependency
 x-worker: &worker
   <<: *app
   command: ["thesistrace-worker", "--interval", "2"]
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  pids_limit: 256
+  tmpfs:
+    - /tmp:size=256m,mode=1777
   depends_on:
     <<: *release-dependency
     temporal-namespace:
@@ -41,8 +39,16 @@ services:
   volume-permissions:
     <<: *app
     user: "0:0"
-    command: ["sh", "-c", "chown -R 10001:10001 /var/lib/thesistrace"]
+    command:
+      [
+        "sh",
+        "-c",
+        "chown -R 10001:11000 /var/lib/thesistrace/working-cache && chmod -R 2770 /var/lib/thesistrace/working-cache && chown -R 10005:10005 /var/lib/thesistrace/objects",
+      ]
     networks: [control]
+    volumes:
+      - working-cache:/var/lib/thesistrace/working-cache
+      - immutable-objects:/var/lib/thesistrace/objects
     restart: "no"
 
   postgres:
@@ -182,6 +188,11 @@ services:
     command: ["python", "-m", "thesistrace.hosted.migrations"]
     environment:
       <<: *app-environment
+      THESISTRACE_DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-change-me}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_API_DATABASE_PASSWORD: ${THESISTRACE_API_DATABASE_PASSWORD:-change-me-api-db-password}
+      THESISTRACE_RELAY_DATABASE_PASSWORD: ${THESISTRACE_RELAY_DATABASE_PASSWORD:-change-me-relay-db-password}
+      THESISTRACE_DATA_DATABASE_PASSWORD: ${THESISTRACE_DATA_DATABASE_PASSWORD:-change-me-data-db-password}
+      THESISTRACE_COMPUTE_DATABASE_PASSWORD: ${THESISTRACE_COMPUTE_DATABASE_PASSWORD:-change-me-compute-db-password}
       THESISTRACE_INJECT_MIGRATION_FAILURE: ${THESISTRACE_INJECT_MIGRATION_FAILURE:-0}
       THESISTRACE_MIGRATIONS_DIR: /app/deploy/hosted/migrations
     depends_on:
@@ -189,6 +200,7 @@ services:
         condition: service_healthy
       volume-permissions:
         condition: service_completed_successfully
+    networks: [control]
     restart: "no"
 
   release-gate:
@@ -201,6 +213,7 @@ services:
         condition: service_completed_successfully
       thesistrace-migrations:
         condition: service_completed_successfully
+    networks: [control]
     restart: "no"
 
   postgrest:
@@ -273,10 +286,71 @@ services:
       - insforge-logs:/insforge-logs
     restart: unless-stopped
 
-  api:
+  object-store:
     <<: *app
+    command: ["thesistrace-object-store"]
+    user: "10005:10005"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 0.5
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    environment:
+      THESISTRACE_OBJECT_STORE_ROOT: /var/lib/thesistrace/objects
+      THESISTRACE_OBJECT_STORE_TOKENS: >-
+        {"api":"${THESISTRACE_OBJECT_STORE_API_TOKEN:-change-me-api-object-token}","compute":"${THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN:-change-me-compute-object-token}","data":"${THESISTRACE_OBJECT_STORE_DATA_TOKEN:-change-me-data-object-token}"}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     depends_on:
       <<: *release-dependency
+      volume-permissions:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 40
+    networks:
+      - storage
+      - observability
+    volumes:
+      - immutable-objects:/var/lib/thesistrace/objects
+
+  api:
+    <<: *app
+    user: "10001:10001"
+    group_add: ["11000"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    environment:
+      <<: *app-environment
+      THESISTRACE_DATABASE_URL: postgresql://thesistrace_api:${THESISTRACE_API_DATABASE_PASSWORD:-change-me-api-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_DATABASE_ROLE: api
+      THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
+      THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_API_TOKEN:-change-me-api-object-token}
+    depends_on:
+      <<: *release-dependency
+      object-store:
+        condition: service_healthy
+    networks:
+      - control
+      - observability
+      - storage
+    volumes:
+      - working-cache:/var/lib/thesistrace/working-cache
     healthcheck:
       test:
         [
@@ -292,25 +366,83 @@ services:
   execution-relay:
     <<: *app
     command: ["thesistrace-execution-relay", "--interval", "1"]
+    user: "10002:10002"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
     environment:
       <<: *app-environment
+      THESISTRACE_DATABASE_URL: postgresql://thesistrace_relay:${THESISTRACE_RELAY_DATABASE_PASSWORD:-change-me-relay-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: relay
     depends_on:
       <<: *release-dependency
       temporal-namespace:
         condition: service_completed_successfully
+    networks:
+      - control
+      - execution
+      - observability
+
+  tushare-egress:
+    <<: *app
+    command: ["thesistrace-tushare-egress"]
+    user: "10006:10006"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 128m
+    cpus: 0.1
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment: {}
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import socket; socket.create_connection(('127.0.0.1', 8080), timeout=2).close()",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - tushare-egress
+      - data-egress
 
   data-worker:
     <<: *worker
     command: ["thesistrace-data-worker"]
     environment:
       <<: *app-environment
+      THESISTRACE_DATABASE_URL: postgresql://thesistrace_data:${THESISTRACE_DATA_DATABASE_PASSWORD:-change-me-data-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: data
+      THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
+      THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_DATA_TOKEN:-change-me-data-object-token}
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      HTTPS_PROXY: http://tushare-egress:8080
+    user: "10003:10003"
+    mem_limit: 1g
+    cpus: 0.5
     networks:
       - control
       - execution
       - observability
-      - data-egress
+      - storage
+      - tushare-egress
+    depends_on:
+      <<: *release-dependency
+      temporal-namespace:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      tushare-egress:
+        condition: service_healthy
 
   compute-worker-1:
     <<: *worker
@@ -318,25 +450,57 @@ services:
       ["thesistrace-temporal-worker"]
     environment: &compute-environment
       <<: *app-environment
+      THESISTRACE_DATABASE_URL: postgresql://thesistrace_compute:${THESISTRACE_COMPUTE_DATABASE_PASSWORD:-change-me-compute-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: compute
+      THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
+      THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN:-change-me-compute-object-token}
+    user: &compute-user "10004:10004"
+    group_add: &compute-groups ["11000"]
+    mem_limit: &compute-memory 1g
+    cpus: &compute-cpus 0.75
+    networks: &compute-networks
+      - control
+      - execution
+      - observability
+      - storage
+    volumes: &compute-volumes
+      - working-cache:/var/lib/thesistrace/working-cache
 
   compute-worker-2:
     <<: *worker
     command: *compute-command
     environment:
       <<: *compute-environment
+    user: *compute-user
+    group_add: *compute-groups
+    mem_limit: *compute-memory
+    cpus: *compute-cpus
+    networks: *compute-networks
+    volumes: *compute-volumes
 
   compute-worker-3:
     <<: *worker
     command: *compute-command
     environment:
       <<: *compute-environment
+    user: *compute-user
+    group_add: *compute-groups
+    mem_limit: *compute-memory
+    cpus: *compute-cpus
+    networks: *compute-networks
+    volumes: *compute-volumes
 
   compute-worker-4:
     <<: *worker
     command: *compute-command
     environment:
       <<: *compute-environment
+    user: *compute-user
+    group_add: *compute-groups
+    mem_limit: *compute-memory
+    cpus: *compute-cpus
+    networks: *compute-networks
+    volumes: *compute-volumes
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.136.0
@@ -418,11 +582,16 @@ networks:
   observability:
     driver: bridge
     internal: true
+  storage:
+    driver: bridge
+    internal: true
+  tushare-egress:
+    driver: bridge
+    internal: true
   data-egress:
     driver: bridge
 
 volumes:
-  app-runtime:
   caddy-config:
   caddy-data:
   grafana-data:
@@ -432,3 +601,4 @@ volumes:
   postgres-data:
   prometheus-data:
   temporal-data:
+  working-cache:

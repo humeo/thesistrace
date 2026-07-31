@@ -121,6 +121,59 @@ class ImmutableObjectStore:
         digest = self._put_payload(payload, suffix=".json")
         return {"sha256": digest, "bytes": len(payload)}
 
+    def probe(self) -> bool:
+        probe_path = self.root / f".health-{uuid4()}"
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+            probe_path.write_bytes(b"ok")
+            available = probe_path.read_bytes() == b"ok"
+        except OSError:
+            return False
+        try:
+            probe_path.unlink(missing_ok=True)
+        except OSError:
+            return False
+        return available
+
+    def put_canonical_json_bytes(
+        self,
+        payload: bytes,
+    ) -> dict[str, object]:
+        try:
+            value = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ParquetContractError(
+                "JSON object payload is invalid"
+            ) from error
+        if canonical_json_bytes(value) != payload:
+            raise ParquetContractError(
+                "JSON object payload is not canonical"
+            )
+        digest = self._put_payload(payload, suffix=".json")
+        return {"sha256": digest, "bytes": len(payload)}
+
+    def put_parquet_bytes(
+        self,
+        payload: bytes,
+    ) -> dict[str, object]:
+        require_pinned_writer_runtime()
+        try:
+            parquet_file = pq.ParquetFile(pa.BufferReader(payload))
+        except (pa.ArrowException, OSError) as error:
+            raise ParquetContractError(
+                "Parquet object payload is invalid"
+            ) from error
+        if parquet_file.metadata.num_row_groups != 1:
+            raise ParquetContractError(
+                "Parquet object must contain exactly one row group"
+            )
+        digest = self._put_payload(payload, suffix=".parquet")
+        return {
+            "format": "parquet",
+            "sha256": digest,
+            "bytes": len(payload),
+        }
+
     def put_parquet_rows(
         self,
         rows: Sequence[Mapping[str, object]],
@@ -238,6 +291,26 @@ class ImmutableObjectStore:
             with stage_lock:
                 fcntl.flock(stage_lock.fileno(), fcntl.LOCK_EX)
                 fcntl.flock(stage_lock.fileno(), fcntl.LOCK_UN)
+
+    def staged_publication_active(self, run_id: str) -> bool:
+        run_root = self.root / "staging" / run_id
+        if not run_root.exists():
+            return False
+        for stage_root in sorted(run_root.glob("*")):
+            try:
+                stage_lock = (stage_root / ".stage.lock").open("a+b")
+            except FileNotFoundError:
+                continue
+            with stage_lock:
+                try:
+                    fcntl.flock(
+                        stage_lock.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                except BlockingIOError:
+                    return True
+                fcntl.flock(stage_lock.fileno(), fcntl.LOCK_UN)
+        return False
 
     def _remove_uncommitted_paths(
         self,
@@ -397,6 +470,11 @@ class StagedObjectStore:
 
     @contextmanager
     def publication(self, *, manifest_sha256: str) -> Iterator[None]:
+        self.promote(manifest_sha256=manifest_sha256)
+        yield
+        self.resolve_publication()
+
+    def promote(self, *, manifest_sha256: str) -> None:
         self.destination.root.mkdir(parents=True, exist_ok=True)
         lock_path = self.destination.root / "staging" / ".publication.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -443,10 +521,15 @@ class StagedObjectStore:
                     if destination.exists():
                         continue
                     os.replace(source, destination)
-                yield
-                self.promotion_resolved = True
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
+
+    def resolve_publication(self) -> None:
+        if not self.promotion_started:
+            raise ParquetContractError(
+                "staged publication was not promoted"
+            )
+        self.promotion_resolved = True
 
 
 def _read_stage_json(path: Path) -> dict[str, object]:

@@ -1,8 +1,6 @@
 import copy
 import os
 from datetime import UTC, date, datetime
-from pathlib import Path
-from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Query, Request
@@ -21,6 +19,7 @@ from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
 from thesistrace.management import SourceAuthorizationService, build_management_store
+from thesistrace.objects import ImmutableObjectStore
 from thesistrace.provisioning import (
     ProvisioningError,
     RegistrationService,
@@ -927,7 +926,7 @@ def create_app(
             and (datetime.now(UTC) - heartbeat).total_seconds()
             <= settings.worker_stale_after_seconds
         )
-        object_store_available = probe_object_store(settings.object_root)
+        object_store_available = objects.probe()
         status = "available" if worker_available and object_store_available else "degraded"
         return {
             "status": status,
@@ -1237,6 +1236,17 @@ def create_app(
 
     @app.get("/api/v1/objects/{digest}")
     def get_object(digest: str) -> FileResponse:
+        if (
+            settings.runtime_mode == "hosted"
+            or not isinstance(objects, ImmutableObjectStore)
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "IMMUTABLE_OBJECT_NOT_FOUND",
+                    "object not found",
+                ),
+            )
         if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
             raise HTTPException(
                 status_code=404,
@@ -1253,7 +1263,10 @@ def create_app(
         else:
             raise HTTPException(
                 status_code=404,
-                detail=error_detail("IMMUTABLE_OBJECT_NOT_FOUND", "object not found"),
+                detail=error_detail(
+                    "IMMUTABLE_OBJECT_NOT_FOUND",
+                    "object not found",
+                ),
             )
         return FileResponse(
             path,
@@ -1262,18 +1275,6 @@ def create_app(
         )
 
     return app
-
-
-def probe_object_store(root: Path) -> bool:
-    probe_path = root / f".health-{uuid4()}"
-    try:
-        root.mkdir(parents=True, exist_ok=True)
-        probe_path.write_bytes(b"ok")
-        return probe_path.read_bytes() == b"ok"
-    except OSError:
-        return False
-    finally:
-        probe_path.unlink(missing_ok=True)
 
 
 def reject_client_workspace_identity(content: dict[str, object]) -> None:

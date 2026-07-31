@@ -13,6 +13,13 @@ random_secret() {
     openssl rand -hex 32
 }
 
+append_secret_if_missing() {
+    name="$1"
+    if ! grep -q "^${name}=" "$env_file"; then
+        echo "${name}=$(random_secret)" >>"$env_file"
+    fi
+}
+
 prepare() {
     mkdir -p "$state_dir"
     if [ ! -d "$insforge_dir/.git" ]; then
@@ -46,6 +53,14 @@ prepare() {
             echo "GRAFANA_ADMIN_PASSWORD=$(random_secret)"
         } >"$env_file"
     fi
+    umask 077
+    append_secret_if_missing THESISTRACE_API_DATABASE_PASSWORD
+    append_secret_if_missing THESISTRACE_RELAY_DATABASE_PASSWORD
+    append_secret_if_missing THESISTRACE_DATA_DATABASE_PASSWORD
+    append_secret_if_missing THESISTRACE_COMPUTE_DATABASE_PASSWORD
+    append_secret_if_missing THESISTRACE_OBJECT_STORE_API_TOKEN
+    append_secret_if_missing THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN
+    append_secret_if_missing THESISTRACE_OBJECT_STORE_DATA_TOKEN
 }
 
 compose() {
