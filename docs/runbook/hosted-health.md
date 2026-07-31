@@ -54,6 +54,19 @@ The Health service runs the deterministic quantitative regression once in a
 background thread after startup. Until it completes, the Quantitative Semantic
 Health view remains degraded rather than blocking service readiness.
 
+`release_freshness` requires both a successful publication whose requested
+session matches the authoritative Release and a bounded Release age. The
+default bound is 345,600 seconds (four days), which covers an ordinary weekend
+without allowing a stopped publication schedule to remain green forever. Set
+`THESISTRACE_RELEASE_FRESHNESS_MAX_SECONDS` to an explicitly reviewed local
+market-calendar bound when operating across a longer exchange holiday.
+
+In production, the System Health Public-Origin probe uses
+`THESISTRACE_SITE_ADDRESS` and validates its public certificate through the
+Cloudflare hostname. Only the localhost launcher substitutes
+`host.docker.internal`, preserves `Host/SNI=localhost`, and disables
+certificate verification for the generated local Caddy certificate.
+
 ## Retention and privacy
 
 - Prometheus is capped by both `--storage.tsdb.retention.time=7d` and

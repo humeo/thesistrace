@@ -21,8 +21,11 @@ EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 WORKSPACE_ID = re.compile(r"\bworkspace_[0-9a-f]+\b", re.IGNORECASE)
 AUTHORIZATION_HEADER = re.compile(r"(?i)\bauthorization\s*[:=]\s*(?:bearer|basic)\s+[^\s,;]+")
 SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(token|password|secret|api[_-]?key)\s*[:=]\s*"
+    r"(?i)[\"']?\b(token|password|secret|api[_-]?key)\b[\"']?\s*[:=]\s*"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+RESEARCH_ASSIGNMENT = re.compile(
+    r"(?i)[\"']?\b(expression|alpha)\b[\"']?\s*[:=]\s*.*"
 )
 ALPHA_FIELD = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
 _configured = False
@@ -71,6 +74,10 @@ def sanitize_text(value: str) -> str:
     sanitized = WORKSPACE_ID.sub("[redacted-workspace]", sanitized)
     sanitized = AUTHORIZATION_HEADER.sub("authorization=[redacted]", sanitized)
     sanitized = SECRET_ASSIGNMENT.sub(lambda match: f"{match.group(1)}=[redacted]", sanitized)
+    sanitized = RESEARCH_ASSIGNMENT.sub(
+        lambda match: f"{match.group(1)}=[redacted]",
+        sanitized,
+    )
     sanitized = ALPHA_FIELD.sub("[redacted-expression]", sanitized)
     encoded = sanitized.encode("utf-8")
     if len(encoded) <= MAX_LOG_MESSAGE_BYTES:

@@ -97,6 +97,17 @@ prepare() {
 }
 
 compose() {
+    site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
+    case "$site_address" in
+        https://localhost*)
+            : "${THESISTRACE_HEALTH_PUBLIC_ORIGIN:=https://host.docker.internal:${THESISTRACE_HTTPS_PORT:-443}}"
+            : "${THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST:=localhost}"
+            : "${THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE:=true}"
+            export THESISTRACE_HEALTH_PUBLIC_ORIGIN
+            export THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST
+            export THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE
+            ;;
+    esac
     docker compose \
         --project-name thesistrace-hosted \
         --project-directory "$root" \

@@ -19,6 +19,7 @@ from thesistrace.hosted.health_service import (
     run_semantic_regression,
     storage_pressure_snapshot,
     trace_export_available,
+    worker_slots_ready,
 )
 from thesistrace.hosted.observability import (
     JsonLogFormatter,
@@ -210,6 +211,27 @@ def test_failed_publication_degrades_only_data_and_preserves_pointer_evidence() 
         assert data["checks"]["previous_release_preserved"] is True
 
 
+def test_old_release_degrades_freshness_even_when_publication_matches() -> None:
+    class OldReleaseStore(StubHealthStore):
+        def snapshot(self) -> dict[str, object]:
+            snapshot = super().snapshot()
+            data = dict(snapshot["data"])
+            data["release_age_seconds"] = 345601
+            snapshot["data"] = data
+            return snapshot
+
+    app = create_health_app(
+        OldReleaseStore(),
+        dependency_status=healthy_dependencies,
+        semantic_state=complete_semantic_state(),
+        run_regression_on_startup=False,
+    )
+    with TestClient(app) as client:
+        data = client.get("/health/data").json()
+        assert data["status"] == "degraded"
+        assert data["checks"]["release_freshness"] is False
+
+
 def test_tushare_and_telemetry_failures_do_not_kill_system_readiness() -> None:
     dependencies = healthy_dependencies()
     dependencies["tushare"] = False
@@ -349,6 +371,47 @@ def test_public_origin_uses_public_host_for_tls_and_edge_for_transport(
     }
 
 
+def test_public_origin_derives_hostname_from_site_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    class Response:
+        status = 200
+
+    class Connection:
+        def __init__(
+            self,
+            connect_host: str,
+            connect_port: int,
+            public_host: str,
+            **_kwargs: object,
+        ) -> None:
+            observed["connection"] = (connect_host, connect_port, public_host)
+
+        def request(self, *_args: object, **kwargs: object) -> None:
+            observed["headers"] = kwargs["headers"]
+
+        def getresponse(self) -> Response:
+            return Response()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setenv("THESISTRACE_PUBLIC_ORIGIN", "https://edge:8443")
+    monkeypatch.delenv("THESISTRACE_PUBLIC_ORIGIN_HOST", raising=False)
+    monkeypatch.setenv("THESISTRACE_SITE_ADDRESS", "https://research.example:443")
+    monkeypatch.setenv("THESISTRACE_PUBLIC_ORIGIN_INSECURE", "false")
+    monkeypatch.setattr(
+        "thesistrace.hosted.health_service.RoutedHTTPSConnection",
+        Connection,
+    )
+
+    assert public_origin_available() is True
+    assert observed["connection"] == ("edge", 8443, "research.example")
+    assert observed["headers"] == {"Host": "research.example"}
+
+
 def test_temporal_task_queue_snapshot_uses_real_backlog_and_poller_evidence(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -370,6 +433,35 @@ def test_temporal_task_queue_snapshot_uses_real_backlog_and_poller_evidence(
     assert snapshot["pollers_ready"] is True
     assert snapshot["task_queue_compute_workflow_backlog"] == len("thesistrace-compute-workflows")
     assert snapshot["task_queue_data_activity_backlog"] == len("thesistrace-data")
+
+
+def test_idle_dynamic_activity_queue_does_not_require_a_poller() -> None:
+    class WorkflowService:
+        async def describe_task_queue(self, request, **_kwargs):
+            dynamic = request.task_queue.name.endswith(("-p1", "-p3"))
+            return SimpleNamespace(
+                stats=SimpleNamespace(approximate_backlog_count=0),
+                pollers=[] if dynamic else [object()],
+            )
+
+    client = SimpleNamespace(workflow_service=WorkflowService())
+    snapshot = asyncio.run(read_temporal_queues(client))
+    assert snapshot["pollers_ready"] is True
+
+
+def test_worker_slot_probes_run_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    barrier = threading.Barrier(4)
+
+    def probe(_url: str) -> bool:
+        barrier.wait(timeout=0.5)
+        time.sleep(0.02)
+        return True
+
+    monkeypatch.setattr("thesistrace.hosted.health_service.http_available", probe)
+    assert worker_slots_ready() == 4
 
 
 def test_semantic_regression_uses_product_contracts_not_profitability() -> None:
@@ -418,6 +510,7 @@ def test_structured_logs_redact_private_and_secret_values() -> None:
     assert "user@example.com" not in sanitized
     assert "top-secret" not in sanitized
     assert "$close_adj" not in sanitized
+    assert "pct_change" not in sanitized
 
     record = logging.LogRecord(
         "test",
@@ -437,6 +530,7 @@ def test_structured_logs_redact_private_and_secret_values() -> None:
         "Authorization: Bearer top-secret",
         "Authorization=Basic dXNlcjpwYXNz",
         'password="two secret words"',
+        '{"token":"top-secret"}',
     ):
         redacted = sanitize_text(credential)
         assert "top-secret" not in redacted

@@ -460,6 +460,26 @@ def test_health_views_are_private_bounded_and_separately_provisioned() -> None:
     assert 'up{job=\\"service-probes\\"' in system_dashboard
     assert "compute-worker-[1-4]:9100" in system_dashboard
     assert "vector(0)" in system_dashboard
+    for path in dashboards:
+        dashboard = json.loads(path.read_text())
+        primary = dashboard["panels"][0]
+        assert primary["fieldConfig"]["defaults"]["min"] == 0
+        assert primary["fieldConfig"]["defaults"]["max"] == 1
+        assert primary["fieldConfig"]["defaults"]["thresholds"]["steps"] == [
+            {"color": "red", "value": None},
+            {"color": "green", "value": 1},
+        ]
+
+
+def test_health_origin_defaults_to_public_site_and_local_override_is_explicit() -> None:
+    health = compose_model()["services"]["health-service"]
+    assert health["environment"]["THESISTRACE_PUBLIC_ORIGIN"] == "https://localhost"
+    assert health["environment"]["THESISTRACE_PUBLIC_ORIGIN_INSECURE"] == "false"
+    assert health["extra_hosts"] == ["host.docker.internal=host-gateway"]
+
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    assert "https://host.docker.internal:" in launcher
+    assert "THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST:=localhost" in launcher
 
 
 def test_otel_sampling_and_export_failure_are_bounded_and_visible() -> None:

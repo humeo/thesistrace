@@ -309,7 +309,14 @@ def create_health_app(
         data_checks = {
             "tushare": bool(dependencies.get("tushare", False)),
             "release_freshness": bool(data_values.get("release_present", False))
-            and bool(data_values.get("release_session_current", False)),
+            and bool(data_values.get("release_session_current", False))
+            and float(data_values.get("release_age_seconds", -1.0))
+            <= float(
+                os.environ.get(
+                    "THESISTRACE_RELEASE_FRESHNESS_MAX_SECONDS",
+                    "345600",
+                )
+            ),
             "validation": bool(data_values.get("publication_validation_succeeded", False)),
             "coverage": bool(data_values.get("coverage_valid", False)),
             "schema": bool(data_values.get("schema_valid", False)),
@@ -505,14 +512,17 @@ def public_origin_available() -> bool:
     if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
         return False
     connect_port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    public_host = os.environ.get("THESISTRACE_PUBLIC_ORIGIN_HOST", "") or parsed.netloc
+    configured_public_host = os.environ.get("THESISTRACE_PUBLIC_ORIGIN_HOST", "")
+    site = urlparse(os.environ.get("THESISTRACE_SITE_ADDRESS", ""))
+    public_host = configured_public_host or site.hostname or parsed.hostname
     request_target = f"{parsed.path.rstrip('/')}/api/v1/live"
     connection: http.client.HTTPConnection
     try:
         if parsed.scheme == "https":
             context = (
                 ssl._create_unverified_context()
-                if os.environ.get("THESISTRACE_PUBLIC_ORIGIN_INSECURE") == "true"
+                if os.environ.get("THESISTRACE_PUBLIC_ORIGIN_INSECURE", "").lower()
+                in {"1", "true", "yes"}
                 else ssl.create_default_context()
             )
             connection = RoutedHTTPSConnection(
@@ -596,7 +606,18 @@ def storage_pressure_snapshot() -> dict[str, float | bool]:
 
 
 def worker_slots_ready() -> int:
-    return sum(http_available(f"http://compute-worker-{slot}:9100/ready") for slot in range(1, 5))
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=4,
+        thread_name_prefix="health-worker",
+    ) as executor:
+        checks = executor.map(
+            http_available,
+            (
+                f"http://compute-worker-{slot}:9100/ready"
+                for slot in range(1, 5)
+            ),
+        )
+        return sum(checks)
 
 
 async def monitor_temporal_queues(state: TemporalQueueState) -> None:
@@ -676,7 +697,10 @@ async def read_temporal_queues(
     snapshot: dict[str, int | bool] = {
         f"task_queue_{name}_backlog": backlog for name, backlog, _pollers in described
     }
-    snapshot["pollers_ready"] = all(pollers > 0 for _name, _backlog, pollers in described)
+    snapshot["pollers_ready"] = all(
+        pollers > 0 or (name in {"compute_p1", "compute_p3"} and backlog == 0)
+        for name, backlog, pollers in described
+    )
     return snapshot
 
 
