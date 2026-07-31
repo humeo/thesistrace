@@ -495,6 +495,8 @@ def test_health_freshness_uses_latest_scheduled_research_session() -> None:
     assert "dataset_release_matches_expected_session" in migration
     assert "publication.trigger_kind = 'schedule'" in migration
     assert "publication.kind IN ('live_bootstrap', 'live_increment')" in migration
+    assert "publication.status = 'succeeded'" in migration
+    assert "expected_release.manifest_json" in migration
 
 
 def test_otel_sampling_and_export_failure_are_bounded_and_visible() -> None:

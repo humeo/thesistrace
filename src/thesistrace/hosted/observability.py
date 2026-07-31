@@ -19,9 +19,13 @@ MAX_LOG_MESSAGE_BYTES = 2048
 MAX_TEMPORAL_CONTROL_PAYLOAD_BYTES = 4096
 EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 WORKSPACE_ID = re.compile(r"\bworkspace_[0-9a-f]+\b", re.IGNORECASE)
-AUTHORIZATION_HEADER = re.compile(r"(?i)\bauthorization\s*[:=]\s*(?:bearer|basic)\s+[^\s,;]+")
+AUTHORIZATION_HEADER = re.compile(
+    r"(?i)[\"']?\bauthorization\b[\"']?\s*[:=]\s*[\"']?"
+    r"(?:bearer|basic)\s+[^\"',;}\s]+[\"']?"
+)
 SECRET_ASSIGNMENT = re.compile(
-    r"(?i)[\"']?\b(token|password|secret|api[_-]?key)\b[\"']?\s*[:=]\s*"
+    r"(?i)[\"']?\b([A-Za-z0-9_-]*(?:token|password|secret|api[_-]?key))"
+    r"\b[\"']?\s*[:=]\s*"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 RESEARCH_ASSIGNMENT = re.compile(

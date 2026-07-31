@@ -13,10 +13,14 @@ AS $$
         WHERE pointer.singleton = 1
     ),
     expected_session AS (
-        SELECT publication.parameters_json ->> 'as_of' AS session
+        SELECT expected_release.manifest_json::jsonb
+                   #>> '{appended_session_range,end}' AS session
         FROM thesistrace_product.dataset_publications AS publication
+        JOIN thesistrace_product.dataset_releases AS expected_release
+          ON expected_release.id = publication.result_release_id
         WHERE publication.trigger_kind = 'schedule'
           AND publication.kind IN ('live_bootstrap', 'live_increment')
+          AND publication.status = 'succeeded'
         ORDER BY publication.created_at::timestamptz DESC
         LIMIT 1
     )

@@ -529,8 +529,12 @@ def test_structured_logs_redact_private_and_secret_values() -> None:
     for credential in (
         "Authorization: Bearer top-secret",
         "Authorization=Basic dXNlcjpwYXNz",
+        '{"authorization":"Bearer top-secret"}',
         'password="two secret words"',
         '{"token":"top-secret"}',
+        "TUSHARE_TOKEN=top-secret",
+        "THESISTRACE_OBJECT_STORE_TOKEN=top-secret",
+        '{"refresh_token":"top-secret"}',
     ):
         redacted = sanitize_text(credential)
         assert "top-secret" not in redacted
