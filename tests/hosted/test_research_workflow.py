@@ -328,6 +328,7 @@ def test_delivery_finalizer_preserves_an_authoritatively_committed_manifest(
         attempt_id=attempt_id,
         result_bundle_id=result_bundle_id,
         result_manifest_sha256=str(manifest_object["sha256"]),
+        storage_objects=[],
     )
     monkeypatch.setattr(
         temporal_worker,
@@ -376,6 +377,7 @@ def test_cancelled_run_rejects_a_late_success_publication(tmp_path: Path) -> Non
         attempt_id=str(attempt["id"]),
         result_bundle_id="result-late",
         result_manifest_sha256="late-manifest",
+        storage_objects=[],
     )
 
     assert cancelled is not None

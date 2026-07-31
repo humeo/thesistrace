@@ -15,10 +15,15 @@ from thesistrace.datasets import DatasetPublisher
 from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import ControlMetadataPort, ObjectStorePort, ObjectWriterPort
+from thesistrace.quota import QuotaExceededError
 from thesistrace.result_objects import (
     CompactResultError,
     publish_compact_result_objects,
     reconstruct_result_view,
+)
+from thesistrace.storage_admission import (
+    StorageAdmissionError,
+    publication_storage_objects,
 )
 from thesistrace.strategy import run_strategy
 
@@ -137,6 +142,10 @@ class ResearchRunService:
                                 result_manifest_sha256=str(
                                     manifest_object["sha256"]
                                 ),
+                                storage_objects=publication_storage_objects(
+                                    manifest,
+                                    manifest_object=manifest_object,
+                                ),
                             )
                             if not published:
                                 raise ResearchPublicationFenced
@@ -177,12 +186,21 @@ class ResearchRunService:
             latest = self.metadata.research_run(run_id)
             if latest is not None and latest["status"] == "succeeded":
                 return self._recover_staged_for_run(run_id)
+            quota_exceeded = isinstance(error, QuotaExceededError)
+            storage_rejected = isinstance(error, StorageAdmissionError)
             resource_exhausted = is_resource_exhaustion(error)
-            reason_code = (
-                "RESOURCE_EXHAUSTED"
-                if resource_exhausted
-                else "CALCULATION_FAILED"
-            )
+            if quota_exceeded:
+                reason_code = error.reason_code
+                message = "Personal Workspace private storage quota is full"
+            elif storage_rejected:
+                reason_code = error.reason_code
+                message = str(error)
+            elif resource_exhausted:
+                reason_code = "RESOURCE_EXHAUSTED"
+                message = "accepted activity resource envelope was exhausted"
+            else:
+                reason_code = "CALCULATION_FAILED"
+                message = "research calculation failed"
             retryable = resource_exhausted and should_retry_resource_exhaustion(
                 ordinal
             )
@@ -193,19 +211,19 @@ class ResearchRunService:
                 type(error).__name__,
                 reason_code,
             )
+            diagnostic: dict[str, object] = {
+                "reason_code": reason_code,
+                "message": message,
+                "correlation_id": attempt_id,
+            }
+            if quota_exceeded or storage_rejected:
+                diagnostic["dimension"] = error.dimension
+                diagnostic["limit"] = error.limit
             self.metadata.finish_research_run_attempt(
                 run_id=run_id,
                 attempt_id=attempt_id,
                 retryable=retryable,
-                diagnostic={
-                    "reason_code": reason_code,
-                    "message": (
-                        "accepted activity resource envelope was exhausted"
-                        if resource_exhausted
-                        else "research calculation failed"
-                    ),
-                    "correlation_id": attempt_id,
-                },
+                diagnostic=diagnostic,
             )
             return self._recover_staged_for_run(run_id)
         completed = self.metadata.research_run(run_id)

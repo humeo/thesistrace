@@ -17,6 +17,7 @@ from thesistrace.objects import (
     parquet_bytes,
     require_pinned_writer_runtime,
 )
+from thesistrace.storage_admission import StorageAdmissionError
 
 
 class LeaseHeartbeat:
@@ -282,6 +283,22 @@ class RemoteObjectStore:
                     response.close()
                     time.sleep(0.05)
                     continue
+                if response.status_code == 507:
+                    detail = response.json().get("detail", {})
+                    raise StorageAdmissionError(
+                        str(detail.get("reason_code", "DISK_PRESSURE")),
+                        str(detail.get("message", "storage admission failed")),
+                        dimension=(
+                            str(detail["dimension"])
+                            if detail.get("dimension") is not None
+                            else None
+                        ),
+                        limit=(
+                            int(detail["limit"])
+                            if detail.get("limit") is not None
+                            else None
+                        ),
+                    )
                 response.raise_for_status()
                 return response
         except httpx.HTTPError as error:

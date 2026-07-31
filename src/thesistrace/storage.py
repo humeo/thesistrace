@@ -1115,6 +1115,7 @@ class MetadataStore:
         attempt_id: str,
         release: dict[str, object],
         idempotency_key: str,
+        storage_objects: list[dict[str, object]],
         cancellation_requested: Callable[[], bool] | None = None,
     ) -> bool:
         now = datetime.now(UTC).isoformat()
@@ -1184,6 +1185,12 @@ class MetadataStore:
                     (diagnostic_json, now, publication_id),
                 )
                 return False
+            self.commit_platform_storage_references(
+                connection,
+                resource_kind="dataset_release",
+                resource_id=str(release["id"]),
+                objects=storage_objects,
+            )
             committed_release, _created = self._publish_dataset_release(
                 connection,
                 release,
@@ -1890,6 +1897,30 @@ class MetadataStore:
         """Hosted stores override this transaction hook to enforce Compute quota."""
         del connection, resource_kind, resource_id, admitted_at
 
+    def commit_private_storage_references(
+        self,
+        connection,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        objects: list[dict[str, object]],
+    ) -> int:
+        """Local V1 has no hosted private-storage quota."""
+        del connection, resource_kind, resource_id
+        return sum(int(value["bytes"]) for value in objects)
+
+    def commit_platform_storage_references(
+        self,
+        connection,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        objects: list[dict[str, object]],
+    ) -> int:
+        """Local V1 has no hosted platform object index."""
+        del connection, resource_kind, resource_id
+        return sum(int(value["bytes"]) for value in objects)
+
     def _lock_idempotent_admission(
         self,
         connection,
@@ -2276,6 +2307,7 @@ class MetadataStore:
         attempt_id: str,
         result_bundle_id: str,
         result_manifest_sha256: str,
+        storage_objects: list[dict[str, object]],
     ) -> bool:
         now = datetime.now(UTC).isoformat()
         with self.connect() as connection:
@@ -2292,6 +2324,12 @@ class MetadataStore:
                 or attempt["status"] != "running"
             ):
                 return False
+            self.commit_private_storage_references(
+                connection,
+                resource_kind="research_run",
+                resource_id=run_id,
+                objects=storage_objects,
+            )
             run_update = connection.execute(
                 """
                 UPDATE research_runs

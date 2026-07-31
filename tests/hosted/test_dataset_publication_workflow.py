@@ -41,6 +41,7 @@ from thesistrace.platform_publications import (
     DatasetPublicationService,
 )
 from thesistrace.storage import MetadataStore
+from thesistrace.storage_admission import StorageAdmissionError
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_DATABASE_URL = os.environ.get("THESISTRACE_TEST_DATABASE_URL")
@@ -390,6 +391,17 @@ class ExhaustedPublicationService(DatasetPublicationService):
         raise MemoryError("injected exhaustion")
 
 
+class DiskRejectedPublicationService(DatasetPublicationService):
+    def _build_candidate(self, publication, objects):
+        del publication, objects
+        raise StorageAdmissionError(
+            "DISK_PRESSURE",
+            "persistent disk rejects all payload growth",
+            dimension="disk_usage",
+            limit=90,
+        )
+
+
 def test_failure_and_repeated_resource_exhaustion_preserve_previous_truth(
     tmp_path: Path,
 ) -> None:
@@ -417,6 +429,26 @@ def test_failure_and_repeated_resource_exhaustion_preserve_previous_truth(
         str(failed_request["id"])
     )
     assert failed["status"] == "failed"
+    assert store.latest_dataset_release()["id"] == previous_release_id
+
+    disk_request, _ = requests.request(
+        actor="operator-1",
+        request_version="v1",
+        kind="fixture_increment",
+        parameters={"new_sessions": 1, "corrections": []},
+        idempotency_key="disk-pressure",
+    )
+    disk_rejected = DiskRejectedPublicationService(store, objects).execute(
+        str(disk_request["id"])
+    )
+    assert disk_rejected["status"] == "failed"
+    assert disk_rejected["diagnostic"] == {
+        "reason_code": "DISK_PRESSURE",
+        "message": "persistent disk rejects all payload growth",
+        "correlation_id": disk_rejected["attempts"][-1]["id"],
+        "dimension": "disk_usage",
+        "limit": 90,
+    }
     assert store.latest_dataset_release()["id"] == previous_release_id
     assert not (objects.root / "manifests" / "candidate-release.json").exists()
     assert not (objects.root / "staging" / str(failed_request["id"])).exists()
@@ -607,6 +639,7 @@ def test_postgres_data_role_atomically_commits_release_and_tracking_trigger() ->
         attempt_id=str(attempt["id"]),
         release=release,
         idempotency_key=str(publication["idempotency_key"]),
+        storage_objects=[],
     ) is True
     assert data.latest_dataset_release()["id"] == release["id"]
     assert data.tracking_release_trigger(release["id"]) == {
@@ -652,6 +685,7 @@ def test_postgres_data_role_atomically_commits_release_and_tracking_trigger() ->
             attempt_id=str(race_attempt["id"]),
             release=race_release,
             idempotency_key=str(race_current["idempotency_key"]),
+            storage_objects=[],
         )
 
     def cancel_race() -> str:

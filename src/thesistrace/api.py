@@ -32,6 +32,7 @@ from thesistrace.research_runs import (
 )
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
+from thesistrace.storage_admission import StorageAdmissionError
 from thesistrace.tenancy import authenticated_subject
 from thesistrace.tracking import (
     DailyTrackingError,
@@ -79,11 +80,11 @@ def error_detail(reason_code: str, message: str) -> dict[str, str]:
 
 
 def quota_error_detail(error: QuotaExceededError) -> dict[str, object]:
-    noun = (
-        "DailyTrack"
-        if error.dimension == "max_active_daily_tracks"
-        else "Compute"
-    )
+    noun = {
+        "max_active_daily_tracks": "DailyTrack",
+        "max_nonterminal_user_compute_jobs": "Compute",
+        "max_private_storage_bytes": "Storage",
+    }.get(error.dimension, "Resource")
     return {
         "reason_code": error.reason_code,
         "message": f"Personal Workspace {noun} quota is full",
@@ -657,6 +658,16 @@ def create_app(
             raise HTTPException(
                 status_code=409,
                 detail=quota_error_detail(error),
+            ) from error
+        except StorageAdmissionError as error:
+            raise HTTPException(
+                status_code=507,
+                detail={
+                    "reason_code": error.reason_code,
+                    "message": str(error),
+                    "dimension": error.dimension,
+                    "limit": error.limit,
+                },
             ) from error
         except DailyTrackingError as error:
             raise HTTPException(

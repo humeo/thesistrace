@@ -13,6 +13,10 @@ from thesistrace.activity_contract import (
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.ports import ObjectStorePort, ObjectStoreStagePort
+from thesistrace.storage_admission import (
+    StorageAdmissionError,
+    publication_storage_objects,
+)
 from thesistrace.tushare_source import (
     HttpTushareTransport,
     TushareAdapter,
@@ -294,6 +298,9 @@ class DatasetPublicationService:
                                 idempotency_key=str(
                                     publication["idempotency_key"]
                                 ),
+                                storage_objects=publication_storage_objects(
+                                    release
+                                ),
                                 cancellation_requested=self.cancellation_requested,
                             )
                         )
@@ -310,21 +317,25 @@ class DatasetPublicationService:
             latest = self.metadata.dataset_publication(publication_id)
             if latest is not None and latest["status"] == "succeeded":
                 return self.recover(publication_id)
+            storage_rejected = isinstance(error, StorageAdmissionError)
             exhausted = is_resource_exhaustion(error)
-            reason_code = (
-                "RESOURCE_EXHAUSTED"
-                if exhausted
-                else "DATASET_PUBLICATION_FAILED"
-            )
+            if storage_rejected:
+                reason_code = error.reason_code
+                message = str(error)
+            elif exhausted:
+                reason_code = "RESOURCE_EXHAUSTED"
+                message = "accepted Data Worker resource envelope was exhausted"
+            else:
+                reason_code = "DATASET_PUBLICATION_FAILED"
+                message = "Dataset Publication failed validation or execution"
             diagnostic = {
                 "reason_code": reason_code,
-                "message": (
-                    "accepted Data Worker resource envelope was exhausted"
-                    if exhausted
-                    else "Dataset Publication failed validation or execution"
-                ),
+                "message": message,
                 "correlation_id": attempt_id,
             }
+            if storage_rejected:
+                diagnostic["dimension"] = error.dimension
+                diagnostic["limit"] = error.limit
             logger.error(
                 "Dataset Publication failed publication_id=%s "
                 "attempt_id=%s error_type=%s reason_code=%s",

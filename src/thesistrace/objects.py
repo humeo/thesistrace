@@ -4,7 +4,7 @@ import json
 import math
 import os
 import shutil
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -474,7 +474,12 @@ class StagedObjectStore:
         yield
         self.resolve_publication()
 
-    def promote(self, *, manifest_sha256: str) -> None:
+    def promote(
+        self,
+        *,
+        manifest_sha256: str,
+        before_move: Callable[[], None] | None = None,
+    ) -> None:
         self.destination.root.mkdir(parents=True, exist_ok=True)
         lock_path = self.destination.root / "staging" / ".publication.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -506,6 +511,8 @@ class StagedObjectStore:
                     if self.cleanup_uncommitted_payloads
                     else []
                 )
+                if before_move is not None:
+                    before_move()
                 journal = {
                     "run_id": self.run_id,
                     "attempt_id": self.attempt_id,

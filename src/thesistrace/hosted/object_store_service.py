@@ -1,9 +1,11 @@
 import fcntl
 import hmac
 import json
+import logging
 import os
 import shutil
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -12,7 +14,7 @@ from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 
 from thesistrace.objects import (
     ImmutableObjectStore,
@@ -20,9 +22,18 @@ from thesistrace.objects import (
     StagedObjectStore,
     canonical_json_bytes,
 )
+from thesistrace.storage_admission import (
+    DEFAULT_ALL_WRITE_REJECTION_PERCENT,
+    DEFAULT_DISK_WARNING_PERCENT,
+    DEFAULT_PERSISTENT_DISK_BYTES,
+    DEFAULT_PRIVATE_WRITE_REJECTION_PERCENT,
+    DiskPressurePolicy,
+    StorageAdmissionError,
+)
 
 MAINTENANCE_ROLES = {"api", "compute", "data"}
 LEASE_SECONDS = 30.0
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -187,6 +198,16 @@ class StageRegistry:
 def create_object_store_app(
     root: Path,
     role_tokens: dict[str, str],
+    *,
+    disk_capacity_bytes: int = DEFAULT_PERSISTENT_DISK_BYTES,
+    disk_warning_percent: int = DEFAULT_DISK_WARNING_PERCENT,
+    private_write_rejection_percent: int = (
+        DEFAULT_PRIVATE_WRITE_REJECTION_PERCENT
+    ),
+    all_write_rejection_percent: int = (
+        DEFAULT_ALL_WRITE_REJECTION_PERCENT
+    ),
+    disk_used_bytes: Callable[[], int] | None = None,
 ) -> FastAPI:
     if set(role_tokens) != {"api", "compute", "data"} or any(
         not token for token in role_tokens.values()
@@ -197,9 +218,58 @@ def create_object_store_app(
     if len(set(role_tokens.values())) != len(role_tokens):
         raise ValueError("ObjectStore role tokens must be distinct")
     store = ImmutableObjectStore(root)
+    disk_policy = DiskPressurePolicy(
+        disk_capacity_bytes,
+        warning_percent=disk_warning_percent,
+        private_write_rejection_percent=private_write_rejection_percent,
+        all_write_rejection_percent=all_write_rejection_percent,
+    )
+    if disk_used_bytes is None:
+        def current_disk_usage() -> int:
+            return shutil.disk_usage(
+                root if root.exists() else root.parent
+            ).used
+
+        disk_used_bytes = current_disk_usage
     guards = GuardRegistry(root)
     stages = StageRegistry()
     app = FastAPI(title="ThesisTrace Private ObjectStore")
+
+    def admit_growth(role: str, candidate_bytes: int) -> None:
+        decision = disk_policy.evaluate(
+            used_bytes=int(disk_used_bytes()),
+            candidate_bytes=candidate_bytes,
+            private_growth=role != "data",
+        )
+        if decision.warning:
+            logger.warning(
+                "persistent disk warning threshold reached "
+                "projected_percent=%.2f role=%s",
+                decision.projected_percent,
+                role,
+            )
+
+    def admit_object_payload(
+        role: str,
+        writer: ImmutableObjectStore,
+        payload: bytes,
+        *,
+        suffix: str,
+    ) -> None:
+        digest = __import__("hashlib").sha256(payload).hexdigest()
+        destination = (
+            writer.root / "sha256" / digest[:2] / f"{digest}{suffix}"
+        )
+        admit_growth(role, 0 if destination.exists() else len(payload))
+
+    def admit_manifest_payload(
+        role: str,
+        writer: ImmutableObjectStore,
+        resource_id: str,
+        payload: bytes,
+    ) -> None:
+        destination = writer.root / "manifests" / f"{resource_id}.json"
+        admit_growth(role, 0 if destination.exists() else len(payload))
 
     def require_role(
         request: Request,
@@ -297,6 +367,23 @@ def create_object_store_app(
     ) -> Response:
         return Response(status_code=422)
 
+    @app.exception_handler(StorageAdmissionError)
+    async def storage_admission_error(
+        _request: Request,
+        error: StorageAdmissionError,
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=507,
+            content={
+                "detail": {
+                    "reason_code": error.reason_code,
+                    "message": str(error),
+                    "dimension": error.dimension,
+                    "limit": error.limit,
+                }
+            },
+        )
+
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
@@ -310,13 +397,17 @@ def create_object_store_app(
 
     @app.put("/v1/objects/json")
     async def put_json(request: Request) -> dict[str, object]:
-        require_role(request, {"compute", "data"})
-        return store.put_canonical_json_bytes(await request.body())
+        role = require_role(request, {"compute", "data"})
+        payload = await request.body()
+        admit_object_payload(role, store, payload, suffix=".json")
+        return store.put_canonical_json_bytes(payload)
 
     @app.put("/v1/objects/parquet")
     async def put_parquet(request: Request) -> dict[str, object]:
-        require_role(request, {"compute", "data"})
-        return store.put_parquet_bytes(await request.body())
+        role = require_role(request, {"compute", "data"})
+        payload = await request.body()
+        admit_object_payload(role, store, payload, suffix=".parquet")
+        return store.put_parquet_bytes(payload)
 
     @app.put("/v1/manifests/{resource_id}")
     async def put_manifest(
@@ -327,7 +418,14 @@ def create_object_store_app(
         require_manifest_role(role, resource_id)
         payload = await request.body()
         value = decode_canonical_json(payload)
-        store.put_manifest(path_identity(resource_id), value)
+        normalized_resource_id = path_identity(resource_id)
+        admit_manifest_payload(
+            role,
+            store,
+            normalized_resource_id,
+            payload,
+        )
+        store.put_manifest(normalized_resource_id, value)
         return {"status": "stored"}
 
     @app.get("/v1/objects/{digest}/json")
@@ -422,8 +520,20 @@ def create_object_store_app(
         )
         payload = await request.body()
         if object_format == "json":
+            admit_object_payload(
+                role,
+                stage.writer,
+                payload,
+                suffix=".json",
+            )
             return stage.writer.put_canonical_json_bytes(payload)
         if object_format == "parquet":
+            admit_object_payload(
+                role,
+                stage.writer,
+                payload,
+                suffix=".parquet",
+            )
             return stage.writer.put_parquet_bytes(payload)
         raise HTTPException(status_code=404)
 
@@ -445,10 +555,16 @@ def create_object_store_app(
             request,
             role,
         )
-        stage.put_manifest(
-            path_identity(resource_id),
-            decode_canonical_json(await request.body()),
+        payload = await request.body()
+        value = decode_canonical_json(payload)
+        normalized_resource_id = path_identity(resource_id)
+        admit_manifest_payload(
+            role,
+            stage.writer,
+            normalized_resource_id,
+            payload,
         )
+        stage.put_manifest(normalized_resource_id, value)
         return {"status": "stored"}
 
     @app.post(
@@ -470,7 +586,8 @@ def create_object_store_app(
         stage.promote(
             manifest_sha256=digest_identity(
                 str(body["manifest_sha256"])
-            )
+            ),
+            before_move=lambda: admit_growth(role, 0),
         )
         return {"status": "promoted"}
 
@@ -728,6 +845,30 @@ def main() -> None:
     app = create_object_store_app(
         root,
         {str(role): str(token) for role, token in tokens.items()},
+        disk_capacity_bytes=int(
+            os.environ.get(
+                "THESISTRACE_PERSISTENT_DISK_BYTES",
+                str(DEFAULT_PERSISTENT_DISK_BYTES),
+            )
+        ),
+        disk_warning_percent=int(
+            os.environ.get(
+                "THESISTRACE_DISK_WARNING_PERCENT",
+                str(DEFAULT_DISK_WARNING_PERCENT),
+            )
+        ),
+        private_write_rejection_percent=int(
+            os.environ.get(
+                "THESISTRACE_PRIVATE_WRITE_REJECTION_PERCENT",
+                str(DEFAULT_PRIVATE_WRITE_REJECTION_PERCENT),
+            )
+        ),
+        all_write_rejection_percent=int(
+            os.environ.get(
+                "THESISTRACE_ALL_WRITE_REJECTION_PERCENT",
+                str(DEFAULT_ALL_WRITE_REJECTION_PERCENT),
+            )
+        ),
     )
     uvicorn.run(app, host="0.0.0.0", port=8010)
 

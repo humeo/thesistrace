@@ -28,7 +28,11 @@ def remote(
     role: str,
 ) -> tuple[RemoteObjectStore, TestClient]:
     client = TestClient(
-        create_object_store_app(tmp_path / "objects", TOKENS)
+        create_object_store_app(
+            tmp_path / "objects",
+            TOKENS,
+            disk_used_bytes=lambda: 0,
+        )
     )
     return (
         RemoteObjectStore(
@@ -337,7 +341,11 @@ def test_crashed_stage_lease_expires_and_becomes_recoverable(
         0.05,
     )
     client = TestClient(
-        create_object_store_app(tmp_path / "objects", TOKENS)
+        create_object_store_app(
+            tmp_path / "objects",
+            TOKENS,
+            disk_used_bytes=lambda: 0,
+        )
     )
     headers = {"Authorization": f"Bearer {TOKENS['compute']}"}
     try:

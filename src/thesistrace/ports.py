@@ -97,6 +97,24 @@ class ControlMetadataPort(Protocol):
         updated_at: str,
     ) -> None: ...
 
+    def commit_private_storage_references(
+        self,
+        connection,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        objects: list[dict[str, object]],
+    ) -> int: ...
+
+    def commit_platform_storage_references(
+        self,
+        connection,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        objects: list[dict[str, object]],
+    ) -> int: ...
+
 
 class ObjectWriterPort(Protocol):
     def put_json(self, value: object) -> dict[str, object]: ...

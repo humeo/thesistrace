@@ -292,6 +292,68 @@ class PostgresControlMetadataStore(MetadataStore):
             (resource_kind, resource_id, admitted_at),
         )
 
+    def commit_private_storage_references(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        objects: list[dict[str, object]],
+    ) -> int:
+        row = connection.execute(
+            """
+            SELECT accepted, used_bytes, limit_bytes
+            FROM thesistrace_control.commit_workspace_storage_references(
+                ?, ?, ?::jsonb
+            )
+            """,
+            (
+                resource_kind,
+                resource_id,
+                json.dumps(
+                    objects,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("private storage admission returned no result")
+        if not bool(row["accepted"]):
+            raise QuotaExceededError(
+                dimension="max_private_storage_bytes",
+                limit=int(row["limit_bytes"]),
+            )
+        return int(row["used_bytes"])
+
+    def commit_platform_storage_references(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        objects: list[dict[str, object]],
+    ) -> int:
+        row = connection.execute(
+            """
+            SELECT thesistrace_control.commit_platform_storage_references(
+                ?, ?, ?::jsonb
+            ) AS used_bytes
+            """,
+            (
+                resource_kind,
+                resource_id,
+                json.dumps(
+                    objects,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("platform storage indexing returned no result")
+        return int(row["used_bytes"])
+
     def _lock_idempotent_admission(
         self,
         connection: PostgresConnectionAdapter,

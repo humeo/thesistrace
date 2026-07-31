@@ -85,6 +85,38 @@ or P3 queue; all four containers independently poll one heavy Activity slot.
 Hosted Temporal uses one read/write partition for these queues because Temporal
 fairness and FIFO are defined per Task Queue partition.
 
+## Storage admission and disk pressure
+
+`object-store` measures projected usage against
+`THESISTRACE_PERSISTENT_DISK_BYTES`, which defaults to the configured
+200-GB persistent SSD (`200000000000` bytes). The thresholds are configured by
+`THESISTRACE_DISK_WARNING_PERCENT`,
+`THESISTRACE_PRIVATE_WRITE_REJECTION_PERCENT`, and
+`THESISTRACE_ALL_WRITE_REJECTION_PERCENT`, defaulting to 70%, 80%, and 90%.
+The warning threshold logs `persistent disk warning threshold reached`; the
+private rejection threshold blocks new Personal Workspace payload growth while
+the Data Worker may still publish a Dataset Release; the all-write threshold
+blocks all payload growth, including Dataset Publication. A rejected
+ObjectStore request returns HTTP 507 with
+`reason_code=DISK_PRESSURE` and the applicable percentage limit.
+
+PostgreSQL indexes the exact compressed bytes of immutable content objects and
+named manifests referenced by each Personal Workspace. The same object is
+charged once per Personal Workspace even when several private resources refer
+to it. Platform-owned Dataset Release references are indexed separately and
+never consume `max_private_storage_bytes`. A private publication that would
+exceed the effective quota fails with `reason_code=QUOTA_EXCEEDED`,
+`dimension=max_private_storage_bytes`, and the byte limit.
+
+Result Bundle, Tracking Checkpoint, and Dataset Release publication stage their
+objects first, repeat disk and quota admission immediately before the database
+success transition, and commit references with the authoritative manifest
+state in one PostgreSQL transaction. On rejection, recovery removes the
+unreferenced stage while the previous Result, Tracking Head, or Dataset Release
+remains readable. Reads, cancellation, stage recovery, deletion, and cleanup
+do not pass through payload-growth admission and remain available at every
+pressure level.
+
 ## Stop and restart
 
 ```sh

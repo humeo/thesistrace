@@ -56,6 +56,10 @@ from thesistrace.result_objects import (
 from thesistrace.result_objects import (
     terminal_strategy_state as compact_terminal_strategy_state,
 )
+from thesistrace.storage_admission import (
+    StorageAdmissionError,
+    publication_storage_objects,
+)
 from thesistrace.strategy import (
     advance_strategy_metric_state,
     run_strategy,
@@ -439,6 +443,15 @@ class DailyTrackingService:
                         with staged_objects.publication(
                             manifest_sha256=expected_manifest_sha256
                         ):
+                            self.metadata.commit_private_storage_references(
+                                connection,
+                                resource_kind="tracking_checkpoint",
+                                resource_id=checkpoint_id,
+                                objects=publication_storage_objects(
+                                    checkpoint_manifest,
+                                    manifest_object=checkpoint_object,
+                                ),
+                            )
                             connection.execute(
                                 """
                                 INSERT INTO daily_tracks
@@ -2109,12 +2122,18 @@ class DailyTrackingService:
             current = self._recover_staged_advance(advance_id)
             if current["status"] == "succeeded":
                 return current
+            quota_exceeded = isinstance(error, QuotaExceededError)
+            storage_rejected = isinstance(error, StorageAdmissionError)
             resource_exhausted = is_resource_exhaustion(error)
             session_limit_exceeded = isinstance(
                 error,
                 TrackingAdvanceLimitError,
             )
-            if resource_exhausted:
+            if quota_exceeded:
+                reason_code = error.reason_code
+            elif storage_rejected:
+                reason_code = error.reason_code
+            elif resource_exhausted:
                 reason_code = "RESOURCE_EXHAUSTED"
             elif session_limit_exceeded:
                 reason_code = "TRACKING_ADVANCE_SESSION_LIMIT"
@@ -2131,6 +2150,14 @@ class DailyTrackingService:
                         "accepted Compute Worker resource envelope was exhausted"
                         if resource_exhausted
                         else str(error)
+                    ),
+                    **(
+                        {
+                            "dimension": error.dimension,
+                            "limit": error.limit,
+                        }
+                        if quota_exceeded or storage_rejected
+                        else {}
                     ),
                 },
                 terminal=(
@@ -2895,6 +2922,10 @@ class DailyTrackingService:
             "id": checkpoint_id,
             "manifest_sha256": manifest_object["sha256"],
             "manifest": manifest,
+            "storage_objects": publication_storage_objects(
+                manifest,
+                manifest_object=manifest_object,
+            ),
         }
 
     def _calculate_incremental_advance(
@@ -3157,6 +3188,10 @@ class DailyTrackingService:
             "id": checkpoint_id,
             "manifest_sha256": manifest_object["sha256"],
             "manifest": manifest,
+            "storage_objects": publication_storage_objects(
+                manifest,
+                manifest_object=manifest_object,
+            ),
         }
 
     def _batch_oracle(
@@ -3951,6 +3986,17 @@ class DailyTrackingService:
                 )
             ):
                 raise DailyTrackingError("Advance publication was fenced")
+            storage_objects = checkpoint.get("storage_objects")
+            if not isinstance(storage_objects, list):
+                raise DailyTrackingError(
+                    "Checkpoint storage accounting is missing"
+                )
+            self.metadata.commit_private_storage_references(
+                connection,
+                resource_kind="tracking_checkpoint",
+                resource_id=str(checkpoint["id"]),
+                objects=storage_objects,
+            )
             connection.execute(
                 """
                 INSERT INTO tracking_checkpoints
