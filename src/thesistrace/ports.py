@@ -12,6 +12,49 @@ class ControlMetadataPort(Protocol):
 
     def connect(self): ...
 
+    def lock_daily_track_activation(
+        self,
+        connection,
+    ) -> None: ...
+
+    def active_daily_track_limit(self, connection) -> int: ...
+
+    def lock_daily_track(self, connection, track_id: str) -> None: ...
+
+    def daily_track_head_manifest_sha256(
+        self,
+        track_id: str,
+    ) -> str | None: ...
+
+    def daily_track_activation_reservation_ids(self) -> list[str]: ...
+
+    def delete_daily_track_activation_reservation(
+        self,
+        track_id: str,
+    ) -> bool: ...
+
+    def daily_track_cache_states(
+        self,
+        track_ids: list[str],
+    ) -> dict[str, tuple[str, int]]: ...
+
+    def pending_working_cache_deletions(
+        self,
+        track_id: str | None = None,
+    ) -> list[dict[str, object]]: ...
+
+    def fail_working_cache_deletion(
+        self,
+        track_id: str,
+        error: str,
+    ) -> None: ...
+
+    def complete_working_cache_deletion(
+        self,
+        track_id: str,
+        completed_at: str,
+    ) -> None: ...
+
 
 class ObjectWriterPort(Protocol):
     def put_json(self, value: object) -> dict[str, object]: ...
@@ -59,7 +102,11 @@ class ObjectStorePort(ObjectWriterPort, Protocol):
         run_id: str,
         *,
         committed_manifest_sha256: str | None,
-    ) -> None: ...
+    ) -> bool: ...
+
+    def staged_publication_ids(self, *, prefix: str) -> list[str]: ...
+
+    def wait_for_staged_publication(self, run_id: str) -> None: ...
 
     def read_json(self, digest: str) -> object: ...
 

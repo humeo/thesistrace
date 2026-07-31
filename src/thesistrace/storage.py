@@ -237,6 +237,13 @@ class MetadataStore:
                     daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS daily_track_activation_reservations (
+                    track_id TEXT PRIMARY KEY,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    seed_run_id TEXT NOT NULL REFERENCES research_runs(id),
+                    created_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS tracking_generations (
                     id TEXT PRIMARY KEY,
                     daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
@@ -351,6 +358,142 @@ class MetadataStore:
                 "tracking_advances",
                 "correction_boundary_json",
                 "TEXT",
+            )
+
+    def lock_daily_track_activation(
+        self,
+        connection,
+    ) -> None:
+        del connection
+
+    def active_daily_track_limit(self, connection) -> int:
+        del connection
+        return 10
+
+    def lock_daily_track(self, connection, track_id: str) -> None:
+        del connection, track_id
+
+    def daily_track_head_manifest_sha256(
+        self,
+        track_id: str,
+    ) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT checkpoint.manifest_sha256
+                FROM daily_tracks AS track
+                JOIN tracking_checkpoints AS checkpoint
+                  ON checkpoint.id = track.head_checkpoint_id
+                WHERE track.id = ?
+                """,
+                (track_id,),
+            ).fetchone()
+        return None if row is None else str(row["manifest_sha256"])
+
+    def daily_track_activation_reservation_ids(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT track_id
+                FROM daily_track_activation_reservations
+                ORDER BY track_id
+                """
+            ).fetchall()
+        return [str(row["track_id"]) for row in rows]
+
+    def delete_daily_track_activation_reservation(
+        self,
+        track_id: str,
+    ) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                DELETE FROM daily_track_activation_reservations
+                WHERE track_id = ?
+                """,
+                (track_id,),
+            )
+        return cursor.rowcount == 1
+
+    def daily_track_cache_states(
+        self,
+        track_ids: list[str],
+    ) -> dict[str, tuple[str, int]]:
+        if not track_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in track_ids)
+        with self.connect() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT id, status, fencing_token
+                FROM daily_tracks
+                WHERE id IN ({placeholders})
+                """,
+                track_ids,
+            ).fetchall()
+        return {
+            str(row["id"]): (
+                str(row["status"]),
+                int(row["fencing_token"]),
+            )
+            for row in rows
+        }
+
+    def pending_working_cache_deletions(
+        self,
+        track_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT deletion.daily_track_id,
+                       deletion.fencing_token,
+                       deletion.attempt_count,
+                       track.status AS track_status
+                FROM working_cache_deletions AS deletion
+                LEFT JOIN daily_tracks AS track
+                  ON track.id = deletion.daily_track_id
+                WHERE deletion.status = 'pending'
+                  AND deletion.daily_track_id =
+                      COALESCE(?, deletion.daily_track_id)
+                ORDER BY deletion.requested_at,
+                         deletion.daily_track_id
+                """,
+                (track_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def fail_working_cache_deletion(
+        self,
+        track_id: str,
+        error: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE working_cache_deletions
+                SET attempt_count = attempt_count + 1,
+                    last_error = ?
+                WHERE daily_track_id = ? AND status = 'pending'
+                """,
+                (error, track_id),
+            )
+
+    def complete_working_cache_deletion(
+        self,
+        track_id: str,
+        completed_at: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE working_cache_deletions
+                SET status = 'completed',
+                    attempt_count = attempt_count + 1,
+                    completed_at = ?, last_error = NULL
+                WHERE daily_track_id = ? AND status = 'pending'
+                """,
+                (completed_at, track_id),
             )
 
     def installation_id(self) -> str:

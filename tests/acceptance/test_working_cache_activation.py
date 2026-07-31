@@ -1,15 +1,18 @@
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+from threading import Event
 
+import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
+from thesistrace.quota import QuotaExceededError
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
-from thesistrace.tracking import DailyTrackingError, DailyTrackingService
+from thesistrace.tracking import DailyTrackingService
 from thesistrace.working_cache import (
     MAX_CACHE_BYTES,
     WorkingCacheStore,
@@ -251,8 +254,9 @@ def test_concurrent_activation_atomically_enforces_ten_active_tracks(
 
     assert len(successes) == 1
     assert len(errors) == 1
-    assert isinstance(errors[0], DailyTrackingError)
-    assert "limit of 10" in str(errors[0])
+    assert isinstance(errors[0], QuotaExceededError)
+    assert errors[0].dimension == "max_active_daily_tracks"
+    assert errors[0].limit == 10
     with metadata.connect() as connection:
         active_count = connection.execute(
             "SELECT COUNT(*) FROM daily_tracks WHERE status = 'active'"
@@ -261,6 +265,60 @@ def test_concurrent_activation_atomically_enforces_ten_active_tracks(
     assert WorkingCacheStore(settings.working_cache_root).list_track_ids() == [
         successes[0]["id"]
     ]
+
+
+def test_concurrent_same_key_waits_for_and_replays_the_activation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        metadata_path=tmp_path / "metadata.sqlite3",
+        object_root=tmp_path / "objects",
+        working_cache_root=tmp_path / "working-cache",
+    )
+    with TestClient(create_app(settings)) as client:
+        run_id = create_succeeded_run(client, settings)
+    calculation_started = Event()
+    calculation_can_finish = Event()
+    original = DailyTrackingService._commit_activation_cache
+
+    def coordinated_calculation(self, *args, **kwargs):
+        calculation_started.set()
+        assert calculation_can_finish.wait(timeout=10)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        DailyTrackingService,
+        "_commit_activation_cache",
+        coordinated_calculation,
+    )
+
+    def activate():
+        metadata = MetadataStore(settings.metadata_path)
+        objects = ImmutableObjectStore(settings.object_root)
+        return DailyTrackingService(
+            metadata,
+            DatasetPublisher(metadata, objects),
+            objects,
+            WorkingCacheStore(settings.working_cache_root),
+        ).activate(run_id, "same-key")
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        owner = executor.submit(activate)
+        assert calculation_started.wait(timeout=10)
+        replay = executor.submit(activate)
+        with pytest.raises(TimeoutError):
+            replay.result(timeout=0.2)
+        calculation_can_finish.set()
+        owner_result = owner.result(timeout=30)
+        replay_result = replay.result(timeout=30)
+
+    assert owner_result[1] is True
+    assert replay_result[1] is False
+    assert replay_result[0]["id"] == owner_result[0]["id"]
+    assert WorkingCacheStore(
+        settings.working_cache_root
+    ).list_track_ids() == [owner_result[0]["id"]]
 
 
 def create_succeeded_run(client: TestClient, settings: Settings) -> str:

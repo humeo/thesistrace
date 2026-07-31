@@ -6,7 +6,10 @@ from typing import Any
 import psycopg
 from psycopg import sql
 
-from thesistrace.quota import QuotaExceededError
+from thesistrace.quota import (
+    QuotaExceededError,
+    daily_track_activation_lock_key,
+)
 from thesistrace.storage import MetadataStore
 from thesistrace.tenancy import service_workspace, verified_subject
 
@@ -51,6 +54,9 @@ class PostgresConnectionAdapter:
 
     def rollback(self) -> None:
         self.connection.rollback()
+
+    def commit(self) -> None:
+        self.connection.commit()
 
     def lock_research_run(self, run_id: str) -> HybridRow | None:
         return self.connection.execute(
@@ -237,6 +243,171 @@ class PostgresControlMetadataStore(MetadataStore):
             )
             """
         )
+
+    def lock_daily_track_activation(
+        self,
+        connection: PostgresConnectionAdapter,
+    ) -> None:
+        workspace = connection.execute(
+            "SELECT thesistrace_control.current_workspace_id() AS workspace_id"
+        ).fetchone()
+        if workspace is None or workspace["workspace_id"] is None:
+            raise RuntimeError("Personal Workspace context is missing")
+        connection.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
+            (
+                daily_track_activation_lock_key(
+                    str(workspace["workspace_id"])
+                ),
+            ),
+        )
+
+    def active_daily_track_limit(
+        self,
+        connection: PostgresConnectionAdapter,
+    ) -> int:
+        row = connection.execute(
+            """
+            SELECT max_active_daily_tracks
+            FROM thesistrace_control.workspace_quota_profiles
+            WHERE workspace_id = thesistrace_control.current_workspace_id()
+            """
+        ).fetchone()
+        if row is None:
+            raise RuntimeError("Personal Workspace Quota Profile is missing")
+        return int(row["max_active_daily_tracks"])
+
+    def lock_daily_track(
+        self,
+        connection: PostgresConnectionAdapter,
+        track_id: str,
+    ) -> None:
+        connection.execute(
+            """
+            SELECT id
+            FROM daily_tracks
+            WHERE id = ?
+            FOR UPDATE
+            """,
+            (track_id,),
+        )
+
+    def daily_track_head_manifest_sha256(
+        self,
+        track_id: str,
+    ) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    thesistrace_control.daily_track_head_manifest_sha256(
+                        ?
+                    ) AS manifest_sha256
+                """,
+                (track_id,),
+            ).fetchone()
+        if row is None or row["manifest_sha256"] is None:
+            return None
+        return str(row["manifest_sha256"])
+
+    def daily_track_activation_reservation_ids(self) -> list[str]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT track_id
+                FROM
+                    thesistrace_control.daily_track_activation_reservation_ids()
+                    AS reservation(track_id)
+                """
+            ).fetchall()
+        return [str(row["track_id"]) for row in rows]
+
+    def delete_daily_track_activation_reservation(
+        self,
+        track_id: str,
+    ) -> bool:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    thesistrace_control.delete_daily_track_activation_reservation(
+                        ?
+                    ) AS deleted
+                """,
+                (track_id,),
+            ).fetchone()
+        return bool(row is not None and row["deleted"])
+
+    def daily_track_cache_states(
+        self,
+        track_ids: list[str],
+    ) -> dict[str, tuple[str, int]]:
+        if not track_ids:
+            return {}
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT track_id, status, fencing_token
+                FROM thesistrace_control.daily_track_cache_states(?)
+                """,
+                (track_ids,),
+            ).fetchall()
+        return {
+            str(row["track_id"]): (
+                str(row["status"]),
+                int(row["fencing_token"]),
+            )
+            for row in rows
+        }
+
+    def pending_working_cache_deletions(
+        self,
+        track_id: str | None = None,
+    ) -> list[dict[str, object]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT daily_track_id, fencing_token,
+                       attempt_count, track_status
+                FROM
+                    thesistrace_control.pending_working_cache_deletions(
+                        ?
+                    )
+                """,
+                (track_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def fail_working_cache_deletion(
+        self,
+        track_id: str,
+        error: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                SELECT thesistrace_control.fail_working_cache_deletion(
+                    ?, ?
+                )
+                """,
+                (track_id, error),
+            )
+
+    def complete_working_cache_deletion(
+        self,
+        track_id: str,
+        completed_at: str,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                SELECT
+                    thesistrace_control.complete_working_cache_deletion(
+                        ?, ?
+                    )
+                """,
+                (track_id, completed_at),
+            )
 
     def request_dataset_publication(
         self,

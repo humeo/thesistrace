@@ -179,10 +179,11 @@ class ImmutableObjectStore:
         run_id: str,
         *,
         committed_manifest_sha256: str | None,
-    ) -> None:
+    ) -> bool:
         staging_root = self.root / "staging"
         if not staging_root.exists():
-            return
+            return True
+        recovered = True
         lock_path = staging_root / ".publication.lock"
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         with lock_path.open("a+b") as publication_lock:
@@ -198,6 +199,7 @@ class ImmutableObjectStore:
                                 fcntl.LOCK_EX | fcntl.LOCK_NB,
                             )
                         except BlockingIOError:
+                            recovered = False
                             continue
                         journal_path = stage_root / ".publication.json"
                         if journal_path.exists():
@@ -212,6 +214,30 @@ class ImmutableObjectStore:
                     run_root.rmdir()
             finally:
                 fcntl.flock(publication_lock.fileno(), fcntl.LOCK_UN)
+        return recovered
+
+    def staged_publication_ids(self, *, prefix: str) -> list[str]:
+        staging_root = self.root / "staging"
+        if not staging_root.exists():
+            return []
+        return sorted(
+            path.name
+            for path in staging_root.iterdir()
+            if path.is_dir() and path.name.startswith(prefix)
+        )
+
+    def wait_for_staged_publication(self, run_id: str) -> None:
+        run_root = self.root / "staging" / run_id
+        if not run_root.exists():
+            return
+        for stage_root in sorted(run_root.glob("*")):
+            try:
+                stage_lock = (stage_root / ".stage.lock").open("a+b")
+            except FileNotFoundError:
+                continue
+            with stage_lock:
+                fcntl.flock(stage_lock.fileno(), fcntl.LOCK_EX)
+                fcntl.flock(stage_lock.fileno(), fcntl.LOCK_UN)
 
     def _remove_uncommitted_paths(
         self,
@@ -334,6 +360,10 @@ class StagedObjectStore:
     def __exit__(self, _type, _value, _traceback) -> None:
         if not self.promotion_started or self.promotion_resolved:
             shutil.rmtree(self.root, ignore_errors=True)
+            try:
+                self.root.parent.rmdir()
+            except OSError:
+                pass
         if self.stage_lock is not None:
             fcntl.flock(self.stage_lock.fileno(), fcntl.LOCK_UN)
             self.stage_lock.close()

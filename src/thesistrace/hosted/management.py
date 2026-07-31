@@ -3,6 +3,8 @@ import json
 import psycopg
 from psycopg.rows import dict_row
 
+from thesistrace.quota import daily_track_activation_lock_key
+
 
 class PostgresManagementStore:
     def __init__(self, database_url: str) -> None:
@@ -112,6 +114,14 @@ class PostgresManagementStore:
     ) -> dict[str, int]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             with connection.transaction():
+                connection.execute(
+                    """
+                    SELECT pg_advisory_xact_lock(
+                        hashtextextended(%s, 0)
+                    )
+                    """,
+                    (daily_track_activation_lock_key(workspace_id),),
+                )
                 current = connection.execute(
                     """
                     SELECT

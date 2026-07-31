@@ -22,6 +22,7 @@ from thesistrace.ports import (
     ObjectStorePort,
     WorkingCachePort,
 )
+from thesistrace.quota import QuotaExceededError
 from thesistrace.research_runs import RUNTIME_BUILD
 from thesistrace.result_objects import (
     EXECUTION_AGGREGATE_CONTRACT,
@@ -87,7 +88,10 @@ class DailyTrackingService:
         run_id: str,
         idempotency_key: str,
     ) -> tuple[dict[str, object], bool]:
+        pending_track_id: str | None = None
         with self.metadata.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.metadata.lock_daily_track_activation(connection)
             existing = connection.execute(
                 """
                 SELECT daily_track_id
@@ -96,11 +100,49 @@ class DailyTrackingService:
                 """,
                 (idempotency_key,),
             ).fetchone()
+            reservation = connection.execute(
+                """
+                SELECT track_id
+                FROM daily_track_activation_reservations
+                WHERE idempotency_key = ?
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if existing is None and reservation is not None:
+                pending_track_id = str(reservation["track_id"])
+            if existing is None and pending_track_id is None:
+                active_count = int(
+                    connection.execute(
+                        """
+                        SELECT
+                            (
+                                SELECT COUNT(*)
+                                FROM daily_tracks
+                                WHERE status = 'active'
+                            )
+                            +
+                            (
+                                SELECT COUNT(*)
+                                FROM daily_track_activation_reservations
+                            )
+                        """
+                    ).fetchone()[0]
+                )
+                active_limit = self.metadata.active_daily_track_limit(
+                    connection
+                )
+                if active_count >= active_limit:
+                    raise QuotaExceededError(
+                        dimension="max_active_daily_tracks",
+                        limit=active_limit,
+                    )
         if existing is not None:
             track = self.get_track(str(existing["daily_track_id"]))
             if track is None:
                 raise DailyTrackingError("idempotent DailyTrack disappeared")
             return track, False
+        if pending_track_id is not None:
+            return self._await_reserved_activation(pending_track_id)
 
         run = self.metadata.research_run(run_id)
         if (
@@ -174,120 +216,287 @@ class DailyTrackingService:
             "runtime_build": RUNTIME_BUILD,
             "created_at": now,
         }
-        checkpoint_object = self.objects.put_json(checkpoint_manifest)
-        self.objects.put_manifest(checkpoint_id, checkpoint_manifest)
-        self._commit_activation_cache(
-            track_id=track_id,
-            generation_id=generation_id,
-            checkpoint_id=checkpoint_id,
-            checkpoint_sha256=str(checkpoint_object["sha256"]),
-            frozen=frozen,
-            release=release,
-            definition=content,
-            calculation_kernel=str(manifest["calculation_kernel"]),
-        )
-        self.cache.advance_fence(track_id, 1, stopped=False)
         admitted = False
         existing_track_id: str | None = None
+        reserved = False
+        stage_attempt_id = f"activation_{uuid4().hex[:20]}"
+        expected_manifest_sha256: str | None = None
         try:
-            with self.metadata.connect() as connection:
-                connection.execute("BEGIN IMMEDIATE")
-                existing = connection.execute(
-                    """
-                    SELECT daily_track_id
-                    FROM daily_track_activation_idempotency
-                    WHERE idempotency_key = ?
-                    """,
-                    (idempotency_key,),
-                ).fetchone()
-                if existing is not None:
-                    existing_track_id = str(existing["daily_track_id"])
-                    return_existing = True
-                else:
-                    return_existing = False
-                active_count = int(
-                    connection.execute(
-                        """
-                        SELECT COUNT(*)
-                        FROM daily_tracks
-                        WHERE status = 'active'
-                        """
-                    ).fetchone()[0]
-                )
-                if not return_existing and active_count >= 10:
-                    raise DailyTrackingError("Active DailyTrack limit of 10 reached")
-                if return_existing:
-                    connection.rollback()
-                else:
-                    connection.execute(
-                        """
-                        INSERT INTO daily_tracks
-                            (id, seed_run_id, definition_version_id,
-                             definition_content_hash, activation_release_id,
-                             origin_session, numeric_execution_contract, status,
-                             current_generation_id, head_checkpoint_id, created_at,
-                             fencing_token)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 1)
-                        """,
-                        (
-                            track_id,
-                            run_id,
-                            frozen["id"],
-                            frozen["content_hash"],
-                            release["id"],
-                            origin_session,
-                            content["numeric_execution_contract"],
-                            generation_id,
-                            checkpoint_id,
-                            now,
+            with self.objects.stage(
+                track_id,
+                stage_attempt_id,
+                cleanup_uncommitted_payloads=True,
+            ) as staged_objects:
+                try:
+                    with self.metadata.connect() as connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        self.metadata.lock_daily_track_activation(
+                            connection
+                        )
+                        existing = connection.execute(
+                            """
+                            SELECT daily_track_id
+                            FROM daily_track_activation_idempotency
+                            WHERE idempotency_key = ?
+                            """,
+                            (idempotency_key,),
+                        ).fetchone()
+                        reservation = connection.execute(
+                            """
+                            SELECT track_id
+                            FROM daily_track_activation_reservations
+                            WHERE idempotency_key = ?
+                            """,
+                            (idempotency_key,),
+                        ).fetchone()
+                        if existing is not None:
+                            existing_track_id = str(
+                                existing["daily_track_id"]
+                            )
+                            connection.rollback()
+                        elif reservation is not None:
+                            pending_track_id = str(
+                                reservation["track_id"]
+                            )
+                            connection.rollback()
+                        else:
+                            active_count = int(
+                                connection.execute(
+                                    """
+                                    SELECT
+                                        (
+                                            SELECT COUNT(*)
+                                            FROM daily_tracks
+                                            WHERE status = 'active'
+                                        )
+                                        +
+                                        (
+                                            SELECT COUNT(*)
+                                            FROM
+                                                daily_track_activation_reservations
+                                        )
+                                    """
+                                ).fetchone()[0]
+                            )
+                            active_limit = (
+                                self.metadata.active_daily_track_limit(
+                                    connection
+                                )
+                            )
+                            if active_count >= active_limit:
+                                raise QuotaExceededError(
+                                    dimension=(
+                                        "max_active_daily_tracks"
+                                    ),
+                                    limit=active_limit,
+                                )
+                            connection.execute(
+                                """
+                                INSERT INTO
+                                    daily_track_activation_reservations
+                                    (track_id, idempotency_key,
+                                     seed_run_id, created_at)
+                                VALUES (?, ?, ?, ?)
+                                """,
+                                (
+                                    track_id,
+                                    idempotency_key,
+                                    run_id,
+                                    now,
+                                ),
+                            )
+                            connection.commit()
+                            reserved = True
+                except Exception:
+                    if (
+                        track_id
+                        not in self.metadata.daily_track_activation_reservation_ids()
+                    ):
+                        raise
+                    reserved = True
+
+                if (
+                    existing_track_id is None
+                    and pending_track_id is None
+                ):
+                    checkpoint_object = staged_objects.put_json(
+                        checkpoint_manifest
+                    )
+                    expected_manifest_sha256 = str(
+                        checkpoint_object["sha256"]
+                    )
+                    staged_objects.put_manifest(
+                        checkpoint_id,
+                        checkpoint_manifest,
+                    )
+                    self._commit_activation_cache(
+                        track_id=track_id,
+                        generation_id=generation_id,
+                        checkpoint_id=checkpoint_id,
+                        checkpoint_sha256=expected_manifest_sha256,
+                        frozen=frozen,
+                        release=release,
+                        definition=content,
+                        calculation_kernel=str(
+                            manifest["calculation_kernel"]
                         ),
                     )
-                    connection.execute(
-                        """
-                        INSERT INTO tracking_generations
-                            (id, daily_track_id, ordinal, calculation_kernel,
-                             numeric_execution_contract, basis_dataset_release_id,
-                             reason, created_at)
-                        VALUES (?, ?, 0, ?, ?, ?, 'activation', ?)
-                        """,
-                        (
-                            generation_id,
-                            track_id,
-                            manifest["calculation_kernel"],
-                            content["numeric_execution_contract"],
-                            release["id"],
-                            now,
-                        ),
+                    self.cache.advance_fence(
+                        track_id,
+                        1,
+                        stopped=False,
                     )
-                    connection.execute(
-                        """
-                        INSERT INTO tracking_checkpoints
-                            (id, daily_track_id, generation_id,
-                             predecessor_checkpoint_id, target_dataset_release_id,
-                             manifest_sha256, created_at)
-                        VALUES (?, ?, ?, NULL, ?, ?, ?)
-                        """,
-                        (
-                            checkpoint_id,
-                            track_id,
-                            generation_id,
-                            release["id"],
-                            checkpoint_object["sha256"],
-                            now,
-                        ),
-                    )
-                    connection.execute(
-                        """
-                        INSERT INTO daily_track_activation_idempotency
-                            (idempotency_key, daily_track_id)
-                        VALUES (?, ?)
-                        """,
-                        (idempotency_key, track_id),
-                    )
-                    admitted = True
+                    with self.metadata.connect() as connection:
+                        connection.execute("BEGIN IMMEDIATE")
+                        self.metadata.lock_daily_track_activation(
+                            connection
+                        )
+                        reservation = connection.execute(
+                            """
+                            SELECT idempotency_key, seed_run_id
+                            FROM daily_track_activation_reservations
+                            WHERE track_id = ?
+                            """,
+                            (track_id,),
+                        ).fetchone()
+                        if (
+                            reservation is None
+                            or reservation["idempotency_key"]
+                            != idempotency_key
+                            or reservation["seed_run_id"] != run_id
+                        ):
+                            raise DailyTrackingError(
+                                "DailyTrack activation reservation disappeared"
+                            )
+                        with staged_objects.publication(
+                            manifest_sha256=expected_manifest_sha256
+                        ):
+                            connection.execute(
+                                """
+                                INSERT INTO daily_tracks
+                                    (id, seed_run_id,
+                                     definition_version_id,
+                                     definition_content_hash,
+                                     activation_release_id,
+                                     origin_session,
+                                     numeric_execution_contract,
+                                     status,
+                                     current_generation_id,
+                                     head_checkpoint_id,
+                                     created_at,
+                                     fencing_token)
+                                VALUES (?, ?, ?, ?, ?, ?, ?,
+                                        'active', ?, ?, ?, 1)
+                                """,
+                                (
+                                    track_id,
+                                    run_id,
+                                    frozen["id"],
+                                    frozen["content_hash"],
+                                    release["id"],
+                                    origin_session,
+                                    content[
+                                        "numeric_execution_contract"
+                                    ],
+                                    generation_id,
+                                    checkpoint_id,
+                                    now,
+                                ),
+                            )
+                            connection.execute(
+                                """
+                                INSERT INTO tracking_generations
+                                    (id, daily_track_id, ordinal,
+                                     calculation_kernel,
+                                     numeric_execution_contract,
+                                     basis_dataset_release_id,
+                                     reason, created_at)
+                                VALUES (?, ?, 0, ?, ?, ?,
+                                        'activation', ?)
+                                """,
+                                (
+                                    generation_id,
+                                    track_id,
+                                    manifest[
+                                        "calculation_kernel"
+                                    ],
+                                    content[
+                                        "numeric_execution_contract"
+                                    ],
+                                    release["id"],
+                                    now,
+                                ),
+                            )
+                            connection.execute(
+                                """
+                                INSERT INTO tracking_checkpoints
+                                    (id, daily_track_id,
+                                     generation_id,
+                                     predecessor_checkpoint_id,
+                                     target_dataset_release_id,
+                                     manifest_sha256, created_at)
+                                VALUES (?, ?, ?, NULL, ?, ?, ?)
+                                """,
+                                (
+                                    checkpoint_id,
+                                    track_id,
+                                    generation_id,
+                                    release["id"],
+                                    expected_manifest_sha256,
+                                    now,
+                                ),
+                            )
+                            connection.execute(
+                                """
+                                INSERT INTO
+                                    daily_track_activation_idempotency
+                                    (idempotency_key,
+                                     daily_track_id)
+                                VALUES (?, ?)
+                                """,
+                                (idempotency_key, track_id),
+                            )
+                            connection.execute(
+                                """
+                                DELETE FROM
+                                    daily_track_activation_reservations
+                                WHERE track_id = ?
+                                """,
+                                (track_id,),
+                            )
+                            connection.commit()
+                            admitted = True
         except Exception:
-            self.cache.delete(track_id)
-            raise
+            committed_manifest_sha256 = (
+                self.metadata.daily_track_head_manifest_sha256(
+                    track_id
+                )
+            )
+            if (
+                expected_manifest_sha256 is not None
+                and committed_manifest_sha256
+                == expected_manifest_sha256
+            ):
+                admitted = True
+                self.objects.recover_staged_publication(
+                    track_id,
+                    committed_manifest_sha256=(
+                        committed_manifest_sha256
+                    ),
+                )
+            else:
+                if reserved:
+                    self.metadata.delete_daily_track_activation_reservation(
+                        track_id
+                    )
+                self.cache.delete(track_id)
+                self.objects.recover_staged_publication(
+                    track_id,
+                    committed_manifest_sha256=None,
+                )
+                raise
+        if pending_track_id is not None:
+            return self._await_reserved_activation(pending_track_id)
         if not admitted:
             self.cache.delete(track_id)
             if existing_track_id is None:
@@ -303,6 +512,23 @@ class DailyTrackingService:
         if track is None:
             raise DailyTrackingError("activated DailyTrack disappeared")
         return track, True
+
+    def _await_reserved_activation(
+        self,
+        track_id: str,
+    ) -> tuple[dict[str, object], bool]:
+        self.objects.wait_for_staged_publication(track_id)
+        track = self.get_track(track_id)
+        if track is not None:
+            return track, False
+        self.objects.recover_staged_publication(
+            track_id,
+            committed_manifest_sha256=None,
+        )
+        self.metadata.delete_daily_track_activation_reservation(
+            track_id
+        )
+        raise DailyTrackingError("DailyTrack activation did not complete")
 
     def _commit_activation_cache(
         self,
@@ -752,10 +978,40 @@ class DailyTrackingService:
             "terminal_strategy_state": terminal,
         }
 
+    def reconcile_activation_staging(self) -> list[str]:
+        reconciled: list[str] = []
+        for track_id in self.objects.staged_publication_ids(
+            prefix="track_"
+        ):
+            committed_manifest_sha256 = (
+                self.metadata.daily_track_head_manifest_sha256(
+                    track_id
+                )
+            )
+            recovered = self.objects.recover_staged_publication(
+                track_id,
+                committed_manifest_sha256=committed_manifest_sha256,
+            )
+            if recovered:
+                reconciled.append(track_id)
+        reservation_ids = (
+            self.metadata.daily_track_activation_reservation_ids()
+        )
+        staged_track_ids = set(
+            self.objects.staged_publication_ids(prefix="track_")
+        )
+        for track_id in reservation_ids:
+            if track_id not in staged_track_ids:
+                self.metadata.delete_daily_track_activation_reservation(
+                    track_id
+                )
+        return reconciled
+
     def stop(self, track_id: str) -> dict[str, object] | None:
         now = datetime.now(UTC).isoformat()
         with self.metadata.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self.metadata.lock_daily_track(connection, track_id)
             row = connection.execute(
                 """
                 SELECT status, fencing_token
@@ -782,22 +1038,32 @@ class DailyTrackingService:
                 INSERT INTO working_cache_deletions
                     (daily_track_id, fencing_token, status, requested_at)
                 VALUES (?, ?, 'pending', ?)
-                ON CONFLICT(daily_track_id) DO UPDATE SET
-                    fencing_token = MAX(
-                        working_cache_deletions.fencing_token,
-                        excluded.fencing_token
-                    ),
+                ON CONFLICT DO NOTHING
+                """,
+                (track_id, fencing_token, now),
+            )
+            connection.execute(
+                """
+                UPDATE working_cache_deletions
+                SET
+                    fencing_token = CASE
+                        WHEN fencing_token > ?
+                        THEN working_cache_deletions.fencing_token
+                        ELSE ?
+                    END,
                     status = CASE
                         WHEN working_cache_deletions.status = 'completed'
                         THEN 'completed'
                         ELSE 'pending'
                     END,
-                    requested_at = MIN(
-                        working_cache_deletions.requested_at,
-                        excluded.requested_at
-                    )
+                    requested_at = CASE
+                        WHEN requested_at < ?
+                        THEN working_cache_deletions.requested_at
+                        ELSE ?
+                    END
+                WHERE daily_track_id = ?
                 """,
-                (track_id, fencing_token, now),
+                (fencing_token, fencing_token, now, now, track_id),
             )
             connection.execute(
                 """
@@ -826,7 +1092,8 @@ class DailyTrackingService:
                 """
                 UPDATE tracking_advances
                 SET status = 'blocked', updated_at = ?
-                WHERE daily_track_id = ? AND status = 'running'
+                WHERE daily_track_id = ?
+                  AND status IN ('pending', 'queued', 'running')
                 """,
                 (now, track_id),
             )
@@ -854,21 +1121,9 @@ class DailyTrackingService:
         *,
         track_id: str | None = None,
     ) -> list[dict[str, object]]:
-        with self.metadata.connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT deletion.daily_track_id, deletion.fencing_token,
-                       deletion.attempt_count, track.status AS track_status
-                FROM working_cache_deletions AS deletion
-                LEFT JOIN daily_tracks AS track
-                  ON track.id = deletion.daily_track_id
-                WHERE deletion.status = 'pending'
-                  AND deletion.daily_track_id =
-                      COALESCE(?, deletion.daily_track_id)
-                ORDER BY deletion.requested_at, deletion.daily_track_id
-                """,
-                (track_id,),
-            ).fetchall()
+        rows = self.metadata.pending_working_cache_deletions(
+            track_id
+        )
         outcomes: list[dict[str, object]] = []
         for row in rows:
             current_track_id = str(row["daily_track_id"])
@@ -881,16 +1136,10 @@ class DailyTrackingService:
                 )
                 self.cache.delete_if_not_newer(current_track_id, token)
             except Exception as error:
-                with self.metadata.connect() as connection:
-                    connection.execute(
-                        """
-                        UPDATE working_cache_deletions
-                        SET attempt_count = attempt_count + 1,
-                            last_error = ?
-                        WHERE daily_track_id = ? AND status = 'pending'
-                        """,
-                        (str(error), current_track_id),
-                    )
+                self.metadata.fail_working_cache_deletion(
+                    current_track_id,
+                    str(error),
+                )
                 outcomes.append(
                     {
                         "daily_track_id": current_track_id,
@@ -900,17 +1149,10 @@ class DailyTrackingService:
                 )
                 continue
             completed_at = datetime.now(UTC).isoformat()
-            with self.metadata.connect() as connection:
-                connection.execute(
-                    """
-                    UPDATE working_cache_deletions
-                    SET status = 'completed',
-                        attempt_count = attempt_count + 1,
-                        completed_at = ?, last_error = NULL
-                    WHERE daily_track_id = ? AND status = 'pending'
-                    """,
-                    (completed_at, current_track_id),
-                )
+            self.metadata.complete_working_cache_deletion(
+                current_track_id,
+                completed_at,
+            )
             outcomes.append(
                 {
                     "daily_track_id": current_track_id,
@@ -918,14 +1160,19 @@ class DailyTrackingService:
                 }
             )
 
-        with self.metadata.connect() as connection:
-            states = {
-                str(row["id"]): (str(row["status"]), int(row["fencing_token"]))
-                for row in connection.execute(
-                    "SELECT id, status, fencing_token FROM daily_tracks"
-                ).fetchall()
-            }
-        for cached_track_id in self.cache.list_track_ids():
+        if track_id is not None:
+            return outcomes
+
+        cached_track_ids = self.cache.list_track_ids()
+        activation_reservations = set(
+            self.metadata.daily_track_activation_reservation_ids()
+        )
+        states = self.metadata.daily_track_cache_states(
+            cached_track_ids
+        )
+        for cached_track_id in cached_track_ids:
+            if cached_track_id in activation_reservations:
+                continue
             state = states.get(cached_track_id)
             if state is not None and state[0] == "active":
                 continue
@@ -2237,6 +2484,7 @@ class DailyTrackingService:
         now = datetime.now(UTC).isoformat()
         with self.metadata.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self.metadata.lock_daily_track(connection, track_id)
             track = connection.execute(
                 """
                 SELECT status, current_generation_id, head_checkpoint_id,
@@ -2392,6 +2640,22 @@ class DailyTrackingService:
             else None
         )
         with self.metadata.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            self.metadata.lock_daily_track(connection, track_id)
+            track = connection.execute(
+                """
+                SELECT status, current_generation_id
+                FROM daily_tracks
+                WHERE id = ?
+                """,
+                (track_id,),
+            ).fetchone()
+            if (
+                track is None
+                or track["status"] != "active"
+                or track["current_generation_id"] != generation_id
+            ):
+                raise DailyTrackingError("DailyTrack is not active")
             existing = connection.execute(
                 """
                 SELECT *
@@ -2437,6 +2701,16 @@ class DailyTrackingService:
             ).fetchone()
             if row is None:
                 raise KeyError(advance_id)
+            self.metadata.lock_daily_track(
+                connection,
+                str(row["daily_track_id"]),
+            )
+            row = connection.execute(
+                "SELECT * FROM tracking_advances WHERE id = ?",
+                (advance_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(advance_id)
             if row["status"] not in {"pending", "blocked"}:
                 return None
             track = connection.execute(
@@ -2464,22 +2738,32 @@ class DailyTrackingService:
                 + 1
             )
             attempt_id = f"track_attempt_{uuid4().hex[:20]}"
-            connection.execute(
+            advance_update = connection.execute(
                 """
                 UPDATE tracking_advances
                 SET status = 'running', updated_at = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('pending', 'blocked')
                 """,
                 (now, advance_id),
             )
-            connection.execute(
+            track_update = connection.execute(
                 """
                 UPDATE daily_tracks
                 SET fencing_token = ?
                 WHERE id = ? AND status = 'active'
+                  AND fencing_token = ?
                 """,
-                (fencing_token, row["daily_track_id"]),
+                (
+                    fencing_token,
+                    row["daily_track_id"],
+                    track["fencing_token"],
+                ),
             )
+            if (
+                advance_update.rowcount != 1
+                or track_update.rowcount != 1
+            ):
+                raise DailyTrackingError("Advance claim was fenced")
             connection.execute(
                 """
                 INSERT INTO tracking_advance_attempts
@@ -2509,6 +2793,10 @@ class DailyTrackingService:
         manifest = checkpoint["manifest"]
         with self.metadata.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            self.metadata.lock_daily_track(
+                connection,
+                str(advance["daily_track_id"]),
+            )
             track = connection.execute(
                 """
                 SELECT status, current_generation_id, head_checkpoint_id,
@@ -2577,7 +2865,7 @@ class DailyTrackingService:
                     now,
                 ),
             )
-            connection.execute(
+            attempt_update = connection.execute(
                 """
                 UPDATE tracking_advance_attempts
                 SET status = 'succeeded', completed_at = ?
@@ -2585,7 +2873,7 @@ class DailyTrackingService:
                 """,
                 (now, attempt["id"]),
             )
-            connection.execute(
+            advance_update = connection.execute(
                 """
                 UPDATE tracking_advances
                 SET status = 'succeeded', checkpoint_id = ?, updated_at = ?
@@ -2593,18 +2881,30 @@ class DailyTrackingService:
                 """,
                 (checkpoint["id"], now, advance["id"]),
             )
-            connection.execute(
+            track_update = connection.execute(
                 """
                 UPDATE daily_tracks
                 SET current_generation_id = ?, head_checkpoint_id = ?
                 WHERE id = ? AND status = 'active'
+                  AND current_generation_id = ?
+                  AND head_checkpoint_id = ?
+                  AND fencing_token = ?
                 """,
                 (
                     advance["generation_id"],
                     checkpoint["id"],
                     advance["daily_track_id"],
+                    expected_generation_id,
+                    expected_head_checkpoint_id,
+                    current_attempt["fencing_token"],
                 ),
             )
+            if (
+                attempt_update.rowcount != 1
+                or advance_update.rowcount != 1
+                or track_update.rowcount != 1
+            ):
+                raise DailyTrackingError("Advance publication was fenced")
 
     def _block_advance(
         self,

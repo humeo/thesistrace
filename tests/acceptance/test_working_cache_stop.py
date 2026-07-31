@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -138,6 +139,47 @@ def test_reconciliation_deletes_unknown_cache_namespaces_without_creating_state(
     assert service.reconcile_cache_deletions() == []
     assert service.cache.list_track_ids() == []
     assert service.get_track("orphan-track") is None
+
+
+def test_reconciliation_preserves_cache_owned_by_an_activation_reservation(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(
+        metadata_path=tmp_path / "metadata.sqlite3",
+        object_root=tmp_path / "objects",
+        working_cache_root=tmp_path / "working-cache",
+    )
+    metadata = MetadataStore(settings.metadata_path)
+    metadata.initialize()
+    track_id = "track-finalizing"
+    seed_run_id = "run-finalizing"
+    with metadata.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO research_runs (id, status, created_at)
+            VALUES (?, 'succeeded', ?)
+            """,
+            (seed_run_id, datetime.now(UTC).isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT INTO daily_track_activation_reservations
+                (track_id, idempotency_key, seed_run_id, created_at)
+            VALUES (?, 'finalizing', ?, ?)
+            """,
+            (
+                track_id,
+                seed_run_id,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+    cache_root = settings.working_cache_root / "tracks" / track_id
+    cache_root.mkdir(parents=True)
+    (cache_root / "partial.bin").write_bytes(b"live activation")
+
+    service = tracking_service(settings)
+    assert service.reconcile_cache_deletions() == []
+    assert service.cache.list_track_ids() == [track_id]
 
 
 def activated_track(tmp_path: Path) -> tuple[Settings, dict[str, object]]:

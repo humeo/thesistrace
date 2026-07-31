@@ -58,6 +58,7 @@ def main() -> None:
             time.sleep(args.interval)
             continue
         try:
+            tracking.reconcile_activation_staging()
             tracking.reconcile_cache_deletions()
             store.recover_abandoned_research_runs(
                 stale_after_seconds=settings.worker_stale_after_seconds

@@ -19,6 +19,10 @@ DEFAULT_QUOTA_PROFILE = {
 }
 
 
+def daily_track_activation_lock_key(workspace_id: str) -> str:
+    return f"{workspace_id}:daily-track-activation"
+
+
 class QuotaProfileError(RuntimeError):
     def __init__(self, reason_code: str, message: str) -> None:
         super().__init__(message)

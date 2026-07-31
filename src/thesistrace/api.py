@@ -79,9 +79,14 @@ def error_detail(reason_code: str, message: str) -> dict[str, str]:
 
 
 def quota_error_detail(error: QuotaExceededError) -> dict[str, object]:
+    noun = (
+        "DailyTrack"
+        if error.dimension == "max_active_daily_tracks"
+        else "Compute"
+    )
     return {
         "reason_code": error.reason_code,
-        "message": "Personal Workspace Compute quota is full",
+        "message": f"Personal Workspace {noun} quota is full",
         "dimension": error.dimension,
         "limit": error.limit,
     }
@@ -202,6 +207,7 @@ def create_app(
         objects,
         runtime.working_cache,
     )
+    tracking.reconcile_activation_staging()
     tracking.reconcile_cache_deletions()
     source_authorization = SourceAuthorizationService(
         build_management_store(settings, store)
@@ -646,6 +652,11 @@ def create_app(
     ) -> JSONResponse:
         try:
             track, created = tracking.activate(run_id, idempotency_key)
+        except QuotaExceededError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=quota_error_detail(error),
+            ) from error
         except DailyTrackingError as error:
             raise HTTPException(
                 status_code=409,

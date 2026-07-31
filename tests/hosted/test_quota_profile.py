@@ -1,8 +1,13 @@
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import (
+    ThreadPoolExecutor,
+)
+from concurrent.futures import (
+    TimeoutError as FutureTimeoutError,
+)
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from threading import Barrier
+from threading import Barrier, Event
 from uuid import uuid4
 
 import psycopg
@@ -425,11 +430,30 @@ def test_postgres_default_profile_serializes_eight_compute_admissions() -> None:
         "max_private_storage_bytes": 20 * 1024**3,
     }
 
+    override_started = Event()
+
+    def lower_active_track_limit() -> dict[str, int]:
+        override_started.set()
+        return quota_service.override(
+            actor="quota-operator-c",
+            workspace_id=workspace_id,
+            max_active_daily_tracks=3,
+        )
+
     with authenticated_subject(identity.subject):
         store = PostgresControlMetadataStore(
             TEST_DATABASE_URL,
             database_role="api",
         )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            with store.connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                store.lock_daily_track_activation(connection)
+                update = executor.submit(lower_active_track_limit)
+                assert override_started.wait(timeout=5)
+                with pytest.raises(FutureTimeoutError):
+                    update.result(timeout=0.2)
+            assert update.result(timeout=5)["max_active_daily_tracks"] == 3
         drafts = [
             store.create_research_draft({"title": f"quota-{index}"})
             for index in range(9)
