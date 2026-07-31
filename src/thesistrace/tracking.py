@@ -1,6 +1,7 @@
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -8,6 +9,7 @@ from uuid import uuid4
 
 from thesistrace.activity_contract import (
     MAX_RESOURCE_EXHAUSTION_EXECUTIONS,
+    CooperativeActivityCancellation,
     is_resource_exhaustion,
 )
 from thesistrace.alpha import evaluate_alpha_matrix, validate_alpha
@@ -2062,12 +2064,19 @@ class DailyTrackingService:
                 )
         return advance_ids
 
-    def execute_advance(self, advance_id: str) -> dict[str, object]:
+    def execute_advance(
+        self,
+        advance_id: str,
+        *,
+        progress: Callable[[str], None] | None = None,
+    ) -> dict[str, object]:
+        report_progress(progress, "recover")
         self._recover_staged_advance(advance_id)
         claimed = self._claim_advance(advance_id)
         if claimed is None:
             return self._advance(advance_id)
         advance, attempt = claimed
+        report_progress(progress, "claimed")
         try:
             with self.objects.publication_guard(advance_id):
                 with self.objects.stage(
@@ -2080,17 +2089,22 @@ class DailyTrackingService:
                         fencing_token=int(attempt["fencing_token"]),
                         attempt_id=str(attempt["id"]),
                         objects=staged_objects,
+                        progress=progress,
                     )
+                    report_progress(progress, "calculated")
                     with staged_objects.publication(
                         manifest_sha256=str(
                             checkpoint["manifest_sha256"]
                         )
                     ):
+                        report_progress(progress, "before-publication")
                         self._publish_advance_success(
                             advance,
                             attempt,
                             checkpoint,
                         )
+        except CooperativeActivityCancellation:
+            raise
         except Exception as error:
             current = self._recover_staged_advance(advance_id)
             if current["status"] == "succeeded":
@@ -2289,6 +2303,8 @@ class DailyTrackingService:
         *,
         calculation_kernel: str,
         numeric_execution_contract: str,
+        enqueue_execution: bool = True,
+        generation_rebuild_id: str | None = None,
     ) -> dict[str, object]:
         track = self.get_track(track_id)
         if track is None:
@@ -2335,26 +2351,53 @@ class DailyTrackingService:
             target_release_id=str(head["target_dataset_release_id"]),
             expected_generation_id=str(track["current_generation_id"]),
             expected_head_checkpoint_id=str(track["head_checkpoint_id"]),
+            enqueue_execution=enqueue_execution,
+            generation_rebuild_id=generation_rebuild_id,
         )
         updated = self.get_track(track_id)
         if updated is None:
             raise KeyError(track_id)
         return updated
 
-    def verify_equivalence(self, track_id: str) -> dict[str, object]:
+    def verify_equivalence(
+        self,
+        track_id: str,
+        *,
+        checkpoint_id: str | None = None,
+        progress: Callable[[str], None] | None = None,
+    ) -> dict[str, object]:
+        report_progress(progress, "load-track")
         track = self.get_track(track_id)
         if track is None:
             raise KeyError(track_id)
-        head = track["head"]
-        if not isinstance(head, dict):
+        target_checkpoint_id = (
+            str(track["head_checkpoint_id"])
+            if checkpoint_id is None
+            else checkpoint_id
+        )
+        target_checkpoint = next(
+            (
+                item
+                for item in track["checkpoints"]
+                if str(item["id"]) == target_checkpoint_id
+            ),
+            None,
+        )
+        if not isinstance(target_checkpoint, dict):
             raise DailyTrackingError("DailyTrack has no Head")
-        oracle = self._ordered_release_oracle(track)
+        oracle = self._ordered_release_oracle(
+            track,
+            target_checkpoint_id,
+            progress=progress,
+        )
         return {
             "status": "equivalent",
             "daily_track_id": track_id,
-            "generation_id": head["generation_id"],
-            "target_dataset_release_id": head["target_dataset_release_id"],
-            "checkpoint_id": head["id"],
+            "generation_id": target_checkpoint["generation_id"],
+            "target_dataset_release_id": target_checkpoint[
+                "target_dataset_release_id"
+            ],
+            "checkpoint_id": target_checkpoint["id"],
             "release_sequence": oracle["release_sequence"],
             "trace_checksums": oracle["trace_checksums"],
         }
@@ -2362,15 +2405,19 @@ class DailyTrackingService:
     def _ordered_release_oracle(
         self,
         track: dict[str, object],
+        target_checkpoint_id: str,
+        *,
+        progress: Callable[[str], None] | None = None,
     ) -> dict[str, object]:
         checkpoint_rows = {
             str(item["id"]): item
             for item in track["checkpoints"]
             if isinstance(item, dict)
         }
-        cursor: str | None = str(track["head_checkpoint_id"])
+        cursor: str | None = target_checkpoint_id
         manifests: list[dict[str, object]] = []
         while cursor is not None:
+            report_progress(progress, "read-checkpoint-chain")
             row = checkpoint_rows.get(cursor)
             if row is None:
                 raise EquivalenceError(
@@ -2406,14 +2453,19 @@ class DailyTrackingService:
         )
         if root_release is None:
             raise DailyTrackingError("equivalence root Release is missing")
+        report_progress(progress, "materialize-root-release")
         root_canonical = self.datasets.materialize_canonical(root_release)
+        report_progress(progress, "calculate-root-alpha")
         root_alpha = self._alpha(root_canonical, definition, kernel=kernel)
+        report_progress(progress, "calculate-root-labels")
         root_labels = build_forward_labels(
             root_canonical,
             root_alpha,
             report_sessions=504,
         )
+        report_progress(progress, "calculate-root-factor")
         root_factor = evaluate_factor(root_labels)
+        report_progress(progress, "calculate-root-strategy")
         root_batch = self._batch_oracle(
             track,
             str(root_release["id"]),
@@ -2470,6 +2522,7 @@ class DailyTrackingService:
         ]
 
         for manifest in manifests[1:]:
+            report_progress(progress, "calculate-release-transition")
             release = self.metadata.dataset_release(
                 str(manifest["target_dataset_release_id"])
             )
@@ -2522,6 +2575,7 @@ class DailyTrackingService:
                     equivalence_bytes(transition["trace"])
                 ).hexdigest()
             )
+            report_progress(progress, "verified-release-transition")
         return {
             "projection": projection,
             "release_sequence": release_sequence,
@@ -2596,8 +2650,10 @@ class DailyTrackingService:
         fencing_token: int,
         attempt_id: str,
         objects: ObjectWriterPort | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> dict[str, object]:
         writer = objects or self.objects
+        report_progress(progress, "load-advance-inputs")
         track = self._frontier_track(
             str(advance["daily_track_id"]),
             generation_id=str(advance["generation_id"]),
@@ -2637,6 +2693,7 @@ class DailyTrackingService:
             "terminal_strategy_state",
         } <= set(current_objects)
         if replay:
+            report_progress(progress, "materialize-replay-release")
             canonical = self.datasets.materialize_canonical(target)
             return self._calculate_compact_replay(
                 track=track,
@@ -2649,6 +2706,7 @@ class DailyTrackingService:
                 fencing_token=fencing_token,
                 attempt_id=attempt_id,
                 objects=writer,
+                progress=progress,
             )
         if compact_head:
             if not isinstance(current_head, dict):
@@ -2693,6 +2751,7 @@ class DailyTrackingService:
                 fencing_token=fencing_token,
                 attempt_id=attempt_id,
                 objects=writer,
+                progress=progress,
             )
         raise DailyTrackingError("Tracking Head does not use the compact contract")
 
@@ -2709,14 +2768,19 @@ class DailyTrackingService:
         fencing_token: int,
         attempt_id: str,
         objects: ObjectWriterPort,
+        progress: Callable[[str], None] | None = None,
     ) -> dict[str, object]:
+        report_progress(progress, "calculate-replay-alpha")
         alpha = self._alpha(canonical, definition, kernel=kernel)
+        report_progress(progress, "calculate-replay-labels")
         summary_labels = build_forward_labels(
             canonical,
             alpha,
             report_sessions=504,
         )
+        report_progress(progress, "calculate-replay-factor")
         factor = evaluate_factor(summary_labels)
+        report_progress(progress, "calculate-replay-strategy")
         strategy = self._batch_oracle(
             track,
             str(target["id"]),
@@ -2739,6 +2803,7 @@ class DailyTrackingService:
                 "strategy": strategy["diagnostics"],
             },
         }
+        report_progress(progress, "write-replay-result")
         entries = publish_compact_result_objects(
             objects,
             artifacts,
@@ -2802,6 +2867,7 @@ class DailyTrackingService:
             for item in pending_items
         }
         rolling_rows = factor_artifact_to_rolling_rows(factor)
+        report_progress(progress, "before-replay-cache")
         self._assert_cache_write_authority(
             str(track["id"]),
             fencing_token,
@@ -2845,6 +2911,7 @@ class DailyTrackingService:
         fencing_token: int,
         attempt_id: str,
         objects: ObjectWriterPort,
+        progress: Callable[[str], None] | None = None,
     ) -> dict[str, object]:
         head = track["head"]
         if not isinstance(head, dict):
@@ -2882,6 +2949,7 @@ class DailyTrackingService:
         prior_session = str(prior_release["appended_session_range"]["end"])
         transition: dict[str, object] | None = None
         for offset in range(0, len(new_sessions), TRACKING_ADVANCE_CHUNK_SESSIONS):
+            report_progress(progress, "calculate-incremental-chunk")
             chunk = new_sessions[
                 offset : offset + TRACKING_ADVANCE_CHUNK_SESSIONS
             ]
@@ -2942,6 +3010,7 @@ class DailyTrackingService:
                 TRACKING_PRODUCT_HISTORY_LIMIT,
             )
             prior_session = chunk[-1]
+            report_progress(progress, "calculated-incremental-chunk")
         if transition is None:
             raise DailyTrackingError("Advance has no new Research Sessions")
         processed_sessions = new_sessions
@@ -3063,6 +3132,7 @@ class DailyTrackingService:
             ]
             for session in sorted(set(pending) - set(retained))
         }
+        report_progress(progress, "before-incremental-cache")
         self._assert_cache_write_authority(str(track["id"]), fencing_token)
         self.cache.commit_advance(
             {
@@ -3478,6 +3548,8 @@ class DailyTrackingService:
         target_release_id: str,
         expected_generation_id: str,
         expected_head_checkpoint_id: str,
+        enqueue_execution: bool = True,
+        generation_rebuild_id: str | None = None,
     ) -> dict[str, object]:
         now = datetime.now(UTC).isoformat()
         with self.metadata.connect() as connection:
@@ -3618,12 +3690,26 @@ class DailyTrackingService:
                 )
             else:
                 advance_id = str(advance["id"])
-            self.metadata.enqueue_tracking_advance_execution(
-                connection,
-                track_id=track_id,
-                advance_id=advance_id,
-                created_at=now,
-            )
+            if generation_rebuild_id is not None:
+                self.metadata.bind_tracking_generation_rebuild(
+                    connection,
+                    rebuild_id=generation_rebuild_id,
+                    track_id=track_id,
+                    basis_generation_id=expected_generation_id,
+                    basis_head_checkpoint_id=(
+                        expected_head_checkpoint_id
+                    ),
+                    generation_id=str(existing["id"]),
+                    advance_id=advance_id,
+                    updated_at=now,
+                )
+            if enqueue_execution:
+                self.metadata.enqueue_tracking_advance_execution(
+                    connection,
+                    track_id=track_id,
+                    advance_id=advance_id,
+                    created_at=now,
+                )
             return {key: existing[key] for key in existing.keys()}
 
     def _create_advance(
@@ -4634,3 +4720,11 @@ def equivalence_bytes(value: object) -> bytes:
         return item
 
     return canonical_json_bytes(normalize(value))
+
+
+def report_progress(
+    progress: Callable[[str], None] | None,
+    stage: str,
+) -> None:
+    if progress is not None:
+        progress(stage)

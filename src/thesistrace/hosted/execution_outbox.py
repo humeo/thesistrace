@@ -53,6 +53,10 @@ def require_research_entry(entry: dict[str, str]) -> tuple[str, str, str]:
         "research_run",
         "research_run_cancel",
         "tracking_advance",
+        "tracking_equivalence",
+        "tracking_equivalence_cancel",
+        "tracking_generation_rebuild",
+        "tracking_generation_rebuild_cancel",
     }:
         raise ValueError(f"unsupported execution resource: {entry['resource_kind']}")
     return entry["resource_kind"], entry["workspace_id"], entry["resource_id"]
@@ -71,7 +75,7 @@ def require_execution_entry(
             raise ValueError("Tracking Release fanout cannot belong to a Workspace")
         return resource_kind, None, str(entry["resource_id"])
     if entry["workspace_id"] is None:
-        raise ValueError("Research execution requires a Workspace")
+        raise ValueError("Workspace execution requires a Workspace")
     research_entry = {
         key: str(entry[key])
         for key in ("resource_kind", "workspace_id", "resource_id")

@@ -2,10 +2,13 @@ import argparse
 import json
 import sys
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import replace
+from datetime import UTC, datetime
 from typing import cast
+from uuid import uuid4
 
 from thesistrace.config import Settings, settings_from_environment
+from thesistrace.datasets import DatasetPublisher
 from thesistrace.management import (
     HOSTED_TUSHARE_SCOPE,
     SourceAuthorizationError,
@@ -27,7 +30,14 @@ from thesistrace.quota import (
     QuotaProfileService,
     QuotaProfileStore,
 )
+from thesistrace.runtime import build_runtime
 from thesistrace.storage import MetadataStore
+from thesistrace.tenancy import workspace_execution
+from thesistrace.tracking import DailyTrackingError, DailyTrackingService
+from thesistrace.tracking_operations import (
+    TrackingOperationError,
+    TrackingOperationService,
+)
 
 CLI_VERSION = "0.1.0"
 
@@ -103,6 +113,28 @@ def build_parser() -> argparse.ArgumentParser:
     publication_request.add_argument("--as-of")
     publication_request.add_argument("--new-sessions", type=int)
     publication_request.add_argument("--corrections-json", default="[]")
+
+    tracking_rebuilds = resources.add_parser(
+        "tracking-generation-rebuild"
+    )
+    rebuild_commands = tracking_rebuilds.add_subparsers(
+        dest="command",
+        required=True,
+    )
+    rebuild_request = rebuild_commands.add_parser("request")
+    rebuild_request.add_argument("--actor", required=True)
+    rebuild_request.add_argument("--workspace-id", required=True)
+    rebuild_request.add_argument("--track-id", required=True)
+    rebuild_request.add_argument("--calculation-kernel", required=True)
+    rebuild_request.add_argument(
+        "--numeric-execution-contract",
+        required=True,
+    )
+    rebuild_request.add_argument("--idempotency-key", required=True)
+    rebuild_cancel = rebuild_commands.add_parser("cancel")
+    rebuild_cancel.add_argument("--actor", required=True)
+    rebuild_cancel.add_argument("--workspace-id", required=True)
+    rebuild_cancel.add_argument("--rebuild-id", required=True)
     return parser
 
 
@@ -113,6 +145,7 @@ def run(
     registration_service: RegistrationService | None = None,
     quota_service: QuotaProfileService | None = None,
     publication_request_service: DatasetPublicationRequestService | None = None,
+    tracking_operation_service: TrackingOperationService | None = None,
 ) -> int:
     arguments = build_parser().parse_args(argv)
     active_settings = settings or settings_from_environment()
@@ -121,6 +154,127 @@ def run(
         local_store.initialize()
     management_store = build_management_store(active_settings, local_store)
     service = SourceAuthorizationService(management_store)
+
+    if arguments.resource == "tracking-generation-rebuild":
+        actor = arguments.actor.strip()
+        if not actor:
+            print(
+                json.dumps(
+                    {
+                        "reason_code": "OPERATOR_ACTOR_REQUIRED",
+                        "message": "Operator actor is required",
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        def operate(
+            operations: TrackingOperationService,
+        ) -> tuple[dict[str, object], bool | None]:
+            if arguments.command == "cancel":
+                return (
+                    operations.cancel_generation_rebuild(
+                        arguments.rebuild_id,
+                        enqueue_workflow_cancellation=(
+                            active_settings.runtime_mode == "hosted"
+                        ),
+                    ),
+                    None,
+                )
+            return operations.request_generation_rebuild(
+                arguments.track_id,
+                calculation_kernel=arguments.calculation_kernel,
+                numeric_execution_contract=(
+                    arguments.numeric_execution_contract
+                ),
+                idempotency_key=arguments.idempotency_key,
+                operator_authorized=True,
+            )
+
+        try:
+            operations = tracking_operation_service
+            if operations is None:
+                compute_settings = replace(
+                    active_settings,
+                    database_role="compute",
+                )
+                with workspace_execution(arguments.workspace_id):
+                    runtime = build_runtime(compute_settings)
+                    tracking = DailyTrackingService(
+                        runtime.control_metadata,
+                        DatasetPublisher(
+                            runtime.control_metadata,
+                            runtime.objects,
+                        ),
+                        runtime.objects,
+                        runtime.working_cache,
+                    )
+                    operations = TrackingOperationService(
+                        runtime.control_metadata,
+                        tracking,
+                    )
+                    rebuild, created = operate(operations)
+            else:
+                rebuild, created = operate(operations)
+        except (
+            KeyError,
+            PermissionError,
+            TrackingOperationError,
+            DailyTrackingError,
+        ):
+            print(
+                json.dumps(
+                    {
+                        "reason_code": (
+                            "TRACKING_GENERATION_REBUILD_DENIED"
+                        ),
+                        "message": (
+                            "DailyTrack or Generation rebuild not found "
+                            "or operation not allowed"
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        action = (
+            "tracking_generation_rebuild.cancel"
+            if arguments.command == "cancel"
+            else "tracking_generation_rebuild.request"
+        )
+        management_store.append_management_audit_event(
+            {
+                "id": f"audit_{uuid4().hex}",
+                "occurred_at": datetime.now(UTC).isoformat(),
+                "actor": actor,
+                "action": action,
+                "outcome": "succeeded",
+                "reason_code": None,
+                "subject_type": "tracking_generation_rebuild",
+                "subject_id": rebuild["id"],
+                "details": {
+                    "workspace_id": arguments.workspace_id,
+                    **(
+                        {"daily_track_id": arguments.track_id}
+                        if arguments.command == "request"
+                        else {}
+                    ),
+                },
+            }
+        )
+        response: dict[str, object] = {"rebuild": rebuild}
+        if created is not None:
+            response["created"] = created
+        print(
+            json.dumps(
+                response,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
+        return 0
 
     if arguments.resource == "dataset-publication":
         publications = (

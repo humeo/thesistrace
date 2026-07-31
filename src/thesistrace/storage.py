@@ -306,6 +306,35 @@ class MetadataStore:
                     UNIQUE(advance_id, ordinal)
                 );
 
+                CREATE TABLE IF NOT EXISTS tracking_equivalence_requests (
+                    id TEXT PRIMARY KEY,
+                    daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
+                    generation_id TEXT NOT NULL REFERENCES tracking_generations(id),
+                    head_checkpoint_id TEXT NOT NULL REFERENCES tracking_checkpoints(id),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    result_json TEXT,
+                    diagnostic_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS tracking_generation_rebuilds (
+                    id TEXT PRIMARY KEY,
+                    daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
+                    calculation_kernel TEXT NOT NULL,
+                    numeric_execution_contract TEXT NOT NULL,
+                    basis_generation_id TEXT NOT NULL,
+                    basis_head_checkpoint_id TEXT NOT NULL,
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    status TEXT NOT NULL,
+                    generation_id TEXT,
+                    advance_id TEXT,
+                    diagnostic_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS working_cache_deletions (
                     daily_track_id TEXT PRIMARY KEY REFERENCES daily_tracks(id),
                     fencing_token INTEGER NOT NULL,
@@ -1801,6 +1830,54 @@ class MetadataStore:
     ) -> None:
         """Hosted stores override this transaction hook to deliver cancellation."""
         del connection, run_id, created_at
+
+    def _enqueue_tracking_operation(
+        self,
+        connection,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        created_at: str,
+    ) -> None:
+        """Hosted stores override this hook to deliver Tracking operations."""
+        del connection, resource_kind, resource_id, created_at
+
+    @staticmethod
+    def bind_tracking_generation_rebuild(
+        connection,
+        *,
+        rebuild_id: str,
+        track_id: str,
+        basis_generation_id: str,
+        basis_head_checkpoint_id: str,
+        generation_id: str,
+        advance_id: str,
+        updated_at: str,
+    ) -> None:
+        updated = connection.execute(
+            """
+            UPDATE tracking_generation_rebuilds
+            SET generation_id = ?, advance_id = ?, updated_at = ?
+            WHERE id = ?
+              AND daily_track_id = ?
+              AND basis_generation_id = ?
+              AND basis_head_checkpoint_id = ?
+              AND status = 'running'
+            """,
+            (
+                generation_id,
+                advance_id,
+                updated_at,
+                rebuild_id,
+                track_id,
+                basis_generation_id,
+                basis_head_checkpoint_id,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeError(
+                "Tracking Generation rebuild binding was fenced"
+            )
 
     def _admit_user_compute(
         self,

@@ -84,6 +84,19 @@ class ControlMetadataPort(Protocol):
         created_at: str,
     ) -> None: ...
 
+    def bind_tracking_generation_rebuild(
+        self,
+        connection,
+        *,
+        rebuild_id: str,
+        track_id: str,
+        basis_generation_id: str,
+        basis_head_checkpoint_id: str,
+        generation_id: str,
+        advance_id: str,
+        updated_at: str,
+    ) -> None: ...
+
 
 class ObjectWriterPort(Protocol):
     def put_json(self, value: object) -> dict[str, object]: ...

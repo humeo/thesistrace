@@ -183,6 +183,37 @@ class PostgresControlMetadataStore(MetadataStore):
             (f"cancel_{run_id}", run_id, created_at),
         )
 
+    def _enqueue_tracking_operation(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        resource_kind: str,
+        resource_id: str,
+        created_at: str,
+    ) -> None:
+        if resource_kind not in {
+            "tracking_equivalence",
+            "tracking_equivalence_cancel",
+            "tracking_generation_rebuild",
+            "tracking_generation_rebuild_cancel",
+        }:
+            raise ValueError("unsupported Tracking operation")
+        connection.execute(
+            """
+            INSERT INTO execution_outbox
+                (id, resource_kind, resource_id, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+            ON CONFLICT (workspace_id, resource_kind, resource_id)
+            DO NOTHING
+            """,
+            (
+                f"outbox_{resource_kind}_{resource_id}",
+                resource_kind,
+                resource_id,
+                created_at,
+            ),
+        )
+
     def enqueue_tracking_advance_execution(
         self,
         connection: PostgresConnectionAdapter,

@@ -39,6 +39,7 @@ from thesistrace.tracking import (
     DailyTrackingService,
     EquivalenceError,
 )
+from thesistrace.tracking_operations import TrackingOperationService
 from thesistrace.tushare_source import (
     HttpTushareTransport,
     TushareAdapter,
@@ -207,6 +208,7 @@ def create_app(
         objects,
         runtime.working_cache,
     )
+    tracking_operations = TrackingOperationService(store, tracking)
     tracking.reconcile_activation_staging()
     tracking.reconcile_cache_deletions()
     source_authorization = SourceAuthorizationService(
@@ -779,6 +781,14 @@ def create_app(
         track_id: str,
         request: KernelUpgradeRequest,
     ) -> dict[str, object]:
+        if settings.runtime_mode == "hosted":
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "DAILY_TRACK_NOT_FOUND",
+                    "DailyTrack not found",
+                ),
+            )
         try:
             track = tracking.upgrade_kernel(
                 track_id,
@@ -802,6 +812,14 @@ def create_app(
 
     @app.post("/api/v1/daily-tracks/{track_id}/verify-equivalence")
     def verify_daily_track(track_id: str) -> dict[str, object]:
+        if settings.runtime_mode == "hosted":
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "DAILY_TRACK_NOT_FOUND",
+                    "DailyTrack not found",
+                ),
+            )
         try:
             return tracking.verify_equivalence(track_id)
         except KeyError as error:
@@ -819,6 +837,87 @@ def create_app(
                 status_code=409,
                 detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
             ) from error
+
+    @app.post(
+        "/api/v1/daily-tracks/{track_id}/equivalence-requests",
+    )
+    def request_daily_track_equivalence(
+        track_id: str,
+        idempotency_key: str = Header(
+            min_length=1,
+            alias="Idempotency-Key",
+        ),
+    ) -> JSONResponse:
+        try:
+            request, created = tracking_operations.request_equivalence(
+                track_id,
+                idempotency_key,
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "DAILY_TRACK_NOT_FOUND",
+                    "DailyTrack not found",
+                ),
+            ) from error
+        except QuotaExceededError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=quota_error_detail(error),
+            ) from error
+        return JSONResponse(
+            status_code=202 if created else 200,
+            content=request,
+        )
+
+    @app.get(
+        "/api/v1/daily-tracks/{track_id}/equivalence-requests/{request_id}"
+    )
+    def get_daily_track_equivalence(
+        track_id: str,
+        request_id: str,
+    ) -> dict[str, object]:
+        request = tracking_operations.equivalence_request(request_id)
+        if (
+            request is None
+            or request["daily_track_id"] != track_id
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "EQUIVALENCE_REQUEST_NOT_FOUND",
+                    "Equivalence request not found",
+                ),
+            )
+        return request
+
+    @app.post(
+        "/api/v1/daily-tracks/{track_id}/equivalence-requests/"
+        "{request_id}/cancel"
+    )
+    def cancel_daily_track_equivalence(
+        track_id: str,
+        request_id: str,
+    ) -> dict[str, object]:
+        request = tracking_operations.equivalence_request(request_id)
+        if (
+            request is None
+            or request["daily_track_id"] != track_id
+        ):
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "EQUIVALENCE_REQUEST_NOT_FOUND",
+                    "Equivalence request not found",
+                ),
+            )
+        return tracking_operations.cancel_equivalence(
+            request_id,
+            enqueue_workflow_cancellation=(
+                settings.runtime_mode == "hosted"
+            ),
+        )
 
     @app.get("/api/v1/health")
     def get_health() -> dict[str, object]:

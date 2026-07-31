@@ -15,6 +15,10 @@ from thesistrace.config import settings_from_environment
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.activity_heartbeat import ActivityHeartbeat
 from thesistrace.hosted.research_workflow import RESEARCH_TASK_QUEUE, ResearchWorkflow
+from thesistrace.hosted.tracking_operations_workflow import (
+    TrackingEquivalenceWorkflow,
+    TrackingGenerationRebuildWorkflow,
+)
 from thesistrace.hosted.tracking_workflow import (
     TrackingAdvanceWorkflow,
     TrackingReleaseWorkflow,
@@ -23,6 +27,7 @@ from thesistrace.research_runs import ResearchRunService, recover_staged_researc
 from thesistrace.runtime import build_runtime
 from thesistrace.tenancy import workspace_execution
 from thesistrace.tracking import CorrectionImpactCache, DailyTrackingService
+from thesistrace.tracking_operations import TrackingOperationService
 
 logger = logging.getLogger(__name__)
 TRACKING_FANOUT_PAGE_SIZE = 100
@@ -34,6 +39,13 @@ def _tracking_service(runtime) -> DailyTrackingService:
         DatasetPublisher(runtime.control_metadata, runtime.objects),
         runtime.objects,
         runtime.working_cache,
+    )
+
+
+def _tracking_operation_service(runtime) -> TrackingOperationService:
+    return TrackingOperationService(
+        runtime.control_metadata,
+        _tracking_service(runtime),
     )
 
 
@@ -267,6 +279,124 @@ def finalize_tracking_advance_delivery_failure(
     }
 
 
+@activity.defn(name="execute_tracking_equivalence")
+def execute_tracking_equivalence(
+    request: dict[str, str],
+) -> dict[str, str]:
+    settings = settings_from_environment()
+    with workspace_execution(request["workspace_id"]):
+        runtime = build_runtime(settings)
+        service = _tracking_operation_service(runtime)
+        try:
+            with ActivityHeartbeat(
+                on_cancel=lambda: service.cancel_equivalence(
+                    request["request_id"]
+                )
+            ) as heartbeat:
+                completed = service.execute_equivalence(
+                    request["request_id"],
+                    progress=heartbeat.checkpoint,
+                )
+        except Exception as error:
+            if not is_resource_exhaustion(error):
+                raise
+            final_execution = (
+                activity.info().attempt
+                >= MAX_RESOURCE_EXHAUSTION_EXECUTIONS
+            )
+            if final_execution:
+                service.fail_equivalence(
+                    request["request_id"],
+                    "RESOURCE_EXHAUSTED",
+                )
+            raise ApplicationError(
+                "Equivalence exhausted Worker resources",
+                type="RESOURCE_EXHAUSTED",
+                non_retryable=final_execution,
+            ) from error
+    return {
+        "request_id": request["request_id"],
+        "status": str(completed["status"]),
+    }
+
+
+@activity.defn(name="finalize_tracking_equivalence_failure")
+def finalize_tracking_equivalence_failure(
+    request: dict[str, str],
+) -> dict[str, str]:
+    settings = settings_from_environment()
+    with workspace_execution(request["workspace_id"]):
+        runtime = build_runtime(settings)
+        failed = _tracking_operation_service(runtime).fail_equivalence(
+            request["request_id"],
+            "ACTIVITY_DELIVERY_FAILED",
+        )
+    return {
+        "request_id": request["request_id"],
+        "status": str(failed["status"]),
+    }
+
+
+@activity.defn(name="execute_tracking_generation_rebuild")
+def execute_tracking_generation_rebuild(
+    request: dict[str, str],
+) -> dict[str, str]:
+    settings = settings_from_environment()
+    with workspace_execution(request["workspace_id"]):
+        runtime = build_runtime(settings)
+        service = _tracking_operation_service(runtime)
+        try:
+            with ActivityHeartbeat(
+                on_cancel=lambda: service.cancel_generation_rebuild(
+                    request["rebuild_id"]
+                )
+            ) as heartbeat:
+                completed = service.execute_generation_rebuild(
+                    request["rebuild_id"],
+                    progress=heartbeat.checkpoint,
+                )
+        except Exception as error:
+            if not is_resource_exhaustion(error):
+                raise
+            final_execution = (
+                activity.info().attempt
+                >= MAX_RESOURCE_EXHAUSTION_EXECUTIONS
+            )
+            if final_execution:
+                service.fail_generation_rebuild(
+                    request["rebuild_id"],
+                    "RESOURCE_EXHAUSTED",
+                )
+            raise ApplicationError(
+                "Generation rebuild exhausted Worker resources",
+                type="RESOURCE_EXHAUSTED",
+                non_retryable=final_execution,
+            ) from error
+    return {
+        "rebuild_id": request["rebuild_id"],
+        "status": str(completed["status"]),
+    }
+
+
+@activity.defn(name="finalize_tracking_generation_rebuild_failure")
+def finalize_tracking_generation_rebuild_failure(
+    request: dict[str, str],
+) -> dict[str, str]:
+    settings = settings_from_environment()
+    with workspace_execution(request["workspace_id"]):
+        runtime = build_runtime(settings)
+        failed = _tracking_operation_service(
+            runtime
+        ).fail_generation_rebuild(
+            request["rebuild_id"],
+            "ACTIVITY_DELIVERY_FAILED",
+        )
+    return {
+        "rebuild_id": request["rebuild_id"],
+        "status": str(failed["status"]),
+    }
+
+
 async def run() -> None:
     settings = settings_from_environment()
     client = await Client.connect(
@@ -281,6 +411,8 @@ async def run() -> None:
                 ResearchWorkflow,
                 TrackingReleaseWorkflow,
                 TrackingAdvanceWorkflow,
+                TrackingEquivalenceWorkflow,
+                TrackingGenerationRebuildWorkflow,
             ],
             activities=[
                 execute_research_run,
@@ -288,6 +420,10 @@ async def run() -> None:
                 fanout_tracking_release,
                 execute_tracking_advance,
                 finalize_tracking_advance_delivery_failure,
+                execute_tracking_equivalence,
+                finalize_tracking_equivalence_failure,
+                execute_tracking_generation_rebuild,
+                finalize_tracking_generation_rebuild_failure,
             ],
             activity_executor=executor,
             max_concurrent_activities=1,

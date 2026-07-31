@@ -5,6 +5,7 @@ import logging
 from temporalio.client import Client
 from temporalio.common import WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
+from temporalio.service import RPCError, RPCStatusCode
 
 from thesistrace.config import settings_from_environment
 from thesistrace.hosted.dataset_publication_workflow import (
@@ -21,6 +22,13 @@ from thesistrace.hosted.research_workflow import (
     ResearchWorkflow,
     research_workflow_id,
 )
+from thesistrace.hosted.tracking_operations_workflow import (
+    TRACKING_OPERATIONS_TASK_QUEUE,
+    TrackingEquivalenceWorkflow,
+    TrackingGenerationRebuildWorkflow,
+    tracking_equivalence_workflow_id,
+    tracking_generation_rebuild_workflow_id,
+)
 from thesistrace.hosted.tracking_workflow import (
     TRACKING_TASK_QUEUE,
     TrackingAdvanceWorkflow,
@@ -31,6 +39,15 @@ from thesistrace.hosted.tracking_workflow import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def cancel_workflow_idempotently(client: Client, workflow_id: str) -> None:
+    handle = client.get_workflow_handle(workflow_id)
+    try:
+        await handle.cancel()
+    except RPCError as error:
+        if error.status != RPCStatusCode.NOT_FOUND:
+            raise
 
 
 async def relay_once(
@@ -94,11 +111,59 @@ async def relay_once(
                 )
             except WorkflowAlreadyStartedError:
                 pass
-        elif resource_kind == "research_run_cancel":
-            handle = client.get_workflow_handle(
-                research_workflow_id(resource_id)
+        elif resource_kind == "tracking_equivalence":
+            if workspace_id is None:
+                raise ValueError(
+                    "Tracking Equivalence requires a Workspace"
+                )
+            try:
+                await client.start_workflow(
+                    TrackingEquivalenceWorkflow.run,
+                    {
+                        "workspace_id": workspace_id,
+                        "request_id": resource_id,
+                    },
+                    id=tracking_equivalence_workflow_id(resource_id),
+                    task_queue=TRACKING_OPERATIONS_TASK_QUEUE,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                )
+            except WorkflowAlreadyStartedError:
+                pass
+        elif resource_kind == "tracking_generation_rebuild":
+            if workspace_id is None:
+                raise ValueError(
+                    "Tracking Generation rebuild requires a Workspace"
+                )
+            try:
+                await client.start_workflow(
+                    TrackingGenerationRebuildWorkflow.run,
+                    {
+                        "workspace_id": workspace_id,
+                        "rebuild_id": resource_id,
+                    },
+                    id=tracking_generation_rebuild_workflow_id(
+                        resource_id
+                    ),
+                    task_queue=TRACKING_OPERATIONS_TASK_QUEUE,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                )
+            except WorkflowAlreadyStartedError:
+                pass
+        elif resource_kind == "tracking_equivalence_cancel":
+            await cancel_workflow_idempotently(
+                client,
+                tracking_equivalence_workflow_id(resource_id)
             )
-            await handle.cancel()
+        elif resource_kind == "tracking_generation_rebuild_cancel":
+            await cancel_workflow_idempotently(
+                client,
+                tracking_generation_rebuild_workflow_id(resource_id)
+            )
+        elif resource_kind == "research_run_cancel":
+            await cancel_workflow_idempotently(
+                client,
+                research_workflow_id(resource_id),
+            )
         else:
             raise ValueError(f"unsupported execution resource: {resource_kind}")
         outbox.mark_dispatched(entry["outbox_id"])

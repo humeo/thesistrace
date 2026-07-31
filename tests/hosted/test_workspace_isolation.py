@@ -21,11 +21,13 @@ from thesistrace.management import HOSTED_TUSHARE_SCOPE, SourceAuthorizationServ
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.ports import LocalWorkerDispatch
 from thesistrace.provisioning import RegistrationService
+from thesistrace.quota import QuotaExceededError
 from thesistrace.runtime import RuntimePorts
 from thesistrace.tenancy import (
     authenticated_subject,
     workspace_execution,
 )
+from thesistrace.tracking_operations import TrackingOperationService
 from thesistrace.working_cache import WorkingCacheStore
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +48,8 @@ PRIVATE_TABLES = (
     "tracking_advances",
     "tracking_execution_outbox",
     "tracking_advance_attempts",
+    "tracking_equivalence_requests",
+    "tracking_generation_rebuilds",
     "working_cache_deletions",
 )
 
@@ -117,6 +121,8 @@ def truncate_product_state() -> None:
                 thesistrace_product.tracking_advances,
                 thesistrace_product.tracking_execution_outbox,
                 thesistrace_product.tracking_advance_attempts,
+                thesistrace_product.tracking_equivalence_requests,
+                thesistrace_product.tracking_generation_rebuilds,
                 thesistrace_product.working_cache_deletions,
                 thesistrace_product.publication_idempotency,
                 thesistrace_product.dataset_release_pointer,
@@ -374,6 +380,8 @@ def seed_private_table_graph(
         "tracking_advances": f"advance-{prefix}",
         "tracking_execution_outbox": f"tracking-outbox-{prefix}",
         "tracking_advance_attempts": f"advance-attempt-{prefix}",
+        "tracking_equivalence_requests": f"equivalence-{prefix}",
+        "tracking_generation_rebuilds": f"rebuild-{prefix}",
         "working_cache_deletions": f"track-{prefix}",
     }
     now = datetime.now(UTC).isoformat()
@@ -596,6 +604,48 @@ def seed_private_table_graph(
         )
         connection.execute(
             """
+            INSERT INTO thesistrace_product.tracking_equivalence_requests
+                (workspace_id, id, daily_track_id, generation_id,
+                 head_checkpoint_id, idempotency_key, status,
+                 created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 'succeeded', %s, %s)
+            """,
+            (
+                workspace_id,
+                ids["tracking_equivalence_requests"],
+                ids["daily_tracks"],
+                ids["tracking_generations"],
+                ids["tracking_checkpoints"],
+                f"equivalence-key-{prefix}",
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO thesistrace_product.tracking_generation_rebuilds
+                (workspace_id, id, daily_track_id, calculation_kernel,
+                 numeric_execution_contract, basis_generation_id,
+                 basis_head_checkpoint_id, idempotency_key, status,
+                 generation_id, advance_id, created_at, updated_at)
+            VALUES (%s, %s, %s, 'kernel-v1', 'numeric-v1', %s, %s, %s,
+                    'succeeded', %s, %s, %s, %s)
+            """,
+            (
+                workspace_id,
+                ids["tracking_generation_rebuilds"],
+                ids["daily_tracks"],
+                ids["tracking_generations"],
+                ids["tracking_checkpoints"],
+                f"rebuild-key-{prefix}",
+                ids["tracking_generations"],
+                ids["tracking_advances"],
+                now,
+                now,
+            ),
+        )
+        connection.execute(
+            """
             INSERT INTO thesistrace_product.working_cache_deletions
                 (workspace_id, daily_track_id, fencing_token, status, requested_at)
             VALUES (%s, %s, 1, 'completed', %s)
@@ -790,6 +840,8 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
                     "execution_outbox",
                     "daily_track_activation_reservations",
                     "tracking_execution_outbox",
+                    "tracking_equivalence_requests",
+                    "tracking_generation_rebuilds",
                 }:
                     changed = connection.execute(
                         f"""
@@ -830,3 +882,137 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
         connection.execute("SET LOCAL search_path = thesistrace_product, public")
         with pytest.raises(psycopg.errors.InsufficientPrivilege):
             connection.execute("SELECT * FROM research_definition_drafts")
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_tracking_operations_share_quota_and_keep_rebuild_operator_only(
+    tmp_path: Path,
+) -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    truncate_product_state()
+    suffix = uuid4().hex
+    identity_a = InsForgeIdentity(
+        subject=f"operations-a-{suffix}",
+        email=f"operations-a-{suffix}@example.com",
+    )
+    identity_b = InsForgeIdentity(
+        subject=f"operations-b-{suffix}",
+        email=f"operations-b-{suffix}@example.com",
+    )
+    workspace_a = provision_identity(identity_a)
+    workspace_b = provision_identity(identity_b)
+    release = bootstrap_shared_release(tmp_path)
+    ids_a = seed_private_table_graph(
+        workspace_a,
+        str(release["id"]),
+        f"operations-a-{suffix}",
+    )
+    ids_b = seed_private_table_graph(
+        workspace_b,
+        str(release["id"]),
+        f"operations-b-{suffix}",
+    )
+    now = datetime.now(UTC).isoformat()
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        for index in range(7):
+            connection.execute(
+                """
+                INSERT INTO thesistrace_product.user_compute_admissions
+                    (workspace_id, resource_kind, resource_id, admitted_at)
+                VALUES (%s, 'research_run', %s, %s)
+                """,
+                (workspace_a, f"queued-run-{index}-{suffix}", now),
+            )
+
+    with authenticated_subject(identity_a.subject):
+        api_store = PostgresControlMetadataStore(
+            TEST_DATABASE_URL,
+            database_role="api",
+        )
+        operations = TrackingOperationService(api_store, object())
+        equivalence, created = operations.request_equivalence(
+            ids_a["daily_tracks"],
+            f"equivalence-{suffix}",
+        )
+        assert created is True
+        assert equivalence["status"] == "queued"
+        repeated, repeated_created = operations.request_equivalence(
+            ids_a["daily_tracks"],
+            f"equivalence-{suffix}",
+        )
+        assert repeated_created is False
+        assert repeated["id"] == equivalence["id"]
+        with pytest.raises(QuotaExceededError):
+            operations.request_equivalence(
+                ids_a["daily_tracks"],
+                f"equivalence-over-quota-{suffix}",
+            )
+        with pytest.raises(KeyError):
+            operations.request_equivalence(
+                ids_b["daily_tracks"],
+                f"equivalence-cross-workspace-{suffix}",
+            )
+        cancelled_equivalence = operations.cancel_equivalence(
+            str(equivalence["id"]),
+            enqueue_workflow_cancellation=True,
+        )
+        assert cancelled_equivalence["status"] == "cancelled"
+
+    compute_store = PostgresControlMetadataStore(
+        TEST_DATABASE_URL,
+        database_role="compute",
+    )
+    with workspace_execution(workspace_a):
+        operations = TrackingOperationService(compute_store, object())
+        rebuild, created = operations.request_generation_rebuild(
+            ids_a["daily_tracks"],
+            calculation_kernel="kernel-v2",
+            numeric_execution_contract="numeric-v1",
+            idempotency_key=f"rebuild-{suffix}",
+            operator_authorized=True,
+        )
+        assert created is True
+        assert rebuild["status"] == "queued"
+        cancelled_rebuild = operations.cancel_generation_rebuild(
+            str(rebuild["id"]),
+            enqueue_workflow_cancellation=True,
+        )
+        assert cancelled_rebuild["status"] == "cancelled"
+
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        active = connection.execute(
+            """
+            SELECT count(*)
+            FROM thesistrace_product.user_compute_admissions
+            WHERE workspace_id = %s AND completed_at IS NULL
+            """,
+            (workspace_a,),
+        ).fetchone()[0]
+        assert active == 7
+        outbox_kinds = {
+            row[0]
+            for row in connection.execute(
+                """
+                SELECT resource_kind
+                FROM thesistrace_product.execution_outbox
+                WHERE workspace_id = %s
+                  AND resource_kind IN (
+                      'tracking_equivalence',
+                      'tracking_equivalence_cancel',
+                      'tracking_generation_rebuild',
+                      'tracking_generation_rebuild_cancel'
+                  )
+                """,
+                (workspace_a,),
+            ).fetchall()
+        }
+        assert outbox_kinds == {
+            "tracking_equivalence",
+            "tracking_equivalence_cancel",
+            "tracking_generation_rebuild",
+            "tracking_generation_rebuild_cancel",
+        }
