@@ -1,10 +1,12 @@
 import contextvars
+import sys
 from collections.abc import Callable
 from threading import Event, Lock, Thread
 
 from temporalio import activity
 
 from thesistrace.activity_contract import CooperativeActivityCancellation
+from thesistrace.hosted.observability import operation_span
 
 
 class ActivityHeartbeat:
@@ -19,6 +21,7 @@ class ActivityHeartbeat:
         self.stop_event = Event()
         self.cancel_lock = Lock()
         self.cancel_recorded = False
+        self.span = None
         context = contextvars.copy_context()
         self.thread = Thread(
             target=lambda: context.run(self._run),
@@ -27,8 +30,15 @@ class ActivityHeartbeat:
         )
 
     def __enter__(self) -> "ActivityHeartbeat":
-        activity.heartbeat({"stage": "started"})
-        self.thread.start()
+        self.span = operation_span("task", activity.info().activity_type)
+        self.span.__enter__()
+        try:
+            activity.heartbeat({"stage": "started"})
+            self.thread.start()
+        except BaseException:
+            self.span.__exit__(*sys.exc_info())
+            self.span = None
+            raise
         return self
 
     def checkpoint(self, stage: str) -> None:
@@ -37,9 +47,11 @@ class ActivityHeartbeat:
             raise CooperativeActivityCancellation
         activity.heartbeat({"stage": stage})
 
-    def __exit__(self, _type, _value, _traceback) -> None:
+    def __exit__(self, error_type, error_value, traceback) -> None:
         self.stop_event.set()
         self.thread.join(timeout=self.interval + 1)
+        if self.span is not None:
+            self.span.__exit__(error_type, error_value, traceback)
 
     def _run(self) -> None:
         while not self.stop_event.wait(self.interval):

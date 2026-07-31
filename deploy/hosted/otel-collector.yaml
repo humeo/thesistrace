@@ -11,19 +11,102 @@ receivers:
         endpoint: 0.0.0.0:4318
 
 processors:
-  batch: {}
   memory_limiter:
     check_interval: 1s
     limit_mib: 192
+  tail_sampling:
+    decision_wait: 10s
+    num_traces: 5000
+    expected_new_traces_per_sec: 50
+    policies:
+      - name: failed-task
+        type: and
+        and:
+          and_sub_policy:
+            - name: task-kind
+              type: string_attribute
+              string_attribute:
+                key: thesistrace.span.kind
+                values: [task]
+            - name: error-status
+              type: status_code
+              status_code:
+                status_codes: [ERROR]
+            - name: retain-all-failures
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 100
+      - name: successful-task
+        type: and
+        and:
+          and_sub_policy:
+            - name: task-kind
+              type: string_attribute
+              string_attribute:
+                key: thesistrace.span.kind
+                values: [task]
+            - name: ok-status
+              type: status_code
+              status_code:
+                status_codes: [OK]
+            - name: retain-successful-tasks
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 10
+      - name: successful-http
+        type: and
+        and:
+          and_sub_policy:
+            - name: http-kind
+              type: string_attribute
+              string_attribute:
+                key: thesistrace.span.kind
+                values: [http]
+            - name: ok-status
+              type: status_code
+              status_code:
+                status_codes: [OK]
+            - name: retain-ordinary-http
+              type: probabilistic
+              probabilistic:
+                sampling_percentage: 1
+  batch:
+    send_batch_size: 512
+    timeout: 5s
 
 exporters:
   prometheus:
     endpoint: 0.0.0.0:8889
+  otlp/external:
+    endpoint: ${env:THESISTRACE_EXTERNAL_OTLP_ENDPOINT}
+    tls:
+      insecure: ${env:THESISTRACE_EXTERNAL_OTLP_INSECURE}
+    sending_queue:
+      enabled: true
+      num_consumers: 2
+      queue_size: 2048
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 0s
 
 service:
   extensions: [health_check]
+  telemetry:
+    metrics:
+      readers:
+        - pull:
+            exporter:
+              prometheus:
+                host: 0.0.0.0
+                port: 8888
   pipelines:
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch]
+      exporters: [otlp/external]

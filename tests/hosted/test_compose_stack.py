@@ -56,6 +56,7 @@ def test_hosted_stack_declares_the_complete_pinned_topology() -> None:
         "otel-collector",
         "prometheus",
         "grafana",
+        "health-service",
     }
     assert required <= services.keys()
 
@@ -66,7 +67,7 @@ def test_hosted_stack_declares_the_complete_pinned_topology() -> None:
             assert not image.endswith(":latest"), name
 
 
-def test_only_edge_binds_host_ports_and_it_serves_the_static_build() -> None:
+def test_only_edge_is_public_and_grafana_is_loopback_only() -> None:
     model = compose_model()
     services = model["services"]
     published = {
@@ -74,10 +75,19 @@ def test_only_edge_binds_host_ports_and_it_serves_the_static_build() -> None:
         for name, service in services.items()
         if service.get("ports")
     }
-    assert set(published) == {"edge"}
+    assert set(published) == {"edge", "grafana"}
     assert {
         int(binding["published"]) for binding in published["edge"]
     } == {80, 443}
+    assert published["grafana"] == [
+        {
+            "mode": "ingress",
+            "target": 3000,
+            "published": "3001",
+            "protocol": "tcp",
+            "host_ip": "127.0.0.1",
+        }
+    ]
 
     edge = services["edge"]
     assert edge["build"]["dockerfile"] == "deploy/hosted/Dockerfile.edge"
@@ -111,7 +121,6 @@ def test_private_services_use_internal_networks_and_persistent_named_volumes() -
         "data-worker",
         "compute-worker-1",
         "prometheus",
-        "grafana",
     }:
         assert not services[name].get("ports"), name
 
@@ -230,6 +239,7 @@ def test_five_workers_have_isolated_single_slot_container_boundaries() -> None:
     assert set(egress["networks"]) == {
         "tushare-egress",
         "data-egress",
+        "observability",
     }
     assert not egress.get("environment")
     assert {
@@ -341,6 +351,7 @@ def test_steady_services_use_distinct_identities_and_secrets() -> None:
         "THESISTRACE_RELAY_DATABASE_PASSWORD",
         "THESISTRACE_DATA_DATABASE_PASSWORD",
         "THESISTRACE_COMPUTE_DATABASE_PASSWORD",
+        "THESISTRACE_HEALTH_DATABASE_PASSWORD",
         "THESISTRACE_OBJECT_STORE_API_TOKEN",
         "THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN",
         "THESISTRACE_OBJECT_STORE_DATA_TOKEN",
@@ -381,10 +392,99 @@ def test_one_shot_migrations_gate_every_public_or_steady_application_service() -
         "compute-worker-2",
         "compute-worker-3",
         "compute-worker-4",
+        "health-service",
     }:
         assert services[name]["depends_on"]["release-gate"]["condition"] == (
             "service_completed_successfully"
         )
+
+
+def test_health_views_are_private_bounded_and_separately_provisioned() -> None:
+    model = compose_model()
+    services = model["services"]
+    health = services["health-service"]
+    assert not health.get("ports")
+    assert set(health["networks"]) == {
+        "edge",
+        "control",
+        "execution",
+        "observability",
+        "storage",
+        "tushare-egress",
+    }
+    assert health["environment"]["THESISTRACE_DATABASE_ROLE"] == "health"
+    assert health["environment"]["THESISTRACE_DISK_WARNING_PERCENT"] == "70"
+    assert health["command"] == ["thesistrace-health-service"]
+    assert set(health["depends_on"]) == {"release-gate"}
+    assert set(services["grafana"]["networks"]) == {
+        "observability",
+        "operator",
+    }
+    assert model["networks"]["operator"].get("internal") is not True
+    assert {
+        name
+        for name, service in services.items()
+        if "operator" in service.get("networks", {})
+    } == {"grafana"}
+
+    for service in services.values():
+        assert service["logging"] == {
+            "driver": "json-file",
+            "options": {"max-file": "5", "max-size": "20m"},
+        }
+
+    prometheus = (ROOT / "deploy" / "hosted" / "prometheus.yaml").read_text()
+    assert "health-service:8020" in prometheus
+    assert "otel-collector:8888" in prometheus
+
+    provisioning = ROOT / "deploy" / "hosted" / "grafana" / "provisioning"
+    dashboards = sorted((provisioning / "dashboards").glob("*.json"))
+    assert [path.name for path in dashboards] == [
+        "data-health.json",
+        "quantitative-semantic-health.json",
+        "system-health.json",
+    ]
+    for path in dashboards:
+        dashboard = json.loads(path.read_text())
+        assert dashboard["title"].endswith("Health")
+        assert not dashboard.get("alert")
+        assert all("alert" not in panel for panel in dashboard["panels"])
+        expected_view = {
+            "system-health.json": 'view=\\"system\\"',
+            "data-health.json": 'view=\\"data\\"',
+            "quantitative-semantic-health.json": 'view=\\"quantitative\\"',
+        }[path.name]
+        assert expected_view in path.read_text()
+
+    system_dashboard = (provisioning / "dashboards" / "system-health.json").read_text()
+    assert 'up{job=\\"service-probes\\"' in system_dashboard
+    assert "compute-worker-[1-4]:9100" in system_dashboard
+    assert "vector(0)" in system_dashboard
+
+
+def test_otel_sampling_and_export_failure_are_bounded_and_visible() -> None:
+    collector = (ROOT / "deploy" / "hosted" / "otel-collector.yaml").read_text()
+    assert "tail_sampling:" in collector
+    assert "status_codes: [ERROR]" in collector
+    assert "sampling_percentage: 100" in collector
+    assert "sampling_percentage: 10" in collector
+    assert "sampling_percentage: 1" in collector
+    assert "otlp/external:" in collector
+    assert "sending_queue:" in collector
+    assert "queue_size: 2048" in collector
+    assert "host: 0.0.0.0" in collector
+    assert "port: 8888" in collector
+
+    system_dashboard = (
+        ROOT
+        / "deploy"
+        / "hosted"
+        / "grafana"
+        / "provisioning"
+        / "dashboards"
+        / "system-health.json"
+    ).read_text()
+    assert "otelcol_exporter_send_failed_spans" in system_dashboard
 
 
 def test_public_origin_smoke_uses_no_private_service_address() -> None:

@@ -77,6 +77,13 @@ class RemoteObjectStore:
         except ParquetContractError:
             return False
 
+    def ready(self) -> bool:
+        try:
+            response = self.client.get("/ready", timeout=2)
+            return response.status_code == 200
+        except httpx.HTTPError:
+            return False
+
     def put_json(self, value: object) -> dict[str, object]:
         return self._put_bytes(
             "/v1/objects/json",

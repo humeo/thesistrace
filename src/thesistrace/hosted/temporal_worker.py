@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from datetime import timedelta
@@ -22,6 +23,12 @@ from thesistrace.hosted.compute_dispatch import (
     ComputeTaskQueues,
     activity_backlogs,
     run_preferred_activity_poller,
+)
+from thesistrace.hosted.observability import configure_observability
+from thesistrace.hosted.probes import (
+    ProcessProbeServer,
+    ProcessProbeState,
+    monitor_role,
 )
 from thesistrace.hosted.research_workflow import ResearchWorkflow
 from thesistrace.hosted.tracking_operations_workflow import (
@@ -503,40 +510,51 @@ def build_compute_activity_worker(
 
 async def run() -> None:
     settings = settings_from_environment()
-    client = await Client.connect(
-        settings.temporal_address,
-        namespace=settings.temporal_namespace,
+    state = ProcessProbeState(
+        service="compute-worker",
+        slot=os.environ.get(
+            "THESISTRACE_SERVICE_SLOT",
+            settings.compute_slot_preference,
+        ),
     )
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        workflow_worker = (
-            build_compute_workflow_worker(
-                client,
-            )
-            if settings.compute_workflow_poller
-            else None
+    with ProcessProbeServer(state):
+        client = await Client.connect(
+            settings.temporal_address,
+            namespace=settings.temporal_namespace,
         )
-
-        def activity_worker(task_queue: str) -> Worker:
-            return build_compute_activity_worker(
-                client,
-                task_queue=task_queue,
-                executor=executor,
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            workflow_worker = (
+                build_compute_workflow_worker(
+                    client,
+                )
+                if settings.compute_workflow_poller
+                else None
             )
 
-        async def backlog() -> tuple[int, int]:
-            return await activity_backlogs(
-                client,
-                settings.temporal_namespace,
-            )
+            def activity_worker(task_queue: str) -> Worker:
+                return build_compute_activity_worker(
+                    client,
+                    task_queue=task_queue,
+                    executor=executor,
+                )
 
-        await run_compute_slot(
-            preference=settings.compute_slot_preference,
-            workflow_worker=workflow_worker,
-            activity_worker=activity_worker,
-            backlog=backlog,
-        )
+            async def backlog() -> tuple[int, int]:
+                return await activity_backlogs(
+                    client,
+                    settings.temporal_namespace,
+                )
+
+            await monitor_role(
+                run_compute_slot(
+                    preference=settings.compute_slot_preference,
+                    workflow_worker=workflow_worker,
+                    activity_worker=activity_worker,
+                    backlog=backlog,
+                ),
+                state,
+            )
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_observability("compute-worker")
     asyncio.run(run())

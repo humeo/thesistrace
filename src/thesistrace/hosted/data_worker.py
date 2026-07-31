@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from collections.abc import Callable, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
 from typing import Any
@@ -19,6 +20,12 @@ from thesistrace.hosted.dataset_publication_workflow import (
     DATASET_PUBLICATION_TASK_QUEUE,
     DatasetPublicationWorkflow,
     ScheduledDatasetPublicationWorkflow,
+)
+from thesistrace.hosted.observability import configure_observability
+from thesistrace.hosted.probes import (
+    ProcessProbeServer,
+    ProcessProbeState,
+    monitor_role,
 )
 from thesistrace.platform_publications import (
     DatasetPublicationRequestService,
@@ -176,13 +183,18 @@ def request_scheduled_dataset_publication(
 
 async def run() -> None:
     settings = settings_from_environment()
-    client = await Client.connect(
-        settings.temporal_address,
-        namespace=settings.temporal_namespace,
+    state = ProcessProbeState(
+        service="data-worker",
+        slot=os.environ.get("THESISTRACE_SERVICE_SLOT", "data-1"),
     )
-    with ThreadPoolExecutor(max_workers=1) as executor:
-        worker = build_data_worker(client, executor=executor)
-        await worker.run()
+    with ProcessProbeServer(state):
+        client = await Client.connect(
+            settings.temporal_address,
+            namespace=settings.temporal_namespace,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            worker = build_data_worker(client, executor=executor)
+            await monitor_role(worker.run(), state)
 
 
 def build_data_worker(
@@ -218,5 +230,5 @@ def build_data_worker(
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    configure_observability("data-worker")
     asyncio.run(run())

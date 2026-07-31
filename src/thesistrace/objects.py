@@ -135,6 +135,17 @@ class ImmutableObjectStore:
             return False
         return available
 
+    def ready(self) -> bool:
+        candidate = self.root
+        while not candidate.exists() and candidate != candidate.parent:
+            candidate = candidate.parent
+        if not candidate.is_dir():
+            return False
+        required = os.R_OK | os.X_OK
+        if candidate != self.root:
+            required |= os.W_OK
+        return os.access(candidate, required)
+
     def put_canonical_json_bytes(
         self,
         payload: bytes,

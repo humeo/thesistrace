@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: ThesisTrace Health
+    orgId: 1
+    folder: ThesisTrace Health
+    type: file
+    disableDeletion: true
+    editable: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

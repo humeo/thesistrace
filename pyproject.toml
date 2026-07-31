@@ -12,6 +12,8 @@ dependencies = [
   "pyarrow==25.0.0",
   "uvicorn[standard]>=0.35.0,<1",
   "temporalio==1.30.0",
+  "opentelemetry-sdk>=1.38.0,<2",
+  "opentelemetry-exporter-otlp-proto-grpc>=1.38.0,<2",
 ]
 
 [project.scripts]
@@ -23,6 +25,7 @@ thesistrace-temporal-worker = "thesistrace.hosted.temporal_worker:main"
 thesistrace-data-worker = "thesistrace.hosted.data_worker:main"
 thesistrace-object-store = "thesistrace.hosted.object_store_service:main"
 thesistrace-tushare-egress = "thesistrace.hosted.tushare_egress:main"
+thesistrace-health-service = "thesistrace.hosted.health_service:main"
 
 [dependency-groups]
 dev = [

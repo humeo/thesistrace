@@ -14,8 +14,9 @@ from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
+from thesistrace.hosted.observability import configure_observability, instrument_http
 from thesistrace.objects import (
     ImmutableObjectStore,
     ParquetContractError,
@@ -234,6 +235,7 @@ def create_object_store_app(
     guards = GuardRegistry(root)
     stages = StageRegistry()
     app = FastAPI(title="ThesisTrace Private ObjectStore")
+    instrument_http(app)
 
     def admit_growth(role: str, candidate_bytes: int) -> None:
         decision = disk_policy.evaluate(
@@ -387,6 +389,35 @@ def create_object_store_app(
     @app.get("/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/live")
+    def live() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/ready")
+    def ready() -> dict[str, str]:
+        if not root.is_dir() or not os.access(
+            root,
+            os.R_OK | os.W_OK | os.X_OK,
+        ):
+            raise HTTPException(status_code=503)
+        return {"status": "ready"}
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    def metrics() -> str:
+        used_bytes = int(disk_used_bytes())
+        used_ratio = used_bytes / disk_capacity_bytes
+        return (
+            "# HELP thesistrace_storage_used_bytes Persistent disk bytes used.\n"
+            "# TYPE thesistrace_storage_used_bytes gauge\n"
+            f"thesistrace_storage_used_bytes {used_bytes}\n"
+            "# HELP thesistrace_storage_capacity_bytes Persistent disk capacity.\n"
+            "# TYPE thesistrace_storage_capacity_bytes gauge\n"
+            f"thesistrace_storage_capacity_bytes {disk_capacity_bytes}\n"
+            "# HELP thesistrace_storage_used_ratio Persistent disk used ratio.\n"
+            "# TYPE thesistrace_storage_used_ratio gauge\n"
+            f"thesistrace_storage_used_ratio {used_ratio:.9f}\n"
+        )
 
     @app.post("/v1/probe")
     def probe(request: Request) -> dict[str, str]:
@@ -837,6 +868,7 @@ def remove_empty_parent(path: Path) -> None:
 
 
 def main() -> None:
+    configure_observability("object-store")
     root = Path(
         os.environ.get(
             "THESISTRACE_OBJECT_STORE_ROOT",
@@ -881,7 +913,7 @@ def main() -> None:
             )
         ),
     )
-    uvicorn.run(app, host="0.0.0.0", port=8010)
+    uvicorn.run(app, host="0.0.0.0", port=8010, log_config=None)
 
 
 if __name__ == "__main__":

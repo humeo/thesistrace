@@ -9,6 +9,12 @@
 	}
 }
 
+:2019 {
+	respond /live 200
+	respond /ready 200
+	respond 404
+}
+
 {$THESISTRACE_SITE_ADDRESS:https://localhost} {
 	tls {$THESISTRACE_ORIGIN_TLS}
 	encode zstd gzip

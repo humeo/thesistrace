@@ -18,6 +18,7 @@ from thesistrace.auth import (
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
+from thesistrace.hosted.observability import configure_observability, instrument_http
 from thesistrace.management import SourceAuthorizationService, build_management_store
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.provisioning import (
@@ -254,6 +255,7 @@ def create_app(
     )
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
+    instrument_http(app)
     verifier = identity_verifier
     if settings.auth_mode == "insforge" and verifier is None:
         verifier = build_identity_verifier(
@@ -318,7 +320,8 @@ def create_app(
                 )
         if (
             settings.auth_mode != "insforge"
-            or request.url.path == "/api/v1/health"
+            or request.url.path
+            in {"/api/v1/health", "/api/v1/live", "/api/v1/ready"}
             or not request.url.path.startswith("/api/v1/")
         ):
             return await call_next(request)
@@ -1025,7 +1028,7 @@ def create_app(
             and (datetime.now(UTC) - heartbeat).total_seconds()
             <= settings.worker_stale_after_seconds
         )
-        object_store_available = objects.probe()
+        object_store_available = objects.ready()
         status = "available" if worker_available and object_store_available else "degraded"
         return {
             "status": status,
@@ -1040,6 +1043,24 @@ def create_app(
                 },
             },
         }
+
+    @app.get("/api/v1/live")
+    def get_liveness() -> dict[str, str]:
+        return {"status": "alive"}
+
+    @app.get("/api/v1/ready")
+    def get_readiness():
+        try:
+            store.last_worker_heartbeat()
+            object_store_ready = objects.ready()
+        except Exception:
+            object_store_ready = False
+        if not object_store_ready:
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_ready"},
+            )
+        return {"status": "ready"}
 
     @app.post("/api/v1/dataset-releases/bootstrap")
     def bootstrap_dataset_release(
@@ -1389,8 +1410,10 @@ def reject_client_workspace_identity(content: dict[str, object]) -> None:
 
 
 def main() -> None:
+    configure_observability("api")
     uvicorn.run(
         create_app(settings_from_environment()),
         host=os.environ.get("THESISTRACE_API_HOST", "127.0.0.1"),
         port=int(os.environ.get("THESISTRACE_API_PORT", "8000")),
+        log_config=None,
     )

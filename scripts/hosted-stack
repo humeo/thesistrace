@@ -90,6 +90,7 @@ prepare() {
     append_secret_if_missing THESISTRACE_RELAY_DATABASE_PASSWORD
     append_secret_if_missing THESISTRACE_DATA_DATABASE_PASSWORD
     append_secret_if_missing THESISTRACE_COMPUTE_DATABASE_PASSWORD
+    append_secret_if_missing THESISTRACE_HEALTH_DATABASE_PASSWORD
     append_secret_if_missing THESISTRACE_OBJECT_STORE_API_TOKEN
     append_secret_if_missing THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN
     append_secret_if_missing THESISTRACE_OBJECT_STORE_DATA_TOKEN

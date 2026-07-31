@@ -1,3 +1,9 @@
+x-bounded-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 x-app: &app
   image: thesistrace/app:${THESISTRACE_RELEASE_VERSION:-0.1.0}
   environment: &app-environment
@@ -13,6 +19,7 @@ x-app: &app
     THESISTRACE_TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-thesistrace}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   restart: unless-stopped
+  logging: *bounded-logging
 
 x-release-dependency: &release-dependency
   release-gate:
@@ -75,6 +82,7 @@ services:
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/jwt.sql:/docker-entrypoint-initdb.d/02-jwt.sql:ro
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
     restart: unless-stopped
+    logging: *bounded-logging
 
   temporal-postgres:
     image: postgres:16.10-alpine
@@ -90,6 +98,7 @@ services:
     volumes:
       - temporal-data:/var/lib/postgresql/data
     restart: unless-stopped
+    logging: *bounded-logging
 
   insforge-migrations:
     image: thesistrace/insforge:2.2.9
@@ -124,6 +133,7 @@ services:
         condition: service_healthy
     networks: [control]
     restart: "no"
+    logging: *bounded-logging
 
   temporal-schema:
     image: temporalio/admin-tools:1.31.0
@@ -141,6 +151,7 @@ services:
     volumes:
       - ./deploy/hosted/temporal:/bootstrap:ro
     restart: "no"
+    logging: *bounded-logging
 
   temporal:
     image: temporalio/server:1.31.0
@@ -164,6 +175,7 @@ services:
     volumes:
       - ./deploy/hosted/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/dynamicconfig.yaml:ro
     restart: unless-stopped
+    logging: *bounded-logging
 
   temporal-namespace:
     image: temporalio/admin-tools:1.31.0
@@ -179,6 +191,7 @@ services:
     volumes:
       - ./deploy/hosted/temporal:/bootstrap:ro
     restart: "no"
+    logging: *bounded-logging
 
   thesistrace-migrations:
     <<: *app
@@ -193,6 +206,7 @@ services:
       THESISTRACE_RELAY_DATABASE_PASSWORD: ${THESISTRACE_RELAY_DATABASE_PASSWORD:-change-me-relay-db-password}
       THESISTRACE_DATA_DATABASE_PASSWORD: ${THESISTRACE_DATA_DATABASE_PASSWORD:-change-me-data-db-password}
       THESISTRACE_COMPUTE_DATABASE_PASSWORD: ${THESISTRACE_COMPUTE_DATABASE_PASSWORD:-change-me-compute-db-password}
+      THESISTRACE_HEALTH_DATABASE_PASSWORD: ${THESISTRACE_HEALTH_DATABASE_PASSWORD:-change-me-health-db-password}
       THESISTRACE_INJECT_MIGRATION_FAILURE: ${THESISTRACE_INJECT_MIGRATION_FAILURE:-0}
       THESISTRACE_MIGRATIONS_DIR: /app/deploy/hosted/migrations
     depends_on:
@@ -229,6 +243,7 @@ services:
         condition: service_healthy
     networks: [control]
     restart: unless-stopped
+    logging: *bounded-logging
 
   deno:
     image: thesistrace/insforge-deno:2.2.9
@@ -259,6 +274,7 @@ services:
       retries: 40
     networks: [control]
     restart: unless-stopped
+    logging: *bounded-logging
 
   insforge:
     image: thesistrace/insforge:2.2.9
@@ -285,6 +301,7 @@ services:
       - insforge-storage:/insforge-storage
       - insforge-logs:/insforge-logs
     restart: unless-stopped
+    logging: *bounded-logging
 
   object-store:
     <<: *app
@@ -318,7 +335,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=2)",
         ]
       interval: 5s
       timeout: 3s
@@ -365,7 +382,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=2)",
         ]
       interval: 5s
       timeout: 3s
@@ -385,6 +402,7 @@ services:
       <<: *app-environment
       THESISTRACE_DATABASE_URL: postgresql://thesistrace_relay:${THESISTRACE_RELAY_DATABASE_PASSWORD:-change-me-relay-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
       THESISTRACE_DATABASE_ROLE: relay
+      THESISTRACE_SERVICE_SLOT: relay-1
     depends_on:
       <<: *release-dependency
       temporal-namespace:
@@ -393,6 +411,17 @@ services:
       - control
       - execution
       - observability
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 40
 
   tushare-egress:
     <<: *app
@@ -414,14 +443,15 @@ services:
           "CMD",
           "python",
           "-c",
-          "import socket; socket.create_connection(('127.0.0.1', 8080), timeout=2).close()",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
         ]
       interval: 5s
-      timeout: 3s
+      timeout: 30s
       retries: 20
     networks:
       - tushare-egress
       - data-egress
+      - observability
 
   data-worker:
     <<: *worker
@@ -434,6 +464,7 @@ services:
       THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_DATA_TOKEN:-change-me-data-object-token}
       TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
       HTTPS_PROXY: http://tushare-egress:8080
+      THESISTRACE_SERVICE_SLOT: data-1
     user: "10003:10003"
     mem_limit: 1g
     cpus: 0.5
@@ -451,6 +482,17 @@ services:
         condition: service_healthy
       tushare-egress:
         condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 40
 
   compute-worker-1:
     <<: *worker
@@ -464,6 +506,7 @@ services:
       THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN:-change-me-compute-object-token}
       THESISTRACE_COMPUTE_SLOT_PREFERENCE: p1
       THESISTRACE_COMPUTE_WORKFLOW_POLLER: "true"
+      THESISTRACE_SERVICE_SLOT: compute-p1-1
     user: &compute-user "10004:10004"
     group_add: &compute-groups ["11000"]
     mem_limit: &compute-memory 1g
@@ -475,6 +518,17 @@ services:
       - storage
     volumes: &compute-volumes
       - working-cache:/var/lib/thesistrace/working-cache
+    healthcheck: &compute-healthcheck
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 40
 
   compute-worker-2:
     <<: *worker
@@ -482,12 +536,14 @@ services:
     environment:
       <<: *compute-environment
       THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
+      THESISTRACE_SERVICE_SLOT: compute-p1-2
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
     cpus: *compute-cpus
     networks: *compute-networks
     volumes: *compute-volumes
+    healthcheck: *compute-healthcheck
 
   compute-worker-3:
     <<: *worker
@@ -495,12 +551,14 @@ services:
     environment:
       <<: *compute-environment
       THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
+      THESISTRACE_SERVICE_SLOT: compute-p1-3
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
     cpus: *compute-cpus
     networks: *compute-networks
     volumes: *compute-volumes
+    healthcheck: *compute-healthcheck
 
   compute-worker-4:
     <<: *worker
@@ -509,20 +567,69 @@ services:
       <<: *compute-environment
       THESISTRACE_COMPUTE_SLOT_PREFERENCE: p3
       THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
+      THESISTRACE_SERVICE_SLOT: compute-p3-1
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
     cpus: *compute-cpus
     networks: *compute-networks
     volumes: *compute-volumes
+    healthcheck: *compute-healthcheck
+
+  health-service:
+    <<: *app
+    command: ["thesistrace-health-service"]
+    user: "10007:10007"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 512m
+    cpus: 0.25
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    environment:
+      <<: *app-environment
+      THESISTRACE_DATABASE_URL: postgresql://thesistrace_health:${THESISTRACE_HEALTH_DATABASE_PASSWORD:-change-me-health-db-password}@postgres:5432/${POSTGRES_DB:-insforge}
+      THESISTRACE_DATABASE_ROLE: health
+      THESISTRACE_HEALTH_FAULT_PLANE: ${THESISTRACE_HEALTH_FAULT_PLANE:-}
+      THESISTRACE_PUBLIC_ORIGIN: ${THESISTRACE_HEALTH_PUBLIC_ORIGIN:-https://edge:8443}
+      THESISTRACE_PUBLIC_ORIGIN_HOST: ${THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST:-localhost}
+      THESISTRACE_PUBLIC_ORIGIN_INSECURE: ${THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE:-true}
+      THESISTRACE_DISK_WARNING_PERCENT: ${THESISTRACE_DISK_WARNING_PERCENT:-70}
+    depends_on:
+      <<: *release-dependency
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/ready', timeout=2)",
+        ]
+      interval: 5s
+      timeout: 10s
+      retries: 40
+    networks:
+      - edge
+      - control
+      - execution
+      - observability
+      - storage
+      - tushare-egress
 
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.136.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    environment:
+      THESISTRACE_EXTERNAL_OTLP_ENDPOINT: ${THESISTRACE_EXTERNAL_OTLP_ENDPOINT:-http://127.0.0.1:4319}
+      THESISTRACE_EXTERNAL_OTLP_INSECURE: ${THESISTRACE_EXTERNAL_OTLP_INSECURE:-true}
     volumes:
       - ./deploy/hosted/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     networks: [observability]
     restart: unless-stopped
+    logging: *bounded-logging
 
   prometheus:
     image: prom/prometheus:v3.6.0
@@ -540,6 +647,7 @@ services:
         condition: service_started
     networks: [observability]
     restart: unless-stopped
+    logging: *bounded-logging
 
   grafana:
     image: grafana/grafana:12.2.0
@@ -547,14 +655,20 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
       GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "127.0.0.1:${GRAFANA_HOST_PORT:-3001}:3000"
     volumes:
       - grafana-data:/var/lib/grafana
+      - ./deploy/hosted/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       <<: *release-dependency
       prometheus:
         condition: service_started
-    networks: [observability]
+    networks:
+      - observability
+      - operator
     restart: unless-stopped
+    logging: *bounded-logging
 
   edge:
     image: thesistrace/edge:${THESISTRACE_RELEASE_VERSION:-0.1.0}
@@ -592,10 +706,18 @@ services:
       - caddy-data:/data
       - caddy-config:/config
       - ${THESISTRACE_ORIGIN_TLS_DIR:-.hosted/origin-tls}:/run/secrets/origin-tls:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 40
     restart: unless-stopped
+    logging: *bounded-logging
 
 networks:
   edge:
+    driver: bridge
+  operator:
     driver: bridge
   control:
     driver: bridge

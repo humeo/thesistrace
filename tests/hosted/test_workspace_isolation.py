@@ -203,12 +203,14 @@ def bootstrap_shared_release(tmp_path: Path) -> dict[str, object]:
             "relay": "",
             "data": "data-password",
             "compute": "compute-password",
+            "health": "health-password",
         },
         {
             "api": "shared-password",
             "relay": "relay-password",
             "data": "data-password",
             "compute": "shared-password",
+            "health": "health-password",
         },
     ],
 )
@@ -1066,6 +1068,7 @@ def test_service_database_credentials_are_distinct_and_role_bound() -> None:
         "relay": "acceptance-relay-password",
         "data": "acceptance-data-password",
         "compute": "acceptance-compute-password",
+        "health": "acceptance-health-password",
     }
     provision_service_role_credentials(
         TEST_DATABASE_URL,
@@ -1076,6 +1079,7 @@ def test_service_database_credentials_are_distinct_and_role_bound() -> None:
         "relay": "thesistrace_relay",
         "data": "thesistrace_data",
         "compute": "thesistrace_compute",
+        "health": "thesistrace_health",
     }
     for service, role in roles.items():
         connection_url = psycopg.conninfo.make_conninfo(

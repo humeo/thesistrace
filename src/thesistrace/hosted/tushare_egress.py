@@ -2,6 +2,9 @@ import select
 import socket
 import socketserver
 
+from thesistrace.hosted.observability import configure_observability
+from thesistrace.hosted.probes import ProcessProbeServer, ProcessProbeState
+
 ALLOWED_HOST = "api.tushare.pro"
 ALLOWED_PORT = 443
 MAX_HEADER_BYTES = 16_384
@@ -76,6 +79,11 @@ class TushareEgressServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
 
+    def service_actions(self) -> None:
+        state = getattr(self, "probe_state", None)
+        if isinstance(state, ProcessProbeState):
+            state.heartbeat()
+
 
 def connect_authority(
     request: bytes,
@@ -96,10 +104,17 @@ def connect_authority(
 
 
 def main() -> None:
-    with TushareEgressServer(
-        ("0.0.0.0", 8080),
-        TushareConnectHandler,
-    ) as server:
+    configure_observability("tushare-egress")
+    state = ProcessProbeState(service="tushare-egress", slot="egress-1")
+    with (
+        ProcessProbeServer(state),
+        TushareEgressServer(
+            ("0.0.0.0", 8080),
+            TushareConnectHandler,
+        ) as server,
+    ):
+        server.probe_state = state
+        state.mark_ready()
         server.serve_forever()
 
 

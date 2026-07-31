@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import os
 
 from temporalio.client import Client
 from temporalio.common import WorkflowIDReusePolicy
@@ -17,6 +18,11 @@ from thesistrace.hosted.execution_outbox import (
     PostgresExecutionOutbox,
     require_execution_entry,
 )
+from thesistrace.hosted.observability import (
+    configure_observability,
+    validate_temporal_control_payload,
+)
+from thesistrace.hosted.probes import ProcessProbeServer, ProcessProbeState
 from thesistrace.hosted.research_workflow import (
     RESEARCH_TASK_QUEUE,
     ResearchWorkflow,
@@ -41,6 +47,12 @@ from thesistrace.hosted.tracking_workflow import (
 logger = logging.getLogger(__name__)
 
 
+def temporal_request(**values: str) -> dict[str, str]:
+    request = dict(values)
+    validate_temporal_control_payload(request)
+    return request
+
+
 async def cancel_workflow_idempotently(client: Client, workflow_id: str) -> None:
     handle = client.get_workflow_handle(workflow_id)
     try:
@@ -63,7 +75,7 @@ async def relay_once(
             try:
                 await client.start_workflow(
                     DatasetPublicationWorkflow.run,
-                    {"publication_id": resource_id},
+                    temporal_request(publication_id=resource_id),
                     id=dataset_publication_workflow_id(resource_id),
                     task_queue=DATASET_PUBLICATION_TASK_QUEUE,
                     id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -76,7 +88,7 @@ async def relay_once(
             try:
                 await client.start_workflow(
                     ResearchWorkflow.run,
-                    {"workspace_id": workspace_id, "run_id": resource_id},
+                    temporal_request(workspace_id=workspace_id, run_id=resource_id),
                     id=research_workflow_id(resource_id),
                     task_queue=RESEARCH_TASK_QUEUE,
                     id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -87,7 +99,7 @@ async def relay_once(
             try:
                 await client.start_workflow(
                     TrackingReleaseWorkflow.run,
-                    {"release_id": resource_id},
+                    temporal_request(release_id=resource_id),
                     id=tracking_release_workflow_id(resource_id),
                     task_queue=TRACKING_TASK_QUEUE,
                     id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -101,10 +113,10 @@ async def relay_once(
             try:
                 await client.start_workflow(
                     TrackingAdvanceWorkflow.run,
-                    {
-                        "workspace_id": workspace_id,
-                        "advance_id": resource_id,
-                    },
+                    temporal_request(
+                        workspace_id=workspace_id,
+                        advance_id=resource_id,
+                    ),
                     id=tracking_advance_workflow_id(resource_id),
                     task_queue=TRACKING_TASK_QUEUE,
                     id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -119,10 +131,10 @@ async def relay_once(
             try:
                 await client.start_workflow(
                     TrackingEquivalenceWorkflow.run,
-                    {
-                        "workspace_id": workspace_id,
-                        "request_id": resource_id,
-                    },
+                    temporal_request(
+                        workspace_id=workspace_id,
+                        request_id=resource_id,
+                    ),
                     id=tracking_equivalence_workflow_id(resource_id),
                     task_queue=TRACKING_OPERATIONS_TASK_QUEUE,
                     id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
@@ -137,10 +149,10 @@ async def relay_once(
             try:
                 await client.start_workflow(
                     TrackingGenerationRebuildWorkflow.run,
-                    {
-                        "workspace_id": workspace_id,
-                        "rebuild_id": resource_id,
-                    },
+                    temporal_request(
+                        workspace_id=workspace_id,
+                        rebuild_id=resource_id,
+                    ),
                     id=tracking_generation_rebuild_workflow_id(
                         resource_id
                     ),
@@ -175,19 +187,28 @@ async def run(interval: float, *, once: bool) -> None:
     settings = settings_from_environment()
     if not settings.database_url:
         raise RuntimeError("THESISTRACE_DATABASE_URL is required")
-    client = await Client.connect(
-        settings.temporal_address,
-        namespace=settings.temporal_namespace,
+    state = ProcessProbeState(
+        service="execution-relay",
+        slot=os.environ.get("THESISTRACE_SERVICE_SLOT", "relay-1"),
     )
-    outbox = PostgresExecutionOutbox(settings.database_url)
-    while True:
-        try:
-            await relay_once(client, outbox)
-        except Exception:
-            logger.exception("Execution outbox relay iteration failed")
-        if once:
-            return
-        await asyncio.sleep(interval)
+    with ProcessProbeServer(state):
+        client = await Client.connect(
+            settings.temporal_address,
+            namespace=settings.temporal_namespace,
+        )
+        outbox = PostgresExecutionOutbox(settings.database_url)
+        while True:
+            try:
+                await relay_once(client, outbox)
+            except Exception:
+                state.mark_not_ready()
+                logger.exception("Execution outbox relay iteration failed")
+            else:
+                state.mark_ready()
+                state.heartbeat()
+            if once:
+                return
+            await asyncio.sleep(interval)
 
 
 def main() -> None:
@@ -195,5 +216,5 @@ def main() -> None:
     parser.add_argument("--interval", type=float, default=1.0)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    configure_observability("execution-relay")
     asyncio.run(run(args.interval, once=args.once))
