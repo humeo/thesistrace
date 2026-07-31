@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Awaitable, Callable, Sequence
+from concurrent.futures import Executor, ThreadPoolExecutor
+from datetime import timedelta
 
 from temporalio import activity
 from temporalio.client import Client
@@ -14,7 +16,14 @@ from thesistrace.activity_contract import (
 from thesistrace.config import settings_from_environment
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.activity_heartbeat import ActivityHeartbeat
-from thesistrace.hosted.research_workflow import RESEARCH_TASK_QUEUE, ResearchWorkflow
+from thesistrace.hosted.compute_dispatch import (
+    COMPUTE_WORKFLOW_TASK_QUEUE,
+    DEFAULT_COMPUTE_TASK_QUEUES,
+    ComputeTaskQueues,
+    activity_backlogs,
+    run_preferred_activity_poller,
+)
+from thesistrace.hosted.research_workflow import ResearchWorkflow
 from thesistrace.hosted.tracking_operations_workflow import (
     TrackingEquivalenceWorkflow,
     TrackingGenerationRebuildWorkflow,
@@ -397,6 +406,101 @@ def finalize_tracking_generation_rebuild_failure(
     }
 
 
+async def run_compute_slot(
+    *,
+    preference: str,
+    workflow_worker: Worker | None,
+    activity_worker: Callable[[str], Worker],
+    backlog: Callable[[], Awaitable[tuple[int, int]]],
+    queues: ComputeTaskQueues = DEFAULT_COMPUTE_TASK_QUEUES,
+    poll_interval_seconds: float = 1.0,
+) -> None:
+    workflow_task = (
+        asyncio.create_task(workflow_worker.run())
+        if workflow_worker is not None
+        else None
+    )
+    activity_task = asyncio.create_task(
+        run_preferred_activity_poller(
+            preference=preference,
+            worker_factory=activity_worker,
+            backlog=backlog,
+            queues=queues,
+            poll_interval_seconds=poll_interval_seconds,
+        )
+    )
+    tasks = [
+        task
+        for task in (workflow_task, activity_task)
+        if task is not None
+    ]
+    try:
+        await asyncio.gather(*tasks)
+    finally:
+        if workflow_worker is not None:
+            await asyncio.shield(workflow_worker.shutdown())
+        activity_task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def build_compute_workflow_worker(
+    client: Client,
+    *,
+    task_queue: str = COMPUTE_WORKFLOW_TASK_QUEUE,
+    workflows: Sequence[type] | None = None,
+) -> Worker:
+    return Worker(
+        client,
+        task_queue=task_queue,
+        workflows=workflows
+        if workflows is not None
+        else [
+            ResearchWorkflow,
+            TrackingReleaseWorkflow,
+            TrackingAdvanceWorkflow,
+            TrackingEquivalenceWorkflow,
+            TrackingGenerationRebuildWorkflow,
+        ],
+        no_remote_activities=True,
+        disable_eager_activity_execution=True,
+        max_cached_workflows=0,
+        max_concurrent_workflow_tasks=1,
+        max_concurrent_workflow_task_polls=1,
+    )
+
+
+def build_compute_activity_worker(
+    client: Client,
+    *,
+    task_queue: str,
+    activities: Sequence[Callable] | None = None,
+    executor: Executor | None = None,
+    identity: str | None = None,
+) -> Worker:
+    return Worker(
+        client,
+        task_queue=task_queue,
+        activities=activities
+        if activities is not None
+        else [
+            execute_research_run,
+            finalize_research_delivery_failure,
+            fanout_tracking_release,
+            execute_tracking_advance,
+            finalize_tracking_advance_delivery_failure,
+            execute_tracking_equivalence,
+            finalize_tracking_equivalence_failure,
+            execute_tracking_generation_rebuild,
+            finalize_tracking_generation_rebuild_failure,
+        ],
+        activity_executor=executor,
+        max_concurrent_activities=1,
+        max_concurrent_activity_task_polls=1,
+        graceful_shutdown_timeout=timedelta(hours=3),
+        identity=identity,
+    )
+
+
 async def run() -> None:
     settings = settings_from_environment()
     client = await Client.connect(
@@ -404,31 +508,33 @@ async def run() -> None:
         namespace=settings.temporal_namespace,
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
-        worker = Worker(
-            client,
-            task_queue=RESEARCH_TASK_QUEUE,
-            workflows=[
-                ResearchWorkflow,
-                TrackingReleaseWorkflow,
-                TrackingAdvanceWorkflow,
-                TrackingEquivalenceWorkflow,
-                TrackingGenerationRebuildWorkflow,
-            ],
-            activities=[
-                execute_research_run,
-                finalize_research_delivery_failure,
-                fanout_tracking_release,
-                execute_tracking_advance,
-                finalize_tracking_advance_delivery_failure,
-                execute_tracking_equivalence,
-                finalize_tracking_equivalence_failure,
-                execute_tracking_generation_rebuild,
-                finalize_tracking_generation_rebuild_failure,
-            ],
-            activity_executor=executor,
-            max_concurrent_activities=1,
+        workflow_worker = (
+            build_compute_workflow_worker(
+                client,
+            )
+            if settings.compute_workflow_poller
+            else None
         )
-        await worker.run()
+
+        def activity_worker(task_queue: str) -> Worker:
+            return build_compute_activity_worker(
+                client,
+                task_queue=task_queue,
+                executor=executor,
+            )
+
+        async def backlog() -> tuple[int, int]:
+            return await activity_backlogs(
+                client,
+                settings.temporal_namespace,
+            )
+
+        await run_compute_slot(
+            preference=settings.compute_slot_preference,
+            workflow_worker=workflow_worker,
+            activity_worker=activity_worker,
+            backlog=backlog,
+        )
 
 
 def main() -> None:

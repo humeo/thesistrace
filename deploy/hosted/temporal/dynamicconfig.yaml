@@ -1,3 +1,12 @@
 limit.maxIDLength:
   - value: 255
     constraints: {}
+matching.enableFairness:
+  - value: true
+    constraints: {}
+matching.numTaskqueueReadPartitions:
+  - value: 1
+    constraints: {}
+matching.numTaskqueueWritePartitions:
+  - value: 1
+    constraints: {}

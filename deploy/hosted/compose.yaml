@@ -454,6 +454,8 @@ services:
       THESISTRACE_DATABASE_ROLE: compute
       THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
       THESISTRACE_OBJECT_STORE_TOKEN: ${THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN:-change-me-compute-object-token}
+      THESISTRACE_COMPUTE_SLOT_PREFERENCE: p1
+      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "true"
     user: &compute-user "10004:10004"
     group_add: &compute-groups ["11000"]
     mem_limit: &compute-memory 1g
@@ -471,6 +473,7 @@ services:
     command: *compute-command
     environment:
       <<: *compute-environment
+      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
@@ -483,6 +486,7 @@ services:
     command: *compute-command
     environment:
       <<: *compute-environment
+      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
@@ -495,6 +499,8 @@ services:
     command: *compute-command
     environment:
       <<: *compute-environment
+      THESISTRACE_COMPUTE_SLOT_PREFERENCE: p3
+      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory

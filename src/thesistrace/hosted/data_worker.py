@@ -1,6 +1,7 @@
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable, Sequence
+from concurrent.futures import Executor, ThreadPoolExecutor
 from typing import Any
 
 from temporalio import activity
@@ -180,23 +181,40 @@ async def run() -> None:
         namespace=settings.temporal_namespace,
     )
     with ThreadPoolExecutor(max_workers=1) as executor:
-        worker = Worker(
-            client,
-            task_queue=DATASET_PUBLICATION_TASK_QUEUE,
-            workflows=[
-                DatasetPublicationWorkflow,
-                ScheduledDatasetPublicationWorkflow,
-            ],
-            activities=[
-                execute_dataset_publication,
-                finalize_dataset_publication_delivery_failure,
-                finalize_dataset_publication_resource_exhaustion,
-                request_scheduled_dataset_publication,
-            ],
-            activity_executor=executor,
-            max_concurrent_activities=1,
-        )
+        worker = build_data_worker(client, executor=executor)
         await worker.run()
+
+
+def build_data_worker(
+    client: Client,
+    *,
+    task_queue: str = DATASET_PUBLICATION_TASK_QUEUE,
+    workflows: Sequence[type] | None = None,
+    activities: Sequence[Callable] | None = None,
+    executor: Executor | None = None,
+) -> Worker:
+    return Worker(
+        client,
+        task_queue=task_queue,
+        workflows=workflows
+        if workflows is not None
+        else [
+            DatasetPublicationWorkflow,
+            ScheduledDatasetPublicationWorkflow,
+        ],
+        activities=activities
+        if activities is not None
+        else [
+            execute_dataset_publication,
+            finalize_dataset_publication_delivery_failure,
+            finalize_dataset_publication_resource_exhaustion,
+            request_scheduled_dataset_publication,
+        ],
+        activity_executor=executor,
+        max_concurrent_activities=1,
+        max_concurrent_activity_task_polls=1,
+        disable_eager_activity_execution=True,
+    )
 
 
 def main() -> None:

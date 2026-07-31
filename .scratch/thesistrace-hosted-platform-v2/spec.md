@@ -367,7 +367,11 @@ deterministic dispatch probe.
   is work-conserving, and running work is not preempted. With sustained P1 and
   P3 backlogs, at least one of the four active or next-available slots must make
   P3 progress while the other three may prefer P1. The probe repeats the same
-  input schedule and requires the same dispatch decisions.
+  input schedule and requires the same ThesisTrace-controlled tier/slot
+  decisions. Temporal documents fairness as roughly proportional and permits
+  small deviations, so exact cross-Workspace interleaving is not a
+  deterministic decision; each repeated run independently proves the accepted
+  equal-weight bound and FIFO sequence.
 - Temporal recovery tests interrupt the outbox relay, API, Temporal Worker, and
   Activity at each publication boundary. They prove accepted work is eventually
   started once, Activity redelivery does not duplicate domain results,

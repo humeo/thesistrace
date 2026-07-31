@@ -4,8 +4,13 @@ from temporalio import workflow
 from temporalio.exceptions import ActivityError
 
 from thesistrace.hosted.activity_policy import heavy_activity_retry_policy
+from thesistrace.hosted.compute_dispatch import (
+    COMPUTE_WORKFLOW_TASK_QUEUE,
+    P3_ACTIVITY_TASK_QUEUE,
+    activity_priority,
+)
 
-RESEARCH_TASK_QUEUE = "thesistrace-compute"
+RESEARCH_TASK_QUEUE = COMPUTE_WORKFLOW_TASK_QUEUE
 
 
 @workflow.defn
@@ -20,6 +25,8 @@ class ResearchWorkflow:
                 start_to_close_timeout=timedelta(hours=2),
                 heartbeat_timeout=timedelta(seconds=30),
                 retry_policy=heavy_activity_retry_policy(),
+                task_queue=P3_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
                 cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
             )
         except ActivityError:
@@ -29,6 +36,8 @@ class ResearchWorkflow:
                 result_type=dict,
                 start_to_close_timeout=timedelta(minutes=1),
                 retry_policy=heavy_activity_retry_policy(),
+                task_queue=P3_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
             )
 
 

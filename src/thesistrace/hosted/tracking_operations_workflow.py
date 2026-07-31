@@ -6,8 +6,13 @@ from temporalio.exceptions import ActivityError
 from thesistrace.hosted.activity_policy import (
     resource_aware_activity_retry_policy,
 )
+from thesistrace.hosted.compute_dispatch import (
+    COMPUTE_WORKFLOW_TASK_QUEUE,
+    P3_ACTIVITY_TASK_QUEUE,
+    activity_priority,
+)
 
-TRACKING_OPERATIONS_TASK_QUEUE = "thesistrace-compute"
+TRACKING_OPERATIONS_TASK_QUEUE = COMPUTE_WORKFLOW_TASK_QUEUE
 
 
 @workflow.defn
@@ -22,6 +27,8 @@ class TrackingEquivalenceWorkflow:
                 start_to_close_timeout=timedelta(hours=2),
                 heartbeat_timeout=timedelta(seconds=30),
                 retry_policy=resource_aware_activity_retry_policy(),
+                task_queue=P3_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
                 cancellation_type=(
                     workflow.ActivityCancellationType
                     .WAIT_CANCELLATION_COMPLETED
@@ -34,6 +41,8 @@ class TrackingEquivalenceWorkflow:
                 result_type=dict,
                 start_to_close_timeout=timedelta(minutes=1),
                 retry_policy=resource_aware_activity_retry_policy(),
+                task_queue=P3_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
             )
 
 
@@ -49,6 +58,8 @@ class TrackingGenerationRebuildWorkflow:
                 start_to_close_timeout=timedelta(hours=2),
                 heartbeat_timeout=timedelta(seconds=30),
                 retry_policy=resource_aware_activity_retry_policy(),
+                task_queue=P3_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
                 cancellation_type=(
                     workflow.ActivityCancellationType
                     .WAIT_CANCELLATION_COMPLETED
@@ -61,6 +72,8 @@ class TrackingGenerationRebuildWorkflow:
                 result_type=dict,
                 start_to_close_timeout=timedelta(minutes=1),
                 retry_policy=resource_aware_activity_retry_policy(),
+                task_queue=P3_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
             )
 
 

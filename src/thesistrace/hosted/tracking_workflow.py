@@ -11,8 +11,14 @@ from thesistrace.hosted.activity_policy import (
     heavy_activity_retry_policy,
     resource_aware_activity_retry_policy,
 )
+from thesistrace.hosted.compute_dispatch import (
+    COMPUTE_WORKFLOW_TASK_QUEUE,
+    P1_ACTIVITY_TASK_QUEUE,
+    activity_priority,
+    platform_activity_priority,
+)
 
-TRACKING_TASK_QUEUE = "thesistrace-compute"
+TRACKING_TASK_QUEUE = COMPUTE_WORKFLOW_TASK_QUEUE
 
 
 @workflow.defn
@@ -31,6 +37,8 @@ class TrackingReleaseWorkflow:
                     start_to_close_timeout=timedelta(minutes=10),
                     heartbeat_timeout=timedelta(seconds=30),
                     retry_policy=resource_aware_activity_retry_policy(),
+                    task_queue=P1_ACTIVITY_TASK_QUEUE,
+                    priority=platform_activity_priority(),
                 )
             except ActivityError as error:
                 if (
@@ -79,6 +87,8 @@ class TrackingAdvanceWorkflow:
                 start_to_close_timeout=timedelta(hours=2),
                 heartbeat_timeout=timedelta(seconds=30),
                 retry_policy=heavy_activity_retry_policy(),
+                task_queue=P1_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
                 cancellation_type=(
                     workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED
                 ),
@@ -90,6 +100,8 @@ class TrackingAdvanceWorkflow:
                 result_type=dict,
                 start_to_close_timeout=timedelta(minutes=1),
                 retry_policy=heavy_activity_retry_policy(),
+                task_queue=P1_ACTIVITY_TASK_QUEUE,
+                priority=activity_priority(request["workspace_id"]),
             )
 
 

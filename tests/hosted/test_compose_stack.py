@@ -141,6 +141,18 @@ def test_hosted_processes_use_explicit_database_and_worker_roles() -> None:
     }:
         assert services[name]["environment"]["THESISTRACE_DATABASE_ROLE"] == "compute"
         assert services[name]["command"][0] == "thesistrace-temporal-worker"
+    assert [
+        services[f"compute-worker-{index}"]["environment"][
+            "THESISTRACE_COMPUTE_SLOT_PREFERENCE"
+        ]
+        for index in range(1, 5)
+    ] == ["p1", "p1", "p1", "p3"]
+    assert [
+        services[f"compute-worker-{index}"]["environment"][
+            "THESISTRACE_COMPUTE_WORKFLOW_POLLER"
+        ]
+        for index in range(1, 5)
+    ] == ["true", "false", "false", "false"]
 
 
 def test_five_workers_have_isolated_single_slot_container_boundaries() -> None:

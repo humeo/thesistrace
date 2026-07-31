@@ -101,13 +101,21 @@ case "$action" in
         set +a
         exec "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
         ;;
+    dispatch-probe)
+        prepare
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            compute-worker-1 \
+            python /workspace/scripts/hosted/temporal_dispatch_probe.py
+        ;;
     operator)
         prepare
         shift
         compose exec -T api thesistrace-operator "$@"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|up|down|restart|smoke|operator}" >&2
+        echo "usage: scripts/hosted-stack {init|config|up|down|restart|smoke|dispatch-probe|operator}" >&2
         exit 2
         ;;
 esac

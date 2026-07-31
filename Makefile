@@ -1,4 +1,4 @@
-.PHONY: dev check hosted-up hosted-down hosted-restart hosted-smoke hosted-config hosted-operator
+.PHONY: dev check hosted-up hosted-down hosted-restart hosted-smoke hosted-config hosted-dispatch-probe hosted-operator
 
 dev:
 	bun run --cwd web dev
@@ -24,6 +24,9 @@ hosted-smoke:
 
 hosted-config:
 	./scripts/hosted-stack config
+
+hosted-dispatch-probe:
+	./scripts/hosted-stack dispatch-probe
 
 hosted-operator:
 	./scripts/hosted-stack operator $(ARGS)
