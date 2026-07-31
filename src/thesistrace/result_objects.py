@@ -7,7 +7,8 @@ import pyarrow as pa
 
 from thesistrace.numeric import canonical_decimal
 from thesistrace.objects import ImmutableObjectStore, ParquetWriterContract
-from thesistrace.strategy import maximum_drawdown
+from thesistrace.ports import ObjectWriterPort
+from thesistrace.strategy import advance_strategy_metric_state, maximum_drawdown
 
 
 class CompactResultError(ValueError):
@@ -96,6 +97,7 @@ RESULT_PARQUET_CONTRACTS = {
     "execution_aggregates": EXECUTION_AGGREGATE_CONTRACT,
     "terminal_positions": TERMINAL_POSITION_CONTRACT,
 }
+TRACKING_TABLE_PARTITION_ROWS = 252
 
 
 def publish_compact_result_objects(
@@ -343,6 +345,16 @@ def terminal_strategy_state(
         if (len(daily) - 1) % rebalance_interval == 0
         else None
     )
+    metrics = strategy.get("metrics")
+    rejections = strategy.get("rejections")
+    if not isinstance(metrics, Mapping) or not isinstance(rejections, list):
+        raise CompactResultError("Strategy metric continuation is invalid")
+    turnover = metrics.get("turnover")
+    if not isinstance(turnover, Mapping) or not isinstance(
+        turnover.get("events"),
+        list,
+    ):
+        raise CompactResultError("Strategy turnover continuation is invalid")
     return {
         "session": str(terminal["session"]),
         "gross_cash": str(terminal["gross_cash"]),
@@ -360,6 +372,22 @@ def terminal_strategy_state(
             "completed_intervals": len(daily) - 1,
         },
         "pending_signal": pending_signal,
+        "last_daily_observation": copy.deepcopy(dict(terminal)),
+        "metric_state": advance_strategy_metric_state(
+            None,
+            daily=[dict(item) for item in daily],
+            turnover_events=[
+                dict(item) for item in turnover["events"]
+            ],
+            cumulative_cost=Decimal(
+                str(terminal["cumulative_transaction_cost"])
+            ),
+            rejections=[
+                dict(item)
+                for item in rejections
+                if isinstance(item, Mapping)
+            ],
+        ),
     }
 
 
@@ -472,7 +500,31 @@ def reconstruct_result_view(
             "execution_aggregates": tables["execution_aggregates"],
         },
         "diagnostics": diagnostics,
-        "terminal_strategy_state": terminal_state,
+        "terminal_strategy_state": public_terminal_strategy_state(
+            terminal_state
+        ),
+    }
+
+
+def public_terminal_strategy_state(
+    terminal_state: Mapping[str, object],
+) -> dict[str, object]:
+    public_fields = (
+        "session",
+        "gross_cash",
+        "net_cash",
+        "gross_nav",
+        "net_nav",
+        "benchmark_nav",
+        "cumulative_transaction_cost",
+        "rebalance_phase",
+        "pending_signal",
+        "positions",
+    )
+    return {
+        field: copy.deepcopy(terminal_state[field])
+        for field in public_fields
+        if field in terminal_state
     }
 
 
@@ -538,12 +590,122 @@ def read_table_object(
     kind: str,
 ) -> list[dict[str, object]]:
     entry = entries.get(kind)
-    if not isinstance(entry, Mapping) or not isinstance(entry.get("sha256"), str):
+    if not isinstance(entry, Mapping):
         raise CompactResultError(f"Result Manifest is missing {kind}")
     contract = RESULT_PARQUET_CONTRACTS[kind]
-    if entry.get("writer_contract_id") != contract.identifier:
+    parts = entry.get("parts")
+    if isinstance(parts, list):
+        rows = [
+            row
+            for part in parts
+            for row in _read_table_part(
+                objects,
+                part,
+                contract,
+                kind,
+            )
+        ]
+        if len(rows) != int(entry.get("row_count", -1)):
+            raise CompactResultError(
+                f"{kind} partition row count does not match Manifest"
+            )
+        return rows
+    return _read_table_part(objects, entry, contract, kind)
+
+
+def read_table_object_tail(
+    objects: ImmutableObjectStore,
+    entries: Mapping[str, object],
+    kind: str,
+    *,
+    limit: int,
+) -> tuple[list[dict[str, object]], int]:
+    if limit < 1:
+        raise CompactResultError("table tail limit must be positive")
+    entry = entries.get(kind)
+    if not isinstance(entry, Mapping):
+        raise CompactResultError(f"Result Manifest is missing {kind}")
+    contract = RESULT_PARQUET_CONTRACTS[kind]
+    parts = entry.get("parts")
+    if not isinstance(parts, list):
+        rows = _read_table_part(objects, entry, contract, kind)
+        return rows[-limit:], len(rows)
+    total_rows = int(entry.get("row_count", -1))
+    if total_rows < 0:
+        raise CompactResultError(
+            f"{kind} partition row count is invalid"
+        )
+    rows: list[dict[str, object]] = []
+    for part in reversed(parts):
+        rows[:0] = _read_table_part(
+            objects,
+            part,
+            contract,
+            kind,
+        )
+        if len(rows) >= limit:
+            break
+    return rows[-limit:], total_rows
+
+
+def table_object_row_count(
+    objects: ImmutableObjectStore,
+    entries: Mapping[str, object],
+    kind: str,
+) -> int:
+    entry = entries.get(kind)
+    if not isinstance(entry, Mapping):
+        raise CompactResultError(f"Result Manifest is missing {kind}")
+    if isinstance(entry.get("parts"), list):
+        count = int(entry.get("row_count", -1))
+        if count < 0:
+            raise CompactResultError(
+                f"{kind} partition row count is invalid"
+            )
+        return count
+    return len(read_table_object(objects, entries, kind))
+
+
+def put_partitioned_table_object(
+    objects: ObjectWriterPort,
+    rows: Sequence[Mapping[str, object]],
+    contract: ParquetWriterContract,
+    *,
+    kind: str,
+) -> dict[str, object]:
+    partitions = [
+        rows[index : index + TRACKING_TABLE_PARTITION_ROWS]
+        for index in range(0, len(rows), TRACKING_TABLE_PARTITION_ROWS)
+    ] or [[]]
+    return {
+        "kind": kind,
+        "format": "partitioned_parquet",
+        "row_count": len(rows),
+        "partition_rows": TRACKING_TABLE_PARTITION_ROWS,
+        "parts": [
+            objects.put_parquet_rows(partition, contract)
+            for partition in partitions
+        ],
+    }
+
+
+def _read_table_part(
+    objects: ImmutableObjectStore,
+    part: object,
+    contract: ParquetWriterContract,
+    kind: str,
+) -> list[dict[str, object]]:
+    if not isinstance(part, Mapping) or not isinstance(
+        part.get("sha256"),
+        str,
+    ):
+        raise CompactResultError(f"{kind} Parquet part is invalid")
+    if part.get("writer_contract_id") != contract.identifier:
         raise CompactResultError(f"{kind} writer contract is unsupported")
-    return objects.read_parquet(str(entry["sha256"]), contract).to_pylist()
+    return objects.read_parquet(
+        str(part["sha256"]),
+        contract,
+    ).to_pylist()
 
 
 def require_mapping(

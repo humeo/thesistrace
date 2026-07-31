@@ -218,6 +218,10 @@ def test_run_publishes_one_complete_immutable_result_bundle(tmp_path: Path) -> N
         assert payload["terminal_strategy_state"]["positions"] == captured[
             "strategy_backtest"
         ]["positions"]
+        assert "metric_state" not in payload["terminal_strategy_state"]
+        assert "last_daily_observation" not in payload[
+            "terminal_strategy_state"
+        ]
         missing_attempt = client.get(f"/api/v1/research-runs/{run_id}/attempts/99")
         assert missing_attempt.status_code == 404
         assert missing_attempt.json()["detail"]["reason_code"] == (

@@ -15,6 +15,9 @@ class CanonicalObjectError(ValueError):
     pass
 
 
+CANONICAL_PARTITION_SESSION_CAP = 252
+
+
 @dataclass(frozen=True)
 class CanonicalFamily:
     table: str
@@ -260,8 +263,8 @@ def write_full_canonical(
         if family.table not in canonical:
             continue
         rows = rows_for_table(family, canonical[family.table])
-        if rows:
-            entries.append(write_partition(objects, family, rows))
+        for partition_rows in bounded_partition_rows(family, rows):
+            entries.append(write_partition(objects, family, partition_rows))
     return sort_partition_entries(entries)
 
 
@@ -328,7 +331,8 @@ def update_canonical_partitions(
             continue
         family = FAMILY_BY_TABLE[table]
         rows = rows_for_table(family, addition)
-        entries.append(write_partition(objects, family, rows))
+        for partition_rows in bounded_partition_rows(family, rows):
+            entries.append(write_partition(objects, family, partition_rows))
 
     universe_additions = delta.get("liquidity_universes_append", {})
     if not isinstance(universe_additions, Mapping):
@@ -338,13 +342,9 @@ def update_canonical_partitions(
         universe_additions,
     )
     if universe_rows:
-        entries.append(
-            write_partition(
-                objects,
-                FAMILY_BY_TABLE["liquidity_universes"],
-                universe_rows,
-            )
-        )
+        family = FAMILY_BY_TABLE["liquidity_universes"]
+        for partition_rows in bounded_partition_rows(family, universe_rows):
+            entries.append(write_partition(objects, family, partition_rows))
     return sort_partition_entries(entries)
 
 
@@ -352,6 +352,55 @@ def materialize_partitioned_canonical(
     objects: ImmutableObjectStore,
     release: Mapping[str, object],
     entries: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    return materialize_partitioned_canonical_window(
+        objects,
+        release,
+        entries,
+        first_session=None,
+        final_session=None,
+    )
+
+
+def materialize_partitioned_canonical_tail(
+    objects: ImmutableObjectStore,
+    release: Mapping[str, object],
+    entries: Sequence[Mapping[str, object]],
+    session_count: int,
+) -> dict[str, object]:
+    if session_count < 1:
+        raise CanonicalObjectError("Canonical tail must contain at least one session")
+    final_session = str(
+        require_mapping(release.get("appended_session_range"))["end"]
+    )
+    table_cache: dict[str, pa.Table] = {}
+    sessions = partitioned_research_calendar_window(
+        objects,
+        entries,
+        final_session=final_session,
+        session_count=session_count,
+        table_cache=table_cache,
+    )
+    if not sessions:
+        raise CanonicalObjectError("Canonical tail has no Research Session")
+    return materialize_partitioned_canonical_window(
+        objects,
+        release,
+        entries,
+        first_session=sessions[0],
+        final_session=sessions[-1],
+        table_cache=table_cache,
+    )
+
+
+def materialize_partitioned_canonical_window(
+    objects: ImmutableObjectStore,
+    release: Mapping[str, object],
+    entries: Sequence[Mapping[str, object]],
+    *,
+    first_session: str | None,
+    final_session: str | None,
+    table_cache: dict[str, pa.Table] | None = None,
 ) -> dict[str, object]:
     table_names = release.get("canonical_tables")
     if not isinstance(table_names, list) or not all(
@@ -375,13 +424,34 @@ def materialize_partitioned_canonical(
         identities: set[tuple[object, ...]] = set()
         for entry in sort_partition_entries(grouped.get(family.family, [])):
             validate_partition_entry(entry, family)
+            if not partition_overlaps_window(
+                entry,
+                family,
+                first_session=first_session,
+                final_session=final_session,
+            ):
+                continue
             try:
-                table_value = objects.read_parquet(str(entry["sha256"]), family.writer_contract)
+                table_value = read_partition_table(
+                    objects,
+                    entry,
+                    family,
+                    table_cache=table_cache,
+                )
             except (OSError, ParquetContractError) as error:
                 raise CanonicalObjectError(
                     f"cannot read Canonical partition for {family.family}"
                 ) from error
             for row in table_value.to_pylist():
+                if (
+                    family.partition_field is not None
+                    and not coordinate_in_window(
+                        str(row[family.partition_field]),
+                        first_session=first_session,
+                        final_session=final_session,
+                    )
+                ):
+                    continue
                 identity = tuple(row[key] for key in family.sort_keys)
                 if identity in identities:
                     raise CanonicalObjectError(
@@ -392,6 +462,299 @@ def materialize_partitioned_canonical(
         rows.sort(key=lambda row: tuple(row[key] for key in family.sort_keys))
         canonical[table] = table_from_rows(family, rows)
     return canonical
+
+
+def partitioned_research_calendar_window(
+    objects: ImmutableObjectStore,
+    entries: Sequence[Mapping[str, object]],
+    *,
+    final_session: str,
+    session_count: int,
+    table_cache: dict[str, pa.Table] | None = None,
+) -> list[str]:
+    if session_count < 1:
+        raise CanonicalObjectError(
+            "Research Calendar window must contain at least one session"
+        )
+    family = FAMILY_BY_TABLE["research_calendar"]
+    candidates = [
+        entry
+        for entry in sort_partition_entries(entries)
+        if entry.get("family") == family.family
+        and partition_starts_before_or_at(entry, final_session)
+    ]
+    sessions: set[str] = set()
+    for entry in reversed(candidates):
+        validate_partition_entry(entry, family)
+        try:
+            table = read_partition_table(
+                objects,
+                entry,
+                family,
+                table_cache=table_cache,
+            )
+        except (OSError, ParquetContractError) as error:
+            raise CanonicalObjectError(
+                "cannot read Canonical partition for market.research_calendar"
+            ) from error
+        sessions.update(
+            str(row["session"])
+            for row in table.to_pylist()
+            if str(row["session"]) <= final_session
+        )
+        if len(sessions) >= session_count:
+            break
+    return sorted(sessions)[-session_count:]
+
+
+def partitioned_research_calendar_neighborhood(
+    objects: ImmutableObjectStore,
+    entries: Sequence[Mapping[str, object]],
+    *,
+    center_session: str,
+    preceding_sessions: int,
+    following_sessions: int,
+    table_cache: dict[str, pa.Table] | None = None,
+) -> list[str]:
+    if preceding_sessions < 0 or following_sessions < 0:
+        raise CanonicalObjectError(
+            "Research Calendar neighborhood bounds must be non-negative"
+        )
+    family = FAMILY_BY_TABLE["research_calendar"]
+    candidates = [
+        entry
+        for entry in sort_partition_entries(entries)
+        if entry.get("family") == family.family
+    ]
+    center_index = next(
+        (
+            index
+            for index, entry in enumerate(candidates)
+            if partition_contains(entry, center_session)
+        ),
+        None,
+    )
+    if center_index is None:
+        raise CanonicalObjectError(
+            "Research Calendar neighborhood center is missing"
+        )
+    sessions: set[str] = set()
+    left = center_index
+    right = center_index
+    visited: set[int] = set()
+    while True:
+        for index in sorted({left, right}):
+            if (
+                index < 0
+                or index >= len(candidates)
+                or index in visited
+            ):
+                continue
+            visited.add(index)
+            entry = candidates[index]
+            validate_partition_entry(entry, family)
+            try:
+                table = read_partition_table(
+                    objects,
+                    entry,
+                    family,
+                    table_cache=table_cache,
+                )
+            except (OSError, ParquetContractError) as error:
+                raise CanonicalObjectError(
+                    "cannot read Canonical partition for market.research_calendar"
+                ) from error
+            sessions.update(
+                str(row["session"])
+                for row in table.to_pylist()
+            )
+        ordered = sorted(sessions)
+        center_position = (
+            ordered.index(center_session)
+            if center_session in ordered
+            else -1
+        )
+        preceding_complete = (
+            center_position >= preceding_sessions
+            or left == 0
+        )
+        following_complete = (
+            center_position >= 0
+            and len(ordered) - center_position - 1 >= following_sessions
+        ) or right == len(candidates) - 1
+        if preceding_complete and following_complete:
+            if center_position < 0:
+                raise CanonicalObjectError(
+                    "Research Calendar neighborhood center is missing"
+                )
+            return ordered[
+                max(0, center_position - preceding_sessions) :
+                center_position + following_sessions + 1
+            ]
+        if not preceding_complete:
+            left -= 1
+        if not following_complete:
+            right += 1
+
+
+def partitioned_research_calendar_range(
+    objects: ImmutableObjectStore,
+    entries: Sequence[Mapping[str, object]],
+    *,
+    after_session: str,
+    through_session: str,
+    table_cache: dict[str, pa.Table] | None = None,
+) -> list[str]:
+    if after_session >= through_session:
+        return []
+    family = FAMILY_BY_TABLE["research_calendar"]
+    sessions: set[str] = set()
+    for entry in sort_partition_entries(entries):
+        if entry.get("family") != family.family:
+            continue
+        partition = require_mapping(entry.get("partition"))
+        start = str(partition.get("start", ""))
+        end = str(partition.get("end", ""))
+        if (end and end <= after_session) or (
+            start and start > through_session
+        ):
+            continue
+        validate_partition_entry(entry, family)
+        try:
+            table = read_partition_table(
+                objects,
+                entry,
+                family,
+                table_cache=table_cache,
+            )
+        except (OSError, ParquetContractError) as error:
+            raise CanonicalObjectError(
+                "cannot read Canonical partition for market.research_calendar"
+            ) from error
+        sessions.update(
+            str(row["session"])
+            for row in table.to_pylist()
+            if after_session < str(row["session"]) <= through_session
+        )
+    return sorted(sessions)
+
+
+def partitioned_liquidity_universe_membership(
+    objects: ImmutableObjectStore,
+    entries: Sequence[Mapping[str, object]],
+    *,
+    universe_name: str,
+    sessions: Sequence[str],
+) -> dict[str, set[str]]:
+    selected_sessions = set(sessions)
+    if not selected_sessions:
+        return {}
+    family = FAMILY_BY_TABLE["liquidity_universes"]
+    memberships = {
+        session: set()
+        for session in selected_sessions
+    }
+    for entry in sort_partition_entries(entries):
+        if entry.get("family") != family.family:
+            continue
+        validate_partition_entry(entry, family)
+        partition = require_mapping(entry.get("partition"))
+        start = str(partition.get("start", ""))
+        end = str(partition.get("end", ""))
+        if start and end and not any(
+            start <= session <= end
+            for session in selected_sessions
+        ):
+            continue
+        try:
+            table = objects.read_parquet(
+                str(entry["sha256"]),
+                family.writer_contract,
+            )
+        except (OSError, ParquetContractError) as error:
+            raise CanonicalObjectError(
+                "cannot read Canonical liquidity universe partition"
+            ) from error
+        for row in table.to_pylist():
+            session = str(row["session"])
+            if (
+                session in selected_sessions
+                and str(row["universe"]) == universe_name
+            ):
+                memberships[session].update(
+                    str(instrument_id)
+                    for instrument_id in row["instrument_ids"]
+                )
+    return memberships
+
+
+def read_partition_table(
+    objects: ImmutableObjectStore,
+    entry: Mapping[str, object],
+    family: CanonicalFamily,
+    *,
+    table_cache: dict[str, pa.Table] | None,
+) -> pa.Table:
+    digest = str(entry["sha256"])
+    if table_cache is not None and digest in table_cache:
+        return table_cache[digest]
+    table = objects.read_parquet(digest, family.writer_contract)
+    if table_cache is not None:
+        table_cache[digest] = table
+    return table
+
+
+def partition_overlaps_window(
+    entry: Mapping[str, object],
+    family: CanonicalFamily,
+    *,
+    first_session: str | None,
+    final_session: str | None,
+) -> bool:
+    if family.partition_field is None or (
+        first_session is None and final_session is None
+    ):
+        return True
+    partition = require_mapping(entry.get("partition"))
+    start = str(partition.get("start", ""))
+    end = str(partition.get("end", ""))
+    if not start or not end:
+        return True
+    return (
+        (first_session is None or end >= first_session)
+        and (final_session is None or start <= final_session)
+    )
+
+
+def partition_starts_before_or_at(
+    entry: Mapping[str, object],
+    final_session: str,
+) -> bool:
+    partition = require_mapping(entry.get("partition"))
+    start = str(partition.get("start", ""))
+    return not start or start <= final_session
+
+
+def partition_contains(
+    entry: Mapping[str, object],
+    session: str,
+) -> bool:
+    partition = require_mapping(entry.get("partition"))
+    start = str(partition.get("start", ""))
+    end = str(partition.get("end", ""))
+    return (not start or start <= session) and (not end or session <= end)
+
+
+def coordinate_in_window(
+    coordinate: str,
+    *,
+    first_session: str | None,
+    final_session: str | None,
+) -> bool:
+    return (
+        (first_session is None or coordinate >= first_session)
+        and (final_session is None or coordinate <= final_session)
+    )
 
 
 def write_partition(
@@ -414,6 +777,7 @@ def write_partition(
         "family": family.family,
         "schema_version": family.schema_version,
         "partition": coordinates,
+        "coordinate_count": coordinate_count(family, rows),
         **object_entry,
     }
 
@@ -488,6 +852,59 @@ def rows_for_table(family: CanonicalFamily, value: object) -> list[dict[str, obj
         for row in value
         if isinstance(row, Mapping)
     ]
+
+
+def bounded_partition_rows(
+    family: CanonicalFamily,
+    rows: Sequence[Mapping[str, object]],
+) -> list[list[dict[str, object]]]:
+    materialized = [dict(row) for row in rows]
+    if not materialized:
+        return []
+    if family.partition_field is None:
+        return [materialized]
+    coordinates = sorted(
+        {
+            str(row[family.partition_field])
+            for row in materialized
+        }
+    )
+    partition_by_coordinate = {
+        coordinate: index // CANONICAL_PARTITION_SESSION_CAP
+        for index, coordinate in enumerate(coordinates)
+    }
+    partitions: list[list[dict[str, object]]] = [
+        []
+        for _index in range(
+            (len(coordinates) + CANONICAL_PARTITION_SESSION_CAP - 1)
+            // CANONICAL_PARTITION_SESSION_CAP
+        )
+    ]
+    for row in materialized:
+        partitions[
+            partition_by_coordinate[str(row[family.partition_field])]
+        ].append(row)
+    return partitions
+
+
+def coordinate_count(
+    family: CanonicalFamily,
+    rows: Sequence[Mapping[str, object]],
+) -> int:
+    if family.partition_field is None:
+        return 1
+    return len(
+        {
+            str(row[family.partition_field])
+            for row in rows
+        }
+    )
+
+
+def require_mapping(value: object) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise CanonicalObjectError("Canonical partition coordinates are invalid")
+    return value
 
 
 def table_from_rows(

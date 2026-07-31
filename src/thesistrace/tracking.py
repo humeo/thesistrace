@@ -1,10 +1,15 @@
 import hashlib
 import json
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+from thesistrace.activity_contract import (
+    MAX_RESOURCE_EXHAUSTION_EXECUTIONS,
+    is_resource_exhaustion,
+)
 from thesistrace.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.factor import (
@@ -20,6 +25,7 @@ from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import (
     ControlMetadataPort,
     ObjectStorePort,
+    ObjectWriterPort,
     WorkingCachePort,
 )
 from thesistrace.quota import QuotaExceededError
@@ -30,9 +36,12 @@ from thesistrace.result_objects import (
     STRATEGY_DAILY_CONTRACT,
     TERMINAL_POSITION_CONTRACT,
     execution_aggregate_rows,
+    public_terminal_strategy_state,
     publish_compact_result_objects,
+    put_partitioned_table_object,
     read_json_object,
     read_table_object,
+    read_table_object_tail,
     rebalance_aggregate_rows,
     reconstruct_result_view,
     reconstruct_strategy_metrics,
@@ -45,7 +54,11 @@ from thesistrace.result_objects import (
 from thesistrace.result_objects import (
     terminal_strategy_state as compact_terminal_strategy_state,
 )
-from thesistrace.strategy import run_strategy, strategy_metrics
+from thesistrace.strategy import (
+    advance_strategy_metric_state,
+    run_strategy,
+    strategy_metrics_from_state,
+)
 from thesistrace.working_cache import WorkingCacheError
 
 
@@ -57,7 +70,16 @@ class EquivalenceError(DailyTrackingError):
     pass
 
 
+class TrackingAdvanceLimitError(DailyTrackingError):
+    pass
+
+
 SUPPORTED_CALCULATION_KERNELS = {"kernel-v1", "kernel-v2"}
+TRACKING_METADATA_HISTORY_LIMIT = 10
+TRACKING_PRODUCT_HISTORY_LIMIT = 252
+MAX_EFFECTIVE_ALPHA_LOOKBACK = 252
+TRACKING_ADVANCE_CHUNK_SESSIONS = 25
+MAX_TRACKING_ADVANCE_SESSIONS = 252
 COMPACT_RESULT_OBJECTS = {
     "diagnostic_summary",
     "execution_aggregates",
@@ -68,6 +90,15 @@ COMPACT_RESULT_OBJECTS = {
     "terminal_positions",
     "terminal_strategy_state",
 }
+
+
+@dataclass
+class CorrectionImpactCache:
+    calendars: dict[tuple[str, str], list[str]] = field(default_factory=dict)
+    memberships: dict[
+        tuple[str, str],
+        dict[str, set[str]],
+    ] = field(default_factory=dict)
 
 
 class DailyTrackingService:
@@ -168,6 +199,18 @@ class DailyTrackingService:
         ):
             raise DailyTrackingError("DailyTrack requires a complete compact Result Bundle")
         result_view = reconstruct_result_view(self.objects, manifest)
+        tracking_seed_tables = {
+            kind: read_table_object(
+                self.objects,
+                public_entries,
+                kind,
+            )
+            for kind in (
+                "strategy_daily_observations",
+                "rebalance_aggregates",
+                "execution_aggregates",
+            )
+        }
         strategy = result_view["strategy_backtest"]
         if not isinstance(strategy, dict):
             raise DailyTrackingError("seed Strategy state is incomplete")
@@ -197,7 +240,8 @@ class DailyTrackingService:
             "generation_id": generation_id,
             "predecessor_checkpoint_id": None,
             "target_dataset_release_id": release["id"],
-            "processed_sessions": [],
+            "processed_session_count": 0,
+            "processed_session_range": None,
             "tracking_origin": {
                 "session": origin_session,
                 "activation_session": activation_session,
@@ -319,6 +363,28 @@ class DailyTrackingService:
                     existing_track_id is None
                     and pending_track_id is None
                 ):
+                    checkpoint_manifest["objects"] = {
+                        **public_entries,
+                        **{
+                            kind: put_partitioned_table_object(
+                                staged_objects,
+                                tracking_seed_tables[kind],
+                                {
+                                    "strategy_daily_observations": (
+                                        STRATEGY_DAILY_CONTRACT
+                                    ),
+                                    "rebalance_aggregates": (
+                                        REBALANCE_AGGREGATE_CONTRACT
+                                    ),
+                                    "execution_aggregates": (
+                                        EXECUTION_AGGREGATE_CONTRACT
+                                    ),
+                                }[kind],
+                                kind=kind,
+                            )
+                            for kind in tracking_seed_tables
+                        },
+                    }
                     checkpoint_object = staged_objects.put_json(
                         checkpoint_manifest
                     )
@@ -634,7 +700,12 @@ class DailyTrackingService:
         }
         try:
             return self.cache.validate(str(track["id"]), expected)
-        except (OSError, ValueError, KeyError, WorkingCacheError):
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            WorkingCacheError,
+        ):
             if write_fencing_token is not None:
                 self._assert_cache_write_authority(
                     str(track["id"]),
@@ -649,7 +720,11 @@ class DailyTrackingService:
                 ),
             )
             self.cache.discard_staging()
-            self._rebuild_working_cache(track, generation, expected)
+            self._rebuild_working_cache(
+                track,
+                generation,
+                expected,
+            )
             return self.cache.validate(str(track["id"]), expected)
 
     def _assert_cache_write_authority(
@@ -679,12 +754,27 @@ class DailyTrackingService:
         generation: dict[str, object],
         coordinates: dict[str, object],
     ) -> None:
-        release_ids = self._checkpoint_release_sequence(track)
-        if not release_ids or release_ids[-1] != coordinates[
-            "basis_dataset_release_id"
-        ]:
-            raise DailyTrackingError("Checkpoint Release sequence is incomplete")
-        release = self.metadata.dataset_release(str(release_ids[-1]))
+        head = track.get("head")
+        if not isinstance(head, dict):
+            raise DailyTrackingError("Working Cache rebuild Head is missing")
+        head_manifest = self._checkpoint_manifest(
+            str(head["manifest_sha256"])
+        )
+        if (
+            str(head["id"]) != str(coordinates["basis_checkpoint_id"])
+            or str(head["manifest_sha256"])
+            != str(coordinates["basis_checkpoint_sha256"])
+            or str(head["target_dataset_release_id"])
+            != str(coordinates["basis_dataset_release_id"])
+            or str(head_manifest.get("target_dataset_release_id"))
+            != str(coordinates["basis_dataset_release_id"])
+            or str(head_manifest.get("generation_id"))
+            != str(coordinates["generation_id"])
+        ):
+            raise DailyTrackingError("Working Cache rebuild basis is stale")
+        release = self.metadata.dataset_release(
+            str(coordinates["basis_dataset_release_id"])
+        )
         frozen = self.metadata.frozen_research_definition(
             str(track["definition_version_id"])
         )
@@ -693,22 +783,24 @@ class DailyTrackingService:
         definition = frozen["content"]
         if not isinstance(definition, dict):
             raise DailyTrackingError("Working Cache rebuild Definition is invalid")
-        canonical = self.datasets.materialize_canonical(release)
-        calendar = [str(session) for session in canonical["research_calendar"]]
         alpha_definition = definition.get("alpha")
         if not isinstance(alpha_definition, dict):
             raise DailyTrackingError("Working Cache rebuild Alpha is invalid")
         lookback = validate_alpha(
             str(alpha_definition["expression"])
         ).effective_lookback
-        window_start = max(0, len(calendar) - 504 - lookback)
-        window = slice_canonical_range(canonical, calendar[window_start])
+        canonical = self.datasets.materialize_canonical_tail(
+            release,
+            504 + lookback,
+        )
+        calendar = [str(session) for session in canonical["research_calendar"]]
+        report_sessions = calendar[-504:]
         alpha = self._alpha(
-            window,
+            canonical,
             definition,
             kernel=str(generation["calculation_kernel"]),
         )
-        recent_sessions = set(calendar[-504:])
+        recent_sessions = set(report_sessions)
         recent_alpha = {
             **alpha,
             "sessions": [
@@ -721,7 +813,7 @@ class DailyTrackingService:
         labels = build_forward_labels(
             canonical,
             recent_alpha,
-            signal_sessions=calendar[-504:],
+            signal_sessions=report_sessions,
         )
         factor = evaluate_factor(labels)
         pending = {
@@ -847,6 +939,73 @@ class DailyTrackingService:
         )
         return track
 
+    def _frontier_track(
+        self,
+        track_id: str,
+        *,
+        generation_id: str | None = None,
+    ) -> dict[str, object] | None:
+        with self.metadata.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM daily_tracks WHERE id = ?",
+                (track_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            requested_generation_id = (
+                generation_id
+                if generation_id is not None
+                else str(row["current_generation_id"])
+            )
+            generations = connection.execute(
+                """
+                SELECT *
+                FROM tracking_generations
+                WHERE daily_track_id = ?
+                  AND id IN (?, ?)
+                ORDER BY ordinal
+                """,
+                (
+                    track_id,
+                    row["current_generation_id"],
+                    requested_generation_id,
+                ),
+            ).fetchall()
+            head = connection.execute(
+                """
+                SELECT *
+                FROM tracking_checkpoints
+                WHERE daily_track_id = ? AND id = ?
+                """,
+                (track_id, row["head_checkpoint_id"]),
+            ).fetchone()
+            unfinished = connection.execute(
+                """
+                SELECT *
+                FROM tracking_advances
+                WHERE daily_track_id = ?
+                  AND status IN ('pending', 'running', 'blocked')
+                ORDER BY created_at, id
+                LIMIT 1
+                """,
+                (track_id,),
+            ).fetchall()
+        track = {key: row[key] for key in row.keys()}
+        track["generations"] = [
+            {key: item[key] for key in item.keys()}
+            for item in generations
+        ]
+        track["advances"] = [
+            self._advance_from_row(item)
+            for item in unfinished
+        ]
+        track["head"] = (
+            None
+            if head is None
+            else {key: head[key] for key in head.keys()}
+        )
+        return track
+
     def list_tracks(self) -> list[dict[str, object]]:
         with self.metadata.connect() as connection:
             rows = connection.execute(
@@ -854,35 +1013,441 @@ class DailyTrackingService:
             ).fetchall()
         return [track for row in rows if (track := self.get_track(str(row["id"]))) is not None]
 
-    def current_view(self, track_id: str) -> dict[str, object]:
-        track = self.get_track(track_id)
+    def bounded_track_view(
+        self,
+        track_id: str,
+        *,
+        history_limit: int = TRACKING_METADATA_HISTORY_LIMIT,
+    ) -> dict[str, object] | None:
+        bounded_limit = min(
+            max(history_limit, 1),
+            TRACKING_METADATA_HISTORY_LIMIT,
+        )
+        with self.metadata.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM daily_tracks WHERE id = ?",
+                (track_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            generations = connection.execute(
+                """
+                SELECT * FROM tracking_generations
+                WHERE daily_track_id = ?
+                ORDER BY ordinal DESC
+                LIMIT ?
+                """,
+                (track_id, bounded_limit),
+            ).fetchall()
+            advances = connection.execute(
+                """
+                SELECT advance.*,
+                       (SELECT COUNT(*) FROM tracking_advance_attempts AS attempt
+                        WHERE attempt.advance_id = advance.id) AS attempt_count
+                FROM tracking_advances AS advance
+                WHERE daily_track_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (track_id, bounded_limit),
+            ).fetchall()
+            checkpoints = connection.execute(
+                """
+                SELECT * FROM tracking_checkpoints
+                WHERE daily_track_id = ?
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (track_id, bounded_limit),
+            ).fetchall()
+            head = connection.execute(
+                """
+                SELECT * FROM tracking_checkpoints
+                WHERE daily_track_id = ? AND id = ?
+                """,
+                (track_id, row["head_checkpoint_id"]),
+            ).fetchone()
+            deletion = connection.execute(
+                """
+                SELECT * FROM working_cache_deletions
+                WHERE daily_track_id = ?
+                """,
+                (track_id,),
+            ).fetchone()
+            counts = {
+                "generation_count": int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM tracking_generations
+                        WHERE daily_track_id = ?
+                        """,
+                        (track_id,),
+                    ).fetchone()[0]
+                ),
+                "advance_count": int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM tracking_advances
+                        WHERE daily_track_id = ?
+                        """,
+                        (track_id,),
+                    ).fetchone()[0]
+                ),
+                "checkpoint_count": int(
+                    connection.execute(
+                        """
+                        SELECT COUNT(*) FROM tracking_checkpoints
+                        WHERE daily_track_id = ?
+                        """,
+                        (track_id,),
+                    ).fetchone()[0]
+                ),
+            }
+        view = {key: row[key] for key in row.keys()}
+        view["generations"] = [
+            {key: item[key] for key in item.keys()}
+            for item in reversed(generations)
+        ]
+        view["advances"] = [
+            self._advance_from_row(item)
+            for item in reversed(advances)
+        ]
+        view["checkpoints"] = [
+            {key: item[key] for key in item.keys()}
+            for item in reversed(checkpoints)
+        ]
+        view["head"] = (
+            None
+            if head is None
+            else {key: head[key] for key in head.keys()}
+        )
+        view["cache_deletion"] = (
+            None
+            if deletion is None
+            else {key: deletion[key] for key in deletion.keys()}
+        )
+        view["history"] = {
+            **counts,
+            "returned_per_collection": bounded_limit,
+        }
+        return public_daily_track_view(view)
+
+    def list_track_views(
+        self,
+        *,
+        offset: int,
+        limit: int,
+    ) -> dict[str, object]:
+        bounded_limit = min(max(limit, 1), 10)
+        with self.metadata.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id
+                FROM daily_tracks
+                ORDER BY created_at, id
+                LIMIT ? OFFSET ?
+                """,
+                (bounded_limit + 1, offset),
+            ).fetchall()
+        selected = rows[:bounded_limit]
+        return {
+            "items": [
+                view
+                for row in selected
+                if (
+                    view := self.bounded_track_view(
+                        str(row["id"]),
+                        history_limit=TRACKING_METADATA_HISTORY_LIMIT,
+                    )
+                )
+                is not None
+            ],
+            "offset": offset,
+            "limit": bounded_limit,
+            "has_more": len(rows) > bounded_limit,
+        }
+
+    def tracking_generation(
+        self,
+        track_id: str,
+        generation_id: str,
+    ) -> dict[str, object] | None:
+        generation = self._tracking_child(
+            "tracking_generations",
+            track_id,
+            generation_id,
+        )
+        return (
+            None
+            if generation is None
+            else public_tracking_generation(generation)
+        )
+
+    def tracking_advance(
+        self,
+        track_id: str,
+        advance_id: str,
+    ) -> dict[str, object] | None:
+        with self.metadata.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM tracking_advances
+                WHERE daily_track_id = ? AND id = ?
+                """,
+                (track_id, advance_id),
+            ).fetchone()
+        if row is None:
+            return None
+        return public_tracking_advance(self._advance(advance_id))
+
+    def tracking_checkpoint(
+        self,
+        track_id: str,
+        checkpoint_id: str,
+    ) -> dict[str, object] | None:
+        checkpoint = self._tracking_checkpoint(
+            track_id,
+            checkpoint_id,
+        )
+        return (
+            None
+            if checkpoint is None
+            else public_tracking_checkpoint(checkpoint)
+        )
+
+    def _tracking_checkpoint(
+        self,
+        track_id: str,
+        checkpoint_id: str,
+    ) -> dict[str, object] | None:
+        return self._tracking_child(
+            "tracking_checkpoints",
+            track_id,
+            checkpoint_id,
+        )
+
+    def _tracking_child(
+        self,
+        table: str,
+        track_id: str,
+        child_id: str,
+    ) -> dict[str, object] | None:
+        if table not in {
+            "tracking_generations",
+            "tracking_checkpoints",
+        }:
+            raise ValueError("unsupported Tracking child table")
+        with self.metadata.connect() as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM {table}
+                WHERE daily_track_id = ? AND id = ?
+                """,
+                (track_id, child_id),
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else {key: row[key] for key in row.keys()}
+        )
+
+    def current_view(
+        self,
+        track_id: str,
+        *,
+        limit: int = TRACKING_PRODUCT_HISTORY_LIMIT,
+    ) -> dict[str, object]:
+        track = self.bounded_track_view(track_id, history_limit=1)
         if track is None:
             raise KeyError(track_id)
-        head = track["head"]
-        if not isinstance(head, dict):
+        head_id = track.get("head_checkpoint_id")
+        if not isinstance(head_id, str):
             raise DailyTrackingError("DailyTrack has no Head")
-        manifest = self._checkpoint_manifest(str(head["manifest_sha256"]))
-        objects = manifest.get("objects")
-        if isinstance(objects, dict) and {
+        return self.checkpoint_product_view(
+            track_id,
+            head_id,
+            limit=limit,
+        )
+
+    def checkpoint_product_view(
+        self,
+        track_id: str,
+        checkpoint_id: str,
+        *,
+        limit: int = TRACKING_PRODUCT_HISTORY_LIMIT,
+    ) -> dict[str, object]:
+        bounded_limit = min(
+            max(limit, 1),
+            TRACKING_PRODUCT_HISTORY_LIMIT,
+        )
+        track = self.bounded_track_view(track_id, history_limit=1)
+        if track is None:
+            raise KeyError(track_id)
+        target = self._tracking_checkpoint(track_id, checkpoint_id)
+        if target is None:
+            raise KeyError(checkpoint_id)
+        windows: list[
+            tuple[
+                dict[str, object],
+                list[dict[str, object]],
+                int,
+            ]
+        ] = []
+        cursor: str | None = checkpoint_id
+        collected_daily = 0
+        while (
+            cursor is not None
+            and collected_daily < bounded_limit
+            and len(windows) <= bounded_limit
+        ):
+            row = self._tracking_checkpoint(track_id, cursor)
+            if row is None:
+                raise DailyTrackingError(
+                    "Tracking Checkpoint chain is incomplete"
+                )
+            manifest = self._checkpoint_manifest(
+                str(row["manifest_sha256"])
+            )
+            entries = manifest.get("objects")
+            if not isinstance(entries, dict):
+                raise DailyTrackingError(
+                    "compact Checkpoint object index is invalid"
+                )
+            daily_tail, total_daily = read_table_object_tail(
+                self.objects,
+                entries,
+                "strategy_daily_observations",
+                limit=bounded_limit - collected_daily,
+            )
+            windows.append((manifest, daily_tail, total_daily))
+            collected_daily += len(daily_tail)
+            predecessor = manifest.get("predecessor_checkpoint_id")
+            cursor = (
+                str(predecessor)
+                if predecessor is not None
+                else None
+            )
+        windows.reverse()
+        daily: list[dict[str, object]] = []
+        rebalances: list[dict[str, object]] = []
+        executions: list[dict[str, object]] = []
+        for manifest, daily_rows, _total_daily in windows:
+            entries = manifest["objects"]
+            daily.extend(daily_rows)
+            if daily_rows:
+                rebalance_rows, _ = read_table_object_tail(
+                    self.objects,
+                    entries,
+                    "rebalance_aggregates",
+                    limit=bounded_limit,
+                )
+                execution_rows, _ = read_table_object_tail(
+                    self.objects,
+                    entries,
+                    "execution_aggregates",
+                    limit=bounded_limit,
+                )
+                sessions = {
+                    str(row["session"])
+                    for row in daily_rows
+                }
+                rebalances.extend(
+                    row
+                    for row in rebalance_rows
+                    if str(row["session"]) in sessions
+                )
+                executions.extend(
+                    row
+                    for row in execution_rows
+                    if str(row["session"]) in sessions
+                )
+        daily = daily[-bounded_limit:]
+        sessions = {str(row["session"]) for row in daily}
+        rebalances = [
+            row for row in rebalances if str(row["session"]) in sessions
+        ]
+        executions = [
+            row for row in executions if str(row["session"]) in sessions
+        ]
+        target_manifest = windows[-1][0]
+        entries = target_manifest["objects"]
+        factor = read_json_object(
+            self.objects,
+            entries,
             "factor_summary",
+        )
+        summary = read_json_object(
+            self.objects,
+            entries,
             "strategy_summary",
-            "strategy_daily_observations",
+        )
+        terminal = read_json_object(
+            self.objects,
+            entries,
             "terminal_strategy_state",
-        } <= set(objects):
-            projection = self._compact_tracking_projection(track)
-            return {
-                "daily_track": {
-                    "id": track["id"],
-                    "status": track["status"],
-                    "generation_id": track["current_generation_id"],
-                    "head_checkpoint_id": track["head_checkpoint_id"],
-                },
-                "checkpoint": manifest,
-                "factor_summary": projection["factor_summary"],
-                "strategy": projection["strategy"],
-                "recent_label_maturation": {"events": []},
-            }
-        raise DailyTrackingError("Tracking Head does not use the compact contract")
+        )
+        terminal.pop("positions_object", None)
+        terminal["positions"] = read_table_object(
+            self.objects,
+            entries,
+            "terminal_positions",
+        )
+        return {
+            "id": checkpoint_id,
+            "daily_track": {
+                "id": track_id,
+                "status": track["status"],
+                "generation_id": track["current_generation_id"],
+                "head_checkpoint_id": track["head_checkpoint_id"],
+                "viewed_generation_id": target_manifest["generation_id"],
+                "viewed_checkpoint_id": checkpoint_id,
+            },
+            "checkpoint": public_checkpoint_manifest(
+                target_manifest,
+                limit=bounded_limit,
+            ),
+            "factor_summary": factor,
+            "strategy": {
+                "alpha_checksum": summary["alpha_checksum"],
+                "initial_cash_cny": summary["initial_cash_cny"],
+                "daily": [
+                    {
+                        **row,
+                        "cash_ratio": (
+                            float(
+                                Decimal(str(row["net_cash"]))
+                                / Decimal(str(row["net_nav"]))
+                            )
+                            if Decimal(str(row["net_nav"])) != 0
+                            else 0.0
+                        ),
+                    }
+                    for row in daily
+                ],
+                "metrics": summary["metrics"],
+                "rebalance_aggregates": rebalances,
+                "execution_aggregates": executions,
+            },
+            "terminal_strategy_state": public_terminal_strategy_state(
+                terminal
+            ),
+            "recent_label_maturation": {"events": []},
+            "window": {
+                "maximum_sessions": bounded_limit,
+                "returned_sessions": len(daily),
+                "start_session": (
+                    str(daily[0]["session"]) if daily else None
+                ),
+                "end_session": (
+                    str(daily[-1]["session"]) if daily else None
+                ),
+                "has_earlier": (
+                    cursor is not None
+                    or sum(total for _, _, total in windows)
+                    > len(daily)
+                ),
+            },
+        }
 
     def _compact_tracking_projection(
         self,
@@ -974,6 +1539,46 @@ class DailyTrackingService:
                 "metrics": metrics,
                 "rebalance_aggregates": rebalances,
                 "execution_aggregates": executions,
+            },
+            "terminal_strategy_state": terminal,
+        }
+
+    def _checkpoint_state_projection(
+        self,
+        checkpoint: dict[str, object],
+    ) -> dict[str, object]:
+        manifest = self._checkpoint_manifest(
+            str(checkpoint["manifest_sha256"])
+        )
+        entries = manifest.get("objects")
+        if not isinstance(entries, dict):
+            raise DailyTrackingError("compact Checkpoint object index is invalid")
+        factor = read_json_object(self.objects, entries, "factor_summary")
+        summary = read_json_object(self.objects, entries, "strategy_summary")
+        terminal = read_json_object(
+            self.objects,
+            entries,
+            "terminal_strategy_state",
+        )
+        terminal.pop("positions_object", None)
+        terminal["positions"] = read_table_object(
+            self.objects,
+            entries,
+            "terminal_positions",
+        )
+        if not isinstance(terminal.get("metric_state"), dict) or not isinstance(
+            terminal.get("last_daily_observation"),
+            dict,
+        ):
+            raise DailyTrackingError(
+                "Tracking terminal continuation state is incomplete"
+            )
+        return {
+            "factor_summary": factor,
+            "strategy": {
+                "alpha_checksum": summary["alpha_checksum"],
+                "initial_cash_cny": summary["initial_cash_cny"],
+                "metrics": summary["metrics"],
             },
             "terminal_strategy_state": terminal,
         }
@@ -1189,10 +1794,15 @@ class DailyTrackingService:
 
     def enqueue_active_tracks(self, target_release_id: str) -> list[dict[str, str]]:
         failures: list[dict[str, str]] = []
+        correction_cache = CorrectionImpactCache()
         for track in self.list_tracks():
             if track["status"] == "active":
                 try:
-                    self.enqueue_toward(str(track["id"]), target_release_id)
+                    self.enqueue_toward(
+                        str(track["id"]),
+                        target_release_id,
+                        correction_cache=correction_cache,
+                    )
                 except DailyTrackingError as error:
                     failures.append(
                         {
@@ -1203,8 +1813,14 @@ class DailyTrackingService:
                     )
         return failures
 
-    def enqueue_toward(self, track_id: str, target_release_id: str) -> dict[str, object] | None:
-        track = self.get_track(track_id)
+    def enqueue_toward(
+        self,
+        track_id: str,
+        target_release_id: str,
+        *,
+        correction_cache: CorrectionImpactCache | None = None,
+    ) -> dict[str, object] | None:
+        track = self._frontier_track(track_id)
         if track is None or track["status"] != "active":
             return None
         head = track["head"]
@@ -1220,14 +1836,17 @@ class DailyTrackingService:
         ]
         if unfinished:
             return unfinished[0]
-        chain = self._release_chain(head_release_id, target_release_id)
-        if not chain:
+        next_release = self.metadata.next_dataset_release_on_path(
+            head_release_id,
+            target_release_id,
+        )
+        if next_release is None:
             raise DailyTrackingError("target Release is not a descendant of Tracking Head")
-        next_release = chain[0]
         correction = self._corrections_affect_track(
             track,
             next_release.get("correction_change_set"),
             next_release,
+            correction_cache=correction_cache,
         )
         correction_boundary = (
             {
@@ -1253,6 +1872,8 @@ class DailyTrackingService:
         track: dict[str, object],
         change_set: object,
         target_release: dict[str, object],
+        *,
+        correction_cache: CorrectionImpactCache | None,
     ) -> bool:
         if not isinstance(change_set, list) or not change_set:
             return False
@@ -1267,28 +1888,26 @@ class DailyTrackingService:
             raise DailyTrackingError("Alpha Definition is invalid")
         parsed_alpha = validate_alpha(str(alpha["expression"]))
         alpha_fields = set(parsed_alpha.field_names)
-        canonical = self.datasets.materialize_canonical(target_release)
-        calendar = [str(session) for session in canonical["research_calendar"]]
-        origin_index = calendar.index(str(track["origin_session"]))
-        alpha_start = max(
-            0,
-            origin_index - parsed_alpha.effective_lookback,
-        )
-        liquidity_start = max(0, origin_index - 19)
-        universes = canonical.get("liquidity_universes")
-        selected_universe = (
-            universes.get(str(definition["universe"]))
-            if isinstance(universes, dict)
-            else None
-        )
-        if not isinstance(selected_universe, list):
-            raise DailyTrackingError("Tracking Universe is missing")
-        potentially_relevant_instruments = {
-            str(instrument_id)
-            for snapshot in selected_universe[alpha_start:]
-            if isinstance(snapshot, dict)
-            for instrument_id in snapshot.get("instrument_ids", [])
-        }
+        origin_session = str(track["origin_session"])
+        release_id = str(target_release["id"])
+        cache = correction_cache or CorrectionImpactCache()
+        origin_calendar_key = (release_id, origin_session)
+        origin_calendar = cache.calendars.get(origin_calendar_key)
+        if origin_calendar is None:
+            origin_calendar = self.datasets.research_calendar_neighborhood(
+                target_release,
+                center_session=origin_session,
+                preceding_sessions=MAX_EFFECTIVE_ALPHA_LOOKBACK,
+                following_sessions=0,
+            )
+            cache.calendars[origin_calendar_key] = origin_calendar
+        if origin_session not in origin_calendar:
+            raise DailyTrackingError("Tracking origin is not in the Dataset Release")
+        origin_index = origin_calendar.index(origin_session)
+        alpha_start = origin_calendar[
+            max(0, origin_index - parsed_alpha.effective_lookback)
+        ]
+        liquidity_start = origin_calendar[max(0, origin_index - 19)]
         alpha_dependency = {
             "open_raw": "open_adj",
             "high_raw": "high_adj",
@@ -1297,26 +1916,81 @@ class DailyTrackingService:
             "volume_shares": "volume_shares",
             "turnover_cny": "turnover_amount_cny",
         }
-        for correction in change_set:
-            if not isinstance(correction, dict):
-                raise DailyTrackingError("Dataset correction change set is invalid")
-            field = str(correction.get("field"))
+        correction_rows = [
+            correction
+            for correction in change_set
+            if isinstance(correction, dict)
+        ]
+        if len(correction_rows) != len(change_set):
+            raise DailyTrackingError("Dataset correction change set is invalid")
+        membership_sessions: set[str] = set()
+        correction_impacts: list[
+            tuple[dict[str, object], set[str]]
+        ] = []
+        for correction in correction_rows:
             session = str(correction.get("session"))
-            instrument_id = str(correction.get("instrument_id"))
+            calendar_key = (release_id, session)
+            calendar = cache.calendars.get(calendar_key)
+            if calendar is None:
+                calendar = self.datasets.research_calendar_neighborhood(
+                    target_release,
+                    center_session=session,
+                    preceding_sessions=21,
+                    following_sessions=MAX_EFFECTIVE_ALPHA_LOOKBACK,
+                )
+                cache.calendars[calendar_key] = calendar
             if session not in calendar:
                 raise DailyTrackingError("Dataset correction session is invalid")
             session_index = calendar.index(session)
-            if (
-                field == "open_raw"
-                and instrument_id in potentially_relevant_instruments
-            ):
+            affected = set(
+                calendar[
+                    max(0, session_index - 21) :
+                    min(
+                        len(calendar),
+                        session_index
+                        + parsed_alpha.effective_lookback
+                        + 1,
+                    )
+                ]
+            )
+            correction_impacts.append((correction, affected))
+            membership_sessions.update(
+                calendar[
+                    max(0, session_index - 21) :
+                    min(
+                        len(calendar),
+                        session_index
+                        + MAX_EFFECTIVE_ALPHA_LOOKBACK
+                        + 1,
+                    )
+                ]
+            )
+        universe_name = str(definition["universe"])
+        membership_key = (release_id, universe_name)
+        memberships = cache.memberships.get(membership_key)
+        if memberships is None:
+            memberships = self.datasets.liquidity_universe_membership(
+                target_release,
+                universe_name=universe_name,
+                sessions=sorted(membership_sessions),
+            )
+            cache.memberships[membership_key] = memberships
+        for correction, affected_sessions in correction_impacts:
+            field = str(correction.get("field"))
+            session = str(correction.get("session"))
+            instrument_id = str(correction.get("instrument_id"))
+            relevant_instrument = any(
+                instrument_id in memberships.get(affected_session, set())
+                for affected_session in affected_sessions
+            )
+            if field == "open_raw" and relevant_instrument:
                 return True
-            if field == "turnover_cny" and session_index >= liquidity_start:
+            if field == "turnover_cny" and session >= liquidity_start:
                 return True
             if (
                 alpha_dependency.get(field) in alpha_fields
-                and instrument_id in potentially_relevant_instruments
-                and session_index >= alpha_start
+                and relevant_instrument
+                and session >= alpha_start
             ):
                 return True
         return False
@@ -1389,33 +2063,70 @@ class DailyTrackingService:
         return advance_ids
 
     def execute_advance(self, advance_id: str) -> dict[str, object]:
+        self._recover_staged_advance(advance_id)
         claimed = self._claim_advance(advance_id)
         if claimed is None:
             return self._advance(advance_id)
         advance, attempt = claimed
         try:
-            checkpoint = self._calculate_advance(
-                advance,
-                fencing_token=int(attempt["fencing_token"]),
-                attempt_id=str(attempt["id"]),
-            )
-            self._publish_advance_success(
-                advance,
-                attempt,
-                checkpoint,
-            )
+            with self.objects.publication_guard(advance_id):
+                with self.objects.stage(
+                    advance_id,
+                    str(attempt["id"]),
+                    cleanup_uncommitted_payloads=True,
+                ) as staged_objects:
+                    checkpoint = self._calculate_advance(
+                        advance,
+                        fencing_token=int(attempt["fencing_token"]),
+                        attempt_id=str(attempt["id"]),
+                        objects=staged_objects,
+                    )
+                    with staged_objects.publication(
+                        manifest_sha256=str(
+                            checkpoint["manifest_sha256"]
+                        )
+                    ):
+                        self._publish_advance_success(
+                            advance,
+                            attempt,
+                            checkpoint,
+                        )
         except Exception as error:
+            current = self._recover_staged_advance(advance_id)
+            if current["status"] == "succeeded":
+                return current
+            resource_exhausted = is_resource_exhaustion(error)
+            session_limit_exceeded = isinstance(
+                error,
+                TrackingAdvanceLimitError,
+            )
+            if resource_exhausted:
+                reason_code = "RESOURCE_EXHAUSTED"
+            elif session_limit_exceeded:
+                reason_code = "TRACKING_ADVANCE_SESSION_LIMIT"
+            elif isinstance(error, EquivalenceError):
+                reason_code = "EQUIVALENCE_MISMATCH"
+            else:
+                reason_code = "TRACKING_CALCULATION_FAILED"
             self._block_advance(
                 advance,
                 attempt,
                 {
-                    "reason_code": (
-                        "EQUIVALENCE_MISMATCH"
-                        if isinstance(error, EquivalenceError)
-                        else "TRACKING_CALCULATION_FAILED"
+                    "reason_code": reason_code,
+                    "message": (
+                        "accepted Compute Worker resource envelope was exhausted"
+                        if resource_exhausted
+                        else str(error)
                     ),
-                    "message": str(error),
                 },
+                terminal=(
+                    session_limit_exceeded
+                    or (
+                        resource_exhausted
+                        and int(attempt["ordinal"])
+                        >= MAX_RESOURCE_EXHAUSTION_EXECUTIONS
+                    )
+                ),
             )
         completed = self._advance(advance_id)
         if completed["status"] == "succeeded":
@@ -1426,6 +2137,151 @@ class DailyTrackingService:
                     str(latest["id"]),
                 )
         return completed
+
+    def _recover_staged_advance(
+        self,
+        advance_id: str,
+    ) -> dict[str, object]:
+        with self.objects.publication_guard(advance_id):
+            current = self._advance(advance_id)
+            committed_manifest_sha256: str | None = None
+            checkpoint_id = current.get("checkpoint_id")
+            if current["status"] == "succeeded" and isinstance(
+                checkpoint_id,
+                str,
+            ):
+                with self.metadata.connect() as connection:
+                    checkpoint = connection.execute(
+                        """
+                        SELECT manifest_sha256
+                        FROM tracking_checkpoints
+                        WHERE id = ? AND daily_track_id = ?
+                        """,
+                        (checkpoint_id, current["daily_track_id"]),
+                    ).fetchone()
+                if checkpoint is not None:
+                    committed_manifest_sha256 = str(
+                        checkpoint["manifest_sha256"]
+                    )
+            self.objects.recover_staged_publication(
+                advance_id,
+                committed_manifest_sha256=committed_manifest_sha256,
+            )
+            return current
+
+    def prepare_advance_redelivery(
+        self,
+        advance_id: str,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = json.dumps(
+            {
+                "reason_code": "ACTIVITY_REDELIVERED",
+                "message": (
+                    "prior Tracking Activity delivery ended before "
+                    "Checkpoint publication"
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.metadata.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            advance = connection.execute(
+                """
+                SELECT daily_track_id, status
+                FROM tracking_advances
+                WHERE id = ?
+                """,
+                (advance_id,),
+            ).fetchone()
+            if advance is None:
+                raise KeyError(advance_id)
+            self.metadata.lock_daily_track(
+                connection,
+                str(advance["daily_track_id"]),
+            )
+            if advance["status"] == "running":
+                connection.execute(
+                    """
+                    UPDATE tracking_advance_attempts
+                    SET status = 'failed', completed_at = ?,
+                        diagnostic_json = ?
+                    WHERE advance_id = ? AND status = 'running'
+                    """,
+                    (now, diagnostic, advance_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE tracking_advances
+                    SET status = 'blocked', updated_at = ?
+                    WHERE id = ? AND status = 'running'
+                    """,
+                    (now, advance_id),
+                )
+        return self._advance(advance_id)
+
+    def fail_advance_delivery(
+        self,
+        advance_id: str,
+    ) -> dict[str, object]:
+        now = datetime.now(UTC).isoformat()
+        diagnostic = json.dumps(
+            {
+                "reason_code": "ACTIVITY_DELIVERY_FAILED",
+                "message": (
+                    "Tracking Activity delivery exhausted before "
+                    "Checkpoint publication"
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        with self.metadata.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            advance = connection.execute(
+                """
+                SELECT daily_track_id, status
+                FROM tracking_advances
+                WHERE id = ?
+                """,
+                (advance_id,),
+            ).fetchone()
+            if advance is None:
+                raise KeyError(advance_id)
+            self.metadata.lock_daily_track(
+                connection,
+                str(advance["daily_track_id"]),
+            )
+            track = connection.execute(
+                "SELECT status FROM daily_tracks WHERE id = ?",
+                (advance["daily_track_id"],),
+            ).fetchone()
+            if (
+                track is not None
+                and track["status"] == "active"
+                and advance["status"]
+                in {"pending", "running", "blocked"}
+            ):
+                connection.execute(
+                    """
+                    UPDATE tracking_advance_attempts
+                    SET status = 'failed', completed_at = ?,
+                        diagnostic_json = ?
+                    WHERE advance_id = ? AND status = 'running'
+                    """,
+                    (now, diagnostic, advance_id),
+                )
+                connection.execute(
+                    """
+                    UPDATE tracking_advances
+                    SET status = 'failed', updated_at = ?
+                    WHERE id = ?
+                      AND status IN ('pending', 'running', 'blocked')
+                    """,
+                    (now, advance_id),
+                )
+        return self._advance(advance_id)
 
     def upgrade_kernel(
         self,
@@ -1631,8 +2487,9 @@ class DailyTrackingService:
                 rolling_factor=rolling,
                 prior_projection=projection,
             )
-            if transition["processed_sessions"] != manifest.get(
-                "processed_sessions"
+            if not checkpoint_processed_sessions_match(
+                manifest,
+                transition["processed_sessions"],
             ):
                 raise EquivalenceError(
                     "EQUIVALENCE_MISMATCH at "
@@ -1738,8 +2595,13 @@ class DailyTrackingService:
         *,
         fencing_token: int,
         attempt_id: str,
+        objects: ObjectWriterPort | None = None,
     ) -> dict[str, object]:
-        track = self.get_track(str(advance["daily_track_id"]))
+        writer = objects or self.objects
+        track = self._frontier_track(
+            str(advance["daily_track_id"]),
+            generation_id=str(advance["generation_id"]),
+        )
         if track is None:
             raise DailyTrackingError("DailyTrack not found")
         target = self.metadata.dataset_release(str(advance["target_dataset_release_id"]))
@@ -1749,7 +2611,6 @@ class DailyTrackingService:
         definition = frozen["content"]
         if not isinstance(definition, dict):
             raise DailyTrackingError("Tracking Definition is invalid")
-        canonical = self.datasets.materialize_canonical(target)
         generation = next(
             item for item in track["generations"] if item["id"] == advance["generation_id"]
         )
@@ -1776,6 +2637,7 @@ class DailyTrackingService:
             "terminal_strategy_state",
         } <= set(current_objects)
         if replay:
+            canonical = self.datasets.materialize_canonical(target)
             return self._calculate_compact_replay(
                 track=track,
                 target=target,
@@ -1786,18 +2648,51 @@ class DailyTrackingService:
                 kernel=kernel,
                 fencing_token=fencing_token,
                 attempt_id=attempt_id,
+                objects=writer,
             )
         if compact_head:
+            if not isinstance(current_head, dict):
+                raise DailyTrackingError("DailyTrack has no Head")
+            prior_release = self.metadata.dataset_release(
+                str(current_head["target_dataset_release_id"])
+            )
+            alpha_definition = definition.get("alpha")
+            if prior_release is None or not isinstance(alpha_definition, dict):
+                raise DailyTrackingError("incremental Tracking inputs are missing")
+            new_sessions = self.datasets.research_calendar_range(
+                target,
+                after_session=str(
+                    prior_release["appended_session_range"]["end"]
+                ),
+                through_session=str(
+                    target["appended_session_range"]["end"]
+                ),
+            )
+            if not new_sessions:
+                raise DailyTrackingError(
+                    "incremental Tracking target has no new Research Session"
+                )
+            if len(new_sessions) > MAX_TRACKING_ADVANCE_SESSIONS:
+                raise TrackingAdvanceLimitError(
+                    "Tracking Advance contains "
+                    f"{len(new_sessions)} Research Sessions; "
+                    f"limit is {MAX_TRACKING_ADVANCE_SESSIONS}"
+                )
+            lookback = validate_alpha(
+                str(alpha_definition["expression"])
+            ).effective_lookback
             return self._calculate_incremental_advance(
                 advance=advance,
                 track=track,
                 target=target,
                 frozen=frozen,
                 definition=definition,
-                canonical=canonical,
+                new_sessions=new_sessions,
+                lookback=lookback,
                 generation=generation,
                 fencing_token=fencing_token,
                 attempt_id=attempt_id,
+                objects=writer,
             )
         raise DailyTrackingError("Tracking Head does not use the compact contract")
 
@@ -1813,6 +2708,7 @@ class DailyTrackingService:
         kernel: str,
         fencing_token: int,
         attempt_id: str,
+        objects: ObjectWriterPort,
     ) -> dict[str, object]:
         alpha = self._alpha(canonical, definition, kernel=kernel)
         summary_labels = build_forward_labels(
@@ -1844,7 +2740,7 @@ class DailyTrackingService:
             },
         }
         entries = publish_compact_result_objects(
-            self.objects,
+            objects,
             artifacts,
             definition,
         )
@@ -1864,7 +2760,9 @@ class DailyTrackingService:
             "generation_id": generation["id"],
             "predecessor_checkpoint_id": None,
             "target_dataset_release_id": target["id"],
-            "processed_sessions": calendar[origin_index:],
+            **processed_session_manifest_fields(
+                calendar[origin_index:]
+            ),
             "tracking_origin": {
                 "session": track["origin_session"],
                 "activation_session": activation_release[
@@ -1889,8 +2787,8 @@ class DailyTrackingService:
             "objects": entries,
             "created_at": now,
         }
-        manifest_object = self.objects.put_json(manifest)
-        self.objects.put_manifest(checkpoint_id, manifest)
+        manifest_object = objects.put_json(manifest)
+        objects.put_manifest(checkpoint_id, manifest)
 
         pending_items = alpha["sessions"][-21:]
         pending = {
@@ -1941,10 +2839,12 @@ class DailyTrackingService:
         target: dict[str, object],
         frozen: dict[str, object],
         definition: dict[str, object],
-        canonical: dict[str, object],
+        new_sessions: list[str],
+        lookback: int,
         generation: dict[str, object],
         fencing_token: int,
         attempt_id: str,
+        objects: ObjectWriterPort,
     ) -> dict[str, object]:
         head = track["head"]
         if not isinstance(head, dict):
@@ -1959,35 +2859,97 @@ class DailyTrackingService:
         if prior_release is None:
             raise DailyTrackingError("Head Release is missing")
         cached_pending = self.cache.read_pending_alpha(str(track["id"]))
-        prior_projection = self._compact_tracking_projection(track)
-        transition = self._tracking_transition(
-            canonical=canonical,
-            definition=definition,
-            kernel=str(generation["calculation_kernel"]),
-            origin_session=str(track["origin_session"]),
-            prior_session=str(prior_release["appended_session_range"]["end"]),
-            pending_alpha={
-                session: [
-                    {
-                        "instrument_id": str(row["instrument_id"]),
-                        "value": float(row["alpha"]),
-                    }
-                    for row in rows
-                ]
-                for session, rows in cached_pending.items()
-            },
-            rolling_factor=self.cache.read_rolling_factor(str(track["id"])),
-            prior_projection=prior_projection,
+        prior_projection = self._checkpoint_state_projection(
+            head,
         )
-        processed_sessions = transition["processed_sessions"]
+        terminal = prior_projection["terminal_strategy_state"]
+        if not isinstance(terminal, dict):
+            raise DailyTrackingError("Tracking terminal state is invalid")
+        pending: dict[str, list[dict[str, object]]] = {
+            session: [
+                {
+                    "instrument_id": str(row["instrument_id"]),
+                    "value": float(row["alpha"]),
+                }
+                for row in rows
+            ]
+            for session, rows in cached_pending.items()
+        }
+        rolling_rows = self.cache.read_rolling_factor(str(track["id"]))
+        projected_daily: list[dict[str, object]] = []
+        projected_rebalances: list[dict[str, object]] = []
+        projected_executions: list[dict[str, object]] = []
+        prior_session = str(prior_release["appended_session_range"]["end"])
+        transition: dict[str, object] | None = None
+        for offset in range(0, len(new_sessions), TRACKING_ADVANCE_CHUNK_SESSIONS):
+            chunk = new_sessions[
+                offset : offset + TRACKING_ADVANCE_CHUNK_SESSIONS
+            ]
+            calendar = self.datasets.research_calendar_neighborhood(
+                target,
+                center_session=chunk[0],
+                preceding_sessions=max(lookback, 21),
+                following_sessions=len(chunk) - 1,
+            )
+            if not calendar or calendar[-1] != chunk[-1]:
+                raise DailyTrackingError(
+                    "Tracking chunk Research Calendar is incomplete"
+                )
+            canonical = self.datasets.materialize_canonical_window(
+                target,
+                calendar[0],
+                chunk[-1],
+            )
+            transition = self._tracking_transition(
+                canonical=canonical,
+                definition=definition,
+                kernel=str(generation["calculation_kernel"]),
+                origin_session=str(track["origin_session"]),
+                prior_session=prior_session,
+                pending_alpha=pending,
+                rolling_factor=rolling_rows,
+                prior_projection=prior_projection,
+            )
+            pending_value = transition["pending_alpha"]
+            rolling_value = transition["rolling_factor"]
+            projection_value = transition["projection"]
+            if (
+                not isinstance(pending_value, dict)
+                or not isinstance(rolling_value, list)
+                or not isinstance(projection_value, dict)
+            ):
+                raise DailyTrackingError(
+                    "Tracking chunk transition is invalid"
+                )
+            pending = pending_value
+            rolling_rows = rolling_value
+            projected_daily.extend(transition["projected_daily"])
+            projected_rebalances.extend(
+                transition["projected_rebalances"]
+            )
+            projected_executions.extend(
+                transition["projected_executions"]
+            )
+            projected_daily = projected_daily[-TRACKING_PRODUCT_HISTORY_LIMIT:]
+            projected_rebalances = projected_rebalances[
+                -TRACKING_PRODUCT_HISTORY_LIMIT:
+            ]
+            projected_executions = projected_executions[
+                -TRACKING_PRODUCT_HISTORY_LIMIT:
+            ]
+            prior_projection = bounded_tracking_projection(
+                projection_value,
+                TRACKING_PRODUCT_HISTORY_LIMIT,
+            )
+            prior_session = chunk[-1]
+        if transition is None:
+            raise DailyTrackingError("Advance has no new Research Sessions")
+        processed_sessions = new_sessions
         pending = transition["pending_alpha"]
         rolling_rows = transition["rolling_factor"]
         factor_summary_value = transition["factor_summary"]
         strategy_summary_value = transition["strategy_summary"]
         strategy = transition["strategy"]
-        projected_daily = transition["projected_daily"]
-        projected_rebalances = transition["projected_rebalances"]
-        projected_executions = transition["projected_executions"]
         if not all(
             isinstance(value, list)
             for value in (
@@ -1999,47 +2961,43 @@ class DailyTrackingService:
             )
         ) or not isinstance(pending, dict):
             raise DailyTrackingError("Tracking transition result is invalid")
-        terminal = prior_projection["terminal_strategy_state"]
-        if not isinstance(terminal, dict):
-            raise DailyTrackingError("Tracking terminal state is invalid")
 
         entries = {
-            "strategy_daily_observations": {
-                "kind": "strategy_daily_observations",
-                **self.objects.put_parquet_rows(
-                    projected_daily,
-                    STRATEGY_DAILY_CONTRACT,
-                ),
-            },
-            "rebalance_aggregates": {
-                "kind": "rebalance_aggregates",
-                **self.objects.put_parquet_rows(
-                    projected_rebalances,
-                    REBALANCE_AGGREGATE_CONTRACT,
-                ),
-            },
-            "execution_aggregates": {
-                "kind": "execution_aggregates",
-                **self.objects.put_parquet_rows(
-                    projected_executions,
-                    EXECUTION_AGGREGATE_CONTRACT,
-                ),
-            },
+            "strategy_daily_observations": put_partitioned_table_object(
+                objects,
+                projected_daily,
+                STRATEGY_DAILY_CONTRACT,
+                kind="strategy_daily_observations",
+            ),
+            "rebalance_aggregates": put_partitioned_table_object(
+                objects,
+                projected_rebalances,
+                REBALANCE_AGGREGATE_CONTRACT,
+                kind="rebalance_aggregates",
+            ),
+            "execution_aggregates": put_partitioned_table_object(
+                objects,
+                projected_executions,
+                EXECUTION_AGGREGATE_CONTRACT,
+                kind="execution_aggregates",
+            ),
             "terminal_positions": {
                 "kind": "terminal_positions",
-                **self.objects.put_parquet_rows(
+                **objects.put_parquet_rows(
                     strategy["positions"],
                     TERMINAL_POSITION_CONTRACT,
                 ),
             },
         }
-        terminal_state = incremental_terminal_state(
-            strategy,
-            terminal,
-            definition,
-            len(processed_sessions),
-            entries["terminal_positions"],
-        )
+        transition_terminal = transition.get("terminal_strategy_state")
+        if not isinstance(transition_terminal, dict):
+            raise DailyTrackingError("Tracking terminal state is incomplete")
+        terminal_state = dict(transition_terminal)
+        terminal_state.pop("positions", None)
+        terminal_state["positions_object"] = {
+            key: entries["terminal_positions"][key]
+            for key in ("sha256", "bytes", "writer_contract_id")
+        }
         for kind, value in (
             ("factor_summary", factor_summary_value),
             ("strategy_summary", strategy_summary_value),
@@ -2048,7 +3006,7 @@ class DailyTrackingService:
             entries[kind] = {
                 "kind": kind,
                 "format": "json",
-                **self.objects.put_json(value),
+                **objects.put_json(value),
             }
         entries = {kind: entries[kind] for kind in sorted(entries)}
 
@@ -2061,7 +3019,7 @@ class DailyTrackingService:
             "generation_id": generation["id"],
             "predecessor_checkpoint_id": head["id"],
             "target_dataset_release_id": target["id"],
-            "processed_sessions": processed_sessions,
+            **processed_session_manifest_fields(processed_sessions),
             "correction_boundary": advance["correction_boundary"],
             "tracking_origin": {
                 "session": track["origin_session"],
@@ -2091,8 +3049,8 @@ class DailyTrackingService:
             "objects": entries,
             "created_at": now,
         }
-        manifest_object = self.objects.put_json(manifest)
-        self.objects.put_manifest(checkpoint_id, manifest)
+        manifest_object = objects.put_json(manifest)
+        objects.put_manifest(checkpoint_id, manifest)
 
         retained = sorted(set(cached_pending) & set(pending))
         newly_retained = {
@@ -2273,14 +3231,24 @@ class DailyTrackingService:
                 matured_labels.append(labels)
                 factor_observations.append(observation)
 
-        final_index = calendar.index(processed_sessions[-1])
-        pending_sessions = set(calendar[max(0, final_index - 20) : final_index + 1])
+        strategy_pending = {
+            session: [dict(row) for row in rows]
+            for session, rows in pending.items()
+        }
+        pending_sessions = set(sorted(pending)[-21:])
         pending = {
             session: rows
             for session, rows in pending.items()
             if session in pending_sessions
         }
-        rolling_sessions = set(calendar[max(0, final_index - 503) : final_index + 1])
+        rolling_sessions = set(
+            sorted(
+                {
+                    session
+                    for session, _horizon in rolling
+                }
+            )[-504:]
+        )
         rolling_rows = [
             row
             for (session, _horizon), row in sorted(rolling.items())
@@ -2293,10 +3261,17 @@ class DailyTrackingService:
         terminal = prior_projection["terminal_strategy_state"]
         if not isinstance(prior_strategy, dict) or not isinstance(terminal, dict):
             raise DailyTrackingError("compact Strategy continuation is invalid")
-        prior_daily = prior_strategy["daily"]
-        if not isinstance(prior_daily, list) or not prior_daily:
-            raise DailyTrackingError("compact Strategy history is empty")
-        alpha_for_strategy = alpha_matrix_from_pending(definition, pending)
+        last_daily = terminal.get("last_daily_observation")
+        prior_metric_state = terminal.get("metric_state")
+        if not isinstance(last_daily, dict) or not isinstance(
+            prior_metric_state,
+            dict,
+        ):
+            raise DailyTrackingError("compact Strategy state is incomplete")
+        alpha_for_strategy = alpha_matrix_from_pending(
+            definition,
+            strategy_pending,
+        )
         strategy = run_strategy(
             canonical,
             alpha_for_strategy,
@@ -2306,7 +3281,7 @@ class DailyTrackingService:
             continuation={
                 "daily": [
                     {
-                        **prior_daily[-1],
+                        **last_daily,
                         "gross_cash": terminal["gross_cash"],
                         "cumulative_transaction_cost": terminal[
                             "cumulative_transaction_cost"
@@ -2314,6 +3289,9 @@ class DailyTrackingService:
                     }
                 ],
                 "positions": terminal["positions"],
+                "report_session_count": terminal["rebalance_phase"][
+                    "report_session_count"
+                ],
             },
         )
         delta_daily = [
@@ -2336,52 +3314,23 @@ class DailyTrackingService:
             for row in execution_aggregate_rows(strategy)
             if str(row["session"]) in new_session_set
         ]
-        complete_daily = [
-            *prior_daily,
-            *[
-                {
-                    **row,
-                    "cash_ratio": (
-                        float(
-                            Decimal(str(row["net_cash"]))
-                            / Decimal(str(row["net_nav"]))
-                        )
-                        if Decimal(str(row["net_nav"])) != 0
-                        else 0.0
-                    ),
-                }
-                for row in projected_daily
-            ],
-        ]
-        complete_rebalances = [
-            *prior_strategy["rebalance_aggregates"],
-            *projected_rebalances,
-        ]
-        complete_executions = [
-            *prior_strategy["execution_aggregates"],
-            *projected_executions,
-        ]
-        rejection_events = [
-            {"reason": reason}
-            for row in complete_executions
-            for reason, count in (
-                ("upper_limit_buy", int(row["upper_limit_buy_rejections"])),
-                ("lower_limit_sell", int(row["lower_limit_sell_rejections"])),
-                ("suspension", int(row["suspension_rejections"])),
-            )
-            for _ in range(count)
-        ]
-        metrics = strategy_metrics(
-            daily=complete_daily,
+        metric_state = advance_strategy_metric_state(
+            prior_metric_state,
+            daily=[dict(row) for row in delta_daily],
             turnover_events=[
                 {"session": row["session"], "value": row["turnover"]}
-                for row in complete_rebalances
+                for row in projected_rebalances
             ],
             cumulative_cost=Decimal(
                 str(delta_daily[-1]["cumulative_transaction_cost"])
             ),
-            rejections=rejection_events,
+            rejections=[
+                dict(row)
+                for row in strategy["rejections"]
+                if isinstance(row, dict)
+            ],
         )
+        metrics = strategy_metrics_from_state(metric_state)
         summary = strategy_summary(
             {
                 "alpha_checksum": alpha_for_strategy["checksum"],
@@ -2395,6 +3344,7 @@ class DailyTrackingService:
             terminal,
             definition,
             len(processed_sessions),
+            metric_state,
             {
                 "sha256": "0" * 64,
                 "bytes": 0,
@@ -2404,6 +3354,53 @@ class DailyTrackingService:
         terminal_state.pop("positions_object")
         terminal_state["positions"] = [dict(row) for row in strategy["positions"]]
         factor_summary_value = rolling_factor_summary(rolling_rows)
+        prior_daily = prior_strategy.get("daily")
+        prior_rebalances = prior_strategy.get("rebalance_aggregates")
+        prior_executions = prior_strategy.get("execution_aggregates")
+        full_projection = all(
+            isinstance(value, list)
+            for value in (prior_daily, prior_rebalances, prior_executions)
+        )
+        complete_daily = (
+            [
+                *prior_daily,
+                *[
+                    {
+                        **row,
+                        "cash_ratio": (
+                            float(
+                                Decimal(str(row["net_cash"]))
+                                / Decimal(str(row["net_nav"]))
+                            )
+                            if Decimal(str(row["net_nav"])) != 0
+                            else 0.0
+                        ),
+                    }
+                    for row in projected_daily
+                ],
+            ]
+            if full_projection
+            else projected_daily
+        )
+        complete_rebalances = (
+            [*prior_rebalances, *projected_rebalances]
+            if full_projection
+            else projected_rebalances
+        )
+        complete_executions = (
+            [*prior_executions, *projected_executions]
+            if full_projection
+            else projected_executions
+        )
+        projection_metrics = (
+            reconstruct_strategy_metrics(
+                summary,
+                complete_daily,
+                complete_rebalances,
+            )
+            if full_projection
+            else metrics
+        )
         return {
             "processed_sessions": processed_sessions,
             "maximum_lookback_sessions": parsed_alpha.effective_lookback,
@@ -2411,6 +3408,7 @@ class DailyTrackingService:
             "rolling_factor": rolling_rows,
             "factor_summary": factor_summary_value,
             "strategy_summary": summary,
+            "terminal_strategy_state": terminal_state,
             "strategy": strategy,
             "projected_daily": projected_daily,
             "projected_rebalances": projected_rebalances,
@@ -2421,7 +3419,7 @@ class DailyTrackingService:
                     "alpha_checksum": summary["alpha_checksum"],
                     "initial_cash_cny": summary["initial_cash_cny"],
                     "daily": complete_daily,
-                    "metrics": metrics,
+                    "metrics": projection_metrics,
                     "rebalance_aggregates": complete_rebalances,
                     "execution_aggregates": complete_executions,
                 },
@@ -2618,6 +3616,14 @@ class DailyTrackingService:
                         now,
                     ),
                 )
+            else:
+                advance_id = str(advance["id"])
+            self.metadata.enqueue_tracking_advance_execution(
+                connection,
+                track_id=track_id,
+                advance_id=advance_id,
+                created_at=now,
+            )
             return {key: existing[key] for key in existing.keys()}
 
     def _create_advance(
@@ -2666,6 +3672,12 @@ class DailyTrackingService:
                 (track_id, generation_id, target_release_id),
             ).fetchone()
             if existing is not None:
+                self.metadata.enqueue_tracking_advance_execution(
+                    connection,
+                    track_id=track_id,
+                    advance_id=str(existing["id"]),
+                    created_at=now,
+                )
                 return self._advance_from_row(existing)
             advance_id = f"advance_{uuid4().hex[:20]}"
             connection.execute(
@@ -2685,6 +3697,12 @@ class DailyTrackingService:
                     now,
                     now,
                 ),
+            )
+            self.metadata.enqueue_tracking_advance_execution(
+                connection,
+                track_id=track_id,
+                advance_id=advance_id,
+                created_at=now,
             )
         return self._advance(advance_id)
 
@@ -2911,6 +3929,8 @@ class DailyTrackingService:
         advance: dict[str, object],
         attempt: dict[str, object],
         diagnostic: dict[str, object],
+        *,
+        terminal: bool = False,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         diagnostic_json = json.dumps(
@@ -2950,10 +3970,14 @@ class DailyTrackingService:
             connection.execute(
                 """
                 UPDATE tracking_advances
-                SET status = 'blocked', updated_at = ?
+                SET status = ?, updated_at = ?
                 WHERE id = ? AND status = 'running'
                 """,
-                (now, advance["id"]),
+                (
+                    "failed" if terminal else "blocked",
+                    now,
+                    advance["id"],
+                ),
             )
 
     def _advance(self, advance_id: str) -> dict[str, object]:
@@ -3024,6 +4048,222 @@ class DailyTrackingService:
         if current is None:
             return []
         return list(reversed(chain))
+
+
+def public_tracking_generation(
+    generation: dict[str, object],
+) -> dict[str, object]:
+    return {
+        key: generation[key]
+        for key in (
+            "id",
+            "daily_track_id",
+            "ordinal",
+            "basis_dataset_release_id",
+            "calculation_kernel",
+            "reason",
+            "supersedes_generation_id",
+            "supersedes_head_checkpoint_id",
+            "created_at",
+        )
+        if key in generation
+    }
+
+
+def processed_session_manifest_fields(
+    sessions: list[str],
+) -> dict[str, object]:
+    return {
+        "processed_session_count": len(sessions),
+        "processed_session_range": (
+            {
+                "start": sessions[0],
+                "end": sessions[-1],
+            }
+            if sessions
+            else None
+        ),
+    }
+
+
+def checkpoint_processed_sessions_match(
+    manifest: dict[str, object],
+    sessions: object,
+) -> bool:
+    if not isinstance(sessions, list) or not all(
+        isinstance(session, str) for session in sessions
+    ):
+        return False
+    legacy = manifest.get("processed_sessions")
+    if isinstance(legacy, list):
+        return legacy == sessions
+    return processed_session_manifest_fields(sessions) == {
+        "processed_session_count": manifest.get(
+            "processed_session_count"
+        ),
+        "processed_session_range": manifest.get(
+            "processed_session_range"
+        ),
+    }
+
+
+def public_tracking_advance(
+    advance: dict[str, object],
+) -> dict[str, object]:
+    result = {
+        key: advance[key]
+        for key in (
+            "id",
+            "daily_track_id",
+            "generation_id",
+            "target_dataset_release_id",
+            "status",
+            "correction_boundary",
+            "attempt_count",
+            "created_at",
+            "updated_at",
+        )
+        if key in advance
+    }
+    attempts = advance.get("attempts")
+    if isinstance(attempts, list):
+        result["attempts"] = [
+            {
+                key: attempt[key]
+                for key in (
+                    "ordinal",
+                    "status",
+                    "created_at",
+                    "completed_at",
+                    "diagnostic",
+                )
+                if key in attempt
+            }
+            for attempt in attempts
+            if isinstance(attempt, dict)
+        ]
+    return result
+
+
+def public_tracking_checkpoint(
+    checkpoint: dict[str, object],
+) -> dict[str, object]:
+    return {
+        key: checkpoint[key]
+        for key in (
+            "id",
+            "daily_track_id",
+            "generation_id",
+            "predecessor_checkpoint_id",
+            "target_dataset_release_id",
+            "created_at",
+        )
+        if key in checkpoint
+    }
+
+
+def public_checkpoint_manifest(
+    manifest: dict[str, object],
+    *,
+    limit: int,
+) -> dict[str, object]:
+    processed = manifest.get("processed_sessions")
+    processed_sessions = (
+        [str(session) for session in processed[-limit:]]
+        if isinstance(processed, list)
+        else []
+    )
+    processed_count = int(
+        manifest.get(
+            "processed_session_count",
+            len(processed) if isinstance(processed, list) else 0,
+        )
+    )
+    processed_range = manifest.get("processed_session_range")
+    if not isinstance(processed_range, dict):
+        processed_range = (
+            {
+                "start": str(processed[0]),
+                "end": str(processed[-1]),
+            }
+            if isinstance(processed, list) and processed
+            else None
+        )
+    return {
+        key: value
+        for key, value in {
+            "id": manifest.get("id"),
+            "kind": manifest.get("kind"),
+            "generation_id": manifest.get("generation_id"),
+            "predecessor_checkpoint_id": manifest.get(
+                "predecessor_checkpoint_id"
+            ),
+            "target_dataset_release_id": manifest.get(
+                "target_dataset_release_id"
+            ),
+            "processed_sessions": processed_sessions,
+            "processed_session_count": processed_count,
+            "processed_session_range": processed_range,
+            "correction_boundary": manifest.get(
+                "correction_boundary"
+            ),
+            "created_at": manifest.get("created_at"),
+        }.items()
+        if value is not None
+    }
+
+
+def public_daily_track_view(
+    track: dict[str, object],
+) -> dict[str, object]:
+    result = {
+        key: track[key]
+        for key in (
+            "id",
+            "seed_run_id",
+            "definition_version_id",
+            "activation_release_id",
+            "origin_session",
+            "numeric_execution_contract",
+            "status",
+            "current_generation_id",
+            "head_checkpoint_id",
+            "created_at",
+            "stopped_at",
+        )
+        if key in track
+    }
+    result["generations"] = [
+        public_tracking_generation(item)
+        for item in track.get("generations", [])
+        if isinstance(item, dict)
+    ]
+    result["advances"] = [
+        public_tracking_advance(item)
+        for item in track.get("advances", [])
+        if isinstance(item, dict)
+    ]
+    result["checkpoints"] = [
+        public_tracking_checkpoint(item)
+        for item in track.get("checkpoints", [])
+        if isinstance(item, dict)
+    ]
+    head = track.get("head")
+    result["head"] = (
+        public_tracking_checkpoint(head)
+        if isinstance(head, dict)
+        else None
+    )
+    history = track.get("history")
+    if isinstance(history, dict):
+        result["history"] = dict(history)
+    deletion = track.get("cache_deletion")
+    result["cache_cleanup_status"] = (
+        str(deletion["status"])
+        if isinstance(deletion, dict) and "status" in deletion
+        else None
+    )
+    return result
 
 
 def slice_canonical_through(
@@ -3184,6 +4424,31 @@ def rolling_factor_row(
     }
 
 
+def bounded_tracking_projection(
+    projection: dict[str, object],
+    limit: int,
+) -> dict[str, object]:
+    strategy = projection.get("strategy")
+    if not isinstance(strategy, dict):
+        raise DailyTrackingError("Tracking Strategy projection is invalid")
+    bounded_strategy = dict(strategy)
+    for key in (
+        "daily",
+        "rebalance_aggregates",
+        "execution_aggregates",
+    ):
+        rows = bounded_strategy.get(key)
+        if not isinstance(rows, list):
+            raise DailyTrackingError(
+                f"Tracking Strategy projection {key} is invalid"
+            )
+        bounded_strategy[key] = [dict(row) for row in rows[-limit:]]
+    return {
+        **projection,
+        "strategy": bounded_strategy,
+    }
+
+
 def rolling_factor_summary(
     rolling_rows: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -3274,6 +4539,7 @@ def incremental_terminal_state(
     prior_terminal: dict[str, object],
     definition: dict[str, object],
     processed_session_count: int,
+    metric_state: dict[str, object],
     positions_entry: dict[str, object],
 ) -> dict[str, object]:
     daily = strategy.get("daily")
@@ -3316,6 +4582,8 @@ def incremental_terminal_state(
             "completed_intervals": report_session_count - 1,
         },
         "pending_signal": pending_signal,
+        "last_daily_observation": dict(terminal),
+        "metric_state": dict(metric_state),
         "positions_object": {
             key: positions_entry[key]
             for key in ("sha256", "bytes", "writer_contract_id")

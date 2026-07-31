@@ -3,6 +3,7 @@ import math
 from collections import Counter
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException, localcontext
+from fractions import Fraction
 from statistics import stdev
 
 from thesistrace.numeric import (
@@ -125,10 +126,14 @@ def run_strategy(
     skip_execution_sessions: set[str] | None = None,
 ) -> dict[str, object]:
     calendar = [str(value) for value in canonical["research_calendar"]]
-    origin_index = len(calendar) - 504 if origin_session is None else calendar.index(origin_session)
-    if origin_index < 0 or len(calendar) - origin_index < 504:
-        raise StrategyCalculationError("Strategy requires 504 report sessions")
     if continuation is None:
+        origin_index = (
+            len(calendar) - 504
+            if origin_session is None
+            else calendar.index(origin_session)
+        )
+        if origin_index < 0 or len(calendar) - origin_index < 504:
+            raise StrategyCalculationError("Strategy requires 504 report sessions")
         processing_start = origin_index
     else:
         prior_daily = continuation.get("daily")
@@ -136,6 +141,14 @@ def run_strategy(
             raise StrategyCalculationError("continuation has no Strategy history")
         last_session = str(prior_daily[-1]["session"])
         processing_start = calendar.index(last_session) + 1
+        report_session_count = int(
+            continuation.get("report_session_count", len(prior_daily))
+        )
+        if report_session_count < len(prior_daily):
+            raise StrategyCalculationError(
+                "continuation report session count is invalid"
+            )
+        origin_index = processing_start - report_session_count
     report_calendar = calendar[processing_start:]
     strategy = definition["strategy"]
     holdings_count = int(strategy["holdings_count"])
@@ -841,29 +854,52 @@ def strategy_metrics(
     intervals = len(daily) - 1
     gross_cumulative = float(gross_nav[-1] / gross_nav[0] - 1)
     net_cumulative = float(net_nav[-1] / net_nav[0] - 1)
-    benchmark_cumulative = float(benchmark_nav[-1] / benchmark_nav[0] - 1)
+    benchmark_cumulative = float(
+        benchmark_nav[-1] / benchmark_nav[0] - 1
+    )
     gross_cagr = cagr(gross_nav[-1] / gross_nav[0], intervals)
     net_cagr = cagr(net_nav[-1] / net_nav[0], intervals)
-    benchmark_cagr = cagr(benchmark_nav[-1] / benchmark_nav[0], intervals)
+    benchmark_cagr = cagr(
+        benchmark_nav[-1] / benchmark_nav[0],
+        intervals,
+    )
     annualized_excess = cagr(
-        (net_nav[-1] / net_nav[0]) / (benchmark_nav[-1] / benchmark_nav[0]),
+        (net_nav[-1] / net_nav[0])
+        / (benchmark_nav[-1] / benchmark_nav[0]),
         intervals,
     )
     net_returns = [
-        float(net_nav[index] / net_nav[index - 1] - 1) for index in range(1, len(net_nav))
+        float(net_nav[index] / net_nav[index - 1] - 1)
+        for index in range(1, len(net_nav))
     ]
-    volatility = stdev(net_returns) * math.sqrt(252) if len(net_returns) >= 2 else None
-    return_mean = math.fsum(net_returns) / len(net_returns) if net_returns else None
+    volatility = (
+        stdev(net_returns) * math.sqrt(252)
+        if len(net_returns) >= 2
+        else None
+    )
+    return_mean = (
+        math.fsum(net_returns) / len(net_returns)
+        if net_returns
+        else None
+    )
     sharpe = (
         None
         if volatility in {None, 0.0} or return_mean is None
-        else return_mean / (volatility / math.sqrt(252)) * math.sqrt(252)
+        else return_mean
+        / (volatility / math.sqrt(252))
+        * math.sqrt(252)
     )
     drawdown = maximum_drawdown(daily, net_nav)
-    calmar = None if drawdown["value"] in {None, 0.0} else net_cagr / abs(float(drawdown["value"]))
+    calmar = (
+        None
+        if drawdown["value"] in {None, 0.0}
+        else net_cagr / abs(float(drawdown["value"]))
+    )
     turnover_values = [float(item["value"]) for item in turnover_events]
     holdings = [int(item["holdings_count"]) for item in daily]
-    weights = [float(item["maximum_single_name_weight"]) for item in daily]
+    weights = [
+        float(item["maximum_single_name_weight"]) for item in daily
+    ]
     cash = [float(item["cash_ratio"]) for item in daily]
     max_weight_index = max(range(len(weights)), key=weights.__getitem__)
     max_cash_index = max(range(len(cash)), key=cash.__getitem__)
@@ -884,9 +920,15 @@ def strategy_metrics(
         "turnover": {
             "events": turnover_events,
             "average_rebalance": (
-                math.fsum(turnover_values) / len(turnover_values) if turnover_values else None
+                math.fsum(turnover_values) / len(turnover_values)
+                if turnover_values
+                else None
             ),
-            "annualized": (math.fsum(turnover_values) * 252 / intervals if intervals else None),
+            "annualized": (
+                math.fsum(turnover_values) * 252 / intervals
+                if intervals
+                else None
+            ),
         },
         "transaction_costs": {
             "cumulative_amount": float(cumulative_cost),
@@ -921,6 +963,352 @@ def strategy_metrics(
             "upper_limit_buy": rejection_counts["upper_limit_buy"],
             "lower_limit_sell": rejection_counts["lower_limit_sell"],
             "suspension": rejection_counts["suspension"],
+        },
+    }
+
+
+def _fraction_from_state(
+    state: dict[str, object],
+    name: str,
+) -> Fraction:
+    return Fraction(
+        int(state.get(f"{name}_numerator", 0)),
+        int(state.get(f"{name}_denominator", 1)),
+    )
+
+
+def _store_fraction(
+    state: dict[str, object],
+    name: str,
+    value: Fraction,
+) -> None:
+    state[f"{name}_numerator"] = value.numerator
+    state[f"{name}_denominator"] = value.denominator
+
+
+def _add_binary64(
+    state: dict[str, object],
+    name: str,
+    value: float,
+) -> None:
+    _store_fraction(
+        state,
+        name,
+        _fraction_from_state(state, name) + Fraction.from_float(value),
+    )
+
+
+def _sample_stdev_from_exact_moments(
+    count: int,
+    total: Fraction,
+    squared_total: Fraction,
+) -> float:
+    if count < 2:
+        raise StrategyCalculationError(
+            "sample standard deviation requires two observations"
+        )
+    squared_deviations = (
+        count * squared_total - total * total
+    ) / count
+    variance = squared_deviations / (count - 1)
+    numerator = variance.numerator
+    denominator = variance.denominator
+    bit_shift = (
+        numerator.bit_length() - denominator.bit_length() - 109
+    ) // 2
+    if bit_shift >= 0:
+        root = (
+            _integer_sqrt_fraction_round_to_odd(
+                numerator,
+                denominator << 2 * bit_shift,
+            )
+            << bit_shift
+        )
+        divisor = 1
+    else:
+        root = _integer_sqrt_fraction_round_to_odd(
+            numerator << -2 * bit_shift,
+            denominator,
+        )
+        divisor = 1 << -bit_shift
+    return root / divisor
+
+
+def _integer_sqrt_fraction_round_to_odd(
+    numerator: int,
+    denominator: int,
+) -> int:
+    root = math.isqrt(numerator // denominator)
+    return root | (
+        root * root * denominator != numerator
+    )
+
+
+def advance_strategy_metric_state(
+    prior_state: dict[str, object] | None,
+    *,
+    daily: list[dict[str, object]],
+    turnover_events: list[dict[str, object]],
+    cumulative_cost: Decimal,
+    rejections: list[dict[str, object]],
+) -> dict[str, object]:
+    state = dict(prior_state or {})
+    rejection_counts = {
+        "upper_limit_buy": int(state.get("upper_limit_buy_rejections", 0)),
+        "lower_limit_sell": int(state.get("lower_limit_sell_rejections", 0)),
+        "suspension": int(state.get("suspension_rejections", 0)),
+    }
+    for rejection in rejections:
+        reason = str(rejection["reason"])
+        if reason in rejection_counts:
+            rejection_counts[reason] += 1
+
+    for row in daily:
+        session = str(row["session"])
+        gross_nav = Decimal(str(row["gross_nav"]))
+        net_nav = Decimal(str(row["net_nav"]))
+        benchmark_nav = Decimal(str(row["benchmark_nav"]))
+        holdings = int(row["holdings_count"])
+        weight = float(row["maximum_single_name_weight"])
+        cash = float(row["cash_ratio"])
+        session_count = int(state.get("session_count", 0))
+        if session_count == 0:
+            state.update(
+                {
+                    "contract": "strategy-metric-state-v1",
+                    "first_gross_nav": str(gross_nav),
+                    "first_net_nav": str(net_nav),
+                    "first_benchmark_nav": str(benchmark_nav),
+                    "return_count": 0,
+                    "peak_net_nav": str(net_nav),
+                    "peak_session": session,
+                    "worst_drawdown": "0",
+                    "worst_peak_nav": str(net_nav),
+                    "worst_peak_session": session,
+                    "worst_trough_session": session,
+                    "worst_recovery_session": None,
+                    "holdings_sum": 0,
+                    "holdings_minimum": holdings,
+                    "holdings_maximum": holdings,
+                    "weight_maximum": weight,
+                    "weight_maximum_session": session,
+                    "cash_maximum": cash,
+                    "cash_maximum_session": session,
+                    "turnover_count": int(state.get("turnover_count", 0)),
+                }
+            )
+        else:
+            prior_net_nav = Decimal(str(state["last_net_nav"]))
+            net_return = float(net_nav / prior_net_nav - 1)
+            return_count = int(state["return_count"]) + 1
+            state["return_count"] = return_count
+            _add_binary64(state, "return_sum", net_return)
+            _store_fraction(
+                state,
+                "return_square_sum",
+                _fraction_from_state(
+                    state,
+                    "return_square_sum",
+                )
+                + Fraction.from_float(net_return) ** 2,
+            )
+
+            worst_drawdown = Decimal(str(state["worst_drawdown"]))
+            if (
+                worst_drawdown > 0
+                and state.get("worst_recovery_session") is None
+                and net_nav >= Decimal(str(state["worst_peak_nav"]))
+            ):
+                state["worst_recovery_session"] = session
+            peak_nav = Decimal(str(state["peak_net_nav"]))
+            if net_nav > peak_nav:
+                peak_nav = net_nav
+                state["peak_net_nav"] = str(net_nav)
+                state["peak_session"] = session
+            drawdown = Decimal(1) - net_nav / peak_nav
+            if drawdown > worst_drawdown:
+                state["worst_drawdown"] = str(drawdown)
+                state["worst_peak_nav"] = str(peak_nav)
+                state["worst_peak_session"] = state["peak_session"]
+                state["worst_trough_session"] = session
+                state["worst_recovery_session"] = None
+            state["holdings_minimum"] = min(
+                int(state["holdings_minimum"]),
+                holdings,
+            )
+            state["holdings_maximum"] = max(
+                int(state["holdings_maximum"]),
+                holdings,
+            )
+            if weight > float(state["weight_maximum"]):
+                state["weight_maximum"] = weight
+                state["weight_maximum_session"] = session
+            if cash > float(state["cash_maximum"]):
+                state["cash_maximum"] = cash
+                state["cash_maximum_session"] = session
+
+        state["session_count"] = session_count + 1
+        state["last_gross_nav"] = str(gross_nav)
+        state["last_net_nav"] = str(net_nav)
+        state["last_benchmark_nav"] = str(benchmark_nav)
+        state["last_session"] = session
+        state["holdings_sum"] = int(state["holdings_sum"]) + holdings
+        state["holdings_ending"] = holdings
+        state["weight_ending"] = weight
+        _add_binary64(state, "cash_sum", cash)
+        state["cash_ending"] = cash
+
+    for item in turnover_events:
+        _add_binary64(
+            state,
+            "turnover_sum",
+            float(item["value"]),
+        )
+    state["turnover_count"] = int(state.get("turnover_count", 0)) + len(
+        turnover_events
+    )
+    state["cumulative_cost"] = str(cumulative_cost)
+    state["upper_limit_buy_rejections"] = rejection_counts["upper_limit_buy"]
+    state["lower_limit_sell_rejections"] = rejection_counts["lower_limit_sell"]
+    state["suspension_rejections"] = rejection_counts["suspension"]
+    if int(state.get("session_count", 0)) == 0:
+        raise StrategyCalculationError("Strategy metric state has no observations")
+    return state
+
+
+def strategy_metrics_from_state(
+    state: dict[str, object],
+) -> dict[str, object]:
+    intervals = int(state["session_count"]) - 1
+    first_gross_nav = Decimal(str(state["first_gross_nav"]))
+    first_net_nav = Decimal(str(state["first_net_nav"]))
+    first_benchmark_nav = Decimal(str(state["first_benchmark_nav"]))
+    last_gross_nav = Decimal(str(state["last_gross_nav"]))
+    last_net_nav = Decimal(str(state["last_net_nav"]))
+    last_benchmark_nav = Decimal(str(state["last_benchmark_nav"]))
+    gross_cumulative = float(last_gross_nav / first_gross_nav - 1)
+    net_cumulative = float(last_net_nav / first_net_nav - 1)
+    benchmark_cumulative = float(
+        last_benchmark_nav / first_benchmark_nav - 1
+    )
+    gross_cagr = cagr(last_gross_nav / first_gross_nav, intervals)
+    net_cagr = cagr(last_net_nav / first_net_nav, intervals)
+    benchmark_cagr = cagr(
+        last_benchmark_nav / first_benchmark_nav,
+        intervals,
+    )
+    annualized_excess = cagr(
+        (last_net_nav / first_net_nav)
+        / (last_benchmark_nav / first_benchmark_nav),
+        intervals,
+    )
+    return_count = int(state["return_count"])
+    return_sum = _fraction_from_state(state, "return_sum")
+    return_square_sum = _fraction_from_state(
+        state,
+        "return_square_sum",
+    )
+    volatility = (
+        _sample_stdev_from_exact_moments(
+            return_count,
+            return_sum,
+            return_square_sum,
+        )
+        * math.sqrt(252)
+        if return_count >= 2
+        else None
+    )
+    return_mean = (
+        float(return_sum) / return_count
+        if return_count
+        else None
+    )
+    sharpe = (
+        None
+        if volatility in {None, 0.0} or return_mean is None
+        else return_mean / (volatility / math.sqrt(252)) * math.sqrt(252)
+    )
+    drawdown_value = float(state["worst_drawdown"])
+    drawdown = {
+        "value": drawdown_value,
+        "peak_session": state["worst_peak_session"],
+        "trough_session": state["worst_trough_session"],
+        "recovery_session": state["worst_recovery_session"],
+        "unrecovered": (
+            state["worst_recovery_session"] is None
+            and drawdown_value > 0
+        ),
+        "series": [],
+    }
+    calmar = (
+        None
+        if drawdown_value == 0.0 or net_cagr is None
+        else net_cagr / abs(drawdown_value)
+    )
+    turnover_sum = float(
+        _fraction_from_state(state, "turnover_sum")
+    )
+    turnover_count = int(state["turnover_count"])
+    cumulative_cost = Decimal(str(state["cumulative_cost"]))
+    session_count = int(state["session_count"])
+    return {
+        "gross_cumulative_return": gross_cumulative,
+        "net_cumulative_return": net_cumulative,
+        "benchmark_cumulative_return": benchmark_cumulative,
+        "gross_cagr": gross_cagr,
+        "net_cagr": net_cagr,
+        "benchmark_cagr": benchmark_cagr,
+        "annualized_excess_return": annualized_excess,
+        "maximum_drawdown": drawdown,
+        "annualized_volatility": volatility,
+        "sharpe": sharpe,
+        "risk_free_rate": 0,
+        "calmar": calmar,
+        "turnover": {
+            "events": [],
+            "average_rebalance": (
+                turnover_sum / turnover_count if turnover_count else None
+            ),
+            "annualized": (
+                turnover_sum * 252 / intervals if intervals else None
+            ),
+        },
+        "transaction_costs": {
+            "cumulative_amount": float(cumulative_cost),
+            "ratio": float(cumulative_cost / INITIAL_CASH),
+            "return_drag": gross_cumulative - net_cumulative,
+        },
+        "holdings_count": {
+            "daily": [],
+            "mean": int(state["holdings_sum"]) / session_count,
+            "minimum": int(state["holdings_minimum"]),
+            "maximum": int(state["holdings_maximum"]),
+            "ending": int(state["holdings_ending"]),
+        },
+        "maximum_single_name_weight": {
+            "daily": [],
+            "period_maximum": {
+                "value": float(state["weight_maximum"]),
+                "session": state["weight_maximum_session"],
+            },
+            "ending": float(state["weight_ending"]),
+        },
+        "cash_ratio": {
+            "daily": [],
+            "mean": (
+                float(_fraction_from_state(state, "cash_sum"))
+                / session_count
+            ),
+            "maximum": {
+                "value": float(state["cash_maximum"]),
+                "session": state["cash_maximum_session"],
+            },
+            "ending": float(state["cash_ending"]),
+        },
+        "market_rejections": {
+            "upper_limit_buy": int(state["upper_limit_buy_rejections"]),
+            "lower_limit_sell": int(state["lower_limit_sell_rejections"]),
+            "suspension": int(state["suspension_rejections"]),
         },
     }
 

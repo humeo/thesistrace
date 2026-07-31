@@ -244,7 +244,16 @@ def test_activation_uses_effective_quota_and_stop_fences_all_later_work(
             == "thesistrace-numeric-v1"
         )
         assert track["head"]["predecessor_checkpoint_id"] is None
-        checkpoint = objects.read_json(str(track["head"]["manifest_sha256"]))
+        raw_track = DailyTrackingService(
+            metadata,
+            DatasetPublisher(metadata, objects),
+            objects,
+            cache,
+        ).get_track(str(track["id"]))
+        assert raw_track is not None
+        checkpoint = objects.read_json(
+            str(raw_track["head"]["manifest_sha256"])
+        )
         assert checkpoint["tracking_origin"]["activation_session"]
         assert (
             checkpoint["numeric_execution_contract"]
@@ -321,10 +330,10 @@ def test_activation_uses_effective_quota_and_stop_fences_all_later_work(
 
     assert stopped.status_code == 200
     assert stopped.json()["status"] == "stopped"
-    assert stopped.json()["cache_deletion"]["status"] == "completed"
+    assert stopped.json()["cache_cleanup_status"] == "completed"
     assert stopped_replay.status_code == 200
-    assert stopped_replay.json()["fencing_token"] == (
-        stopped.json()["fencing_token"]
+    assert stopped_replay.json()["head_checkpoint_id"] == (
+        stopped.json()["head_checkpoint_id"]
     )
     assert admitted_after_stop.status_code == 201
     with metadata.connect() as connection:
@@ -904,7 +913,7 @@ def test_postgres_daily_track_quota_is_workspace_scoped_and_seed_is_retained(
         )
     assert stopped.status_code == 200
     assert stopped.json()["status"] == "stopped"
-    assert stopped.json()["cache_deletion"]["status"] == "pending"
+    assert stopped.json()["cache_cleanup_status"] == "pending"
 
     monkeypatch.setattr(
         cache,
@@ -938,7 +947,5 @@ def test_postgres_daily_track_quota_is_workspace_scoped_and_seed_is_retained(
             },
         )
     assert recovered_track.status_code == 200
-    assert recovered_track.json()["cache_deletion"]["status"] == (
-        "completed"
-    )
+    assert recovered_track.json()["cache_cleanup_status"] == "completed"
     assert replacement.status_code == 201

@@ -55,6 +55,35 @@ class ControlMetadataPort(Protocol):
         completed_at: str,
     ) -> None: ...
 
+    def active_daily_track_refs(
+        self,
+        *,
+        after_workspace_id: str | None = None,
+        after_track_id: str | None = None,
+        through_workspace_id: str | None = None,
+        through_track_id: str | None = None,
+        limit: int = 101,
+    ) -> list[dict[str, str]]: ...
+
+    def active_daily_track_scan_bound(
+        self,
+    ) -> dict[str, str] | None: ...
+
+    def next_dataset_release_on_path(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+    ) -> dict[str, object] | None: ...
+
+    def enqueue_tracking_advance_execution(
+        self,
+        connection,
+        *,
+        track_id: str,
+        advance_id: str,
+        created_at: str,
+    ) -> None: ...
+
 
 class ObjectWriterPort(Protocol):
     def put_json(self, value: object) -> dict[str, object]: ...

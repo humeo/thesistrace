@@ -664,18 +664,24 @@ def create_app(
             ) from error
         if created:
             runtime.execution_dispatch.dispatch("daily_track", str(track["id"]))
-        return JSONResponse(status_code=201 if created else 200, content=track)
+        view = tracking.bounded_track_view(str(track["id"]))
+        if view is None:
+            raise RuntimeError("activated DailyTrack disappeared")
+        return JSONResponse(
+            status_code=201 if created else 200,
+            content=view,
+        )
 
     @app.get("/api/v1/daily-tracks")
     def list_daily_tracks(
         offset: int = Query(0, ge=0),
         limit: int = Query(10, ge=1, le=10),
     ) -> dict[str, object]:
-        return page(tracking.list_tracks(), offset, limit)
+        return tracking.list_track_views(offset=offset, limit=limit)
 
     @app.get("/api/v1/daily-tracks/{track_id}")
     def get_daily_track(track_id: str) -> dict[str, object]:
-        track = tracking.get_track(track_id)
+        track = tracking.bounded_track_view(track_id)
         if track is None:
             raise HTTPException(
                 status_code=404,
@@ -683,24 +689,13 @@ def create_app(
             )
         return track
 
-    def get_track_child(
-        track_id: str,
-        collection: str,
-        child_id: str,
+    def require_track_child(
+        child: dict[str, object] | None,
         reason_code: str,
         label: str,
     ) -> dict[str, object]:
-        track = tracking.get_track(track_id)
-        if track is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
-            )
-        children = track.get(collection)
-        if isinstance(children, list):
-            for child in children:
-                if isinstance(child, dict) and child.get("id") == child_id:
-                    return child
+        if child is not None:
+            return child
         raise HTTPException(
             status_code=404,
             detail=error_detail(reason_code, f"{label} not found"),
@@ -708,38 +703,53 @@ def create_app(
 
     @app.get("/api/v1/daily-tracks/{track_id}/generations/{generation_id}")
     def get_daily_track_generation(track_id: str, generation_id: str) -> dict[str, object]:
-        return get_track_child(
-            track_id,
-            "generations",
-            generation_id,
+        return require_track_child(
+            tracking.tracking_generation(track_id, generation_id),
             "TRACKING_GENERATION_NOT_FOUND",
             "Tracking Generation",
         )
 
     @app.get("/api/v1/daily-tracks/{track_id}/advances/{advance_id}")
     def get_daily_track_advance(track_id: str, advance_id: str) -> dict[str, object]:
-        return get_track_child(
-            track_id,
-            "advances",
-            advance_id,
+        return require_track_child(
+            tracking.tracking_advance(track_id, advance_id),
             "TRACKING_ADVANCE_NOT_FOUND",
             "Tracking Advance",
         )
 
     @app.get("/api/v1/daily-tracks/{track_id}/checkpoints/{checkpoint_id}")
-    def get_daily_track_checkpoint(track_id: str, checkpoint_id: str) -> dict[str, object]:
-        return get_track_child(
-            track_id,
-            "checkpoints",
-            checkpoint_id,
-            "TRACKING_CHECKPOINT_NOT_FOUND",
-            "Tracking Checkpoint",
-        )
+    def get_daily_track_checkpoint(
+        track_id: str,
+        checkpoint_id: str,
+        limit: int = Query(252, ge=1, le=252),
+    ) -> dict[str, object]:
+        try:
+            return tracking.checkpoint_product_view(
+                track_id,
+                checkpoint_id,
+                limit=limit,
+            )
+        except KeyError as error:
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail(
+                    "TRACKING_CHECKPOINT_NOT_FOUND",
+                    "Tracking Checkpoint not found",
+                ),
+            ) from error
+        except DailyTrackingError as error:
+            raise HTTPException(
+                status_code=409,
+                detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
+            ) from error
 
     @app.get("/api/v1/daily-tracks/{track_id}/current")
-    def get_daily_track_current_view(track_id: str) -> dict[str, object]:
+    def get_daily_track_current_view(
+        track_id: str,
+        limit: int = Query(252, ge=1, le=252),
+    ) -> dict[str, object]:
         try:
-            return tracking.current_view(track_id)
+            return tracking.current_view(track_id, limit=limit)
         except KeyError as error:
             raise HTTPException(
                 status_code=404,
@@ -759,7 +769,10 @@ def create_app(
                 status_code=404,
                 detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
             )
-        return track
+        view = tracking.bounded_track_view(track_id)
+        if view is None:
+            raise RuntimeError("stopped DailyTrack disappeared")
+        return view
 
     @app.post("/api/v1/daily-tracks/{track_id}/kernel-upgrade")
     def upgrade_daily_track_kernel(
@@ -767,11 +780,15 @@ def create_app(
         request: KernelUpgradeRequest,
     ) -> dict[str, object]:
         try:
-            return tracking.upgrade_kernel(
+            track = tracking.upgrade_kernel(
                 track_id,
                 calculation_kernel=request.calculation_kernel,
                 numeric_execution_contract=request.numeric_execution_contract,
             )
+            view = tracking.bounded_track_view(str(track["id"]))
+            if view is None:
+                raise KeyError(track_id)
+            return view
         except KeyError as error:
             raise HTTPException(
                 status_code=404,

@@ -1,10 +1,41 @@
 import json
 from pathlib import Path
 
+from thesistrace.canonical_objects import (
+    update_canonical_partitions,
+    write_full_canonical,
+)
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.fixture import build_fixture
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.storage import MetadataStore
+
+
+def test_large_increment_splits_every_range_family_at_252_sessions(
+    tmp_path: Path,
+) -> None:
+    objects = ImmutableObjectStore(tmp_path / "objects")
+    root = {"research_calendar": ["0000"]}
+    predecessor = write_full_canonical(objects, root)
+    appended = [f"{index:04d}" for index in range(1, 255)]
+
+    entries = update_canonical_partitions(
+        objects,
+        predecessor,
+        {"research_calendar": [*root["research_calendar"], *appended]},
+        {"research_calendar_append": appended},
+    )
+
+    calendar_entries = [
+        entry
+        for entry in entries
+        if entry["family"] == "market.research_calendar"
+    ]
+    assert [entry["coordinate_count"] for entry in calendar_entries] == [
+        1,
+        252,
+        2,
+    ]
 
 
 def test_bootstrap_publishes_canonical_families_as_manifest_bound_parquet(
@@ -54,6 +85,55 @@ def test_bootstrap_publishes_canonical_families_as_manifest_bound_parquet(
 
     source_entry = next(entry for entry in release["objects"] if entry["kind"] == "source_fixture")
     assert objects.path_for(source_entry["sha256"]).is_file()
+
+
+def test_tail_materialization_reads_only_overlapping_canonical_partitions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    publisher, objects = publisher_at(tmp_path)
+    release, _created = publisher.bootstrap("root", "v1")
+    full = publisher.materialize_canonical(release)
+    entries = canonical_partitions(release)
+    session_families = {
+        "market.research_calendar",
+        "equity.eod_price",
+        "equity.trading_state",
+        "equity.price_limit",
+        "universe.base_pool",
+        "equity.liquidity_universe",
+    }
+    for entry in entries:
+        if entry["family"] in session_families:
+            assert entry["coordinate_count"] <= 252
+
+    read_digests: list[str] = []
+    read_parquet = objects.read_parquet
+
+    def record_read(digest, contract):
+        read_digests.append(str(digest))
+        return read_parquet(digest, contract)
+
+    monkeypatch.setattr(objects, "read_parquet", record_read)
+    tail = publisher.materialize_canonical_tail(release, 21)
+
+    assert tail["research_calendar"] == full["research_calendar"][-21:]
+    first_session = str(tail["research_calendar"][0])
+    by_digest = {str(entry["sha256"]): entry for entry in entries}
+    for digest in read_digests:
+        entry = by_digest[digest]
+        if entry["family"] not in session_families:
+            continue
+        assert str(entry["partition"]["end"]) >= first_session
+    earliest_calendar = min(
+        (
+            entry
+            for entry in entries
+            if entry["family"] == "market.research_calendar"
+        ),
+        key=lambda entry: str(entry["partition"]["start"]),
+    )
+    assert str(earliest_calendar["sha256"]) not in read_digests
 
 
 def test_one_session_increment_reuses_every_historical_canonical_partition(
@@ -152,17 +232,24 @@ def test_correction_replaces_only_affected_partitions_and_preserves_other_identi
         for entry in canonical_partitions(corrected)
         if entry["family"] == "equity.eod_price"
     }
-    root_partition = json.dumps(
-        {
-            "type": "session_range",
-            "start": root["appended_session_range"]["start"],
-            "end": root["appended_session_range"]["end"],
-        },
-        sort_keys=True,
+    affected_partition = next(
+        json.dumps(entry["partition"], sort_keys=True)
+        for entry in canonical_partitions(daily)
+        if entry["family"] == "equity.eod_price"
+        and str(entry["partition"]["start"])
+        <= correction["session"]
+        <= str(entry["partition"]["end"])
     )
-    assert previous_price_by_partition[root_partition] != corrected_price_by_partition[
-        root_partition
+    assert previous_price_by_partition[
+        affected_partition
+    ] != corrected_price_by_partition[
+        affected_partition
     ]
+    assert all(
+        corrected_price_by_partition[partition] == digest
+        for partition, digest in previous_price_by_partition.items()
+        if partition != affected_partition
+    )
     materialized = publisher.materialize_canonical(corrected)
     corrected_row = next(
         row

@@ -44,7 +44,17 @@ def test_activation_publishes_compact_checkpoint_and_seeds_bounded_cache(
         assert repeated.json()["id"] == track["id"]
 
     objects = ImmutableObjectStore(settings.object_root)
-    checkpoint = objects.read_json(track["head"]["manifest_sha256"])
+    metadata = MetadataStore(settings.metadata_path)
+    raw_track = DailyTrackingService(
+        metadata,
+        DatasetPublisher(metadata, objects),
+        objects,
+        WorkingCacheStore(settings.working_cache_root),
+    ).get_track(str(track["id"]))
+    assert raw_track is not None
+    checkpoint = objects.read_json(
+        raw_track["head"]["manifest_sha256"]
+    )
     assert isinstance(checkpoint, dict)
     assert set(checkpoint["objects"]) == {
         "diagnostic_summary",
@@ -69,8 +79,12 @@ def test_activation_publishes_compact_checkpoint_and_seeds_bounded_cache(
     assert basis["daily_track_id"] == track["id"]
     assert basis["generation_id"] == track["current_generation_id"]
     assert basis["basis_checkpoint_id"] == track["head"]["id"]
-    assert basis["basis_checkpoint_sha256"] == track["head"]["manifest_sha256"]
-    assert basis["definition_content_hash"] == track["definition_content_hash"]
+    assert basis["basis_checkpoint_sha256"] == raw_track["head"][
+        "manifest_sha256"
+    ]
+    assert basis["definition_content_hash"] == raw_track[
+        "definition_content_hash"
+    ]
     assert basis["calculation_kernel"] == "kernel-v1"
     assert basis["numeric_execution_contract"] == "thesistrace-numeric-v1"
     assert basis["basis_dataset_release_id"] == track["activation_release_id"]

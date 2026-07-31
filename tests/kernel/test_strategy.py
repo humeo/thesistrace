@@ -1,3 +1,4 @@
+import copy
 from decimal import Decimal
 
 import pytest
@@ -6,12 +7,14 @@ from thesistrace.alpha import evaluate_alpha_matrix
 from thesistrace.fixture import build_fixture
 from thesistrace.strategy import (
     StrategyCalculationError,
+    advance_strategy_metric_state,
     equal_weight_benchmark_return,
     legal_order_quantity,
     market_rejection_reason,
     maximum_drawdown,
     run_strategy,
     split_child_orders,
+    strategy_metrics_from_state,
     transaction_cost,
 )
 
@@ -165,6 +168,41 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     )
     assert result["rebalance_events"][0]["target_weights"]
     assert result["rebalance_events"][0]["actual_weights"]
+
+    metric_state = None
+    for chunk in (result["daily"][:211], result["daily"][211:]):
+        sessions = {str(row["session"]) for row in chunk}
+        metric_state = advance_strategy_metric_state(
+            metric_state,
+            daily=chunk,
+            turnover_events=[
+                event
+                for event in metrics["turnover"]["events"]
+                if str(event["session"]) in sessions
+            ],
+            cumulative_cost=Decimal(
+                str(chunk[-1]["cumulative_transaction_cost"])
+            ),
+            rejections=[
+                rejection
+                for rejection in result["rejections"]
+                if str(rejection["session"]) in sessions
+            ],
+        )
+    assert metric_state is not None
+    compact_metrics = copy.deepcopy(metrics)
+    compact_metrics["maximum_drawdown"].pop("series")
+    compact_metrics["turnover"].pop("events")
+    compact_metrics["holdings_count"].pop("daily")
+    compact_metrics["maximum_single_name_weight"].pop("daily")
+    compact_metrics["cash_ratio"].pop("daily")
+    state_metrics = strategy_metrics_from_state(metric_state)
+    state_metrics["maximum_drawdown"].pop("series")
+    state_metrics["turnover"].pop("events")
+    state_metrics["holdings_count"].pop("daily")
+    state_metrics["maximum_single_name_weight"].pop("daily")
+    state_metrics["cash_ratio"].pop("daily")
+    assert state_metrics == compact_metrics
 
 
 def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() -> None:

@@ -49,7 +49,11 @@ class PostgresExecutionOutbox:
 
 
 def require_research_entry(entry: dict[str, str]) -> tuple[str, str, str]:
-    if entry["resource_kind"] not in {"research_run", "research_run_cancel"}:
+    if entry["resource_kind"] not in {
+        "research_run",
+        "research_run_cancel",
+        "tracking_advance",
+    }:
         raise ValueError(f"unsupported execution resource: {entry['resource_kind']}")
     return entry["resource_kind"], entry["workspace_id"], entry["resource_id"]
 
@@ -61,6 +65,10 @@ def require_execution_entry(
     if resource_kind == "dataset_publication":
         if entry["workspace_id"] is not None:
             raise ValueError("Dataset Publication cannot belong to a Workspace")
+        return resource_kind, None, str(entry["resource_id"])
+    if resource_kind == "tracking_release":
+        if entry["workspace_id"] is not None:
+            raise ValueError("Tracking Release fanout cannot belong to a Workspace")
         return resource_kind, None, str(entry["resource_id"])
     if entry["workspace_id"] is None:
         raise ValueError("Research execution requires a Workspace")

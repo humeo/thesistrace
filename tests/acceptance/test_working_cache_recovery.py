@@ -19,6 +19,7 @@ from thesistrace.working_cache import (
 
 def test_missing_corrupt_mismatched_and_oversized_caches_rebuild_from_head(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings, track = activated_track(tmp_path)
     service = tracking_service(settings)
@@ -44,6 +45,20 @@ def test_missing_corrupt_mismatched_and_oversized_caches_rebuild_from_head(
 
     track_root = settings.working_cache_root / "tracks" / track["id"]
     (track_root / "basis.json").unlink()
+    monkeypatch.setattr(
+        service,
+        "get_track",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache rebuild must not load the complete Track history")
+        ),
+    )
+    monkeypatch.setattr(
+        service,
+        "_checkpoint_release_sequence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("cache rebuild must not traverse the Checkpoint chain")
+        ),
+    )
     rebuilt = service._ensure_working_cache(track, track["generations"][0])
     assert payload_identities(rebuilt) == payload_identities(original)
 
@@ -106,12 +121,7 @@ def test_complete_cache_loss_rebuilds_the_same_next_compact_checkpoint(
     objects = ImmutableObjectStore(settings.object_root)
     intact_manifest = objects.read_json(intact_head["manifest_sha256"])
     recovered_manifest = objects.read_json(recovered_head["manifest_sha256"])
-    assert {
-        kind: entry["sha256"] for kind, entry in intact_manifest["objects"].items()
-    } == {
-        kind: entry["sha256"]
-        for kind, entry in recovered_manifest["objects"].items()
-    }
+    assert intact_manifest["objects"] == recovered_manifest["objects"]
     assert payload_identities(service.cache.read_basis(intact["id"])) == (
         payload_identities(service.cache.read_basis(recovered["id"]))
     )
@@ -185,7 +195,9 @@ def activated_track(tmp_path: Path) -> tuple[Settings, dict[str, object]]:
             f"/api/v1/research-runs/{run_id}/daily-tracks",
             headers={"Idempotency-Key": "rebuild-track"},
         ).json()
-    return settings, track
+    raw_track = tracking_service(settings).get_track(str(track["id"]))
+    assert raw_track is not None
+    return settings, raw_track
 
 
 def create_succeeded_run(client: TestClient, settings: Settings) -> str:

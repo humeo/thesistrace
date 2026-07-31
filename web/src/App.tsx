@@ -962,7 +962,7 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
     checkpoint: {
       id: string;
       kind: string;
-      processed_sessions?: string[];
+      processed_session_count: number;
       correction_boundary?: {
         target_dataset_release_id: string;
         accepted_correction_change_set: unknown[];
@@ -1376,7 +1376,7 @@ function ResearchResultPanel({ result }: { result: ResearchResult }) {
                   · {trackingView.recent_label_maturation.events.length} LABEL EVENTS ·
                   NET CASH {trackingView.strategy.daily.at(-1)?.net_cash} · HOLDINGS{" "}
                   {trackingView.strategy.daily.at(-1)?.holdings_count} · PROCESSED{" "}
-                  {trackingView.checkpoint.processed_sessions?.length ?? 0}
+                  {trackingView.checkpoint.processed_session_count}
                 </small>
               )}
               {trackingView?.recent_label_maturation.events.length ? (

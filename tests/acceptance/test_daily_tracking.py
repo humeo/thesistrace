@@ -9,7 +9,7 @@ from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
-from thesistrace.result_objects import STRATEGY_DAILY_CONTRACT
+from thesistrace.result_objects import read_table_object
 from thesistrace.storage import MetadataStore
 from thesistrace.tracking import DailyTrackingError, DailyTrackingService
 from thesistrace.working_cache import WorkingCacheStore
@@ -199,6 +199,13 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert current["head"]["target_dataset_release_id"] == catchup_release["id"]
         current_view = client.get(f"/api/v1/daily-tracks/{track_id}/current").json()
         assert current_view["checkpoint"]["id"] == current["head"]["id"]
+        assert "objects" not in current_view["checkpoint"]
+        assert "manifest_sha256" not in client.get(
+            f"/api/v1/daily-tracks/{track_id}"
+        ).text
+        assert "fencing_token" not in client.get(
+            f"/api/v1/daily-tracks/{track_id}"
+        ).text
         assert (
             client.get(
                 f"/api/v1/daily-tracks/{track_id}/generations/"
@@ -219,6 +226,12 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
             ).json()["id"]
             == current["head"]["id"]
         )
+        historical_window = client.get(
+            f"/api/v1/daily-tracks/{track_id}/checkpoints/"
+            f"{current['head']['id']}?limit=1"
+        ).json()
+        assert len(historical_window["strategy"]["daily"]) == 1
+        assert historical_window["window"]["maximum_sessions"] == 1
         assert (
             current_view["factor_summary"]["horizons"]["1"]["diagnostics"][
                 "session_count"
@@ -228,24 +241,30 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert "daily" not in current_view["factor_summary"]["horizons"]["1"]
         assert current_view["recent_label_maturation"]["events"] == []
         head_manifest = objects.read_json(current["head"]["manifest_sha256"])
-        assert head_manifest["processed_sessions"] == [
-            "2026-07-30",
-            "2026-07-31",
-            "2026-08-03",
-        ]
+        assert head_manifest["processed_session_count"] == 3
+        assert head_manifest["processed_session_range"] == {
+            "start": "2026-07-30",
+            "end": "2026-08-03",
+        }
         assert head_manifest["predecessor_checkpoint_id"] == track["head"]["id"]
-        strategy_delta = objects.read_parquet(
-            head_manifest["objects"]["strategy_daily_observations"]["sha256"],
-            STRATEGY_DAILY_CONTRACT,
-        ).to_pylist()
+        strategy_delta = read_table_object(
+            objects,
+            head_manifest["objects"],
+            "strategy_daily_observations",
+        )
         assert len(strategy_delta) == 3
-        assert len(current_view["strategy"]["daily"]) == 507
+        assert len(current_view["strategy"]["daily"]) == 252
+        assert current_view["window"]["maximum_sessions"] == 252
+        assert current_view["window"]["has_earlier"] is True
         assert "forward_labels" not in head_manifest["objects"]
         assert "factor_evaluation" not in head_manifest["objects"]
-        assert (
-            client.post(f"/api/v1/daily-tracks/{track_id}/verify-equivalence").json()["status"]
-            == "equivalent"
+        equivalence_response = client.post(
+            f"/api/v1/daily-tracks/{track_id}/verify-equivalence"
         )
+        assert equivalence_response.status_code == 200, (
+            equivalence_response.json()
+        )
+        assert equivalence_response.json()["status"] == "equivalent"
         assert (
             tracking.execute_advance(advanced["id"])["checkpoint_id"] == advanced["checkpoint_id"]
         )
@@ -255,7 +274,13 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         after_ordered_catchup = tracking.get_track(track_id)
         assert after_ordered_catchup["head"]["target_dataset_release_id"] == later_release["id"]
         ordered_manifest = objects.read_json(after_ordered_catchup["head"]["manifest_sha256"])
-        assert len(ordered_manifest["processed_sessions"]) == 1
+        assert ordered_manifest["processed_session_count"] == 1
+        exact_window = client.get(
+            f"/api/v1/daily-tracks/{track_id}/checkpoints/"
+            f"{after_ordered_catchup['head']['id']}?limit=1"
+        ).json()
+        assert exact_window["window"]["returned_sessions"] == 1
+        assert exact_window["window"]["has_earlier"] is True
 
         correction = client.post(
             "/api/v1/dataset-releases/publish-fixture",
@@ -340,18 +365,20 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
         assert corrected["current_generation_id"] == track["current_generation_id"]
         corrected_head = objects.read_json(corrected["head"]["manifest_sha256"])
         assert corrected_head["predecessor_checkpoint_id"] == prior_correction_head["id"]
-        assert corrected_head["processed_sessions"] == [
-            correction["appended_session_range"]["end"]
-        ]
+        assert corrected_head["processed_session_count"] == 1
+        assert corrected_head["processed_session_range"] == {
+            "start": correction["appended_session_range"]["end"],
+            "end": correction["appended_session_range"]["end"],
+        }
         assert corrected_head["correction_boundary"] == correction_advance[
             "correction_boundary"
         ]
         corrected_view = client.get(
             f"/api/v1/daily-tracks/{track_id}/current"
         ).json()
-        assert corrected_view["strategy"]["daily"][:-1] == prior_correction_view[
-            "strategy"
-        ]["daily"]
+        assert corrected_view["strategy"]["daily"][:-1] == (
+            prior_correction_view["strategy"]["daily"][1:]
+        )
         assert (
             objects.read_json(prior_correction_head["manifest_sha256"])
             == prior_correction_manifest
@@ -463,7 +490,7 @@ def test_daily_track_activation_catchup_replay_and_equivalence(tmp_path: Path) -
             daily_head = tracking.get_track(track_id)["head"]
             assert daily_head["target_dataset_release_id"] == daily_release["id"]
             daily_manifest = objects.read_json(daily_head["manifest_sha256"])
-            assert len(daily_manifest["processed_sessions"]) == 1
+            assert daily_manifest["processed_session_count"] == 1
             assert (
                 client.post(f"/api/v1/daily-tracks/{track_id}/verify-equivalence").status_code
                 == 200

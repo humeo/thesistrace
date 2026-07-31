@@ -9,6 +9,12 @@ from thesistrace.canonical_objects import (
     CanonicalObjectError,
     canonical_schema_entries,
     materialize_partitioned_canonical,
+    materialize_partitioned_canonical_tail,
+    materialize_partitioned_canonical_window,
+    partitioned_liquidity_universe_membership,
+    partitioned_research_calendar_neighborhood,
+    partitioned_research_calendar_range,
+    partitioned_research_calendar_window,
     update_canonical_partitions,
     write_full_canonical,
 )
@@ -548,6 +554,212 @@ class DatasetPublisher:
             raise InvalidFixtureError("release has no canonical object")
         return canonical
 
+    def materialize_canonical_tail(
+        self,
+        release: dict[str, object],
+        session_count: int,
+    ) -> dict[str, object]:
+        if session_count < 1:
+            raise InvalidFixtureError(
+                "Canonical tail must contain at least one session"
+            )
+        objects = release.get("objects")
+        if not isinstance(objects, list):
+            raise InvalidFixtureError("release has no object manifest")
+        partition_entries = canonical_partition_entries(objects)
+        if partition_entries:
+            try:
+                return materialize_partitioned_canonical_tail(
+                    self.objects,
+                    release,
+                    partition_entries,
+                    session_count,
+                )
+            except CanonicalObjectError as error:
+                raise InvalidFixtureError(str(error)) from error
+        canonical = self.materialize_canonical(release)
+        calendar = canonical.get("research_calendar")
+        if not isinstance(calendar, list) or not calendar:
+            raise InvalidFixtureError("canonical Research Calendar is missing")
+        first_session = str(calendar[max(0, len(calendar) - session_count)])
+        return canonical_window(canonical, first_session, str(calendar[-1]))
+
+    def materialize_canonical_window(
+        self,
+        release: dict[str, object],
+        first_session: str,
+        final_session: str,
+    ) -> dict[str, object]:
+        if first_session > final_session:
+            raise InvalidFixtureError("Canonical window is reversed")
+        objects = release.get("objects")
+        if not isinstance(objects, list):
+            raise InvalidFixtureError("release has no object manifest")
+        partition_entries = canonical_partition_entries(objects)
+        if partition_entries:
+            try:
+                return materialize_partitioned_canonical_window(
+                    self.objects,
+                    release,
+                    partition_entries,
+                    first_session=first_session,
+                    final_session=final_session,
+                )
+            except CanonicalObjectError as error:
+                raise InvalidFixtureError(str(error)) from error
+        return canonical_window(
+            self.materialize_canonical(release),
+            first_session,
+            final_session,
+        )
+
+    def research_calendar_window(
+        self,
+        release: dict[str, object],
+        *,
+        final_session: str,
+        session_count: int,
+    ) -> list[str]:
+        if session_count < 1:
+            raise InvalidFixtureError(
+                "Research Calendar window must contain at least one session"
+            )
+        objects = release.get("objects")
+        if not isinstance(objects, list):
+            raise InvalidFixtureError("release has no object manifest")
+        partition_entries = canonical_partition_entries(objects)
+        if partition_entries:
+            try:
+                return partitioned_research_calendar_window(
+                    self.objects,
+                    partition_entries,
+                    final_session=final_session,
+                    session_count=session_count,
+                )
+            except CanonicalObjectError as error:
+                raise InvalidFixtureError(str(error)) from error
+        canonical = self.materialize_canonical(release)
+        calendar = canonical.get("research_calendar")
+        if not isinstance(calendar, list):
+            raise InvalidFixtureError("canonical Research Calendar is missing")
+        eligible = [
+            str(session)
+            for session in calendar
+            if str(session) <= final_session
+        ]
+        return eligible[-session_count:]
+
+    def research_calendar_neighborhood(
+        self,
+        release: dict[str, object],
+        *,
+        center_session: str,
+        preceding_sessions: int,
+        following_sessions: int,
+    ) -> list[str]:
+        objects = release.get("objects")
+        if not isinstance(objects, list):
+            raise InvalidFixtureError("release has no object manifest")
+        partition_entries = canonical_partition_entries(objects)
+        if partition_entries:
+            try:
+                return partitioned_research_calendar_neighborhood(
+                    self.objects,
+                    partition_entries,
+                    center_session=center_session,
+                    preceding_sessions=preceding_sessions,
+                    following_sessions=following_sessions,
+                )
+            except CanonicalObjectError as error:
+                raise InvalidFixtureError(str(error)) from error
+        canonical = self.materialize_canonical(release)
+        calendar = canonical.get("research_calendar")
+        if not isinstance(calendar, list):
+            raise InvalidFixtureError("canonical Research Calendar is missing")
+        sessions = [str(session) for session in calendar]
+        try:
+            center_index = sessions.index(center_session)
+        except ValueError as error:
+            raise InvalidFixtureError(
+                "Research Calendar neighborhood center is missing"
+            ) from error
+        return sessions[
+            max(0, center_index - preceding_sessions) :
+            center_index + following_sessions + 1
+        ]
+
+    def research_calendar_range(
+        self,
+        release: dict[str, object],
+        *,
+        after_session: str,
+        through_session: str,
+    ) -> list[str]:
+        objects = release.get("objects")
+        if not isinstance(objects, list):
+            raise InvalidFixtureError("release has no object manifest")
+        partition_entries = canonical_partition_entries(objects)
+        if partition_entries:
+            try:
+                return partitioned_research_calendar_range(
+                    self.objects,
+                    partition_entries,
+                    after_session=after_session,
+                    through_session=through_session,
+                )
+            except CanonicalObjectError as error:
+                raise InvalidFixtureError(str(error)) from error
+        canonical = self.materialize_canonical(release)
+        calendar = canonical.get("research_calendar")
+        if not isinstance(calendar, list):
+            raise InvalidFixtureError("canonical Research Calendar is missing")
+        return [
+            str(session)
+            for session in calendar
+            if after_session < str(session) <= through_session
+        ]
+
+    def liquidity_universe_membership(
+        self,
+        release: dict[str, object],
+        *,
+        universe_name: str,
+        sessions: list[str],
+    ) -> dict[str, set[str]]:
+        objects = release.get("objects")
+        if not isinstance(objects, list):
+            raise InvalidFixtureError("release has no object manifest")
+        partition_entries = canonical_partition_entries(objects)
+        if partition_entries:
+            try:
+                return partitioned_liquidity_universe_membership(
+                    self.objects,
+                    partition_entries,
+                    universe_name=universe_name,
+                    sessions=sessions,
+                )
+            except CanonicalObjectError as error:
+                raise InvalidFixtureError(str(error)) from error
+        canonical = self.materialize_canonical(release)
+        universes = canonical.get("liquidity_universes")
+        selected = (
+            universes.get(universe_name)
+            if isinstance(universes, dict)
+            else None
+        )
+        if not isinstance(selected, list):
+            raise InvalidFixtureError("Canonical Liquidity Universe is missing")
+        requested = set(sessions)
+        return {
+            str(snapshot["session"]): {
+                str(instrument_id)
+                for instrument_id in snapshot["instrument_ids"]
+            }
+            for snapshot in selected
+            if isinstance(snapshot, dict)
+            and str(snapshot.get("session")) in requested
+        }
+
 
 def canonical_partition_entries(
     entries: list[object],
@@ -557,6 +769,57 @@ def canonical_partition_entries(
         for entry in entries
         if isinstance(entry, dict) and entry.get("kind") == "canonical_partition"
     ]
+
+
+def canonical_window(
+    canonical: dict[str, object],
+    first_session: str,
+    final_session: str,
+) -> dict[str, object]:
+    window = dict(canonical)
+    calendar = canonical.get("research_calendar")
+    if not isinstance(calendar, list):
+        raise InvalidFixtureError("canonical Research Calendar is missing")
+    selected = [
+        str(session)
+        for session in calendar
+        if first_session <= str(session) <= final_session
+    ]
+    selected_set = set(selected)
+    window["research_calendar"] = selected
+    for key in (
+        "prices",
+        "trading_states",
+        "price_limits",
+        "base_pool",
+        "st_designations",
+        "adjustment_anchors",
+    ):
+        rows = canonical.get(key)
+        if not isinstance(rows, list):
+            continue
+        coordinate = "trade_date" if key == "st_designations" else (
+            "anchor_session" if key == "adjustment_anchors" else "session"
+        )
+        window[key] = [
+            dict(row)
+            for row in rows
+            if isinstance(row, dict)
+            and str(row.get(coordinate)) in selected_set
+        ]
+    universes = canonical.get("liquidity_universes")
+    if isinstance(universes, dict):
+        window["liquidity_universes"] = {
+            str(name): [
+                dict(row)
+                for row in rows
+                if isinstance(row, dict)
+                and str(row.get("session")) in selected_set
+            ]
+            for name, rows in universes.items()
+            if isinstance(rows, list)
+        }
+    return window
 
 
 def noncanonical_object_entries(

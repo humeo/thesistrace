@@ -80,6 +80,51 @@ class PostgresControlMetadataStore(MetadataStore):
     def initialize(self) -> None:
         return None
 
+    def next_dataset_release_on_path(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+    ) -> dict[str, object] | None:
+        if ancestor_id == descendant_id:
+            return None
+        descendant = self.dataset_release(descendant_id)
+        if descendant is None:
+            return None
+        if descendant.get("predecessor_id") == ancestor_id:
+            return descendant
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                WITH RECURSIVE lineage(
+                    id,
+                    predecessor_id,
+                    manifest_json
+                ) AS (
+                    SELECT id,
+                           manifest_json::jsonb ->> 'predecessor_id',
+                           manifest_json
+                    FROM dataset_releases
+                    WHERE id = ?
+                    UNION ALL
+                    SELECT release.id,
+                           release.manifest_json::jsonb
+                               ->> 'predecessor_id',
+                           release.manifest_json
+                    FROM dataset_releases AS release
+                    JOIN lineage
+                      ON release.id = lineage.predecessor_id
+                )
+                SELECT manifest_json
+                FROM lineage
+                WHERE predecessor_id = ?
+                LIMIT 1
+                """,
+                (descendant_id, ancestor_id),
+            ).fetchone()
+        if row is None or row["manifest_json"] is None:
+            return None
+        return dict(json.loads(str(row["manifest_json"])))
+
     @contextmanager
     def connect(self) -> Iterator[PostgresConnectionAdapter]:
         with psycopg.connect(self.database_url, row_factory=hybrid_row) as connection:
@@ -136,6 +181,29 @@ class PostgresControlMetadataStore(MetadataStore):
             ON CONFLICT (workspace_id, resource_kind, resource_id) DO NOTHING
             """,
             (f"cancel_{run_id}", run_id, created_at),
+        )
+
+    def enqueue_tracking_advance_execution(
+        self,
+        connection: PostgresConnectionAdapter,
+        *,
+        track_id: str,
+        advance_id: str,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO tracking_execution_outbox
+                (id, daily_track_id, advance_id, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+            ON CONFLICT(workspace_id, advance_id) DO NOTHING
+            """,
+            (
+                f"outbox_{advance_id}",
+                track_id,
+                advance_id,
+                created_at,
+            ),
         )
 
     def _admit_user_compute(
@@ -359,6 +427,58 @@ class PostgresControlMetadataStore(MetadataStore):
             )
             for row in rows
         }
+
+    def active_daily_track_refs(
+        self,
+        *,
+        after_workspace_id: str | None = None,
+        after_track_id: str | None = None,
+        through_workspace_id: str | None = None,
+        through_track_id: str | None = None,
+        limit: int = 101,
+    ) -> list[dict[str, str]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT workspace_id, track_id
+                FROM thesistrace_control.active_daily_track_refs(
+                    ?, ?, ?, ?, ?
+                )
+                """,
+                (
+                    after_workspace_id,
+                    after_track_id,
+                    through_workspace_id,
+                    through_track_id,
+                    limit,
+                ),
+            ).fetchall()
+        return [
+            {
+                "workspace_id": str(row["workspace_id"]),
+                "track_id": str(row["track_id"]),
+            }
+            for row in rows
+        ]
+
+    def active_daily_track_scan_bound(
+        self,
+    ) -> dict[str, str] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT workspace_id, track_id
+                FROM thesistrace_control.active_daily_track_scan_bound()
+                """
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else {
+                "workspace_id": str(row["workspace_id"]),
+                "track_id": str(row["track_id"]),
+            }
+        )
 
     def pending_working_cache_deletions(
         self,

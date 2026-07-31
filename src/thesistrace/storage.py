@@ -281,6 +281,20 @@ class MetadataStore:
                     UNIQUE(daily_track_id, generation_id, target_dataset_release_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS tracking_execution_outbox (
+                    id TEXT PRIMARY KEY,
+                    daily_track_id TEXT NOT NULL REFERENCES daily_tracks(id),
+                    advance_id TEXT NOT NULL UNIQUE REFERENCES tracking_advances(id),
+                    status TEXT NOT NULL CHECK (status IN ('pending', 'dispatched')),
+                    created_at TEXT NOT NULL,
+                    dispatched_at TEXT
+                );
+
+                CREATE INDEX IF NOT EXISTS
+                tracking_execution_outbox_pending_order
+                ON tracking_execution_outbox(created_at, id)
+                WHERE status = 'pending';
+
                 CREATE TABLE IF NOT EXISTS tracking_advance_attempts (
                     id TEXT PRIMARY KEY,
                     advance_id TEXT NOT NULL REFERENCES tracking_advances(id),
@@ -1196,6 +1210,100 @@ class MetadataStore:
             ).fetchone()
         return None if row is None else dict(row)
 
+    def active_daily_track_refs(
+        self,
+        *,
+        after_workspace_id: str | None = None,
+        after_track_id: str | None = None,
+        through_workspace_id: str | None = None,
+        through_track_id: str | None = None,
+        limit: int = 101,
+    ) -> list[dict[str, str]]:
+        bounded_limit = min(max(limit, 1), 101)
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT 'local' AS workspace_id, id AS track_id
+                FROM daily_tracks
+                WHERE status = 'active'
+                  AND (
+                      ? IS NULL
+                      OR 'local' > ?
+                      OR ('local' = ? AND id > ?)
+                  )
+                  AND (
+                      ? IS NULL
+                      OR 'local' < ?
+                      OR ('local' = ? AND id <= ?)
+                  )
+                ORDER BY id
+                LIMIT ?
+                """,
+                (
+                    after_workspace_id,
+                    after_workspace_id,
+                    after_workspace_id,
+                    after_track_id,
+                    through_workspace_id,
+                    through_workspace_id,
+                    through_workspace_id,
+                    through_track_id,
+                    bounded_limit,
+                ),
+            ).fetchall()
+        return [
+            {
+                "workspace_id": str(row["workspace_id"]),
+                "track_id": str(row["track_id"]),
+            }
+            for row in rows
+        ]
+
+    def active_daily_track_scan_bound(
+        self,
+    ) -> dict[str, str] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 'local' AS workspace_id, id AS track_id
+                FROM daily_tracks
+                WHERE status = 'active'
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return (
+            None
+            if row is None
+            else {
+                "workspace_id": str(row["workspace_id"]),
+                "track_id": str(row["track_id"]),
+            }
+        )
+
+    def enqueue_tracking_advance_execution(
+        self,
+        connection,
+        *,
+        track_id: str,
+        advance_id: str,
+        created_at: str,
+    ) -> None:
+        connection.execute(
+            """
+            INSERT INTO tracking_execution_outbox
+                (id, daily_track_id, advance_id, status, created_at)
+            VALUES (?, ?, ?, 'pending', ?)
+            ON CONFLICT(advance_id) DO NOTHING
+            """,
+            (
+                f"outbox_{advance_id}",
+                track_id,
+                advance_id,
+                created_at,
+            ),
+        )
+
     def _lock_dataset_publication_slot(self, connection) -> None:
         del connection
 
@@ -1306,6 +1414,56 @@ class MetadataStore:
             row = connection.execute(
                 "SELECT manifest_json FROM dataset_releases WHERE id = ?",
                 (release_id,),
+            ).fetchone()
+        if row is None or row["manifest_json"] is None:
+            return None
+        return dict(json.loads(str(row["manifest_json"])))
+
+    def next_dataset_release_on_path(
+        self,
+        ancestor_id: str,
+        descendant_id: str,
+    ) -> dict[str, object] | None:
+        if ancestor_id == descendant_id:
+            return None
+        descendant = self.dataset_release(descendant_id)
+        if descendant is None:
+            return None
+        if descendant.get("predecessor_id") == ancestor_id:
+            return descendant
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                WITH RECURSIVE lineage(
+                    id,
+                    predecessor_id,
+                    manifest_json
+                ) AS (
+                    SELECT id,
+                           json_extract(
+                               manifest_json,
+                               '$.predecessor_id'
+                           ),
+                           manifest_json
+                    FROM dataset_releases
+                    WHERE id = ?
+                    UNION ALL
+                    SELECT release.id,
+                           json_extract(
+                               release.manifest_json,
+                               '$.predecessor_id'
+                           ),
+                           release.manifest_json
+                    FROM dataset_releases AS release
+                    JOIN lineage
+                      ON release.id = lineage.predecessor_id
+                )
+                SELECT manifest_json
+                FROM lineage
+                WHERE predecessor_id = ?
+                LIMIT 1
+                """,
+                (descendant_id, ancestor_id),
             ).fetchone()
         if row is None or row["manifest_json"] is None:
             return None

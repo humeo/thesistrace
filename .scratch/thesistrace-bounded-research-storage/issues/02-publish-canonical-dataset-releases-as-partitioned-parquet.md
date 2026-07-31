@@ -30,11 +30,12 @@ consumer while checks stay green, then remove the legacy Canonical writer.
   reading, and the next publication from a legacy predecessor migrates the
   active Canonical state to Parquet without carrying legacy Canonical JSON into
   the new Release.
-- Capacity evidence for the deterministic 35-instrument, 756-session fixture:
-  legacy Canonical JSON was `19,684,882` bytes; the ten Canonical Parquet
-  objects total `223,953` bytes. A one-session publication adds six Canonical
-  objects totaling `11,228` bytes and reuses all ten predecessor objects by
-  SHA-256 identity.
+- Capacity evidence for the deterministic 35-instrument, 756-session fixture
+  reduced the former `19,684,882`-byte nested Canonical JSON to compressed
+  Parquet. Every range-partitioned bootstrap and catch-up object is now capped
+  at 252 session coordinates; a one-session publication still writes only its
+  six new Canonical partitions and reuses every predecessor object by SHA-256
+  identity.
 - Verification: `uv run python -m pytest --maxfail=1 -q` (`49 passed`), `uv
   run ruff check .`, and the five focused Parquet Release lifecycle tests all
   completed successfully.

@@ -21,6 +21,14 @@ from thesistrace.hosted.research_workflow import (
     ResearchWorkflow,
     research_workflow_id,
 )
+from thesistrace.hosted.tracking_workflow import (
+    TRACKING_TASK_QUEUE,
+    TrackingAdvanceWorkflow,
+    TrackingReleaseWorkflow,
+    tracking_advance_workflow_id,
+    tracking_release_workflow_id,
+    tracking_release_workflow_retry_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +66,41 @@ async def relay_once(
                 )
             except WorkflowAlreadyStartedError:
                 pass
-        else:
+        elif resource_kind == "tracking_release":
+            try:
+                await client.start_workflow(
+                    TrackingReleaseWorkflow.run,
+                    {"release_id": resource_id},
+                    id=tracking_release_workflow_id(resource_id),
+                    task_queue=TRACKING_TASK_QUEUE,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                    retry_policy=tracking_release_workflow_retry_policy(),
+                )
+            except WorkflowAlreadyStartedError:
+                pass
+        elif resource_kind == "tracking_advance":
+            if workspace_id is None:
+                raise ValueError("Tracking Advance execution requires a Workspace")
+            try:
+                await client.start_workflow(
+                    TrackingAdvanceWorkflow.run,
+                    {
+                        "workspace_id": workspace_id,
+                        "advance_id": resource_id,
+                    },
+                    id=tracking_advance_workflow_id(resource_id),
+                    task_queue=TRACKING_TASK_QUEUE,
+                    id_reuse_policy=WorkflowIDReusePolicy.REJECT_DUPLICATE,
+                )
+            except WorkflowAlreadyStartedError:
+                pass
+        elif resource_kind == "research_run_cancel":
             handle = client.get_workflow_handle(
                 research_workflow_id(resource_id)
             )
             await handle.cancel()
+        else:
+            raise ValueError(f"unsupported execution resource: {resource_kind}")
         outbox.mark_dispatched(entry["outbox_id"])
         dispatched += 1
     return dispatched

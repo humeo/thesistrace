@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,6 +13,7 @@ from thesistrace.auth import InsForgeIdentity
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.control import PostgresControlMetadataStore
+from thesistrace.hosted.execution_outbox import PostgresExecutionOutbox
 from thesistrace.hosted.management import PostgresManagementStore
 from thesistrace.hosted.migrations import apply_migrations
 from thesistrace.hosted.provisioning import PostgresProvisioningStore
@@ -20,7 +22,10 @@ from thesistrace.objects import ImmutableObjectStore
 from thesistrace.ports import LocalWorkerDispatch
 from thesistrace.provisioning import RegistrationService
 from thesistrace.runtime import RuntimePorts
-from thesistrace.tenancy import authenticated_subject
+from thesistrace.tenancy import (
+    authenticated_subject,
+    workspace_execution,
+)
 from thesistrace.working_cache import WorkingCacheStore
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,9 +40,11 @@ PRIVATE_TABLES = (
     "research_run_attempts",
     "daily_tracks",
     "daily_track_activation_idempotency",
+    "daily_track_activation_reservations",
     "tracking_generations",
     "tracking_checkpoints",
     "tracking_advances",
+    "tracking_execution_outbox",
     "tracking_advance_attempts",
     "working_cache_deletions",
 )
@@ -104,9 +111,11 @@ def truncate_product_state() -> None:
                 thesistrace_product.research_run_attempts,
                 thesistrace_product.daily_tracks,
                 thesistrace_product.daily_track_activation_idempotency,
+                thesistrace_product.daily_track_activation_reservations,
                 thesistrace_product.tracking_generations,
                 thesistrace_product.tracking_checkpoints,
                 thesistrace_product.tracking_advances,
+                thesistrace_product.tracking_execution_outbox,
                 thesistrace_product.tracking_advance_attempts,
                 thesistrace_product.working_cache_deletions,
                 thesistrace_product.publication_idempotency,
@@ -169,6 +178,64 @@ def bootstrap_shared_release(tmp_path: Path) -> dict[str, object]:
     )
     assert created is True
     return release
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_postgres_release_path_lookup_returns_only_the_next_release() -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    truncate_product_state()
+    suffix = uuid4().hex[:8]
+    release_ids = [
+        f"release-root-{suffix}",
+        f"release-middle-{suffix}",
+        f"release-target-{suffix}",
+    ]
+    predecessor: str | None = None
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        for ordinal, release_id in enumerate(release_ids):
+            connection.execute(
+                """
+                INSERT INTO thesistrace_product.dataset_releases
+                    (id, manifest_json, created_at)
+                VALUES (%s, %s, %s)
+                """,
+                (
+                    release_id,
+                    json.dumps(
+                        {
+                            "id": release_id,
+                            "predecessor_id": predecessor,
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    f"2026-01-0{ordinal + 1}T00:00:00+00:00",
+                ),
+            )
+            predecessor = release_id
+    store = PostgresControlMetadataStore(
+        TEST_DATABASE_URL,
+        database_role="compute",
+    )
+
+    next_release = store.next_dataset_release_on_path(
+        release_ids[0],
+        release_ids[2],
+    )
+
+    assert next_release is not None
+    assert next_release["id"] == release_ids[1]
+    assert (
+        store.next_dataset_release_on_path(
+            release_ids[2],
+            release_ids[0],
+        )
+        is None
+    )
 
 
 @pytest.mark.skipif(
@@ -301,9 +368,11 @@ def seed_private_table_graph(
         "research_run_attempts": f"attempt-{prefix}",
         "daily_tracks": f"track-{prefix}",
         "daily_track_activation_idempotency": f"track-key-{prefix}",
+        "daily_track_activation_reservations": f"reservation-{prefix}",
         "tracking_generations": f"generation-{prefix}",
         "tracking_checkpoints": f"checkpoint-{prefix}",
         "tracking_advances": f"advance-{prefix}",
+        "tracking_execution_outbox": f"tracking-outbox-{prefix}",
         "tracking_advance_attempts": f"advance-attempt-{prefix}",
         "working_cache_deletions": f"track-{prefix}",
     }
@@ -401,13 +470,27 @@ def seed_private_table_graph(
         )
         connection.execute(
             """
+            INSERT INTO thesistrace_product.daily_track_activation_reservations
+                (workspace_id, track_id, idempotency_key, seed_run_id, created_at)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (
+                workspace_id,
+                ids["daily_track_activation_reservations"],
+                f"reservation-key-{prefix}",
+                ids["research_runs"],
+                now,
+            ),
+        )
+        connection.execute(
+            """
             INSERT INTO thesistrace_product.daily_tracks
                 (workspace_id, id, seed_run_id, definition_version_id,
                  definition_content_hash, activation_release_id, origin_session,
                  numeric_execution_contract, status, current_generation_id,
                  head_checkpoint_id, created_at)
             VALUES (%s, %s, %s, %s, 'hash', %s, '2026-01-01',
-                    'numeric-v1', 'stopped', %s, %s, %s)
+                    'numeric-v1', 'active', %s, %s, %s)
             """,
             (
                 workspace_id,
@@ -486,6 +569,20 @@ def seed_private_table_graph(
         )
         connection.execute(
             """
+            INSERT INTO thesistrace_product.tracking_execution_outbox
+                (workspace_id, id, daily_track_id, advance_id, status, created_at)
+            VALUES (%s, %s, %s, %s, 'pending', %s)
+            """,
+            (
+                workspace_id,
+                ids["tracking_execution_outbox"],
+                ids["daily_tracks"],
+                ids["tracking_advances"],
+                now,
+            ),
+        )
+        connection.execute(
+            """
             INSERT INTO thesistrace_product.tracking_advance_attempts
                 (workspace_id, id, advance_id, ordinal, status, started_at)
             VALUES (%s, %s, %s, 1, 'succeeded', %s)
@@ -530,6 +627,68 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
     release = bootstrap_shared_release(tmp_path)
     ids_a = seed_private_table_graph(workspace_a, str(release["id"]), f"a-{suffix}")
     ids_b = seed_private_table_graph(workspace_b, str(release["id"]), f"b-{suffix}")
+
+    compute_store = PostgresControlMetadataStore(
+        TEST_DATABASE_URL,
+        database_role="compute",
+    )
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        connection.execute(
+            """
+            DELETE FROM thesistrace_product.tracking_execution_outbox
+            WHERE workspace_id = %s AND advance_id = %s
+            """,
+            (workspace_a, ids_a["tracking_advances"]),
+        )
+    with workspace_execution(workspace_a):
+        with compute_store.connect() as connection:
+            for _delivery in range(2):
+                compute_store.enqueue_tracking_advance_execution(
+                    connection,
+                    track_id=ids_a["daily_tracks"],
+                    advance_id=ids_a["tracking_advances"],
+                    created_at=datetime.now(UTC).isoformat(),
+                )
+    expected_track_refs = sorted(
+        [
+            {"workspace_id": workspace_a, "track_id": ids_a["daily_tracks"]},
+            {"workspace_id": workspace_b, "track_id": ids_b["daily_tracks"]},
+        ],
+        key=lambda item: (item["workspace_id"], item["track_id"]),
+    )
+    assert compute_store.active_daily_track_refs() == expected_track_refs
+    assert compute_store.active_daily_track_scan_bound() == (
+        expected_track_refs[-1]
+    )
+    first_page = compute_store.active_daily_track_refs(limit=1)
+    assert first_page == expected_track_refs[:1]
+    assert compute_store.active_daily_track_refs(
+        after_workspace_id=first_page[0]["workspace_id"],
+        after_track_id=first_page[0]["track_id"],
+        through_workspace_id=expected_track_refs[-1]["workspace_id"],
+        through_track_id=expected_track_refs[-1]["track_id"],
+        limit=1,
+    ) == expected_track_refs[1:]
+    relay = PostgresExecutionOutbox(TEST_DATABASE_URL)
+    tracking_entries = [
+        entry
+        for entry in relay.pending(limit=100)
+        if entry["resource_kind"] == "tracking_advance"
+    ]
+    assert {
+        (entry["workspace_id"], entry["resource_id"])
+        for entry in tracking_entries
+    } == {
+        (workspace_a, ids_a["tracking_advances"]),
+        (workspace_b, ids_b["tracking_advances"]),
+    }
+    for entry in tracking_entries:
+        assert relay.mark_dispatched(str(entry["outbox_id"])) is True
+    assert not [
+        entry
+        for entry in relay.pending(limit=100)
+        if entry["resource_kind"] == "tracking_advance"
+    ]
 
     with psycopg.connect(TEST_DATABASE_URL) as connection:
         roles = connection.execute(
@@ -607,6 +766,8 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
                     }
                     else "daily_track_id"
                     if table == "working_cache_deletions"
+                    else "track_id"
+                    if table == "daily_track_activation_reservations"
                     else "resource_id"
                     if table == "user_compute_admissions"
                     else "id"
@@ -619,9 +780,17 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
                     f"SELECT count(*) FROM {table} WHERE {identifying_column} = ?",
                     (other_id,),
                 ).fetchone()[0]
+                if table == "tracking_execution_outbox":
+                    assert own == 0
+                    assert hidden == 0
+                    continue
                 assert own == 1
                 assert hidden == 0
-                if table != "execution_outbox":
+                if table not in {
+                    "execution_outbox",
+                    "daily_track_activation_reservations",
+                    "tracking_execution_outbox",
+                }:
                     changed = connection.execute(
                         f"""
                         UPDATE {table}
