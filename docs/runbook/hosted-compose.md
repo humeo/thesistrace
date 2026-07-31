@@ -47,12 +47,19 @@ the off-node backup that contains the encrypted recovery bundle.
 `deploy/hosted/release.json` defines the compatible Web, Caddy, API, Worker,
 InsForge, Temporal, product-migration, and configuration components. The
 launcher hashes every declared source path and installs one read-only bundle at
-`releases/bundles/<bundle-id>/bundle.json`. Custom images use that immutable
-Bundle ID as their Docker tag. `current.json` and `previous.json` retain the
-active and immediately preceding identities; `candidate.json` names a staged
-bundle only until its migrations and release gate succeed. A failed deployment
-never changes `current.json`. Two releases never overwrite the same custom
-image tag.
+`releases/bundles/<bundle-id>/bundle.json`. Custom images first use the
+source-content identity as a temporary Docker build tag. After the build, the
+final Bundle ID binds both that source identity and every exact local Docker
+`sha256` image ID, and each image receives that final Bundle ID tag;
+`image-lock.json` records the same immutable association.
+Consequently, identical sources that produce different image bytes cannot
+produce the same Bundle ID. Each bundle also contains its own read-only Compose,
+Caddy, Temporal, telemetry, and dashboard configuration snapshot. A retry
+verifies the lock and refuses to rebuild or replace an already locked image.
+`current.json` and `previous.json`
+retain the active and immediately preceding identities; `candidate.json` names
+a staged bundle only until its migrations and release gate succeed. A failed
+deployment never changes `current.json`.
 
 Use `hosted-up` only for a clean installation or an ordinary restart of the
 same release. Deploy a new release with:
@@ -68,8 +75,9 @@ production Activities to drain. It then stops all Workers, installs and builds
 the new bundle as the candidate. It executes only the version-pinned InsForge,
 Temporal persistence, Temporal Visibility, and ThesisTrace migration jobs while
 the prior public containers remain present, then requires the release gate to
-succeed. Only after that gate does it replace steady containers, atomically
-promote the candidate to `current.json`, and create the new Workers stopped.
+succeed. Only after that gate does it recreate every steady configuration
+consumer from the candidate snapshot, promote the candidate to `current.json`,
+and create the new Workers stopped.
 Workers begin polling only after schedules and admission are restored.
 Migrations are append-only expand-contract changes; application startup never
 applies them implicitly.
@@ -90,14 +98,19 @@ make hosted-maintenance-exit
 The enter command reports whether the Activity drain completed. At the
 15-minute limit, Worker shutdown leaves interrupted Activities nonterminal for
 Temporal redelivery; maintenance never relabels them cancelled, failed, or
-resource-exhausted.
+resource-exhausted. The database admission gate rejects every new Dataset
+Publication request, including Operator requests, while the API gate rejects
+new User heavy work, including DailyTrack equivalence requests, and the relay
+leaves already queued outbox work undispatched.
 
-`make hosted-rollback` activates only `previous.json`, recreates the custom
-services from the retained Bundle-ID-tagged images without running a reverse or
-forward migration, and verifies service health before reopening admission. If
-the compatibility epoch differs, the command exits with restore-required and
-leaves maintenance enabled. Use the coordinated restore procedure instead of
-forcing that rollback.
+`make hosted-rollback` activates only `previous.json`, verifies the retained
+image IDs, and recreates databases, Temporal, InsForge, product services, edge,
+and observability containers from that bundle's retained configuration snapshot
+without running a reverse or forward migration. Named data volumes remain
+attached. The command verifies service health before reopening admission. If
+the compatibility epoch differs, it exits with restore-required and leaves
+maintenance enabled. Use the coordinated restore procedure instead of forcing
+that rollback.
 
 ## Service secrets and recovery material
 

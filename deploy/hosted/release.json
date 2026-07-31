@@ -2,6 +2,12 @@
   "manifest_version": 1,
   "version": "0.1.0",
   "compatibility_epoch": "hosted-v2-expand-contract-1",
+  "custom_images": [
+    "thesistrace/app:{bundle_id}",
+    "thesistrace/edge:{bundle_id}",
+    "thesistrace/insforge:{bundle_id}",
+    "thesistrace/insforge-deno:{bundle_id}"
+  ],
   "components": {
     "web": {
       "version": "0.1.0",
@@ -34,14 +40,14 @@
       "source_paths": ["deploy/hosted/temporal"]
     },
     "product_migrations": {
-      "version": "0021",
+      "version": "0022",
       "artifact": "thesistrace/app:{bundle_id}",
       "source_paths": ["deploy/hosted/migrations", "src/thesistrace/hosted/migrations.py"]
     },
     "configuration": {
       "version": "hosted-compose-v2",
       "artifact": "deploy/hosted/compose.yaml",
-      "source_paths": ["deploy/hosted/compose.yaml", "deploy/hosted/Caddyfile", "deploy/hosted/otel-collector.yaml", "deploy/hosted/prometheus.yaml", "deploy/hosted/grafana/provisioning", "docs/runbook/hosted-compose.md"]
+      "source_paths": ["deploy/hosted/compose.yaml", "deploy/hosted/Caddyfile", "deploy/hosted/secret-entrypoint.sh", "deploy/hosted/temporal", "deploy/hosted/otel-collector.yaml", "deploy/hosted/prometheus.yaml", "deploy/hosted/grafana/provisioning", "deploy/hosted/cloudflare-proxy-ranges.txt", "docs/runbook/hosted-compose.md"]
     }
   }
 }

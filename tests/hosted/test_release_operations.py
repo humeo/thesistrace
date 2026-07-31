@@ -1,30 +1,52 @@
 import asyncio
 import json
+import os
 import stat
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
+import thesistrace.hosted.release_cli as release_cli
 from thesistrace.api import create_app
 from thesistrace.config import Settings, settings_from_environment
-from thesistrace.hosted.release_cli import TemporalMaintenanceControl
+from thesistrace.hosted.release_cli import TemporalMaintenanceControl, enter_maintenance
 from thesistrace.hosted.release_gate import ReleaseGateError
 from thesistrace.hosted.release_gate import main as release_gate_main
 from thesistrace.hosted.release_operations import (
-    MaintenanceCoordinator,
     ReleaseBundle,
+    ReleaseOperationError,
     activate_candidate_release,
     activate_previous_release,
-    install_release_bundle,
+    lock_release_images,
     open_recovery_bundle,
-    provision_role_secrets,
     seal_recovery_bundle,
     stage_release_bundle,
+    verify_release_image_lock,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+def release_test_images(bundle_id: str) -> dict[str, str]:
+    return {
+        f"thesistrace/app:{bundle_id}": f"sha256:{'a' * 64}",
+        f"thesistrace/edge:{bundle_id}": f"sha256:{'b' * 64}",
+        f"thesistrace/insforge:{bundle_id}": f"sha256:{'c' * 64}",
+        f"thesistrace/insforge-deno:{bundle_id}": f"sha256:{'d' * 64}",
+    }
+
+
+def activate_bundle(state_root: Path, bundle: ReleaseBundle) -> str:
+    staged_id = stage_release_bundle(state_root, bundle)
+    locked = lock_release_images(
+        state_root,
+        staged_id,
+        release_test_images(staged_id),
+    )
+    bundle_id = str(locked["bundle_id"])
+    activate_candidate_release(state_root)
+    return bundle_id
 
 
 class FakeGate:
@@ -38,38 +60,6 @@ class FakeGate:
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
         self.events.append(f"gate:{enabled}")
-
-
-class FakeSchedules:
-    def __init__(self, events: list[str]) -> None:
-        self.events = events
-
-    def pause(self) -> None:
-        self.events.append("schedules:paused")
-
-    def resume(self) -> None:
-        self.events.append("schedules:resumed")
-
-
-class FakeActivities:
-    def __init__(self, counts: list[int]) -> None:
-        self.counts = counts
-
-    def running_count(self) -> int:
-        if len(self.counts) > 1:
-            return self.counts.pop(0)
-        return self.counts[0]
-
-
-class FakeWorkers:
-    def __init__(self, events: list[str]) -> None:
-        self.events = events
-
-    def stop_normally(self) -> None:
-        self.events.append("workers:stopped")
-
-    def start(self) -> None:
-        self.events.append("workers:started")
 
 
 class FakeAsyncItems:
@@ -156,6 +146,7 @@ def test_release_manifest_pins_every_compatible_component() -> None:
     assert bundle.components["web"]["artifact"] == (
         f"thesistrace/edge:{bundle.bundle_id}"
     )
+    assert set(bundle.custom_images) == set(release_test_images(bundle.bundle_id))
 
 
 def test_temporal_maintenance_pauses_every_listed_schedule() -> None:
@@ -200,16 +191,16 @@ def test_temporal_maintenance_counts_pending_activities_in_running_workflows() -
     ]
 
 
-def test_release_bundle_install_is_immutable_and_retains_one_previous(
+def test_release_bundle_activation_is_immutable_and_retains_one_previous(
     tmp_path: Path,
 ) -> None:
     source = ROOT / "deploy" / "hosted" / "release.json"
     first = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.0")
     second = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.1")
 
-    first_id = install_release_bundle(tmp_path, first)
-    assert install_release_bundle(tmp_path, first) == first_id
-    second_id = install_release_bundle(tmp_path, second)
+    first_id = activate_bundle(tmp_path, first)
+    assert activate_bundle(tmp_path, first) == first_id
+    second_id = activate_bundle(tmp_path, second)
 
     current = json.loads((tmp_path / "current.json").read_text())
     previous = json.loads((tmp_path / "previous.json").read_text())
@@ -224,7 +215,7 @@ def test_staged_release_does_not_replace_current_until_activation(
     source = ROOT / "deploy" / "hosted" / "release.json"
     first = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.0")
     second = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.1")
-    first_id = install_release_bundle(tmp_path, first)
+    first_id = activate_bundle(tmp_path, first)
 
     second_id = stage_release_bundle(tmp_path, second)
 
@@ -232,11 +223,19 @@ def test_staged_release_does_not_replace_current_until_activation(
     assert json.loads((tmp_path / "candidate.json").read_text())["bundle_id"] == second_id
     assert not (tmp_path / "previous.json").exists()
 
+    locked = lock_release_images(
+        tmp_path,
+        second_id,
+        release_test_images(second_id),
+    )
+    finalized_second_id = str(locked["bundle_id"])
     assert activate_candidate_release(tmp_path) == {
         "status": "activated",
-        "bundle_id": second_id,
+        "bundle_id": finalized_second_id,
     }
-    assert json.loads((tmp_path / "current.json").read_text())["bundle_id"] == second_id
+    assert json.loads((tmp_path / "current.json").read_text())["bundle_id"] == (
+        finalized_second_id
+    )
     assert json.loads((tmp_path / "previous.json").read_text())["bundle_id"] == first_id
     assert not (tmp_path / "candidate.json").exists()
 
@@ -249,7 +248,7 @@ def test_release_gate_rejects_unpinned_or_modified_bundle(
         ROOT / "deploy" / "hosted" / "release.json",
         ROOT,
     )
-    bundle_id = install_release_bundle(tmp_path, bundle)
+    bundle_id = activate_bundle(tmp_path, bundle)
     monkeypatch.setenv("THESISTRACE_RELEASE_VERSION", bundle.version)
     monkeypatch.setenv("THESISTRACE_RELEASE_BUNDLE_ID", bundle_id)
     monkeypatch.setenv("THESISTRACE_RELEASE_BUNDLE_ROOT", str(tmp_path))
@@ -275,8 +274,14 @@ def test_release_gate_accepts_staged_candidate_without_changing_current(
     source = ROOT / "deploy" / "hosted" / "release.json"
     current = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.0")
     candidate = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.1")
-    current_id = install_release_bundle(tmp_path, current)
+    current_id = activate_bundle(tmp_path, current)
     candidate_id = stage_release_bundle(tmp_path, candidate)
+    locked = lock_release_images(
+        tmp_path,
+        candidate_id,
+        release_test_images(candidate_id),
+    )
+    candidate_id = str(locked["bundle_id"])
     monkeypatch.setenv("THESISTRACE_RELEASE_VERSION", candidate.version)
     monkeypatch.setenv("THESISTRACE_RELEASE_BUNDLE_ID", candidate_id)
     monkeypatch.setenv("THESISTRACE_RELEASE_BUNDLE_ROOT", str(tmp_path))
@@ -286,14 +291,54 @@ def test_release_gate_accepts_staged_candidate_without_changing_current(
     assert json.loads((tmp_path / "current.json").read_text())["bundle_id"] == current_id
 
 
+def test_release_gate_rejects_modified_configuration_or_image_lock(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bundle = ReleaseBundle.from_manifest(
+        ROOT / "deploy" / "hosted" / "release.json",
+        ROOT,
+    )
+    bundle_id = activate_bundle(tmp_path, bundle)
+    monkeypatch.setenv("THESISTRACE_RELEASE_VERSION", bundle.version)
+    monkeypatch.setenv("THESISTRACE_RELEASE_BUNDLE_ID", bundle_id)
+    monkeypatch.setenv("THESISTRACE_RELEASE_BUNDLE_ROOT", str(tmp_path))
+
+    configuration = (
+        tmp_path
+        / "bundles"
+        / bundle_id
+        / "configuration"
+        / "deploy"
+        / "hosted"
+        / "compose.yaml"
+    )
+    original_configuration = configuration.read_bytes()
+    configuration.chmod(0o600)
+    configuration.write_bytes(original_configuration + b"\n# modified\n")
+    with pytest.raises(ReleaseGateError, match="configuration snapshot"):
+        release_gate_main()
+
+    configuration.write_bytes(original_configuration)
+    configuration.chmod(0o444)
+    image_lock = tmp_path / "bundles" / bundle_id / "image-lock.json"
+    image_lock.chmod(0o600)
+    changed = json.loads(image_lock.read_text())
+    first_image = next(iter(changed["images"]))
+    changed["images"][first_image] = f"sha256:{'f' * 64}"
+    image_lock.write_text(json.dumps(changed))
+    with pytest.raises(ReleaseGateError, match="image lock"):
+        release_gate_main()
+
+
 def test_rollback_activates_only_the_immediately_previous_compatible_bundle(
     tmp_path: Path,
 ) -> None:
     source = ROOT / "deploy" / "hosted" / "release.json"
     first = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.0")
     second = ReleaseBundle.from_manifest(source, ROOT, version_override="2.0.1")
-    first_id = install_release_bundle(tmp_path, first)
-    install_release_bundle(tmp_path, second)
+    first_id = activate_bundle(tmp_path, first)
+    activate_bundle(tmp_path, second)
 
     stage_release_bundle(
         tmp_path,
@@ -310,65 +355,48 @@ def test_rollback_activates_only_the_immediately_previous_compatible_bundle(
         version_override="3.0.0",
         compatibility_epoch_override="hosted-v3-breaking-1",
     )
-    install_release_bundle(tmp_path, incompatible)
+    activate_bundle(tmp_path, incompatible)
     assert activate_previous_release(tmp_path) == {
         "status": "restore_required",
         "reason": "persisted-data compatibility epoch changed",
     }
 
 
-def test_maintenance_pauses_admission_and_schedules_then_drains_before_stop() -> None:
-    events: list[str] = []
+def test_real_maintenance_cli_drains_then_reports_nonterminal_timeout(monkeypatch) -> None:
     gate = FakeGate()
-    gate.events = events
     now = [0.0]
 
-    def sleep(seconds: float) -> None:
+    class Temporal:
+        async def pause_schedules(self) -> int:
+            return 2
+
+        async def running_activity_count(self) -> int:
+            return 1
+
+    async def connect(*_args, **_kwargs):
+        return object()
+
+    async def sleep(seconds: float) -> None:
         now[0] += seconds
 
-    coordinator = MaintenanceCoordinator(
-        gate=gate,
-        schedules=FakeSchedules(events),
-        activities=FakeActivities([2, 1, 0]),
-        workers=FakeWorkers(events),
-        clock=lambda: now[0],
-        sleep=sleep,
-    )
-    result = coordinator.enter(max_drain_seconds=900, poll_interval=5)
+    monkeypatch.setattr(release_cli, "database_url_from_environment", lambda: "postgres://db")
+    monkeypatch.setattr(release_cli, "PostgresMaintenanceGate", lambda _url: gate)
+    monkeypatch.setattr(release_cli, "Client", SimpleNamespace(connect=connect))
+    monkeypatch.setattr(release_cli, "TemporalMaintenanceControl", lambda _client: Temporal())
+    monkeypatch.setattr(release_cli.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(release_cli.asyncio, "sleep", sleep)
 
-    assert result.drained is True
-    assert result.remaining_activities == 0
-    assert result.interrupted_activity_state == "none"
-    assert events == ["gate:True", "schedules:paused", "workers:stopped"]
-    assert now[0] == 10
+    result = asyncio.run(enter_maintenance(5))
 
-    coordinator.exit()
-    assert events[-3:] == ["workers:started", "schedules:resumed", "gate:False"]
-
-
-def test_maintenance_timeout_leaves_activity_nonterminal_for_redelivery() -> None:
-    events: list[str] = []
-    gate = FakeGate()
-    gate.events = events
-    now = [0.0]
-
-    def sleep(seconds: float) -> None:
-        now[0] += seconds
-
-    result = MaintenanceCoordinator(
-        gate=gate,
-        schedules=FakeSchedules(events),
-        activities=FakeActivities([1]),
-        workers=FakeWorkers(events),
-        clock=lambda: now[0],
-        sleep=sleep,
-    ).enter(max_drain_seconds=900, poll_interval=300)
-
-    assert result.drained is False
-    assert result.remaining_activities == 1
-    assert result.interrupted_activity_state == "nonterminal_redelivery"
-    assert now[0] == 900
-    assert events[-1] == "workers:stopped"
+    assert result == {
+        "maintenance": "entered",
+        "paused_schedules": 2,
+        "drained": False,
+        "remaining_activities": 1,
+        "interrupted_activity_state": "nonterminal_redelivery",
+    }
+    assert gate.events == ["gate:True"]
+    assert now[0] == 5
 
 
 def test_hosted_api_rejects_new_heavy_work_during_maintenance(tmp_path: Path) -> None:
@@ -386,10 +414,16 @@ def test_hosted_api_rejects_new_heavy_work_during_maintenance(tmp_path: Path) ->
         assert response.status_code == 503
         assert response.json()["detail"]["reason_code"] == "MAINTENANCE_MODE"
         assert response.headers["Retry-After"] == "60"
+        equivalence = client.post(
+            "/api/v1/daily-tracks/missing/equivalence-requests",
+            headers={"Idempotency-Key": "maintenance-equivalence-test"},
+        )
+        assert equivalence.status_code == 503
+        assert equivalence.json()["detail"]["reason_code"] == "MAINTENANCE_MODE"
         assert client.get("/api/v1/live").status_code == 200
 
 
-def test_role_secrets_are_separate_mode_600_files_and_recovery_is_encrypted(
+def test_recovery_bundle_is_mode_600_and_encrypted(
     tmp_path: Path,
 ) -> None:
     values = {
@@ -397,22 +431,105 @@ def test_role_secrets_are_separate_mode_600_files_and_recovery_is_encrypted(
         "compute_database_url": "postgresql://compute:compute-secret@postgres/db",
         "tushare_token": "tushare-secret",
     }
-    paths = provision_role_secrets(tmp_path / "secrets", values)
-    assert set(paths) == set(values)
-    for name, path in paths.items():
-        assert path.read_text() == values[name]
-        assert stat.S_IMODE(path.stat().st_mode) == 0o600
-        assert path.parent.name == "secrets"
-
     sealed = seal_recovery_bundle(
         tmp_path / "current.recovery",
         values,
         passphrase="recovery-passphrase",
     )
     payload = sealed.read_bytes()
+    assert stat.S_IMODE(sealed.stat().st_mode) == 0o600
     assert b"api-secret" not in payload
     assert b"tushare-secret" not in payload
     assert open_recovery_bundle(sealed, passphrase="recovery-passphrase") == values
+
+
+def test_release_bundle_snapshots_configuration_and_locks_image_digests(
+    tmp_path: Path,
+) -> None:
+    bundle = ReleaseBundle.from_manifest(
+        ROOT / "deploy" / "hosted" / "release.json",
+        ROOT,
+    )
+    bundle_id = stage_release_bundle(tmp_path, bundle)
+    snapshot = (
+        tmp_path
+        / "bundles"
+        / bundle_id
+        / "configuration"
+        / "deploy"
+        / "hosted"
+        / "compose.yaml"
+    )
+    assert snapshot.read_bytes() == (ROOT / "deploy" / "hosted" / "compose.yaml").read_bytes()
+    entrypoint = snapshot.parent / "secret-entrypoint.sh"
+    assert stat.S_IMODE(entrypoint.stat().st_mode) == 0o555
+
+    with pytest.raises(ReleaseOperationError, match="image lock"):
+        activate_candidate_release(tmp_path)
+    images = release_test_images(bundle_id)
+    locked = lock_release_images(tmp_path, bundle_id, images)
+    bundle_id = str(locked["bundle_id"])
+    finalized_images = dict(locked["images"])
+    assert verify_release_image_lock(
+        tmp_path,
+        bundle_id,
+        finalized_images,
+    )["images"] == finalized_images
+    changed_images = dict(finalized_images)
+    app_image = next(
+        image for image in changed_images if image.startswith("thesistrace/app:")
+    )
+    changed_images[app_image] = f"sha256:{'e' * 64}"
+    with pytest.raises(ReleaseOperationError, match="immutable image lock"):
+        lock_release_images(
+            tmp_path,
+            bundle_id,
+            changed_images,
+        )
+
+
+def test_release_bundle_identity_binds_exact_custom_image_ids(
+    tmp_path: Path,
+) -> None:
+    bundle = ReleaseBundle.from_manifest(
+        ROOT / "deploy" / "hosted" / "release.json",
+        ROOT,
+    )
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first_staged_id = stage_release_bundle(first_root, bundle)
+    second_staged_id = stage_release_bundle(second_root, bundle)
+    assert first_staged_id == second_staged_id
+
+    first = lock_release_images(
+        first_root,
+        first_staged_id,
+        release_test_images(first_staged_id),
+    )
+    second_images = release_test_images(second_staged_id)
+    second_images[f"thesistrace/app:{second_staged_id}"] = (
+        f"sha256:{'e' * 64}"
+    )
+    second = lock_release_images(
+        second_root,
+        second_staged_id,
+        second_images,
+    )
+
+    assert first["bundle_id"] != second["bundle_id"]
+    finalized = json.loads(
+        (
+            first_root
+            / "bundles"
+            / str(first["bundle_id"])
+            / "bundle.json"
+        ).read_text()
+    )
+    assert finalized["image_ids"] == first["images"]
+    assert finalized["image_tag"] == first["bundle_id"]
+    assert set(finalized["image_ids"]) == set(
+        release_test_images(str(first["bundle_id"]))
+    )
 
 
 def test_application_settings_load_role_secrets_from_files(
@@ -478,7 +595,7 @@ def test_compose_orders_all_one_shot_migrations_before_public_services() -> None
     assert "/run/thesistrace-release:ro" in compose
 
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
-    assert "release_cli install-bundle" in launcher
+    assert "release_cli stage-bundle" in launcher
 
     migration = (ROOT / "deploy" / "hosted" / "migrations" / "0021_platform_maintenance.sql")
     sql = migration.read_text()
@@ -488,13 +605,52 @@ def test_compose_orders_all_one_shot_migrations_before_public_services() -> None
     assert "maintenance_enabled" in relay
     assert "return []" in relay
 
+    all_admission = (
+        ROOT
+        / "deploy"
+        / "hosted"
+        / "migrations"
+        / "0022_block_all_publication_admission_in_maintenance.sql"
+    ).read_text()
+    assert "reject_dataset_publication_during_maintenance" in all_admission
+    assert "NEW.trigger_kind" not in all_admission
+
 
 def test_custom_images_and_launcher_use_the_immutable_release_bundle_id() -> None:
     compose = (ROOT / "deploy" / "hosted" / "compose.yaml").read_text()
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    model = json.loads(
+        subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                str(ROOT),
+                "-f",
+                str(ROOT / "deploy" / "hosted" / "compose.yaml"),
+                "config",
+                "--format",
+                "json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "THESISTRACE_RELEASE_BUNDLE_ID": "bundle-test"},
+        ).stdout
+    )
 
-    assert compose.count("${THESISTRACE_RELEASE_BUNDLE_ID:-dev}") == 5
+    assert compose.count("image: thesistrace/") == 5
+    assert compose.count("THESISTRACE_RELEASE_IMAGE_TAG") == 5
+    assert model["services"]["release-gate"]["environment"][
+        "THESISTRACE_RELEASE_BUNDLE_ID"
+    ] == "bundle-test"
     assert "THESISTRACE_RELEASE_BUNDLE_ID" in launcher
+    assert "THESISTRACE_RELEASE_IMAGE_TAG" in launcher
+    assert "lock-images" in launcher
+    assert "verify-images" in launcher
+    assert "THESISTRACE_RELEASE_CONFIG_ROOT" in launcher
+    assert 'configuration/deploy/hosted"' in launcher
+    assert 'compose_file="$release_config_root/compose.yaml"' in launcher
     rollback_block = launcher.split("    rollback)", 1)[1].split("        ;;", 1)[0]
     assert "select_current_release" in rollback_block
 
@@ -504,9 +660,9 @@ def test_read_only_operations_do_not_install_a_new_release_bundle() -> None:
     prepare_block = launcher.split("prepare() {", 1)[1].split("\n}", 1)[0]
     smoke_block = launcher.split("    smoke)", 1)[1].split("        ;;", 1)[0]
 
-    assert "release_cli install-bundle" not in prepare_block
+    assert "release_cli stage-bundle" not in prepare_block
     assert "select_current_release" in smoke_block
-    assert "install_release" not in smoke_block
+    assert "stage_release" not in smoke_block
 
 
 def test_existing_up_and_restart_never_rebuild_the_active_bundle() -> None:
@@ -532,11 +688,13 @@ def test_compatible_rollback_does_not_rerun_migration_jobs() -> None:
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
     rollback_block = launcher.split("    rollback)", 1)[1].split("        ;;", 1)[0]
 
-    assert (
-        "compose up --no-start --force-recreate --no-build --no-deps"
-        in rollback_block
+    assert "recreate_steady_services" in rollback_block
+    assert rollback_block.index("check-previous") < rollback_block.index(
+        "select_release previous"
     )
-    assert "compose up --detach --wait --no-build --no-deps" in rollback_block
+    assert rollback_block.index("release_images verify-images") < rollback_block.index(
+        "activate-previous"
+    )
     for migration_service in (
         "insforge-migrations",
         "temporal-schema",
@@ -544,7 +702,37 @@ def test_compatible_rollback_does_not_rerun_migration_jobs() -> None:
         "release-gate",
     ):
         assert migration_service not in rollback_block
-    assert "insforge deno" in rollback_block
+
+
+def test_release_recreates_every_configuration_consumer() -> None:
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    recreate = launcher.split("recreate_steady_services() {", 1)[1].split(
+        "\n}", 1
+    )[0]
+    for service in (
+        "postgres",
+        "temporal-postgres",
+        "temporal",
+        "postgrest",
+        "deno",
+        "insforge",
+        "object-store",
+        "tushare-egress",
+        "otel-collector",
+        "prometheus",
+        "grafana",
+        "api",
+        "health-service",
+        "edge",
+        "execution-relay",
+        "data-worker",
+        "compute-worker-1",
+        "compute-worker-2",
+        "compute-worker-3",
+        "compute-worker-4",
+    ):
+        assert service in recreate
+    assert "--force-recreate --no-build --no-deps" in recreate
 
 
 def test_forward_deploy_drains_old_bundle_before_installing_new_bundle() -> None:
@@ -552,15 +740,14 @@ def test_forward_deploy_drains_old_bundle_before_installing_new_bundle() -> None
     deploy_block = launcher.split("    deploy)", 1)[1].split("        ;;", 1)[0]
 
     assert deploy_block.index("enter_maintenance") < deploy_block.index("stage_release")
-    assert "compose build" in deploy_block
-    migration_phase, steady_phase = deploy_block.split(
-        "compose up --detach --wait --no-build --no-deps", 1
-    )
+    assert "build_candidate_images" in deploy_block
+    migration_phase, steady_phase = deploy_block.split("recreate_steady_services", 1)
     assert "release-gate" in migration_phase
     assert "api edge" not in migration_phase
-    assert "api edge" in steady_phase
-    assert "compose up --no-start --force-recreate --no-build --no-deps" in deploy_block
-    assert deploy_block.index("activate_candidate") > deploy_block.index("compose build")
+    assert steady_phase
+    assert deploy_block.index("activate_candidate") > deploy_block.index(
+        "build_candidate_images"
+    )
     assert deploy_block.rindex("exit_maintenance") > deploy_block.index(
         "activate_candidate"
     )

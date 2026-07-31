@@ -3,8 +3,8 @@ import hashlib
 import json
 import os
 import re
-import time
-from collections.abc import Callable, Mapping
+import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -16,6 +16,8 @@ from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 RELEASE_MANIFEST_VERSION = 1
 RECOVERY_MAGIC = b"TTSR1"
 IDENTIFIER = re.compile(r"^[A-Za-z0-9_.-]+$")
+IMAGE_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+IMAGE_TEMPLATE = re.compile(r"^[a-z0-9._/-]+:\{bundle_id\}$")
 
 
 class ReleaseOperationError(RuntimeError):
@@ -32,13 +34,13 @@ def canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def sha256_paths(root: Path, paths: list[str]) -> str:
-    digest = hashlib.sha256()
+def source_files(root: Path, paths: list[str]) -> list[Path]:
     files: list[Path] = []
+    resolved_root = root.resolve()
     for relative in paths:
         candidate = (root / relative).resolve()
         try:
-            candidate.relative_to(root.resolve())
+            candidate.relative_to(resolved_root)
         except ValueError as error:
             raise ReleaseOperationError("release source path escapes repository") from error
         if candidate.is_dir():
@@ -55,9 +57,23 @@ def sha256_paths(root: Path, paths: list[str]) -> str:
             files.append(candidate)
         else:
             raise ReleaseOperationError(f"release source path is missing: {relative}")
-    for path in sorted(set(files)):
-        relative = path.relative_to(root.resolve()).as_posix().encode("utf-8")
-        payload = path.read_bytes()
+    return sorted(set(files))
+
+
+def sha256_files(root: Path, files: list[Path]) -> str:
+    resolved_root = root.resolve()
+    return sha256_named_payloads(
+        {
+            path.relative_to(resolved_root).as_posix(): path.read_bytes()
+            for path in files
+        }
+    )
+
+
+def sha256_named_payloads(payloads: Mapping[str, bytes]) -> str:
+    digest = hashlib.sha256()
+    for name, payload in sorted(payloads.items()):
+        relative = name.encode("utf-8")
         digest.update(len(relative).to_bytes(4, "big"))
         digest.update(relative)
         digest.update(len(payload).to_bytes(8, "big"))
@@ -72,6 +88,13 @@ class ReleaseBundle:
     components: dict[str, dict[str, str]]
     content_sha256: str
     manifest_sha256: str
+    source_sha256: str
+    bundle_state: str
+    image_tag: str
+    image_ids: dict[str, str]
+    custom_images: tuple[str, ...]
+    configuration_files: dict[str, bytes]
+    configuration_modes: dict[str, int]
 
     @classmethod
     def from_manifest(
@@ -96,7 +119,15 @@ class ReleaseBundle:
         component_sources = source.get("components")
         if not isinstance(component_sources, dict) or not component_sources:
             raise ReleaseOperationError("release components are required")
+        custom_image_templates = source.get("custom_images")
+        if not isinstance(custom_image_templates, list) or not all(
+            isinstance(image, str) and IMAGE_TEMPLATE.fullmatch(image)
+            for image in custom_image_templates
+        ) or len(set(custom_image_templates)) != len(custom_image_templates):
+            raise ReleaseOperationError("custom release images are required")
         component_templates: dict[str, dict[str, str]] = {}
+        configuration_files: dict[str, bytes] = {}
+        configuration_modes: dict[str, int] = {}
         for name, value in sorted(component_sources.items()):
             if not isinstance(value, dict):
                 raise ReleaseOperationError(f"invalid release component: {name}")
@@ -108,16 +139,38 @@ class ReleaseBundle:
             artifact = str(value["artifact"])
             if not artifact:
                 raise ReleaseOperationError(f"component artifact is required: {name}")
+            component_source_files = source_files(repository_root, paths)
             component_templates[str(name)] = {
                 "version": str(value["version"]),
                 "artifact": artifact,
-                "source_sha256": sha256_paths(repository_root, paths),
+                "source_sha256": sha256_files(
+                    repository_root,
+                    component_source_files,
+                ),
             }
+            if name == "configuration":
+                resolved_root = repository_root.resolve()
+                configuration_files = {
+                    path.relative_to(resolved_root).as_posix(): path.read_bytes()
+                    for path in component_source_files
+                }
+                configuration_modes = {
+                    path.relative_to(resolved_root).as_posix(): (
+                        0o555 if path.stat().st_mode & 0o111 else 0o444
+                    )
+                    for path in component_source_files
+                }
+        if not configuration_files:
+            raise ReleaseOperationError("release configuration snapshot is required")
+        configuration_paths = tuple(sorted(configuration_files))
         content_body = {
             "manifest_version": RELEASE_MANIFEST_VERSION,
             "version": version,
             "compatibility_epoch": compatibility_epoch,
             "components": component_templates,
+            "custom_images": custom_image_templates,
+            "configuration_paths": configuration_paths,
+            "configuration_modes": configuration_modes,
         }
         content_sha256 = hashlib.sha256(canonical_json(content_body)).hexdigest()
         bundle_id = f"{version}-{content_sha256[:16]}"
@@ -129,14 +182,25 @@ class ReleaseBundle:
                 }
                 for name, component in component_templates.items()
             }
+            custom_images = tuple(
+                image.format(bundle_id=bundle_id)
+                for image in custom_image_templates
+            )
         except (KeyError, ValueError) as error:
             raise ReleaseOperationError("release artifact template is invalid") from error
         body = {
             "manifest_version": RELEASE_MANIFEST_VERSION,
             "version": version,
             "compatibility_epoch": compatibility_epoch,
+            "source_sha256": content_sha256,
+            "bundle_state": "staged",
             "content_sha256": content_sha256,
             "components": components,
+            "image_tag": bundle_id,
+            "image_ids": {},
+            "custom_images": custom_images,
+            "configuration_paths": configuration_paths,
+            "configuration_modes": configuration_modes,
         }
         return cls(
             version=version,
@@ -144,6 +208,13 @@ class ReleaseBundle:
             components=components,
             content_sha256=content_sha256,
             manifest_sha256=hashlib.sha256(canonical_json(body)).hexdigest(),
+            source_sha256=content_sha256,
+            bundle_state="staged",
+            image_tag=bundle_id,
+            image_ids={},
+            custom_images=custom_images,
+            configuration_files=configuration_files,
+            configuration_modes=configuration_modes,
         )
 
     @property
@@ -156,8 +227,15 @@ class ReleaseBundle:
             "bundle_id": self.bundle_id,
             "version": self.version,
             "compatibility_epoch": self.compatibility_epoch,
+            "source_sha256": self.source_sha256,
+            "bundle_state": self.bundle_state,
             "content_sha256": self.content_sha256,
             "components": self.components,
+            "image_tag": self.image_tag,
+            "image_ids": self.image_ids,
+            "custom_images": self.custom_images,
+            "configuration_paths": tuple(sorted(self.configuration_files)),
+            "configuration_modes": self.configuration_modes,
             "manifest_sha256": self.manifest_sha256,
         }
 
@@ -178,6 +256,8 @@ def write_pointer(state_root: Path, name: str, bundle_id: str) -> None:
 
 
 def read_bundle(state_root: Path, bundle_id: str) -> dict[str, object]:
+    if not IDENTIFIER.fullmatch(bundle_id):
+        raise ReleaseOperationError("release bundle identity is invalid")
     path = state_root / "bundles" / bundle_id / "bundle.json"
     if not path.is_file():
         raise ReleaseOperationError(f"release bundle is unavailable: {bundle_id}")
@@ -197,9 +277,26 @@ def store_release_bundle(state_root: Path, bundle: ReleaseBundle) -> str:
         bundle_path = target / "bundle.json"
         bundle_path.write_bytes(payload)
         bundle_path.chmod(0o444)
+        for relative, contents in sorted(bundle.configuration_files.items()):
+            snapshot = target / "configuration" / relative
+            snapshot.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+            snapshot.write_bytes(contents)
+            snapshot.chmod(bundle.configuration_modes[relative])
     except FileExistsError:
         if (target / "bundle.json").read_bytes() != payload:
             raise ReleaseOperationError("immutable release bundle changed") from None
+        for relative, contents in bundle.configuration_files.items():
+            snapshot = target / "configuration" / relative
+            if not snapshot.is_file() or snapshot.read_bytes() != contents:
+                raise ReleaseOperationError(
+                    "immutable release configuration changed"
+                ) from None
+            if (snapshot.stat().st_mode & 0o777) != bundle.configuration_modes[
+                relative
+            ]:
+                raise ReleaseOperationError(
+                    "immutable release configuration mode changed"
+                ) from None
     return bundle.bundle_id
 
 
@@ -215,6 +312,8 @@ def activate_candidate_release(state_root: Path) -> dict[str, str]:
         raise ReleaseOperationError("a staged release candidate is unavailable")
     bundle_id = candidate["bundle_id"]
     read_bundle(state_root, bundle_id)
+    verify_release_configuration(state_root, bundle_id)
+    verify_release_image_lock(state_root, bundle_id)
     current = read_pointer(state_root, "current")
     if current and current["bundle_id"] != bundle_id:
         write_pointer(state_root, "previous", current["bundle_id"])
@@ -223,13 +322,235 @@ def activate_candidate_release(state_root: Path) -> dict[str, str]:
     return {"status": "activated", "bundle_id": bundle_id}
 
 
-def install_release_bundle(state_root: Path, bundle: ReleaseBundle) -> str:
-    bundle_id = stage_release_bundle(state_root, bundle)
-    activate_candidate_release(state_root)
-    return bundle_id
+def image_lock_path(state_root: Path, bundle_id: str) -> Path:
+    return state_root / "bundles" / bundle_id / "image-lock.json"
 
 
-def activate_previous_release(state_root: Path) -> dict[str, str]:
+def verify_release_configuration(
+    state_root: Path,
+    bundle_id: str,
+) -> dict[str, object]:
+    bundle = read_bundle(state_root, bundle_id)
+    configuration_root = state_root / "bundles" / bundle_id / "configuration"
+    try:
+        paths = bundle["configuration_paths"]
+        modes = bundle["configuration_modes"]
+        expected = bundle["components"]["configuration"]["source_sha256"]
+        if not isinstance(paths, list) or not paths or not isinstance(modes, dict):
+            raise ValueError
+        payloads: dict[str, bytes] = {}
+        for relative in paths:
+            if not isinstance(relative, str):
+                raise ValueError
+            path = (configuration_root / relative).resolve()
+            path.relative_to(configuration_root.resolve())
+            if not path.is_file():
+                raise ValueError
+            if (path.stat().st_mode & 0o777) != modes.get(relative):
+                raise ValueError
+            payloads[relative] = path.read_bytes()
+        if sha256_named_payloads(payloads) != expected:
+            raise ValueError
+    except (KeyError, TypeError, ValueError) as error:
+        raise ReleaseOperationError("release configuration snapshot is invalid") from error
+    return bundle
+
+
+def image_lock_payload(bundle_id: str, images: Mapping[str, str]) -> bytes:
+    if not images or not all(
+        name and IMAGE_DIGEST.fullmatch(digest)
+        for name, digest in images.items()
+    ):
+        raise ReleaseOperationError("release image names and SHA-256 IDs are required")
+    body: dict[str, object] = {
+        "bundle_id": bundle_id,
+        "images": dict(sorted(images.items())),
+    }
+    body["lock_sha256"] = hashlib.sha256(canonical_json(body)).hexdigest()
+    return canonical_json(body) + b"\n"
+
+
+def finalized_content_sha256(
+    source_sha256: str,
+    image_ids: Mapping[str, str],
+) -> str:
+    if not re.fullmatch(r"[0-9a-f]{64}", source_sha256) or not image_ids:
+        raise ReleaseOperationError("release source and image identities are required")
+    if not all(
+        isinstance(name, str)
+        and name
+        and isinstance(digest, str)
+        and IMAGE_DIGEST.fullmatch(digest)
+        for name, digest in image_ids.items()
+    ):
+        raise ReleaseOperationError("release image names and SHA-256 IDs are required")
+    repositories: dict[str, str] = {}
+    for name, digest in image_ids.items():
+        repository, separator, tag = name.rpartition(":")
+        if not separator or not repository or not tag or repository in repositories:
+            raise ReleaseOperationError("release image names must have unique tags")
+        repositories[repository] = digest
+    return hashlib.sha256(
+        canonical_json(
+            {
+                "source_sha256": source_sha256,
+                "image_ids_by_repository": dict(sorted(repositories.items())),
+            }
+        )
+    ).hexdigest()
+
+
+def finalized_release_bundle(
+    state_root: Path,
+    staged_bundle_id: str,
+    images: Mapping[str, str],
+) -> ReleaseBundle:
+    staged = verify_release_configuration(state_root, staged_bundle_id)
+    source_sha256 = str(staged.get("source_sha256", ""))
+    if staged.get("bundle_state") != "staged":
+        raise ReleaseOperationError("release bundle is not staged")
+    content_sha256 = finalized_content_sha256(source_sha256, images)
+    version = str(staged["version"])
+    final_bundle_id = f"{version}-{content_sha256[:16]}"
+    image_ids_by_repository = {
+        name.rpartition(":")[0]: digest for name, digest in images.items()
+    }
+    final_image_ids = {
+        f"{repository}:{final_bundle_id}": digest
+        for repository, digest in sorted(image_ids_by_repository.items())
+    }
+    components = {
+        str(name): {
+            **dict(component),
+            "artifact": str(component["artifact"]).replace(
+                f":{staged_bundle_id}",
+                f":{final_bundle_id}",
+            ),
+        }
+        for name, component in dict(staged["components"]).items()
+    }
+    configuration_root = (
+        state_root / "bundles" / staged_bundle_id / "configuration"
+    )
+    configuration_paths = staged["configuration_paths"]
+    configuration_modes = staged["configuration_modes"]
+    if not isinstance(configuration_paths, list) or not isinstance(
+        configuration_modes, dict
+    ):
+        raise ReleaseOperationError("release configuration snapshot is invalid")
+    configuration_files = {
+        str(relative): (configuration_root / str(relative)).read_bytes()
+        for relative in configuration_paths
+    }
+    body = {
+        "manifest_version": RELEASE_MANIFEST_VERSION,
+        "version": version,
+        "compatibility_epoch": str(staged["compatibility_epoch"]),
+        "source_sha256": source_sha256,
+        "bundle_state": "finalized",
+        "content_sha256": content_sha256,
+        "components": components,
+        "image_tag": final_bundle_id,
+        "image_ids": final_image_ids,
+        "custom_images": tuple(final_image_ids),
+        "configuration_paths": configuration_paths,
+        "configuration_modes": configuration_modes,
+    }
+    finalized = ReleaseBundle(
+        version=version,
+        compatibility_epoch=str(staged["compatibility_epoch"]),
+        components=components,
+        content_sha256=content_sha256,
+        manifest_sha256=hashlib.sha256(canonical_json(body)).hexdigest(),
+        source_sha256=source_sha256,
+        bundle_state="finalized",
+        image_tag=final_bundle_id,
+        image_ids=final_image_ids,
+        custom_images=tuple(final_image_ids),
+        configuration_files=configuration_files,
+        configuration_modes={
+            str(relative): int(mode)
+            for relative, mode in configuration_modes.items()
+        },
+    )
+    if finalized.bundle_id != final_bundle_id:
+        raise ReleaseOperationError("final release bundle identity is invalid")
+    return finalized
+
+
+def lock_release_images(
+    state_root: Path,
+    bundle_id: str,
+    images: Mapping[str, str],
+) -> dict[str, object]:
+    bundle = read_bundle(state_root, bundle_id)
+    if set(images) != set(bundle.get("custom_images", [])):
+        raise ReleaseOperationError("release image set does not match the bundle")
+    if bundle.get("bundle_state") == "finalized":
+        if dict(bundle["image_ids"]) != dict(images):
+            raise ReleaseOperationError("immutable image lock changed")
+        return verify_release_image_lock(state_root, bundle_id, images)
+    finalized = finalized_release_bundle(state_root, bundle_id, images)
+    final_bundle_id = store_release_bundle(state_root, finalized)
+    path = image_lock_path(state_root, final_bundle_id)
+    payload = image_lock_payload(final_bundle_id, finalized.image_ids)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(payload)
+    except FileExistsError:
+        if path.read_bytes() != payload:
+            raise ReleaseOperationError("immutable image lock changed") from None
+    write_pointer(state_root, "candidate", final_bundle_id)
+    if final_bundle_id != bundle_id:
+        shutil.rmtree(state_root / "bundles" / bundle_id)
+    return verify_release_image_lock(state_root, final_bundle_id)
+
+
+def verify_release_image_lock(
+    state_root: Path,
+    bundle_id: str,
+    actual_images: Mapping[str, str] | None = None,
+) -> dict[str, object]:
+    bundle = read_bundle(state_root, bundle_id)
+    path = image_lock_path(state_root, bundle_id)
+    if not path.is_file():
+        raise ReleaseOperationError("release image lock is unavailable")
+    try:
+        lock = json.loads(path.read_text())
+        images = lock["images"]
+        expected_checksum = lock["lock_sha256"]
+        if lock["bundle_id"] != bundle_id or not isinstance(images, dict):
+            raise ValueError
+        if bundle.get("bundle_state") != "finalized":
+            raise ValueError
+        if set(images) != set(bundle.get("custom_images", [])):
+            raise ValueError
+        if dict(images) != bundle.get("image_ids"):
+            raise ValueError
+        if finalized_content_sha256(
+            str(bundle.get("source_sha256", "")),
+            images,
+        ) != bundle.get("content_sha256"):
+            raise ValueError
+        body = {"bundle_id": bundle_id, "images": images}
+        if hashlib.sha256(canonical_json(body)).hexdigest() != expected_checksum:
+            raise ValueError
+        if not all(
+            isinstance(name, str)
+            and isinstance(digest, str)
+            and IMAGE_DIGEST.fullmatch(digest)
+            for name, digest in images.items()
+        ):
+            raise ValueError
+    except (KeyError, TypeError, ValueError) as error:
+        raise ReleaseOperationError("release image lock is invalid") from error
+    if actual_images is not None and dict(images) != dict(actual_images):
+        raise ReleaseOperationError("release image IDs do not match the immutable lock")
+    return dict(lock)
+
+
+def validate_previous_release(state_root: Path) -> dict[str, str]:
     current_pointer = read_pointer(state_root, "current")
     previous_pointer = read_pointer(state_root, "previous")
     if current_pointer is None or previous_pointer is None:
@@ -241,6 +562,19 @@ def activate_previous_release(state_root: Path) -> dict[str, str]:
             "status": "restore_required",
             "reason": "persisted-data compatibility epoch changed",
         }
+    verify_release_configuration(state_root, previous_pointer["bundle_id"])
+    verify_release_image_lock(state_root, previous_pointer["bundle_id"])
+    return {"status": "compatible", "bundle_id": previous_pointer["bundle_id"]}
+
+
+def activate_previous_release(state_root: Path) -> dict[str, str]:
+    validation = validate_previous_release(state_root)
+    if validation["status"] == "restore_required":
+        return validation
+    current_pointer = read_pointer(state_root, "current")
+    previous_pointer = read_pointer(state_root, "previous")
+    if current_pointer is None or previous_pointer is None:
+        raise ReleaseOperationError("an immediately preceding release is unavailable")
     write_pointer(state_root, "current", previous_pointer["bundle_id"])
     write_pointer(state_root, "previous", current_pointer["bundle_id"])
     (state_root / "candidate.json").unlink(missing_ok=True)
@@ -270,101 +604,6 @@ class PostgresMaintenanceGate:
                 "SELECT thesistrace_control.set_platform_maintenance(%s)",
                 (enabled,),
             )
-
-
-class ScheduleControl(Protocol):
-    def pause(self) -> None: ...
-
-    def resume(self) -> None: ...
-
-
-class ActivityMonitor(Protocol):
-    def running_count(self) -> int: ...
-
-
-class WorkerControl(Protocol):
-    def stop_normally(self) -> None: ...
-
-    def start(self) -> None: ...
-
-
-@dataclass(frozen=True)
-class MaintenanceResult:
-    drained: bool
-    remaining_activities: int
-    interrupted_activity_state: str
-
-
-class MaintenanceCoordinator:
-    def __init__(
-        self,
-        *,
-        gate: MaintenanceGate,
-        schedules: ScheduleControl,
-        activities: ActivityMonitor,
-        workers: WorkerControl,
-        clock: Callable[[], float] = time.monotonic,
-        sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
-        self.gate = gate
-        self.schedules = schedules
-        self.activities = activities
-        self.workers = workers
-        self.clock = clock
-        self.sleep = sleep
-
-    def enter(
-        self,
-        *,
-        max_drain_seconds: int = 900,
-        poll_interval: float = 1.0,
-    ) -> MaintenanceResult:
-        if not 1 <= max_drain_seconds <= 900:
-            raise ReleaseOperationError("maintenance drain must be between 1 and 900 seconds")
-        if poll_interval <= 0:
-            raise ReleaseOperationError("maintenance poll interval must be positive")
-        self.gate.set_enabled(True)
-        self.schedules.pause()
-        deadline = self.clock() + max_drain_seconds
-        remaining = self.activities.running_count()
-        while remaining > 0 and self.clock() < deadline:
-            self.sleep(min(poll_interval, deadline - self.clock()))
-            remaining = self.activities.running_count()
-        self.workers.stop_normally()
-        return MaintenanceResult(
-            drained=remaining == 0,
-            remaining_activities=remaining,
-            interrupted_activity_state=(
-                "none" if remaining == 0 else "nonterminal_redelivery"
-            ),
-        )
-
-    def exit(self) -> None:
-        self.workers.start()
-        self.schedules.resume()
-        self.gate.set_enabled(False)
-
-
-def provision_role_secrets(
-    secret_root: Path,
-    values: Mapping[str, str],
-) -> dict[str, Path]:
-    secret_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    secret_root.chmod(0o700)
-    paths: dict[str, Path] = {}
-    for name, value in sorted(values.items()):
-        if not IDENTIFIER.fullmatch(name) or not value:
-            raise ReleaseOperationError("secret names and values must be nonempty")
-        path = secret_root / name
-        if path.exists() and path.read_text() != value:
-            raise ReleaseOperationError(f"refusing to overwrite role secret: {name}")
-        if not path.exists():
-            descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            with os.fdopen(descriptor, "w") as stream:
-                stream.write(value)
-        path.chmod(0o600)
-        paths[name] = path
-    return paths
 
 
 def recovery_key(passphrase: str, salt: bytes) -> bytes:

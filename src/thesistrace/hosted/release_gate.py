@@ -3,7 +3,12 @@ import json
 import os
 from pathlib import Path
 
-from thesistrace.hosted.release_operations import canonical_json
+from thesistrace.hosted.release_operations import (
+    ReleaseOperationError,
+    canonical_json,
+    verify_release_configuration,
+    verify_release_image_lock,
+)
 
 
 class ReleaseGateError(RuntimeError):
@@ -52,13 +57,28 @@ def main() -> None:
             "manifest_version",
             "version",
             "compatibility_epoch",
+            "source_sha256",
+            "bundle_state",
             "content_sha256",
             "components",
+            "image_tag",
+            "image_ids",
+            "custom_images",
+            "configuration_paths",
+            "configuration_modes",
         )
     }
     digest = hashlib.sha256(canonical_json(body)).hexdigest()
     if digest != bundle.get("manifest_sha256"):
         raise ReleaseGateError("release bundle checksum is invalid")
+    try:
+        verify_release_configuration(root, expected_bundle_id)
+    except ReleaseOperationError as error:
+        raise ReleaseGateError("release configuration snapshot is invalid") from error
+    try:
+        verify_release_image_lock(root, expected_bundle_id)
+    except ReleaseOperationError as error:
+        raise ReleaseGateError("release image lock is invalid") from error
     print(f"release gate passed for {expected_bundle_id}")
 
 

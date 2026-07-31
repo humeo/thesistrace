@@ -5,9 +5,10 @@ x-bounded-logging: &bounded-logging
     max-file: "5"
 
 x-app: &app
-  image: thesistrace/app:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
+  image: thesistrace/app:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
   environment: &app-environment
     THESISTRACE_RELEASE_VERSION: ${THESISTRACE_RELEASE_VERSION:-0.1.0}
+    THESISTRACE_RELEASE_BUNDLE_ID: ${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
     THESISTRACE_RUNTIME_MODE: ${THESISTRACE_RUNTIME_MODE:-hosted}
     THESISTRACE_AUTH_MODE: insforge
     THESISTRACE_INSFORGE_JWKS_URL: http://insforge:7130/.well-known/jwks.json
@@ -82,7 +83,7 @@ services:
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/db-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/jwt.sql:/docker-entrypoint-initdb.d/02-jwt.sql:ro
       - ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}/deploy/docker-init/db/postgresql.conf:/etc/postgresql/postgresql.conf:ro
-      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     secrets:
       - postgres_password
       - insforge_encryption_key
@@ -108,7 +109,7 @@ services:
     logging: *bounded-logging
 
   insforge-migrations:
-    image: thesistrace/insforge:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
+    image: thesistrace/insforge:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
     build:
       context: ${INSFORGE_SOURCE_DIR:-.hosted/insforge-v2.2.9}
       dockerfile: Dockerfile
@@ -141,7 +142,7 @@ services:
         condition: service_healthy
     networks: [control]
     volumes:
-      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     secrets:
       - postgres_password
       - insforge_jwt_secret
@@ -165,8 +166,8 @@ services:
         condition: service_healthy
     networks: [execution]
     volumes:
-      - ./deploy/hosted/temporal:/bootstrap:ro
-      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/temporal:/bootstrap:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     secrets:
       - temporal_database_password
     restart: "no"
@@ -192,8 +193,8 @@ services:
       retries: 60
     networks: [execution]
     volumes:
-      - ./deploy/hosted/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/dynamicconfig.yaml:ro
-      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/dynamicconfig.yaml:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint"]
     command: ["/etc/temporal/entrypoint.sh"]
     secrets:
@@ -213,7 +214,7 @@ services:
         condition: service_healthy
     networks: [execution]
     volumes:
-      - ./deploy/hosted/temporal:/bootstrap:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/temporal:/bootstrap:ro
     restart: "no"
     logging: *bounded-logging
 
@@ -283,7 +284,7 @@ services:
         condition: service_healthy
     networks: [control]
     volumes:
-      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     secrets:
       - insforge_database_url
       - insforge_jwt_secret
@@ -291,7 +292,7 @@ services:
     logging: *bounded-logging
 
   deno:
-    image: thesistrace/insforge-deno:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
+    image: thesistrace/insforge-deno:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: deploy/hosted/Dockerfile.deno
@@ -332,7 +333,7 @@ services:
       retries: 40
     networks: [control]
     volumes:
-      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     secrets:
       - postgres_password
       - insforge_encryption_key
@@ -341,7 +342,7 @@ services:
     logging: *bounded-logging
 
   insforge:
-    image: thesistrace/insforge:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
+    image: thesistrace/insforge:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
     entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint", "/sbin/tini", "--"]
     command: ["npm", "start"]
     environment:
@@ -365,7 +366,7 @@ services:
     volumes:
       - insforge-storage:/insforge-storage
       - insforge-logs:/insforge-logs
-      - ./deploy/hosted/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     secrets:
       - postgres_password
       - insforge_jwt_secret
@@ -729,7 +730,7 @@ services:
       THESISTRACE_EXTERNAL_OTLP_ENDPOINT: ${THESISTRACE_EXTERNAL_OTLP_ENDPOINT:-http://127.0.0.1:4319}
       THESISTRACE_EXTERNAL_OTLP_INSECURE: ${THESISTRACE_EXTERNAL_OTLP_INSECURE:-true}
     volumes:
-      - ./deploy/hosted/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     networks: [observability]
     restart: unless-stopped
     logging: *bounded-logging
@@ -742,7 +743,7 @@ services:
       - --storage.tsdb.retention.time=7d
       - --storage.tsdb.retention.size=5GB
     volumes:
-      - ./deploy/hosted/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     depends_on:
       <<: *release-dependency
@@ -762,7 +763,7 @@ services:
       - "127.0.0.1:${GRAFANA_HOST_PORT:-3001}:3000"
     volumes:
       - grafana-data:/var/lib/grafana
-      - ./deploy/hosted/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       <<: *release-dependency
       prometheus:
@@ -776,7 +777,7 @@ services:
     logging: *bounded-logging
 
   edge:
-    image: thesistrace/edge:${THESISTRACE_RELEASE_BUNDLE_ID:-dev}
+    image: thesistrace/edge:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
     build:
       context: .
       dockerfile: deploy/hosted/Dockerfile.edge

@@ -14,9 +14,11 @@ from thesistrace.hosted.release_operations import (
     ReleaseOperationError,
     activate_candidate_release,
     activate_previous_release,
-    install_release_bundle,
+    lock_release_images,
     seal_recovery_bundle,
     stage_release_bundle,
+    validate_previous_release,
+    verify_release_image_lock,
 )
 
 PRODUCTION_WORKFLOW_TYPES = (
@@ -72,13 +74,6 @@ class TemporalMaintenanceControl:
         return count
 
 
-def required_environment(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        raise ReleaseOperationError(f"{name} is required")
-    return value
-
-
 async def enter_maintenance(max_drain_seconds: int) -> dict[str, object]:
     if not 1 <= max_drain_seconds <= 900:
         raise ReleaseOperationError("maintenance drain must be between 1 and 900 seconds")
@@ -126,18 +121,21 @@ async def exit_maintenance() -> dict[str, object]:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description="Operate immutable Hosted releases")
     commands = result.add_subparsers(dest="command", required=True)
-    install = commands.add_parser("install-bundle")
-    install.add_argument("--repository-root", type=Path, required=True)
-    install.add_argument("--state-root", type=Path, required=True)
-    install.add_argument("--manifest", type=Path, required=True)
     stage = commands.add_parser("stage-bundle")
     stage.add_argument("--repository-root", type=Path, required=True)
     stage.add_argument("--state-root", type=Path, required=True)
     stage.add_argument("--manifest", type=Path, required=True)
     activate = commands.add_parser("activate-candidate")
     activate.add_argument("--state-root", type=Path, required=True)
+    for name in ("lock-images", "verify-images"):
+        images = commands.add_parser(name)
+        images.add_argument("--state-root", type=Path, required=True)
+        images.add_argument("--bundle-id", required=True)
+        images.add_argument("--image", action="append", required=True)
     rollback = commands.add_parser("activate-previous")
     rollback.add_argument("--state-root", type=Path, required=True)
+    rollback_check = commands.add_parser("check-previous")
+    rollback_check.add_argument("--state-root", type=Path, required=True)
     enter = commands.add_parser("maintenance-enter")
     enter.add_argument("--max-drain-seconds", type=int, default=900)
     commands.add_parser("maintenance-exit")
@@ -148,26 +146,42 @@ def parser() -> argparse.ArgumentParser:
     return result
 
 
+def parsed_images(values: list[str]) -> dict[str, str]:
+    try:
+        images = dict(value.split("=", 1) for value in values)
+    except ValueError as error:
+        raise ReleaseOperationError("images must use NAME=SHA256 format") from error
+    if len(images) != len(values):
+        raise ReleaseOperationError("release image names must be unique")
+    return images
+
+
 def main() -> None:
     arguments = parser().parse_args()
-    if arguments.command in {"install-bundle", "stage-bundle"}:
+    if arguments.command == "stage-bundle":
         bundle = ReleaseBundle.from_manifest(
             arguments.manifest,
             arguments.repository_root,
         )
-        bundle_id = (
-            install_release_bundle(arguments.state_root, bundle)
-            if arguments.command == "install-bundle"
-            else stage_release_bundle(arguments.state_root, bundle)
-        )
+        bundle_id = stage_release_bundle(arguments.state_root, bundle)
         output: object = {
             "bundle_id": bundle_id,
             "version": bundle.version,
         }
     elif arguments.command == "activate-candidate":
         output = activate_candidate_release(arguments.state_root)
+    elif arguments.command in {"lock-images", "verify-images"}:
+        images = parsed_images(arguments.image)
+        operation = (
+            lock_release_images
+            if arguments.command == "lock-images"
+            else verify_release_image_lock
+        )
+        output = operation(arguments.state_root, arguments.bundle_id, images)
     elif arguments.command == "activate-previous":
         output = activate_previous_release(arguments.state_root)
+    elif arguments.command == "check-previous":
+        output = validate_previous_release(arguments.state_root)
     elif arguments.command == "maintenance-enter":
         output = asyncio.run(enter_maintenance(arguments.max_drain_seconds))
     elif arguments.command == "seal-recovery":

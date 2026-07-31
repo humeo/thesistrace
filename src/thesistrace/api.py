@@ -193,6 +193,7 @@ def is_heavy_work_request(method: str, path: str) -> bool:
         parts[2] == "daily-tracks"
         and parts[-1]
         in {
+            "equivalence-requests",
             "kernel-upgrade",
             "verify-equivalence",
             "rebuild-generation",

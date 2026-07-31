@@ -9,6 +9,7 @@ insforge_dir="$state_dir/insforge-v2.2.9"
 insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
 insforge_patch="$root/deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch"
 compose_file="$root/deploy/hosted/compose.yaml"
+release_config_root="$root/deploy/hosted"
 release_manifest="$root/deploy/hosted/release.json"
 release_state="$state_dir/releases"
 
@@ -78,7 +79,7 @@ validate_public_edge() {
         "$(environment_value THESISTRACE_EDGE_TRUSTED_PROXIES)" \
         "$(environment_value THESISTRACE_ORIGIN_TLS)" \
         "$tls_dir" \
-        "$root/deploy/hosted/cloudflare-proxy-ranges.txt"
+        "$release_config_root/cloudflare-proxy-ranges.txt"
 }
 
 prepare() {
@@ -187,24 +188,25 @@ select_release() {
     export THESISTRACE_RELEASE_POINTER
     release_bundle_id="$(sed -n 's/.*"bundle_id":"\([^"]*\)".*/\1/p' "$pointer_path")"
     release_version="$("$root/.venv/bin/python" -c 'import json, os; from pathlib import Path; root=Path(os.environ["THESISTRACE_RELEASE_STATE"]); pointer=json.loads((root / f"{os.environ['"'"'THESISTRACE_RELEASE_POINTER'"'"']}.json").read_text()); bundle=json.loads((root / "bundles" / pointer["bundle_id"] / "bundle.json").read_text()); print(bundle["version"])')"
-    if [ -z "$release_bundle_id" ] || [ -z "$release_version" ]; then
+    release_image_tag="$("$root/.venv/bin/python" -c 'import json, os; from pathlib import Path; root=Path(os.environ["THESISTRACE_RELEASE_STATE"]); pointer=json.loads((root / f"{os.environ['"'"'THESISTRACE_RELEASE_POINTER'"'"']}.json").read_text()); bundle=json.loads((root / "bundles" / pointer["bundle_id"] / "bundle.json").read_text()); print(bundle.get("image_tag", bundle["bundle_id"]))')"
+    release_image_repositories="$("$root/.venv/bin/python" -c 'import json, os; from pathlib import Path; root=Path(os.environ["THESISTRACE_RELEASE_STATE"]); pointer=json.loads((root / f"{os.environ['"'"'THESISTRACE_RELEASE_POINTER'"'"']}.json").read_text()); bundle=json.loads((root / "bundles" / pointer["bundle_id"] / "bundle.json").read_text()); print("\n".join(image.rpartition(":")[0] for image in bundle["custom_images"]))')"
+    if [ -z "$release_bundle_id" ] || [ -z "$release_version" ] || [ -z "$release_image_tag" ] || [ -z "$release_image_repositories" ]; then
         echo "installed Release Bundle has no identity" >&2
+        exit 1
+    fi
+    release_config_root="$release_state/bundles/$release_bundle_id/configuration/deploy/hosted"
+    compose_file="$release_config_root/compose.yaml"
+    if [ ! -f "$compose_file" ]; then
+        echo "installed Release Bundle has no configuration snapshot" >&2
         exit 1
     fi
     set_environment_value THESISTRACE_RELEASE_VERSION "$release_version"
     set_environment_value THESISTRACE_RELEASE_BUNDLE_ID "$release_bundle_id"
+    set_environment_value THESISTRACE_RELEASE_IMAGE_TAG "$release_image_tag"
 }
 
 select_current_release() {
     select_release current
-}
-
-install_release() {
-    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli install-bundle \
-        --repository-root "$root" \
-        --state-root "$release_state" \
-        --manifest "$release_manifest" >/dev/null
-    select_current_release
 }
 
 stage_release() {
@@ -213,6 +215,39 @@ stage_release() {
         --state-root "$release_state" \
         --manifest "$release_manifest" >/dev/null
     select_release candidate
+}
+
+release_images() {
+    operation="$1"
+    set -- "$operation" \
+        --state-root "$release_state" \
+        --bundle-id "$release_bundle_id"
+    for repository in $release_image_repositories
+    do
+        image="$repository:$release_image_tag"
+        image_id="$(docker image inspect --format '{{.Id}}' "$image")"
+        set -- "$@" --image "$image=$image_id"
+    done
+    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli "$@" >/dev/null
+}
+
+build_candidate_images() {
+    image_lock="$release_state/bundles/$release_bundle_id/image-lock.json"
+    if [ -f "$image_lock" ]; then
+        release_images verify-images
+    else
+        source_image_tag="$release_image_tag"
+        compose build
+        release_images lock-images
+        select_release candidate
+        for repository in $release_image_repositories
+        do
+            docker image tag \
+                "$repository:$source_image_tag" \
+                "$repository:$release_image_tag"
+        done
+        release_images verify-images
+    fi
 }
 
 activate_candidate() {
@@ -225,14 +260,17 @@ ensure_release() {
     if [ -f "$release_state/current.json" ]; then
         select_current_release
     else
-        install_release
+        echo "no current Release Bundle is installed" >&2
+        exit 1
     fi
 }
 
 compose() {
     THESISTRACE_SECRET_DIR="$secret_dir"
     THESISTRACE_RELEASE_BUNDLE_DIR="$release_state"
+    THESISTRACE_RELEASE_CONFIG_ROOT="$release_config_root"
     export THESISTRACE_SECRET_DIR THESISTRACE_RELEASE_BUNDLE_DIR
+    export THESISTRACE_RELEASE_CONFIG_ROOT
     site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
     case "$site_address" in
         https://localhost*)
@@ -273,11 +311,23 @@ exit_maintenance() {
         python -m thesistrace.hosted.release_cli maintenance-exit
 }
 
+recreate_steady_services() {
+    compose up --detach --wait --force-recreate --no-build --no-deps \
+        postgres temporal-postgres
+    compose up --detach --wait --force-recreate --no-build --no-deps \
+        temporal postgrest deno insforge object-store tushare-egress \
+        otel-collector prometheus grafana
+    compose up --detach --wait --force-recreate --no-build --no-deps \
+        api health-service edge
+    compose up --no-start --force-recreate --no-build --no-deps \
+        execution-relay data-worker \
+        compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+}
+
 action="${1:-up}"
 case "$action" in
     init)
         prepare
-        install_release
         ;;
     config)
         prepare
@@ -294,16 +344,11 @@ case "$action" in
         enter_maintenance
         stage_release
         validate_public_edge
-        compose build
+        build_candidate_images
         compose up --detach --wait --no-build \
             insforge-migrations temporal-schema \
             thesistrace-migrations release-gate
-        compose up --detach --wait --no-build --no-deps \
-            api edge health-service tushare-egress object-store \
-            insforge deno
-        compose up --no-start --force-recreate --no-build --no-deps \
-            execution-relay data-worker \
-            compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+        recreate_steady_services
         activate_candidate
         exit_maintenance
         ;;
@@ -311,12 +356,15 @@ case "$action" in
         prepare
         if [ -f "$release_state/current.json" ]; then
             ensure_release
+            release_images verify-images
             validate_public_edge
             compose up --detach --wait --no-build
         else
-            install_release
+            stage_release
             validate_public_edge
-            compose up --build --detach --wait
+            build_candidate_images
+            activate_candidate
+            compose up --detach --wait --no-build
         fi
         ;;
     down)
@@ -327,6 +375,7 @@ case "$action" in
     restart)
         prepare
         ensure_release
+        release_images verify-images
         validate_public_edge
         compose down
         compose up --detach --wait --no-build
@@ -369,15 +418,15 @@ case "$action" in
         select_current_release
         enter_maintenance
         "$root/.venv/bin/python" -m thesistrace.hosted.release_cli \
+            check-previous --state-root "$release_state"
+        select_release previous
+        release_images verify-images
+        select_current_release
+        "$root/.venv/bin/python" -m thesistrace.hosted.release_cli \
             activate-previous --state-root "$release_state"
         select_current_release
         validate_public_edge
-        compose up --no-start --force-recreate --no-build --no-deps \
-            execution-relay data-worker \
-            compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
-        compose up --detach --wait --no-build --no-deps insforge deno
-        compose up --detach --wait --no-build --no-deps \
-            api object-store health-service tushare-egress edge
+        recreate_steady_services
         exit_maintenance
         ;;
     *)
