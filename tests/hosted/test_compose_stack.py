@@ -79,6 +79,14 @@ def test_api_readiness_window_covers_its_constrained_cpu_budget() -> None:
     assert "timeout=15" in " ".join(api["healthcheck"]["test"])
 
 
+def test_postgres_health_checks_wait_for_the_final_tcp_server() -> None:
+    services = compose_model()["services"]
+
+    for name in ("postgres", "temporal-postgres"):
+        command = " ".join(services[name]["healthcheck"]["test"])
+        assert "pg_isready -h 127.0.0.1" in command
+
+
 def test_only_edge_is_public_and_grafana_is_loopback_only() -> None:
     model = compose_model()
     services = model["services"]

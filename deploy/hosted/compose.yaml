@@ -73,7 +73,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-insforge}
       APP_ENCRYPTION_KEY_FILE: /run/secrets/insforge_encryption_key
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-insforge}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-insforge}"]
       interval: 3s
       timeout: 3s
       retries: 40
@@ -99,7 +99,7 @@ services:
       POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
       POSTGRES_PASSWORD_FILE: /run/secrets/temporal_database_password
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${TEMPORAL_DB_USER:-temporal}"]
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${TEMPORAL_DB_USER:-temporal}"]
       interval: 3s
       timeout: 3s
       retries: 40
