@@ -35,13 +35,13 @@ Origin.
   not erase live volumes, and backup-only unreferenced payload bytes are not
   exposed through the authoritative object index.
 - The final real exercise used recovery set
-  `backup_20260801T010818Z_f5f826365bf4`, restored Release Bundle
-  `0.1.0-b7ac1acb57c8a9f3`, and preserved latest Dataset Release
+  `backup_20260801T014557Z_dd63f39efef6`, restored Release Bundle
+  `0.1.0-b16b7ddf27f7bf36`, and preserved latest Dataset Release
   `dsr_5c5940e719ac9cae9732`. The recovered Temporal Workflow
-  `recovery-probe-h21-lock-rpo-20260801T010625Z` remained running and completed
+  `recovery-probe-h21-final-20260801T014107Z` remained running and completed
   only after the release-bundled probe received its continuation signal.
-  Recorded evidence passed with a 119-second committed-state-loss bound,
-  zero-second simulated detection, 172 seconds of recovery execution, both
+  Recorded evidence passed with a 94-second committed-state-loss bound,
+  zero-second simulated detection, 188 seconds of recovery execution, both
   internal recovery health gates available before reopening Edge, and a
   successful public-Origin smoke. The selected set was authenticated before
   erase, and the database retained both the successful restore audit and the
