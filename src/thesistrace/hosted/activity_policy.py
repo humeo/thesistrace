@@ -7,7 +7,7 @@ from thesistrace.activity_contract import (
     MAX_RESOURCE_EXHAUSTION_EXECUTIONS,
 )
 
-HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT = timedelta(minutes=2)
+HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT = timedelta(minutes=5)
 
 
 def heavy_activity_retry_policy() -> RetryPolicy:

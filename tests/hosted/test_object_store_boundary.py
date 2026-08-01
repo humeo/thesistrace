@@ -124,6 +124,33 @@ def test_private_object_store_retries_transient_read_disconnects(
     assert sleeps == [0.1]
 
 
+def test_private_object_store_bounds_persistent_read_disconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    class Client:
+        def request(self, *_args: object, **_options: object) -> httpx.Response:
+            nonlocal attempts
+            attempts += 1
+            raise httpx.RemoteProtocolError("persistent disconnect")
+
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    objects = RemoteObjectStore(
+        "http://object-store",
+        TOKENS["compute"],
+        client=Client(),
+    )
+
+    with pytest.raises(ParquetContractError):
+        objects.read_json("0" * 64)
+
+    assert attempts == 32
+    assert sleeps[:5] == [0.1, 0.2, 0.4, 0.8, 1.6]
+    assert sleeps[-1] == 2.0
+
+
 def test_private_object_store_preserves_typed_object_contract(
     tmp_path: Path,
 ) -> None:

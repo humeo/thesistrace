@@ -19,6 +19,9 @@ from thesistrace.objects import (
 )
 from thesistrace.storage_admission import StorageAdmissionError
 
+READ_TRANSPORT_ATTEMPTS = 32
+READ_TRANSPORT_MAX_BACKOFF_SECONDS = 2.0
+
 
 class LeaseHeartbeat:
     def __init__(
@@ -279,7 +282,9 @@ class RemoteObjectStore:
     def _request(self, method: str, path: str, **options) -> httpx.Response:
         retry_conflict = bool(options.pop("retry_conflict", False))
         retry_deadline = time.monotonic() + 120
-        transport_attempts = 3 if method.upper() == "GET" else 1
+        transport_attempts = (
+            READ_TRANSPORT_ATTEMPTS if method.upper() == "GET" else 1
+        )
         transport_attempt = 0
         request_headers = dict(options.pop("headers", {}))
         try:
@@ -297,7 +302,12 @@ class RemoteObjectStore:
                     transport_attempt += 1
                     if transport_attempt >= transport_attempts:
                         raise
-                    time.sleep(0.1 * (2 ** (transport_attempt - 1)))
+                    time.sleep(
+                        min(
+                            0.1 * (2 ** (transport_attempt - 1)),
+                            READ_TRANSPORT_MAX_BACKOFF_SECONDS,
+                        )
+                    )
                     continue
                 if (
                     response.status_code == 409

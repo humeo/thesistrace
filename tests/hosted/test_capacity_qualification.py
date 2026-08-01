@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_heavy_activity_heartbeat_tolerates_constrained_cpu_sections() -> None:
-    assert HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT == timedelta(minutes=2)
+    assert HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT == timedelta(minutes=5)
     workflow_paths = (
         "capacity_workflow.py",
         "dataset_publication_workflow.py",
