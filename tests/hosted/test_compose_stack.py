@@ -6,6 +6,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "deploy" / "hosted" / "compose.yaml"
+CREATE_TEMPORAL_NAMESPACE = (
+    ROOT / "deploy" / "hosted" / "temporal" / "create-namespace.sh"
+)
 
 
 def compose_model() -> dict[str, object]:
@@ -108,6 +111,57 @@ def test_postgres_health_checks_wait_for_the_final_tcp_server() -> None:
     for name in ("postgres", "temporal-postgres"):
         command = " ".join(services[name]["healthcheck"]["test"])
         assert "pg_isready -h 127.0.0.1" in command
+
+
+def test_namespace_creation_retries_after_a_transient_frontend_disconnect(
+    tmp_path: Path,
+) -> None:
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    state = tmp_path / "temporal-state"
+    temporal = fake_bin / "temporal"
+    temporal.write_text(
+        """#!/bin/sh
+set -eu
+state="$TEMPORAL_FAKE_STATE"
+case "$*" in
+    *"cluster health"*) echo SERVING ;;
+    *"namespace describe"*) grep -q '^created$' "$state" 2>/dev/null ;;
+    *"namespace create"*)
+        attempts="$(cat "$state.attempts" 2>/dev/null || echo 0)"
+        attempts=$((attempts + 1))
+        echo "$attempts" >"$state.attempts"
+        if [ "$attempts" -eq 1 ]; then
+            echo 'transient frontend disconnect' >&2
+            exit 1
+        fi
+        echo created >"$state"
+        ;;
+    *) exit 2 ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    temporal.chmod(0o755)
+    sleep = fake_bin / "sleep"
+    sleep.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    sleep.chmod(0o755)
+
+    completed = subprocess.run(
+        ["/bin/sh", str(CREATE_TEMPORAL_NAMESPACE)],
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "TEMPORAL_FAKE_STATE": str(state),
+        },
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert (tmp_path / "temporal-state.attempts").read_text().strip() == "2"
 
 
 def test_only_edge_is_public_and_grafana_is_loopback_only() -> None:
