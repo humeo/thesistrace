@@ -149,6 +149,16 @@ def test_release_manifest_pins_every_compatible_component() -> None:
     assert set(bundle.custom_images) == set(release_test_images(bundle.bundle_id))
 
 
+def test_release_manifest_tracks_the_latest_product_migration() -> None:
+    manifest = json.loads((ROOT / "deploy" / "hosted" / "release.json").read_text())
+    latest = max(
+        path.stem.split("_", 1)[0]
+        for path in (ROOT / "deploy" / "hosted" / "migrations").glob("*.sql")
+    )
+
+    assert manifest["components"]["product_migrations"]["version"] == latest
+
+
 def test_temporal_maintenance_pauses_every_listed_schedule() -> None:
     client = FakeTemporalClient()
 

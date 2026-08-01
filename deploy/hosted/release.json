@@ -40,7 +40,7 @@
       "source_paths": ["deploy/hosted/temporal"]
     },
     "product_migrations": {
-      "version": "0022",
+      "version": "0024",
       "artifact": "thesistrace/app:{bundle_id}",
       "source_paths": ["deploy/hosted/migrations", "src/thesistrace/hosted/migrations.py"]
     },
