@@ -57,4 +57,7 @@ Origin.
   event. A cross-process host lock serializes the timer and every manual
   recovery mutation, with concurrent attempts rejected and audited. Restore
   gates the exact authenticated Recovery Set and its six-hour RPO instead of
-  depending on machine-local backup-status history.
+  depending on machine-local backup-status history. Backup identity, creation
+  time, Release Bundle, and Workflow probe must match the AES-GCM-protected
+  internal metadata; probe execution and exercise evidence use only the
+  authenticated selection.

@@ -126,7 +126,7 @@ def parser() -> argparse.ArgumentParser:
     workflow_evidence.add_argument("--workflow-id", required=True)
 
     exercise = commands.add_parser("record-exercise")
-    exercise.add_argument("--manifest", type=Path, required=True)
+    exercise.add_argument("--recovery-selection", type=Path, required=True)
     exercise.add_argument("--verification", type=Path, required=True)
     exercise.add_argument("--evidence-dir", type=Path, required=True)
     exercise.add_argument("--incident-at", required=True)
@@ -448,7 +448,7 @@ def main() -> None:
         if not isinstance(verification, dict):
             raise BackupOperationError("restore verification evidence is invalid")
         evidence = write_recovery_exercise(
-            manifest_path=arguments.manifest,
+            recovery_selection_path=arguments.recovery_selection,
             evidence_dir=arguments.evidence_dir,
             incident_at=datetime.fromisoformat(arguments.incident_at),
             detected_at=datetime.fromisoformat(arguments.detected_at),

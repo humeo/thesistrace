@@ -493,7 +493,6 @@ restore_backup() {
         echo "complete recovery set is unavailable: $backup_id" >&2
         return 1
     fi
-    workflow_probe_id="$("$root/.venv/bin/python" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("workflow_probe_id", ""))' "$manifest")"
     enter_maintenance
     stop_for_cold_snapshot
     compose --profile operator run --rm --no-deps -T restore-tool \
@@ -506,6 +505,7 @@ restore_backup() {
         --recovery-passphrase-file /run/secrets/recovery_passphrase \
         --incident-at "$incident_at" \
         --selection-output /restore/status/selected-recovery-set.json
+    workflow_probe_id="$("$root/.venv/bin/python" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("workflow_probe_id") or "")' "$backup_status_dir/selected-recovery-set.json")"
     "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
         restore-release-modes --release-state "$release_state"
     select_current_release
@@ -546,7 +546,7 @@ restore_backup() {
     "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
     restore_completed_at="$(date -u '+%Y-%m-%dT%H:%M:%S+00:00')"
     "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli record-exercise \
-        --manifest "$manifest" \
+        --recovery-selection "$backup_status_dir/selected-recovery-set.json" \
         --verification "$backup_status_dir/restore-verification.json" \
         --evidence-dir "$backup_status_dir/recovery-exercises" \
         --incident-at "$incident_at" \

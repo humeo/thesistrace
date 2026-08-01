@@ -200,9 +200,11 @@ make hosted-restore BACKUP_ID=backup_YYYYMMDDTHHMMSSZ_xxxxxxxxxxxx
 
 Restore is destructive to the four authoritative named volumes and clears the
 disposable Working Cache. It keeps `edge` stopped, authenticates and checksums
-the encrypted set, records the exact authenticated selection, and rejects a
-selection whose backup time exceeds the six-hour incident RPO before erasing
-live volumes. It restores the separately encrypted role secrets, selects the
+the encrypted set, requires its authenticated backup identity, creation time,
+Release Bundle, and optional Workflow probe to match the external manifest,
+records that exact authenticated selection, and rejects a selection whose
+backup time exceeds the six-hour incident RPO before erasing live volumes. It
+restores the separately encrypted role secrets, selects the
 recovered Release Bundle, and refuses to continue if its exact locked images
 are unavailable. It starts PostgreSQL, Temporal, private Storage, and API
 internally; API startup reconciles all pending Resource Tombstones. The restore
@@ -231,7 +233,8 @@ THESISTRACE_RECOVERY_PROBE_ID="$PROBE_ID" make hosted-backup
 make hosted-restore BACKUP_ID=backup_YYYYMMDDTHHMMSSZ_xxxxxxxxxxxx
 ```
 
-During restore, the release-bundled, operator-only recovery-probe service
+During restore, the probe ID is read only from the authenticated Recovery Set
+selection. The release-bundled, operator-only recovery-probe service
 requires the recovered Workflow to still be running, signals it, and waits for
 `continued_after_restore`. It has no host source mount, secrets, or access
 beyond the internal execution network. Failure keeps the Origin closed and

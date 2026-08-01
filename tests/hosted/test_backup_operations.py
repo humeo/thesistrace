@@ -329,6 +329,7 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
         sources=sources,
         release_bundle_id="bundle-1",
         passphrase="correct-passphrase-123",
+        workflow_probe_id="recovery-probe-authenticated-metadata",
     )
     restore_root = tmp_path / "restore-root"
     for relative in (
@@ -354,6 +355,22 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
             working_cache=working_cache,
             passphrase="correct-passphrase-123",
             incident_at=datetime(2026, 8, 1, 6, 0, tzinfo=UTC),
+        )
+    assert (restore_root / "volumes/postgres-data/live").read_bytes() == (
+        b"preserve on rejected restore"
+    )
+    assert (working_cache / "live").read_bytes() == b"preserve"
+    created.manifest_path.write_bytes(original_manifest)
+
+    tampered_manifest = json.loads(original_manifest)
+    del tampered_manifest["workflow_probe_id"]
+    created.manifest_path.write_text(json.dumps(tampered_manifest))
+    with pytest.raises(BackupOperationError, match="authenticated metadata"):
+        restore_recovery_set(
+            manifest_path=created.manifest_path,
+            restore_root=restore_root,
+            working_cache=working_cache,
+            passphrase="correct-passphrase-123",
         )
     assert (restore_root / "volumes/postgres-data/live").read_bytes() == (
         b"preserve on rejected restore"
@@ -533,6 +550,8 @@ def test_restore_gate_requires_the_authenticated_selected_set_within_rpo() -> No
         "backup_id": "backup_20260801T000000Z_aaaaaaaaaaaa",
         "recovery_set_authenticated": True,
         "committed_state_loss_bound_seconds": 21_540,
+        "release_bundle_id": "bundle-1",
+        "workflow_probe_id": None,
     }
 
     with pytest.raises(RestoreVerificationError, match="six-hour RPO"):
@@ -576,19 +595,21 @@ def test_backup_never_marks_a_partial_coordinated_source_as_complete(
 def test_recovery_exercise_records_rpo_detection_and_execution_objectives(
     tmp_path: Path,
 ) -> None:
-    manifest = tmp_path / "backup.json"
-    manifest.write_text(
-        '{"format":"thesistrace-coordinated-backup-v1",'
+    recovery_selection = tmp_path / "selected-recovery-set.json"
+    recovery_selection.write_text(
+        '{"format":"thesistrace-authenticated-recovery-selection-v1",'
         '"backup_id":"backup_20260801T000000Z_aaaaaaaaaaaa","status":"complete",'
-        '"created_at":"2026-08-01T00:00:00+00:00",'
+        '"backup_created_at":"2026-08-01T00:00:00+00:00",'
+        '"incident_at":"2026-08-01T05:30:00+00:00",'
+        '"committed_state_loss_bound_seconds":19800,'
         '"release_bundle_id":"bundle-1",'
         '"workflow_probe_id":"recovery-probe-exercise",'
-        '"artifact":"backup_20260801T000000Z_aaaaaaaaaaaa.ttsb",'
-        '"artifact_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
+        '"manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"authenticated":true}'
     )
 
     evidence_path = write_recovery_exercise(
-        manifest_path=manifest,
+        recovery_selection_path=recovery_selection,
         evidence_dir=tmp_path / "evidence",
         incident_at=datetime(2026, 8, 1, 5, 30, tzinfo=UTC),
         detected_at=datetime(2026, 8, 2, 5, 0, tzinfo=UTC),

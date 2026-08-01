@@ -438,6 +438,7 @@ def create_recovery_set(
                             "backup_id": backup_id,
                             "created_at": created_at.isoformat(),
                             "release_bundle_id": release_bundle_id,
+                            "workflow_probe_id": workflow_probe_id,
                         }
                     ),
                 )
@@ -464,9 +465,8 @@ def create_recovery_set(
             "artifact": artifact_path.name,
             "artifact_bytes": artifact_path.stat().st_size,
             "artifact_sha256": _file_sha256(artifact_path),
+            "workflow_probe_id": workflow_probe_id,
         }
-        if workflow_probe_id:
-            manifest["workflow_probe_id"] = workflow_probe_id
         manifest_temporary = target / f".{backup_id}.json.{os.getpid()}.tmp"
         manifest_descriptor = os.open(
             manifest_temporary,
@@ -611,6 +611,7 @@ def verify_recovery_set(
         "backup_id",
         "created_at",
         "release_bundle_id",
+        "workflow_probe_id",
     )
     if any(
         authenticated_metadata.get(field) != manifest.get(field)
@@ -769,6 +770,7 @@ def authenticated_recovery_selection(
         incident = incident_at.astimezone(UTC)
         backup_id = str(manifest["backup_id"])
         release_bundle_id = str(manifest["release_bundle_id"])
+        workflow_probe_id = manifest.get("workflow_probe_id")
     except (KeyError, ValueError) as error:
         raise BackupOperationError("recovery selection metadata is invalid") from error
     if incident < created_at:
@@ -778,6 +780,11 @@ def authenticated_recovery_selection(
         raise BackupOperationError("selected recovery set exceeds the six-hour RPO")
     if re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None:
         raise BackupOperationError("recovery selection manifest identity is invalid")
+    if workflow_probe_id is not None and (
+        not isinstance(workflow_probe_id, str)
+        or WORKFLOW_PROBE_ID.fullmatch(workflow_probe_id) is None
+    ):
+        raise BackupOperationError("recovery selection Workflow probe is invalid")
     return {
         "format": RECOVERY_SELECTION_FORMAT,
         "backup_id": backup_id,
@@ -786,6 +793,7 @@ def authenticated_recovery_selection(
         "incident_at": incident.isoformat(),
         "committed_state_loss_bound_seconds": state_loss,
         "manifest_sha256": manifest_sha256,
+        "workflow_probe_id": workflow_probe_id,
         "authenticated": True,
     }
 
@@ -802,6 +810,8 @@ def verify_authenticated_recovery_selection(
         ).astimezone(UTC)
         incident_at = datetime.fromisoformat(str(selection["incident_at"])).astimezone(UTC)
         state_loss = int(selection["committed_state_loss_bound_seconds"])
+        release_bundle_id = str(selection["release_bundle_id"])
+        workflow_probe_id = selection.get("workflow_probe_id")
     except (KeyError, TypeError, ValueError) as error:
         raise RestoreVerificationError(
             "authenticated recovery selection is invalid"
@@ -813,6 +823,14 @@ def verify_authenticated_recovery_selection(
         or backup_id != expected_backup_id
         or calculated_loss < 0
         or state_loss != calculated_loss
+        or not release_bundle_id
+        or (
+            workflow_probe_id is not None
+            and (
+                not isinstance(workflow_probe_id, str)
+                or WORKFLOW_PROBE_ID.fullmatch(workflow_probe_id) is None
+            )
+        )
         or re.fullmatch(r"[0-9a-f]{64}", str(selection.get("manifest_sha256", "")))
         is None
     ):
@@ -823,6 +841,8 @@ def verify_authenticated_recovery_selection(
         "backup_id": backup_id,
         "recovery_set_authenticated": True,
         "committed_state_loss_bound_seconds": state_loss,
+        "release_bundle_id": release_bundle_id,
+        "workflow_probe_id": workflow_probe_id,
     }
 
 
@@ -1000,7 +1020,7 @@ def load_restore_snapshot(database_url: str) -> dict[str, object]:
 
 def write_recovery_exercise(
     *,
-    manifest_path: Path,
+    recovery_selection_path: Path,
     evidence_dir: Path,
     incident_at: datetime,
     detected_at: datetime,
@@ -1009,13 +1029,21 @@ def write_recovery_exercise(
     verification: Mapping[str, object],
     public_origin_smoke: bool,
 ) -> Path:
-    manifest = _read_manifest(manifest_path)
     try:
+        selection = json.loads(recovery_selection_path.read_bytes())
+        if not isinstance(selection, dict):
+            raise TypeError
+        verified_selection = verify_authenticated_recovery_selection(
+            selection,
+            expected_backup_id=str(selection["backup_id"]),
+        )
         backup_created_at = datetime.fromisoformat(
-            str(manifest["created_at"])
+            str(selection["backup_created_at"])
         ).astimezone(UTC)
-    except (KeyError, ValueError) as error:
-        raise BackupOperationError("recovery exercise backup time is invalid") from error
+    except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise BackupOperationError(
+            "recovery exercise authenticated selection is invalid"
+        ) from error
     incident = incident_at.astimezone(UTC)
     detected = detected_at.astimezone(UTC)
     started = restore_started_at.astimezone(UTC)
@@ -1040,7 +1068,7 @@ def write_recovery_exercise(
         "recovery_execution_within_8h": execution <= 8 * 60 * 60,
         "public_origin_smoke": bool(public_origin_smoke),
     }
-    workflow_probe_id = manifest.get("workflow_probe_id")
+    workflow_probe_id = verified_selection["workflow_probe_id"]
     if workflow_probe_id is not None:
         objectives["workflow_recovery"] = bool(
             verification.get("workflow_recovery_verified") is True
@@ -1048,8 +1076,8 @@ def write_recovery_exercise(
         )
     evidence = {
         "format": "thesistrace-recovery-exercise-v1",
-        "backup_id": manifest["backup_id"],
-        "release_bundle_id": manifest["release_bundle_id"],
+        "backup_id": verified_selection["backup_id"],
+        "release_bundle_id": verified_selection["release_bundle_id"],
         "backup_created_at": backup_created_at.isoformat(),
         "incident_at": incident.isoformat(),
         "detected_at": detected.isoformat(),
@@ -1070,7 +1098,8 @@ def write_recovery_exercise(
     }
     evidence_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     path = evidence_dir / (
-        f"recovery_{manifest['backup_id']}_{completed.strftime('%Y%m%dT%H%M%SZ')}.json"
+        f"recovery_{verified_selection['backup_id']}_"
+        f"{completed.strftime('%Y%m%dT%H%M%SZ')}.json"
     )
     _write_status(path, evidence)
     path.chmod(0o600)
