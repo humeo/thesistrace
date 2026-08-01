@@ -212,7 +212,13 @@ async def _resilient_workflow_result(
             if attempt == RESULT_RETRY_ATTEMPTS - 1:
                 raise
             await asyncio.sleep(RESULT_RETRY_SECONDS)
-            client = await Client.connect(temporal_address, namespace=namespace)
+            try:
+                client = await Client.connect(
+                    temporal_address,
+                    namespace=namespace,
+                )
+            except (RPCError, RuntimeError):
+                continue
             handle = client.get_workflow_handle(workflow_id, result_type=dict)
     raise AssertionError("unreachable")
 
