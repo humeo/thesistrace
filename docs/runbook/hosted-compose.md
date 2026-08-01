@@ -6,6 +6,10 @@ versioned ThesisTrace API, and the required InsForge Auth routes through the
 same Origin. PostgreSQL, InsForge Storage, Temporal, Workers, Prometheus,
 Grafana, and OpenTelemetry remain on private Compose networks.
 
+This reference deployment is deliberately one node. It provides coordinated
+backup and restore, but it does not provide high availability, automatic
+failover, zero-downtime recovery, or an alert-delivery service.
+
 ## Start
 
 Docker, Docker Compose, Git, OpenSSL, and `uv` are required. Prepare the pinned
@@ -127,6 +131,43 @@ passphrase. The encrypted bundle is recovery input, not an application secret
 mount. Never log its plaintext, include the passphrase beside it, or commit
 either artifact. Secret rotation is a coordinated release operation; do not
 edit one generated role file while dependent services are running.
+
+### Verification and recovery email
+
+Public registration requires real email verification and password recovery.
+Configure InsForge SMTP only through the private control network. Keep the
+provider password in a separate mode-600 file outside the repository and
+Hosted state. The non-secret configuration file has this exact shape:
+
+```json
+{
+  "enabled": true,
+  "host": "smtp.example.com",
+  "port": 587,
+  "username": "mailer@example.com",
+  "senderEmail": "research@example.com",
+  "senderName": "ThesisTrace",
+  "minIntervalSeconds": 60
+}
+```
+
+Apply it without exposing either the InsForge administrator password or SMTP
+password in the command line, process environment, image, or output:
+
+```sh
+chmod 600 /root/thesistrace-smtp.json /root/thesistrace-smtp-password
+make hosted-smtp-configure \
+  CONFIG=/root/thesistrace-smtp.json \
+  PASSWORD_FILE=/root/thesistrace-smtp-password \
+  ACTOR=operator-name
+```
+
+InsForge verifies the public SMTP host and credentials before persisting the
+encrypted password. The helper prints only the confirmed host, port, sender,
+enabled state, and password-presence flag, and appends a sanitized management
+audit event for the named Operator. The private test-only OTP seeding
+used by release acceptance is unavailable unless
+`THESISTRACE_ACCEPTANCE_MODE=1`; it is not an operational substitute for SMTP.
 
 ## Coordinated off-node backup and restore
 
@@ -329,6 +370,119 @@ The declaration and its sanitized audit event contain the actor, time, fixed
 scope, and generated audit identity. They contain no Tushare token or other
 credential. Recording the declaration enables ThesisTrace's policy gate only;
 the command does not validate, negotiate, or interpret upstream legal rights.
+
+## Invitation, publication, and quota operations
+
+Normal invitation issuance remains closed until the current Release Bundle has
+both a passing Capacity Qualification and a passing final Launch
+Qualification. A qualification for an older Release Bundle never opens a new
+release. After launch, issue, inspect, and revoke an invitation through the
+private Operator boundary:
+
+```sh
+make hosted-operator ARGS="invitation issue \
+  --actor operator-1 \
+  --email researcher@example.com \
+  --expires-at 2026-08-08T00:00:00Z"
+make hosted-operator ARGS="invitation inspect --invitation-id invite_xxx"
+make hosted-operator ARGS="invitation revoke \
+  --actor operator-1 --invitation-id invite_xxx"
+```
+
+Use one unique idempotency key for each intended Dataset Publication. The
+bootstrap imports the latest three-year research window through Tushare; the
+increment publishes the requested post-close date. Both are queued on the
+independent Data Worker and preserve the previous authoritative Release until
+the new Release commits completely:
+
+```sh
+make hosted-operator ARGS="dataset-publication request \
+  --actor operator-1 --kind live_bootstrap --as-of 2026-08-01 \
+  --idempotency-key live-bootstrap-20260801"
+make hosted-operator ARGS="dataset-publication request \
+  --actor operator-1 --kind live_increment --as-of 2026-08-04 \
+  --idempotency-key live-increment-20260804"
+```
+
+Confirm completion in Data Health and through the bounded Dataset Release
+product view. Do not retry with a new idempotency key while the original
+request is nonterminal.
+
+Inspect the default or effective Workspace quota before changing it. An
+override changes only the provided dimensions and is recorded in the
+management audit ledger:
+
+```sh
+make hosted-operator ARGS="quota inspect --workspace-id workspace_xxx"
+make hosted-operator ARGS="quota override \
+  --actor operator-1 --workspace-id workspace_xxx \
+  --max-active-daily-tracks 10 \
+  --max-nonterminal-user-compute-jobs 2 \
+  --max-private-storage-bytes 1073741824"
+```
+
+## Final release qualification
+
+Every Release Bundle is closed to new invitations until its own evidence is
+recorded. First run the maximum-load qualification on a separate, otherwise
+identical qualification stack so it does not contaminate the clean Public
+Origin acceptance stack:
+
+```sh
+.venv/bin/python scripts/hosted/capacity_qualification.py \
+  --compose-file deploy/hosted/compose.yaml \
+  --project thesistrace-hosted-qualification \
+  --release-bundle-id "$RELEASE_BUNDLE_ID" \
+  --output "$CAPACITY_EVIDENCE"
+make hosted-operator ARGS="capacity-qualification record \
+  --actor release-operator \
+  --release-bundle-id $RELEASE_BUNDLE_ID \
+  --evidence $CAPACITY_EVIDENCE"
+```
+
+Complete the coordinated backup and full restore exercise for the same exact
+Release Bundle as described above. Its latest generated
+`recovery-exercises/*.json` is the recovery evidence. The final Public-Origin
+stack must start with no Users, Personal Workspaces, invitations, Launch
+Qualifications, Dataset Releases, Research Definitions, ResearchRuns, or
+DailyTracks. It may contain the source declaration and the current Release's
+Capacity Qualification. Initialize its off-node backup target before running
+acceptance because the black-box flow takes a coordinated backup and requires
+all three Health planes to become available.
+
+`THESISTRACE_TEST_DATABASE_URL` must point to a separate disposable PostgreSQL
+database prepared for tests. It must never point to the Public-Origin or
+production database. From a clean Git checkout, run:
+
+```sh
+export THESISTRACE_TEST_DATABASE_URL='postgresql://.../thesistrace_acceptance_test'
+make hosted-release-acceptance \
+  RELEASE_BUNDLE_ID="$RELEASE_BUNDLE_ID" \
+  CAPACITY_EVIDENCE="$CAPACITY_EVIDENCE" \
+  RECOVERY_EVIDENCE="$RECOVERY_EVIDENCE" \
+  OUTPUT="$LAUNCH_EVIDENCE"
+```
+
+The command runs the Public-Origin identity and product chain, PostgreSQL RLS
+for every Workspace table and production role, real Temporal dispatch,
+resource-exhaustion and interruption matrices, storage and direct-Origin
+security, full backend/frontend/browser suites, and all three Health planes.
+The interruption matrix sends concurrent idempotent API requests across an
+API outage, kills a claimed Compute Activity and a running Data publication,
+and requires second Attempts without duplicate results. It then enters
+maintenance, sends `SIGKILL` to every Compose service to model loss of the
+controlled single node, starts from persistent host state, and proves that the
+maintenance fence, result truth, Dataset Releases, and object index survive
+before the Operator exits maintenance.
+
+It records the immutable Launch Qualification only if every check passes, then
+proves normal invitation issuance opens. A failed or stale evidence artifact
+leaves launch closed. The release runner signs the complete evidence with the
+root-only `launch_qualification_key`; the general Operator CLI exposes inspect
+but no record command. Never insert or edit a qualification manually. The
+single SSH Operator remains the deployment trust root: Docker or PostgreSQL
+superuser access can subvert any in-process gate and is outside the Hosted V2
+adversary boundary.
 
 ## Verify
 

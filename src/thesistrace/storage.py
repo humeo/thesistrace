@@ -84,6 +84,19 @@ class MetadataStore:
                         REFERENCES management_audit_events(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS launch_qualifications (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL CHECK (status IN ('passed', 'failed')),
+                    release_bundle_id TEXT NOT NULL,
+                    evidence_sha256 TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    failures_json TEXT NOT NULL,
+                    recorded_by TEXT NOT NULL,
+                    measured_at TEXT NOT NULL,
+                    audit_event_id TEXT NOT NULL UNIQUE
+                        REFERENCES management_audit_events(id)
+                );
+
                 CREATE TRIGGER IF NOT EXISTS management_audit_events_no_update
                 BEFORE UPDATE ON management_audit_events
                 BEGIN
@@ -118,6 +131,18 @@ class MetadataStore:
                 BEFORE DELETE ON capacity_qualifications
                 BEGIN
                     SELECT RAISE(ABORT, 'capacity qualifications are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS launch_qualifications_no_update
+                BEFORE UPDATE ON launch_qualifications
+                BEGIN
+                    SELECT RAISE(ABORT, 'launch qualifications are immutable');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS launch_qualifications_no_delete
+                BEFORE DELETE ON launch_qualifications
+                BEGIN
+                    SELECT RAISE(ABORT, 'launch qualifications are immutable');
                 END;
 
                 CREATE TABLE IF NOT EXISTS dataset_releases (
@@ -720,6 +745,62 @@ class MetadataStore:
                        evidence_json, failures_json, recorded_by, measured_at,
                        audit_event_id
                 FROM capacity_qualifications
+                ORDER BY measured_at DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        result = dict(row)
+        result["evidence"] = json.loads(str(result.pop("evidence_json")))
+        result["failures"] = json.loads(str(result.pop("failures_json")))
+        return result
+
+    def record_launch_qualification(
+        self,
+        qualification: dict[str, object],
+        audit_event: dict[str, object],
+    ) -> None:
+        with self.connect() as connection:
+            self._insert_management_audit_event(connection, audit_event)
+            connection.execute(
+                """
+                INSERT INTO launch_qualifications (
+                    id, status, release_bundle_id, evidence_sha256,
+                    evidence_json, failures_json, recorded_by, measured_at,
+                    audit_event_id
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    qualification["id"],
+                    qualification["status"],
+                    qualification["release_bundle_id"],
+                    qualification["evidence_sha256"],
+                    json.dumps(
+                        qualification["evidence"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    json.dumps(
+                        qualification["failures"],
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    qualification["recorded_by"],
+                    qualification["measured_at"],
+                    qualification["audit_event_id"],
+                ),
+            )
+
+    def latest_launch_qualification(self) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, status, release_bundle_id, evidence_sha256,
+                       evidence_json, failures_json, recorded_by, measured_at,
+                       audit_event_id
+                FROM launch_qualifications
                 ORDER BY measured_at DESC, id DESC
                 LIMIT 1
                 """

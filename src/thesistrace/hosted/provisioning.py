@@ -19,9 +19,11 @@ class PostgresProvisioningStore:
         self,
         database_url: str,
         *,
+        required_release_bundle_id: str | None = None,
         before_provisioning_commit: Callable[[], None] | None = None,
     ) -> None:
         self.database_url = database_url
+        self.required_release_bundle_id = required_release_bundle_id
         self.before_provisioning_commit = before_provisioning_commit
 
     def issue_invitation(
@@ -65,19 +67,10 @@ class PostgresProvisioningStore:
                     "SOURCE_AUTHORIZATION_REQUIRED",
                     "hosted shared Tushare authorization is required",
                 )
-            elif not connection.execute(
-                """
-                SELECT COALESCE(
-                    (
-                        SELECT status = 'passed'
-                        FROM thesistrace_control.capacity_qualifications
-                        ORDER BY measured_at DESC, id DESC
-                        LIMIT 1
-                    ),
-                    false
-                ) AS qualified
-                """
-            ).fetchone()["qualified"]:
+            elif not self._latest_qualification_is_valid(
+                connection,
+                "capacity_qualifications",
+            ):
                 self._insert_audit(
                     connection,
                     actor=actor,
@@ -91,6 +84,24 @@ class PostgresProvisioningStore:
                 failure = ProvisioningError(
                     "CAPACITY_QUALIFICATION_REQUIRED",
                     "a passing capacity qualification is required",
+                )
+            elif not self._latest_qualification_is_valid(
+                connection,
+                "launch_qualifications",
+            ):
+                self._insert_audit(
+                    connection,
+                    actor=actor,
+                    action="registration_invitation.issue",
+                    outcome="rejected",
+                    reason_code="LAUNCH_QUALIFICATION_REQUIRED",
+                    subject_id=invitation_id,
+                    occurred_at=now,
+                    details={"invitation_id": invitation_id},
+                )
+                failure = ProvisioningError(
+                    "LAUNCH_QUALIFICATION_REQUIRED",
+                    "a passing launch qualification is required",
                 )
             else:
                 existing = connection.execute(
@@ -144,6 +155,31 @@ class PostgresProvisioningStore:
         invitation = self.invitation(invitation_id)
         assert invitation is not None
         return invitation
+
+    def _latest_qualification_is_valid(
+        self,
+        connection: psycopg.Connection,
+        table: str,
+    ) -> bool:
+        if table not in {"capacity_qualifications", "launch_qualifications"}:
+            raise ValueError("unsupported qualification table")
+        row = connection.execute(
+            f"""
+            SELECT status, release_bundle_id
+            FROM thesistrace_control.{table}
+            ORDER BY measured_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        return bool(
+            row is not None
+            and row["status"] == "passed"
+            and (
+                self.required_release_bundle_id is None
+                or row["release_bundle_id"]
+                == self.required_release_bundle_id
+            )
+        )
 
     def record_invitation_rejection(
         self,

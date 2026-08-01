@@ -461,6 +461,8 @@ def test_failure_and_repeated_resource_exhaustion_preserve_previous_truth(
         idempotency_key="resource-exhausted",
     )
     exhausted_service = ExhaustedPublicationService(store, objects)
+    manifest_paths = set((objects.root / "manifests").glob("*.json"))
+    payload_paths = set((objects.root / "sha256").glob("*/*"))
     first = exhausted_service.execute(str(exhausted_request["id"]))
     second = exhausted_service.execute(str(exhausted_request["id"]))
     assert first["status"] == "queued"
@@ -468,6 +470,12 @@ def test_failure_and_repeated_resource_exhaustion_preserve_previous_truth(
     assert second["diagnostic"]["reason_code"] == "RESOURCE_EXHAUSTED"
     assert len(second["attempts"]) == 2
     assert store.latest_dataset_release()["id"] == previous_release_id
+    assert second.get("result_release_id") is None
+    assert set((objects.root / "manifests").glob("*.json")) == manifest_paths
+    assert set((objects.root / "sha256").glob("*/*")) == payload_paths
+    assert not (
+        objects.root / "staging" / str(exhausted_request["id"])
+    ).exists()
 
 
 def test_only_data_worker_owns_dataset_queue_and_one_activity_slot() -> None:

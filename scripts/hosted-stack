@@ -13,8 +13,9 @@ release_config_root="$root/deploy/hosted"
 release_manifest="$root/deploy/hosted/release.json"
 release_state="$state_dir/releases"
 backup_status_dir="$state_dir/backup-health"
-recovery_audit_outbox="$backup_status_dir/recovery-audit-outbox"
+operator_audit_outbox="$backup_status_dir/operator-audit-outbox"
 recovery_dir="$state_dir/recovery"
+compose_project="${THESISTRACE_COMPOSE_PROJECT_NAME:-thesistrace-hosted}"
 
 random_secret() {
     openssl rand -hex 32
@@ -148,6 +149,7 @@ prepare() {
     move_secret_to_file THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN object_store_compute_token
     move_secret_to_file THESISTRACE_OBJECT_STORE_DATA_TOKEN object_store_data_token
     move_secret_to_file TUSHARE_TOKEN tushare_token
+    move_secret_to_file THESISTRACE_LAUNCH_QUALIFICATION_KEY launch_qualification_key
     printf '{"api":"%s","compute":"%s","data":"%s"}' \
         "$(sed -n '1p' "$secret_dir/object_store_api_token")" \
         "$(sed -n '1p' "$secret_dir/object_store_compute_token")" \
@@ -211,7 +213,7 @@ stage_recovery_audit() {
     audit_reason_code="${4:-}"
     set -- "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
         audit-stage \
-        --outbox "$recovery_audit_outbox" \
+        --outbox "$operator_audit_outbox" \
         --event-id "$recovery_audit_id" \
         --action "$audit_action" \
         --outcome "$audit_outcome" \
@@ -225,7 +227,7 @@ stage_recovery_audit() {
 flush_recovery_audits() {
     compose --profile operator run --rm --no-deps -T restore-gate \
         python -m thesistrace.hosted.backup_cli audit-flush \
-        --outbox /run/thesistrace-backup/recovery-audit-outbox
+        --outbox /run/thesistrace-backup/operator-audit-outbox
 }
 
 lock_recovery_action() {
@@ -247,7 +249,7 @@ lock_recovery_action() {
     set -- "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
         lock-run \
         --lock "$backup_status_dir/recovery-operation.lock" \
-        --outbox "$recovery_audit_outbox" \
+        --outbox "$operator_audit_outbox" \
         --event-id "$busy_event_id" \
         --action "$audit_action" \
         --subject-id recovery-operation \
@@ -256,6 +258,23 @@ lock_recovery_action() {
         set -- "$@" "$requested_argument"
     fi
     exec "$@"
+}
+
+prepare_acceptance() {
+    disabled_message="$1"
+    if [ "${THESISTRACE_ACCEPTANCE_MODE:-0}" != "1" ]; then
+        echo "$disabled_message" >&2
+        exit 1
+    fi
+    prepare
+    select_current_release
+}
+
+require_acceptance_service() {
+    case "$1" in
+        api|execution-relay|data-worker|compute-worker-1|compute-worker-2|compute-worker-3|compute-worker-4) ;;
+        *) echo "service is not an accepted interruption boundary" >&2; exit 2 ;;
+    esac
 }
 
 select_release() {
@@ -377,7 +396,7 @@ compose() {
             ;;
     esac
     docker compose \
-        --project-name thesistrace-hosted \
+        --project-name "$compose_project" \
         --project-directory "$root" \
         --env-file "$env_file" \
         --file "$compose_file" \
@@ -626,6 +645,46 @@ case "$action" in
         set +a
         exec "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
         ;;
+    health-check)
+        prepare
+        select_current_release
+        compose exec -T health-service python -c \
+            'import json, urllib.request; paths=("system","data","quantitative"); views={name:json.load(urllib.request.urlopen("http://127.0.0.1:8020/health/"+name, timeout=10)) for name in paths}; assert all(view.get("status")=="available" for view in views.values()), views; print(json.dumps(views, sort_keys=True))'
+        ;;
+    smtp-configure)
+        prepare
+        select_current_release
+        smtp_config="${2:?usage: scripts/hosted-stack smtp-configure /absolute/smtp.json /absolute/smtp-password}"
+        smtp_password="${3:?usage: scripts/hosted-stack smtp-configure /absolute/smtp.json /absolute/smtp-password}"
+        smtp_actor="${4:?usage: scripts/hosted-stack smtp-configure /absolute/smtp.json /absolute/smtp-password ACTOR}"
+        case "$smtp_config" in
+            /*) ;;
+            *) echo "SMTP configuration path must be absolute" >&2; exit 2 ;;
+        esac
+        case "$smtp_password" in
+            /*) ;;
+            *) echo "SMTP password path must be absolute" >&2; exit 2 ;;
+        esac
+        if [ ! -f "$smtp_config" ] || [ ! -f "$smtp_password" ]; then
+            echo "SMTP configuration and password files must exist" >&2
+            exit 2
+        fi
+        admin_username="$(environment_value INSFORGE_ADMIN_USERNAME)"
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --volume "$smtp_config:/run/operator/smtp.json:ro" \
+            --volume "$smtp_password:/run/operator/smtp_password:ro" \
+            --volume "$secret_dir/insforge_admin_password:/run/operator/admin_password:ro" \
+            --volume "$operator_audit_outbox:/run/operator/audit-outbox" \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/configure_smtp.py \
+            --config /run/operator/smtp.json \
+            --smtp-password-file /run/operator/smtp_password \
+            --admin-password-file /run/operator/admin_password \
+            --admin-username "${admin_username:-admin}" \
+            --actor "$smtp_actor" \
+            --audit-outbox /run/operator/audit-outbox
+        ;;
     dispatch-probe)
         prepare
         select_current_release
@@ -634,6 +693,145 @@ case "$action" in
             --env PYTHONPATH=/workspace/src \
             compute-worker-1 \
             python /workspace/scripts/hosted/temporal_dispatch_probe.py
+        ;;
+    acceptance-seed-invitation)
+        prepare_acceptance "acceptance state seeding is disabled"
+        acceptance_email="${2:?usage: scripts/hosted-stack acceptance-seed-invitation EMAIL}"
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/seed_acceptance_state.py \
+            invitation --email "$acceptance_email"
+        ;;
+    acceptance-assert-clean)
+        prepare_acceptance "acceptance state inspection is disabled"
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/seed_acceptance_state.py assert-clean
+        ;;
+    acceptance-seed-otp)
+        prepare_acceptance "acceptance state seeding is disabled"
+        acceptance_email="${2:?usage: scripts/hosted-stack acceptance-seed-otp EMAIL PURPOSE CODE}"
+        acceptance_purpose="${3:?usage: scripts/hosted-stack acceptance-seed-otp EMAIL PURPOSE CODE}"
+        acceptance_code="${4:?usage: scripts/hosted-stack acceptance-seed-otp EMAIL PURPOSE CODE}"
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/seed_acceptance_state.py \
+            otp --email "$acceptance_email" \
+            --purpose "$acceptance_purpose" --code "$acceptance_code"
+        ;;
+    acceptance-record-launch)
+        prepare_acceptance "launch qualification recording is disabled"
+        shift
+        acceptance_actor=""
+        acceptance_release=""
+        acceptance_attestation=""
+        evidence_path=""
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --actor) acceptance_actor="${2:-}"; shift 2 ;;
+                --release-bundle-id) acceptance_release="${2:-}"; shift 2 ;;
+                --evidence) evidence_path="${2:-}"; shift 2 ;;
+                --attestation) acceptance_attestation="${2:-}"; shift 2 ;;
+                *) echo "unknown launch qualification argument: $1" >&2; exit 2 ;;
+            esac
+        done
+        if [ -z "$acceptance_actor" ] || [ -z "$acceptance_release" ] || [ -z "$acceptance_attestation" ]; then
+            echo "launch actor, Release Bundle ID, and attestation are required" >&2
+            exit 2
+        fi
+        case "$evidence_path" in
+            /*) ;;
+            *) echo "launch evidence path must be absolute" >&2; exit 2 ;;
+        esac
+        if [ ! -f "$evidence_path" ]; then
+            echo "launch evidence file does not exist" >&2
+            exit 2
+        fi
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --volume "$evidence_path:/run/acceptance/launch.json:ro" \
+            --volume "$secret_dir/launch_qualification_key:/run/acceptance/launch_qualification_key:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/record_launch_qualification.py \
+            --actor "$acceptance_actor" \
+            --release-bundle-id "$acceptance_release" \
+            --evidence /run/acceptance/launch.json \
+            --attestation "$acceptance_attestation" \
+            --attestation-key-file /run/acceptance/launch_qualification_key
+        ;;
+    acceptance-publication-status)
+        prepare_acceptance "acceptance state inspection is disabled"
+        acceptance_publication_id="${2:?usage: scripts/hosted-stack acceptance-publication-status PUBLICATION_ID}"
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/seed_acceptance_state.py \
+            publication-status --publication-id "$acceptance_publication_id"
+        ;;
+    acceptance-storage-status)
+        prepare_acceptance "acceptance storage inspection is disabled"
+        compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/seed_acceptance_state.py \
+            storage-status
+        ;;
+    acceptance-object-status)
+        prepare_acceptance "acceptance object inspection is disabled"
+        compose exec -T object-store python -c \
+            'import json; from pathlib import Path; root=Path("/var/lib/thesistrace/objects"); objects=list((root / "sha256").glob("*/*"))+list((root / "manifests").glob("*.json")); stages=[str(path.relative_to(root)) for path in (root / "staging").glob("*/*") if path.is_dir()]; print(json.dumps({"physical_object_count": len(objects), "staged_publications": stages}, sort_keys=True))'
+        ;;
+    acceptance-stop-service)
+        prepare_acceptance "acceptance service interruption is disabled"
+        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-stop-service SERVICE}"
+        require_acceptance_service "$acceptance_service"
+        recovery_audit_id="audit_acceptance_stop_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+        stage_recovery_audit \
+            acceptance.service.interrupt rejected "$acceptance_service" \
+            OPERATION_INTERRUPTED
+        compose stop --timeout 0 "$acceptance_service"
+        stage_recovery_audit \
+            acceptance.service.interrupt succeeded "$acceptance_service"
+        flush_recovery_audits
+        ;;
+    acceptance-start-service)
+        prepare_acceptance "acceptance service recovery is disabled"
+        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-start-service SERVICE}"
+        require_acceptance_service "$acceptance_service"
+        recovery_audit_id="audit_acceptance_start_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+        stage_recovery_audit \
+            acceptance.service.recover rejected "$acceptance_service" \
+            OPERATION_INTERRUPTED
+        compose up --detach --wait --no-build --no-deps "$acceptance_service"
+        stage_recovery_audit \
+            acceptance.service.recover succeeded "$acceptance_service"
+        flush_recovery_audits
+        ;;
+    acceptance-restart-node)
+        prepare_acceptance "acceptance node interruption is disabled"
+        recovery_audit_id="audit_acceptance_node_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+        stage_recovery_audit \
+            acceptance.node.restart rejected node OPERATION_INTERRUPTED
+        compose kill --signal SIGKILL
+        compose stop --timeout 0
+        compose up --detach --wait --no-build
+        stage_recovery_audit acceptance.node.restart succeeded node
+        flush_recovery_audits
         ;;
     recovery-probe-start)
         prepare
@@ -756,7 +954,7 @@ case "$action" in
         exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

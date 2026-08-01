@@ -22,6 +22,7 @@ from thesistrace.hosted.migrations import (
     provision_service_role_credentials,
 )
 from thesistrace.hosted.provisioning import PostgresProvisioningStore
+from thesistrace.launch import LaunchQualificationService, launch_attestation
 from thesistrace.management import HOSTED_TUSHARE_SCOPE, SourceAuthorizationService
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.ports import LocalWorkerDispatch
@@ -37,6 +38,7 @@ from thesistrace.working_cache import WorkingCacheStore
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_DATABASE_URL = os.environ.get("THESISTRACE_TEST_DATABASE_URL")
+LAUNCH_ATTESTATION_KEY = b"workspace-launch-attestation-key-32"
 PRIVATE_TABLES = (
     "research_definition_drafts",
     "research_definitions",
@@ -69,18 +71,27 @@ class OpenCapacityGate:
         return True
 
 
+class OpenLaunchGate(OpenCapacityGate):
+    pass
+
+
 def passing_capacity_evidence() -> dict[str, object]:
     return {
         "universe": "top3000",
         "compute_workers": [
             {
                 "status": "succeeded",
+                "activity_attempt": 1,
                 "p99_memory_mib": 600,
                 "peak_memory_mib": 650,
             }
             for _index in range(4)
         ],
-        "dataset_publication": {"status": "succeeded", "worker_slot": "data"},
+        "dataset_publication": {
+            "status": "succeeded",
+            "worker_slot": "data-1",
+            "activity_attempt": 1,
+        },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
         "swap_used": False,
         "oom_kill": False,
@@ -96,6 +107,39 @@ def passing_capacity_evidence() -> dict[str, object]:
             "temporal": True,
             "object_store": True,
         },
+    }
+
+
+def passing_launch_evidence() -> dict[str, object]:
+    checks = {
+        name: True
+        for name in (
+            "backend",
+            "browser",
+            "capacity",
+            "coordinated_backup",
+            "data_health",
+            "direct_origin_security",
+            "frontend",
+            "full_restore",
+            "migrations",
+            "postgresql_rls",
+            "public_origin",
+            "quantitative_health",
+            "recovery_matrix",
+            "resource_exhaustion_matrix",
+            "source_authorization",
+            "storage",
+            "system_health",
+            "temporal_dispatch",
+        )
+    }
+    return {
+        "schema_version": "hosted-v2-launch-v1",
+        "clean_stack": True,
+        "release_bundle_id": "test-release",
+        "checks": checks,
+        "records": {name: {"status": "passed"} for name in checks},
     }
 
 
@@ -127,6 +171,17 @@ def prepare_postgres() -> None:
         actor="operator-isolation-test",
         release_bundle_id="test-release",
         evidence=passing_capacity_evidence(),
+    )
+    launch_evidence = passing_launch_evidence()
+    LaunchQualificationService(PostgresManagementStore(TEST_DATABASE_URL)).record(
+        actor="operator-isolation-test",
+        release_bundle_id="test-release",
+        evidence=launch_evidence,
+        attestation=launch_attestation(
+            launch_evidence,
+            LAUNCH_ATTESTATION_KEY,
+        ),
+        attestation_key=LAUNCH_ATTESTATION_KEY,
     )
 
 
@@ -207,6 +262,7 @@ def build_hosted_app(
         store=PostgresProvisioningStore(TEST_DATABASE_URL),
         source_authorization=OpenSourceGate(),
         capacity_qualification=OpenCapacityGate(),
+        launch_qualification=OpenLaunchGate(),
     )
     app = create_app(
         settings,
@@ -345,9 +401,14 @@ def test_two_users_have_private_research_and_the_same_bounded_dataset_view(
         subject=f"subject-b-{suffix}",
         email=f"user-b-{suffix}@example.com",
     )
-    provision_identity(identity_a)
+    workspace_a = provision_identity(identity_a)
     provision_identity(identity_b)
     release = bootstrap_shared_release(tmp_path)
+    graph_a = seed_private_table_graph(
+        workspace_a,
+        str(release["id"]),
+        f"public-a-{suffix}",
+    )
     client, _registration = build_hosted_app(
         tmp_path,
         {
@@ -370,10 +431,13 @@ def test_two_users_have_private_research_and_the_same_bounded_dataset_view(
             json={"name": "private-b"},
         ).json()
 
-        assert [item["id"] for item in client.get(
+        assert set(item["id"] for item in client.get(
             "/api/v1/research-definitions",
             headers=headers_a,
-        ).json()["items"]] == [draft_a["id"]]
+        ).json()["items"]) == {
+            graph_a["research_definition_drafts"],
+            draft_a["id"],
+        }
         assert [item["id"] for item in client.get(
             "/api/v1/research-definitions",
             headers=headers_b,
@@ -387,6 +451,68 @@ def test_two_users_have_private_research_and_the_same_bounded_dataset_view(
             headers=headers_a,
             json={"name": "stolen"},
         ).status_code == 404
+
+        cross_workspace_operations = (
+            ("get", f"/api/v1/research-runs/{graph_a['research_runs']}", None),
+            (
+                "get",
+                f"/api/v1/research-runs/{graph_a['research_runs']}/result",
+                None,
+            ),
+            (
+                "post",
+                f"/api/v1/research-runs/{graph_a['research_runs']}/cancel",
+                None,
+            ),
+            (
+                "post",
+                f"/api/v1/research-runs/{graph_a['research_runs']}/rerun",
+                {"headers": {"Idempotency-Key": f"cross-rerun-{suffix}"}},
+            ),
+            (
+                "post",
+                f"/api/v1/research-runs/{graph_a['research_runs']}/daily-tracks",
+                {"headers": {"Idempotency-Key": f"cross-track-{suffix}"}},
+            ),
+            ("get", f"/api/v1/daily-tracks/{graph_a['daily_tracks']}", None),
+            (
+                "get",
+                f"/api/v1/daily-tracks/{graph_a['daily_tracks']}"
+                f"/advances/{graph_a['tracking_advances']}",
+                None,
+            ),
+            (
+                "post",
+                f"/api/v1/daily-tracks/{graph_a['daily_tracks']}/stop",
+                None,
+            ),
+            (
+                "post",
+                f"/api/v1/daily-tracks/{graph_a['daily_tracks']}"
+                "/equivalence-requests",
+                {"headers": {"Idempotency-Key": f"cross-verify-{suffix}"}},
+            ),
+            ("delete", f"/api/v1/daily-tracks/{graph_a['daily_tracks']}", None),
+            ("delete", f"/api/v1/research-runs/{graph_a['research_runs']}", None),
+        )
+        for method, path, options in cross_workspace_operations:
+            response = getattr(client, method)(
+                path,
+                headers={
+                    **headers_b,
+                    **((options or {}).get("headers", {})),
+                },
+            )
+            assert response.status_code == 404, (method, path, response.text)
+
+        assert [item["id"] for item in client.get(
+            "/api/v1/research-runs",
+            headers=headers_b,
+        ).json()["items"]] == []
+        assert [item["id"] for item in client.get(
+            "/api/v1/daily-tracks",
+            headers=headers_b,
+        ).json()["items"]] == []
 
         assert client.put(
             f"/api/v1/research-definitions/{draft_a['id']}",
@@ -826,21 +952,28 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
         roles = connection.execute(
             """
             SELECT rolname, rolsuper, rolbypassrls
-                FROM pg_roles
-                WHERE rolname = ANY(%s)
-                ORDER BY rolname
-                """,
-            (["thesistrace_api", "thesistrace_relay"],),
-        ).fetchone()
-        assert roles == ("thesistrace_api", False, False)
-        relay_role = connection.execute(
-            """
-            SELECT rolsuper, rolbypassrls
             FROM pg_roles
-            WHERE rolname = 'thesistrace_relay'
+            WHERE rolname = ANY(%s)
+            ORDER BY rolname
             """
-        ).fetchone()
-        assert relay_role == (False, False)
+            ,
+            (
+                [
+                    "thesistrace_api",
+                    "thesistrace_compute",
+                    "thesistrace_data",
+                    "thesistrace_health",
+                    "thesistrace_relay",
+                ],
+            ),
+        ).fetchall()
+        assert roles == [
+            ("thesistrace_api", False, False),
+            ("thesistrace_compute", False, False),
+            ("thesistrace_data", False, False),
+            ("thesistrace_health", False, False),
+            ("thesistrace_relay", False, False),
+        ]
         table_contracts = connection.execute(
             """
             SELECT table_name, is_nullable
@@ -866,19 +999,59 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
             row[0] for row in protected_tables if row[1] and row[2]
         } == set(PRIVATE_TABLES)
 
-    with psycopg.connect(TEST_DATABASE_URL) as connection:
-        connection.execute("SET LOCAL ROLE thesistrace_api")
-        connection.execute("SET LOCAL search_path = thesistrace_product, public")
-        connection.execute(
-            "SELECT set_config('thesistrace.workspace_id', %s, true)",
-            (workspace_b,),
-        )
-        for table in PRIVATE_TABLES:
-            count = connection.execute(
-                f"SELECT count(*) FROM {table}"
-            ).fetchone()[0]
-            assert count == 0
-        connection.rollback()
+    for role in (
+        "thesistrace_api",
+        "thesistrace_compute",
+        "thesistrace_data",
+        "thesistrace_health",
+        "thesistrace_relay",
+    ):
+        for forged_workspace in (None, workspace_b):
+            with psycopg.connect(TEST_DATABASE_URL) as connection:
+                connection.execute(f"SET LOCAL ROLE {role}")
+                connection.execute(
+                    "SET LOCAL search_path = thesistrace_product, public"
+                )
+                if forged_workspace is not None:
+                    connection.execute(
+                        "SELECT set_config('thesistrace.workspace_id', %s, true)",
+                        (forged_workspace,),
+                    )
+                for table in PRIVATE_TABLES:
+                    try:
+                        with connection.transaction():
+                            count = connection.execute(
+                                f"SELECT count(*) FROM {table}"
+                            ).fetchone()[0]
+                    except (
+                        psycopg.errors.InsufficientPrivilege,
+                        psycopg.errors.UndefinedTable,
+                    ):
+                        pass
+                    else:
+                        assert count == 0, (
+                            role,
+                            forged_workspace,
+                            table,
+                            "read",
+                        )
+                    try:
+                        with connection.transaction():
+                            changed = connection.execute(
+                                f"UPDATE {table} SET workspace_id = workspace_id"
+                            ).rowcount
+                    except (
+                        psycopg.errors.InsufficientPrivilege,
+                        psycopg.errors.UndefinedTable,
+                    ):
+                        pass
+                    else:
+                        assert changed == 0, (
+                            role,
+                            forged_workspace,
+                            table,
+                            "write",
+                        )
 
     with authenticated_subject(identity_a.subject):
         api_store = PostgresControlMetadataStore(

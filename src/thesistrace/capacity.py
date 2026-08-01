@@ -1,9 +1,10 @@
-import hashlib
-from datetime import UTC, datetime
 from typing import Protocol
-from uuid import uuid4
 
-from thesistrace.objects import canonical_json_bytes
+from thesistrace.qualification import (
+    CAPACITY_QUALIFICATION,
+    build_qualification,
+    qualification_matches_release,
+)
 
 COMPUTE_ACTIVITY_COUNT = 4
 COMPUTE_P99_MEMORY_LIMIT_MIB = 700
@@ -29,8 +30,14 @@ class CapacityQualificationError(RuntimeError):
 
 
 class CapacityQualificationService:
-    def __init__(self, store: CapacityQualificationStore) -> None:
+    def __init__(
+        self,
+        store: CapacityQualificationStore,
+        *,
+        required_release_bundle_id: str | None = None,
+    ) -> None:
         self.store = store
+        self.required_release_bundle_id = required_release_bundle_id
 
     def record(
         self,
@@ -47,36 +54,13 @@ class CapacityQualificationService:
                 "operator actor and release bundle are required",
             )
         failures = qualification_failures(evidence)
-        measured_at = datetime.now(UTC).isoformat()
-        digest = hashlib.sha256(canonical_json_bytes(evidence)).hexdigest()
-        audit_event_id = f"audit_{uuid4().hex}"
-        qualification = {
-            "id": f"capacity_{uuid4().hex}",
-            "status": "passed" if not failures else "failed",
-            "release_bundle_id": normalized_release,
-            "evidence_sha256": digest,
-            "evidence": evidence,
-            "failures": failures,
-            "recorded_by": normalized_actor,
-            "measured_at": measured_at,
-            "audit_event_id": audit_event_id,
-        }
-        audit_event = {
-            "id": audit_event_id,
-            "occurred_at": measured_at,
-            "actor": normalized_actor,
-            "action": "capacity_qualification.record",
-            "outcome": "succeeded" if not failures else "rejected",
-            "reason_code": None if not failures else "CAPACITY_QUALIFICATION_FAILED",
-            "subject_type": "capacity_qualification",
-            "subject_id": qualification["id"],
-            "details": {
-                "release_bundle_id": normalized_release,
-                "evidence_sha256": digest,
-                "status": qualification["status"],
-                "failure_count": len(failures),
-            },
-        }
+        qualification, audit_event = build_qualification(
+            kind=CAPACITY_QUALIFICATION,
+            actor=normalized_actor,
+            release_bundle_id=normalized_release,
+            evidence=evidence,
+            failures=failures,
+        )
         self.store.record_capacity_qualification(qualification, audit_event)
         return qualification
 
@@ -84,8 +68,10 @@ class CapacityQualificationService:
         return self.store.latest_capacity_qualification()
 
     def is_qualified(self) -> bool:
-        latest = self.inspect()
-        return latest is not None and latest.get("status") == "passed"
+        return qualification_matches_release(
+            self.inspect(),
+            self.required_release_bundle_id,
+        )
 
 
 def qualification_failures(evidence: dict[str, object]) -> list[str]:

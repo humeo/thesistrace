@@ -195,6 +195,15 @@ def test_latest_capacity_measurement_is_an_immutable_launch_gate(tmp_path: Path)
     assert recorded_pass["status"] == "passed"
     assert service.is_qualified() is True
 
+    assert CapacityQualificationService(
+        store,
+        required_release_bundle_id="release-2",
+    ).is_qualified() is False
+    assert CapacityQualificationService(
+        store,
+        required_release_bundle_id="release-1",
+    ).is_qualified() is True
+
     with store.connect() as connection:
         try:
             connection.execute(

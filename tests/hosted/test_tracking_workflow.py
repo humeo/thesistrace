@@ -233,6 +233,12 @@ def test_release_fanout_is_idempotent_and_advance_is_fenced_and_bounded(
         )["advance_ids"][0]
     )
     prior_head_id = tracking.get_track(str(track["id"]))["head_checkpoint_id"]
+    exhaustion_manifest_paths = set(
+        (settings.object_root / "manifests").glob("*.json")
+    )
+    exhaustion_payload_paths = set(
+        (settings.object_root / "sha256").glob("*/*")
+    )
 
     def exhaust(*_args, **_kwargs):
         raise MemoryError
@@ -251,6 +257,15 @@ def test_release_fanout_is_idempotent_and_advance_is_fenced_and_bounded(
         for attempt in second_exhaustion["attempts"]
     } == {"RESOURCE_EXHAUSTED"}
     assert tracking.get_track(str(track["id"]))["head_checkpoint_id"] == prior_head_id
+    assert set(
+        (settings.object_root / "manifests").glob("*.json")
+    ) == exhaustion_manifest_paths
+    assert set(
+        (settings.object_root / "sha256").glob("*/*")
+    ) == exhaustion_payload_paths
+    assert not (
+        settings.object_root / "staging" / third_advance_id
+    ).exists()
 
 
 @pytest.mark.parametrize(

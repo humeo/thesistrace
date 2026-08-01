@@ -14,6 +14,7 @@ from thesistrace.config import Settings
 from thesistrace.hosted.management import PostgresManagementStore
 from thesistrace.hosted.migrations import apply_migrations
 from thesistrace.hosted.provisioning import PostgresProvisioningStore
+from thesistrace.launch import LaunchQualificationService, launch_attestation
 from thesistrace.management import (
     HOSTED_TUSHARE_SCOPE,
     SourceAuthorizationService,
@@ -27,6 +28,7 @@ from thesistrace.provisioning import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
+LAUNCH_ATTESTATION_KEY = b"registration-launch-attestation-key"
 
 
 class OpenSourceGate:
@@ -43,6 +45,10 @@ class OpenCapacityGate:
 
     def is_qualified(self) -> bool:
         return self.qualified
+
+
+class OpenLaunchGate(OpenCapacityGate):
+    pass
 
 
 class RecordingStore:
@@ -116,6 +122,7 @@ def test_invitation_issue_normalizes_email_and_requires_open_source_gate() -> No
         store=store,
         source_authorization=OpenSourceGate(False),
         capacity_qualification=OpenCapacityGate(),
+        launch_qualification=OpenLaunchGate(),
     )
 
     with pytest.raises(ProvisioningError, match="authorization") as closed:
@@ -149,6 +156,7 @@ def test_invitation_issue_requires_a_passing_capacity_gate() -> None:
         store=store,
         source_authorization=OpenSourceGate(True),
         capacity_qualification=OpenCapacityGate(False),
+        launch_qualification=OpenLaunchGate(),
     )
 
     with pytest.raises(ProvisioningError) as closed:
@@ -166,6 +174,29 @@ def test_invitation_issue_requires_a_passing_capacity_gate() -> None:
     )
 
 
+def test_invitation_issue_requires_a_passing_launch_gate() -> None:
+    store = RecordingStore()
+    now = datetime(2026, 7, 31, tzinfo=UTC)
+    service = RegistrationService(
+        store=store,
+        source_authorization=OpenSourceGate(True),
+        capacity_qualification=OpenCapacityGate(),
+        launch_qualification=OpenLaunchGate(False),
+    )
+
+    with pytest.raises(ProvisioningError) as closed:
+        service.issue_invitation(
+            actor="operator-1",
+            email="researcher@example.com",
+            expires_at=now + timedelta(days=1),
+            now=now,
+        )
+
+    assert closed.value.reason_code == "LAUNCH_QUALIFICATION_REQUIRED"
+    assert store.issued == []
+    assert store.rejections[-1]["reason_code"] == "LAUNCH_QUALIFICATION_REQUIRED"
+
+
 def test_invalid_email_and_nonfuture_expiry_are_audited() -> None:
     store = RecordingStore()
     now = datetime(2026, 7, 31, tzinfo=UTC)
@@ -173,6 +204,7 @@ def test_invalid_email_and_nonfuture_expiry_are_audited() -> None:
         store=store,
         source_authorization=OpenSourceGate(True),
         capacity_qualification=OpenCapacityGate(),
+        launch_qualification=OpenLaunchGate(),
     )
 
     with pytest.raises(ProvisioningError) as invalid_email:
@@ -205,6 +237,7 @@ def test_operator_cli_issues_inspects_and_revokes_without_an_admin_api(
         store=store,
         source_authorization=OpenSourceGate(True),
         capacity_qualification=OpenCapacityGate(),
+        launch_qualification=OpenLaunchGate(),
     )
     settings = Settings(
         metadata_path=tmp_path / "metadata.sqlite3",
@@ -358,6 +391,13 @@ def prepare_postgres() -> None:
         release_bundle_id="test-release",
         evidence=passing_capacity_evidence(),
     )
+    launch_evidence = passing_launch_evidence()
+    record_launch(
+        LaunchQualificationService(PostgresManagementStore(TEST_DATABASE_URL)),
+        actor="operator-test",
+        release_bundle_id="test-release",
+        evidence=launch_evidence,
+    )
 
 
 def passing_capacity_evidence() -> dict[str, object]:
@@ -366,12 +406,17 @@ def passing_capacity_evidence() -> dict[str, object]:
         "compute_workers": [
             {
                 "status": "succeeded",
+                "activity_attempt": 1,
                 "p99_memory_mib": 600,
                 "peak_memory_mib": 650,
             }
             for _index in range(4)
         ],
-        "dataset_publication": {"status": "succeeded", "worker_slot": "data"},
+        "dataset_publication": {
+            "status": "succeeded",
+            "worker_slot": "data-1",
+            "activity_attempt": 1,
+        },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
         "swap_used": False,
         "oom_kill": False,
@@ -388,6 +433,58 @@ def passing_capacity_evidence() -> dict[str, object]:
             "object_store": True,
         },
     }
+
+
+def passing_launch_evidence() -> dict[str, object]:
+    checks = {
+        name: True
+        for name in (
+            "backend",
+            "browser",
+            "capacity",
+            "coordinated_backup",
+            "data_health",
+            "direct_origin_security",
+            "frontend",
+            "full_restore",
+            "migrations",
+            "postgresql_rls",
+            "public_origin",
+            "quantitative_health",
+            "recovery_matrix",
+            "resource_exhaustion_matrix",
+            "source_authorization",
+            "storage",
+            "system_health",
+            "temporal_dispatch",
+        )
+    }
+    return {
+        "schema_version": "hosted-v2-launch-v1",
+        "clean_stack": True,
+        "release_bundle_id": "test-release",
+        "checks": checks,
+        "records": {name: {"status": "passed"} for name in checks},
+    }
+
+
+def record_launch(
+    service: LaunchQualificationService,
+    *,
+    actor: str,
+    release_bundle_id: str,
+    evidence: dict[str, object],
+) -> dict[str, object]:
+    return service.record(
+        actor=actor,
+        release_bundle_id=release_bundle_id,
+        evidence=evidence,
+        attestation=launch_attestation(
+            evidence,
+            LAUNCH_ATTESTATION_KEY,
+        ),
+        attestation_key=LAUNCH_ATTESTATION_KEY,
+    )
 
 
 @pytest.mark.skipif(
@@ -494,6 +591,85 @@ def test_postgres_invitation_issue_is_fenced_by_latest_capacity_measurement() ->
             """
         ).fetchone()
     assert audit[0] == "CAPACITY_QUALIFICATION_REQUIRED"
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_postgres_invitation_issue_is_fenced_by_latest_launch_measurement() -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    management = PostgresManagementStore(TEST_DATABASE_URL)
+    failing = passing_launch_evidence()
+    failing["checks"]["full_restore"] = False
+    record_launch(
+        LaunchQualificationService(management),
+        actor="operator-test",
+        release_bundle_id="test-release",
+        evidence=failing,
+    )
+    now = datetime.now(UTC)
+    store = PostgresProvisioningStore(TEST_DATABASE_URL)
+
+    with pytest.raises(ProvisioningError) as rejected:
+        store.issue_invitation(
+            actor="operator-test",
+            normalized_email=f"launch-closed-{now.timestamp()}@example.com",
+            expires_at=now + timedelta(hours=1),
+            now=now,
+        )
+
+    assert rejected.value.reason_code == "LAUNCH_QUALIFICATION_REQUIRED"
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        audit = connection.execute(
+            """
+            SELECT reason_code
+            FROM thesistrace_control.management_audit_events
+            WHERE action = 'registration_invitation.issue'
+            ORDER BY occurred_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert audit[0] == "LAUNCH_QUALIFICATION_REQUIRED"
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_postgres_invitation_requires_qualifications_for_current_release() -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    management = PostgresManagementStore(TEST_DATABASE_URL)
+    CapacityQualificationService(management).record(
+        actor="operator-test",
+        release_bundle_id="old-release",
+        evidence=passing_capacity_evidence(),
+    )
+    stale_launch = passing_launch_evidence()
+    stale_launch["release_bundle_id"] = "old-release"
+    record_launch(
+        LaunchQualificationService(management),
+        actor="operator-test",
+        release_bundle_id="old-release",
+        evidence=stale_launch,
+    )
+    now = datetime.now(UTC)
+    store = PostgresProvisioningStore(
+        TEST_DATABASE_URL,
+        required_release_bundle_id="current-release",
+    )
+
+    with pytest.raises(ProvisioningError) as rejected:
+        store.issue_invitation(
+            actor="operator-test",
+            normalized_email=f"stale-release-{now.timestamp()}@example.com",
+            expires_at=now + timedelta(hours=1),
+            now=now,
+        )
+
+    assert rejected.value.reason_code == "CAPACITY_QUALIFICATION_REQUIRED"
 
 
 @pytest.mark.skipif(

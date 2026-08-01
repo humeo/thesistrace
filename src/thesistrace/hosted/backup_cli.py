@@ -2,7 +2,6 @@ import argparse
 import fcntl
 import json
 import os
-import re
 import time
 import urllib.error
 import urllib.request
@@ -25,15 +24,13 @@ from thesistrace.hosted.backup_operations import (
     verify_restored_state,
     write_recovery_exercise,
 )
-from thesistrace.hosted.management import PostgresManagementStore
-from thesistrace.objects import canonical_json_bytes
-
-RECOVERY_AUDIT_ACTIONS = (
-    "backup.target.initialize",
-    "backup.create",
-    "backup.restore",
+from thesistrace.hosted.operator_audit import (
+    OPERATOR_AUDIT_ACTIONS,
+    RECOVERY_AUDIT_ACTIONS,
+    flush_operator_audits,
+    stage_operator_audit,
 )
-RECOVERY_AUDIT_ID = re.compile(r"audit_recovery_[0-9A-Za-z_-]{1,96}")
+from thesistrace.objects import canonical_json_bytes
 
 
 class RecoveryOperationBusy(RuntimeError):
@@ -95,7 +92,7 @@ def parser() -> argparse.ArgumentParser:
     audit_stage.add_argument("--event-id", required=True)
     audit_stage.add_argument(
         "--action",
-        choices=RECOVERY_AUDIT_ACTIONS,
+        choices=OPERATOR_AUDIT_ACTIONS,
         required=True,
     )
     audit_stage.add_argument(
@@ -173,69 +170,6 @@ def _wait_for_available_runtime(
     raise BackupOperationError(f"runtime health did not become available: {last_error}")
 
 
-def _stage_recovery_audit(
-    outbox: Path,
-    *,
-    event_id: str,
-    action: str,
-    outcome: str,
-    subject_id: str,
-    reason_code: str | None,
-) -> Path:
-    if RECOVERY_AUDIT_ID.fullmatch(event_id) is None or not subject_id:
-        raise BackupOperationError("recovery audit identity is invalid")
-    parent_existed = outbox.exists()
-    outbox.mkdir(parents=True, exist_ok=True, mode=0o700)
-    outbox.chmod(0o700)
-    if not parent_existed:
-        _fsync_directory(outbox.parent)
-    path = outbox / f"{event_id}.json"
-    occurred_at = datetime.now(UTC).isoformat()
-    if path.is_file():
-        try:
-            existing = json.loads(path.read_bytes())
-            occurred_at = str(existing["occurred_at"])
-        except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
-            raise BackupOperationError("recovery audit outbox is invalid") from error
-    event = {
-        "id": event_id,
-        "occurred_at": occurred_at,
-        "actor": "operator",
-        "action": action,
-        "outcome": outcome,
-        "reason_code": reason_code,
-        "subject_type": "hosted_recovery",
-        "subject_id": subject_id,
-        "details": {},
-    }
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-        0o600,
-    )
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(canonical_json_bytes(event))
-            stream.flush()
-            os.fsync(stream.fileno())
-        temporary.replace(path)
-    except Exception:
-        temporary.unlink(missing_ok=True)
-        raise
-    path.chmod(0o600)
-    _fsync_directory(outbox)
-    return path
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def _acquire_recovery_lock(path: Path) -> int:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
     descriptor = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
@@ -245,36 +179,6 @@ def _acquire_recovery_lock(path: Path) -> int:
         os.close(descriptor)
         raise RecoveryOperationBusy("another recovery operation is active") from error
     return descriptor
-
-
-def _flush_recovery_audits(outbox: Path, database_url: str) -> int:
-    if not outbox.exists():
-        return 0
-    store = PostgresManagementStore(database_url)
-    flushed = 0
-    for path in sorted(outbox.glob("audit_recovery_*.json")):
-        try:
-            event = json.loads(path.read_bytes())
-        except (OSError, json.JSONDecodeError) as error:
-            raise BackupOperationError("recovery audit outbox is invalid") from error
-        if (
-            not isinstance(event, dict)
-            or RECOVERY_AUDIT_ID.fullmatch(str(event.get("id", ""))) is None
-            or event.get("action") not in RECOVERY_AUDIT_ACTIONS
-            or event.get("outcome") not in {"succeeded", "rejected"}
-            or event.get("actor") != "operator"
-            or event.get("subject_type") != "hosted_recovery"
-            or not isinstance(event.get("subject_id"), str)
-            or not event["subject_id"]
-            or event.get("details") != {}
-        ):
-            raise BackupOperationError("recovery audit outbox is invalid")
-        store.append_management_audit_event_idempotent(event)
-        path.unlink()
-        flushed += 1
-    if flushed:
-        _fsync_directory(outbox)
-    return flushed
 
 
 def main() -> None:
@@ -373,9 +277,10 @@ def main() -> None:
         )
         output = {"status": "verified"}
     elif arguments.command == "audit-stage":
-        path = _stage_recovery_audit(
+        path = stage_operator_audit(
             arguments.outbox,
             event_id=arguments.event_id,
+            actor="operator",
             action=arguments.action,
             outcome=arguments.outcome,
             subject_id=arguments.subject_id,
@@ -388,15 +293,16 @@ def main() -> None:
             raise BackupOperationError("management audit database credentials are required")
         output = {
             "status": "recorded",
-            "flushed": _flush_recovery_audits(arguments.outbox, database_url),
+            "flushed": flush_operator_audits(arguments.outbox, database_url),
         }
     elif arguments.command == "lock-run":
         try:
             descriptor = _acquire_recovery_lock(arguments.lock)
         except RecoveryOperationBusy:
-            _stage_recovery_audit(
+            stage_operator_audit(
                 arguments.outbox,
                 event_id=arguments.event_id,
+                actor="operator",
                 action=arguments.action,
                 outcome="rejected",
                 subject_id=arguments.subject_id,

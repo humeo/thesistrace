@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from thesistrace.hosted import backup_cli
+from thesistrace.hosted import backup_cli, operator_audit
 
 
 class AvailableResponse:
@@ -65,7 +65,7 @@ def test_management_audit_outbox_is_sanitized_retryable_and_persisted(
         ) -> None:
             events.append(event)
 
-    monkeypatch.setattr(backup_cli, "PostgresManagementStore", Store)
+    monkeypatch.setattr(operator_audit, "PostgresManagementStore", Store)
     outbox = tmp_path / "audit-outbox"
     monkeypatch.setattr(
         sys,
@@ -154,11 +154,12 @@ def test_management_audit_outbox_survives_database_failure(
         ) -> None:
             raise RuntimeError("database unavailable")
 
-    monkeypatch.setattr(backup_cli, "PostgresManagementStore", UnavailableStore)
+    monkeypatch.setattr(operator_audit, "PostgresManagementStore", UnavailableStore)
     outbox = tmp_path / "audit-outbox"
-    staged = backup_cli._stage_recovery_audit(
+    staged = operator_audit.stage_operator_audit(
         outbox,
         event_id="audit_recovery_database_failure",
+        actor="operator",
         action="backup.create",
         outcome="rejected",
         subject_id="backup-attempt-20260801T000000Z",
@@ -166,9 +167,58 @@ def test_management_audit_outbox_survives_database_failure(
     )
 
     with pytest.raises(RuntimeError, match="database unavailable"):
-        backup_cli._flush_recovery_audits(outbox, "postgresql://operator")
+        operator_audit.flush_operator_audits(outbox, "postgresql://operator")
 
     assert staged.is_file()
+
+
+def test_acceptance_interruption_audit_uses_the_same_durable_outbox(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    events: list[dict[str, object]] = []
+
+    class Store:
+        def __init__(self, database_url: str) -> None:
+            assert database_url == "postgresql://operator"
+
+        def append_management_audit_event_idempotent(
+            self,
+            event: dict[str, object],
+        ) -> None:
+            events.append(event)
+
+    monkeypatch.setattr(operator_audit, "PostgresManagementStore", Store)
+    outbox = tmp_path / "audit-outbox"
+    staged = operator_audit.stage_operator_audit(
+        outbox,
+        event_id="audit_acceptance_stop_test",
+        actor="operator",
+        action="acceptance.service.interrupt",
+        outcome="succeeded",
+        subject_id="worker-1",
+        reason_code=None,
+    )
+
+    assert staged.name == "audit_acceptance_stop_test.json"
+    assert operator_audit.flush_operator_audits(
+        outbox,
+        "postgresql://operator",
+    ) == 1
+    assert events == [
+        {
+            "id": "audit_acceptance_stop_test",
+            "occurred_at": events[0]["occurred_at"],
+            "actor": "operator",
+            "action": "acceptance.service.interrupt",
+            "outcome": "succeeded",
+            "reason_code": None,
+            "subject_type": "hosted_acceptance",
+            "subject_id": "worker-1",
+            "details": {},
+        }
+    ]
+    assert list(outbox.iterdir()) == []
 
 
 def test_recovery_lock_rejects_a_concurrent_operator_and_records_busy(
@@ -248,17 +298,18 @@ def test_recovery_lock_survives_exec_and_busy_attempt_is_audited(
 
 def test_audit_stage_fsyncs_file_and_directory(monkeypatch, tmp_path: Path) -> None:
     synced: list[int] = []
-    real_fsync = backup_cli.os.fsync
+    real_fsync = operator_audit.os.fsync
 
     def recording_fsync(descriptor: int) -> None:
         synced.append(descriptor)
         real_fsync(descriptor)
 
-    monkeypatch.setattr(backup_cli.os, "fsync", recording_fsync)
+    monkeypatch.setattr(operator_audit.os, "fsync", recording_fsync)
 
-    backup_cli._stage_recovery_audit(
+    operator_audit.stage_operator_audit(
         tmp_path / "outbox",
         event_id="audit_recovery_fsync",
+        actor="operator",
         action="backup.create",
         outcome="rejected",
         subject_id="backup-attempt-fsync",

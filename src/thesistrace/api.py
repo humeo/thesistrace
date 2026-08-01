@@ -793,6 +793,11 @@ def create_app(
         run_id: str,
         idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
     ) -> JSONResponse:
+        if store.research_run(run_id) is None:
+            raise HTTPException(
+                status_code=404,
+                detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
+            )
         try:
             track, created = tracking.activate(run_id, idempotency_key)
         except QuotaExceededError as error:

@@ -1,0 +1,241 @@
+import argparse
+import hashlib
+import json
+import os
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+import psycopg
+
+from thesistrace.config import database_url_from_environment
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        description="Seed private state for clean-stack Hosted acceptance",
+    )
+    commands = result.add_subparsers(dest="command", required=True)
+    commands.add_parser("assert-clean")
+    commands.add_parser("storage-status")
+    invitation = commands.add_parser("invitation")
+    invitation.add_argument("--email", required=True)
+    otp = commands.add_parser("otp")
+    otp.add_argument("--email", required=True)
+    otp.add_argument(
+        "--purpose",
+        choices=("VERIFY_EMAIL", "RESET_PASSWORD"),
+        required=True,
+    )
+    otp.add_argument("--code", required=True)
+    publication = commands.add_parser("publication-status")
+    publication.add_argument("--publication-id", required=True)
+    return result
+
+
+def main() -> None:
+    if os.environ.get("THESISTRACE_ACCEPTANCE_MODE") != "1":
+        raise SystemExit("acceptance state seeding is disabled")
+    arguments = parser().parse_args()
+    database_url = database_url_from_environment()
+    if not database_url:
+        raise SystemExit("THESISTRACE_DATABASE_URL is required")
+    if arguments.command == "assert-clean":
+        assert_clean(database_url)
+        return
+    if arguments.command == "storage-status":
+        inspect_storage(database_url)
+        return
+    if arguments.command == "publication-status":
+        inspect_publication(database_url, arguments.publication_id)
+        return
+    email = arguments.email.strip().casefold()
+    if not email or "@" not in email:
+        raise SystemExit("a normalized email is required")
+    if arguments.command == "invitation":
+        seed_invitation(database_url, email)
+    else:
+        code = arguments.code.strip()
+        if len(code) != 6 or not code.isdigit():
+            raise SystemExit("acceptance OTP must be a six-digit code")
+        seed_otp(database_url, email, arguments.purpose, code)
+
+
+def assert_clean(database_url: str) -> None:
+    tables = (
+        "thesistrace_control.product_users",
+        "thesistrace_control.personal_workspaces",
+        "thesistrace_control.registration_invitations",
+        "thesistrace_control.launch_qualifications",
+        "thesistrace_product.dataset_releases",
+        "thesistrace_product.research_definition_drafts",
+        "thesistrace_product.research_runs",
+        "thesistrace_product.daily_tracks",
+    )
+    with psycopg.connect(database_url) as connection:
+        counts = {
+            table: int(connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0])
+            for table in tables
+        }
+    populated = {table: count for table, count in counts.items() if count}
+    if populated:
+        raise SystemExit(f"Hosted acceptance requires a clean stack: {populated}")
+    print("clean Hosted acceptance state verified")
+
+
+def seed_invitation(database_url: str, email: str) -> None:
+    now = datetime.now(UTC)
+    invitation_id = f"invite_acceptance_{uuid4().hex}"
+    with psycopg.connect(database_url) as connection:
+        insert_audit_event(
+            connection,
+            action="acceptance.invitation.seed",
+            subject_type="registration_invitation",
+            subject_id=invitation_id,
+            details={"fixture": True},
+        )
+        connection.execute(
+            """
+            INSERT INTO thesistrace_control.registration_invitations (
+                id, normalized_email, state, issued_by, issued_at, expires_at
+            )
+            VALUES (%s, %s, 'issued', 'release-acceptance-fixture', %s, %s)
+            """,
+            (
+                invitation_id,
+                email,
+                now,
+                now + timedelta(hours=1),
+            ),
+        )
+    print("acceptance invitation seeded")
+
+
+def seed_otp(
+    database_url: str,
+    email: str,
+    purpose: str,
+    code: str,
+) -> None:
+    with psycopg.connect(database_url) as connection:
+        subject_id = hashlib.sha256(email.encode()).hexdigest()[:20]
+        insert_audit_event(
+            connection,
+            action="acceptance.otp.seed",
+            subject_type="email_otp",
+            subject_id=subject_id,
+            details={"fixture": True, "purpose": purpose},
+        )
+        connection.execute(
+            """
+            INSERT INTO auth.email_otps (
+                email, purpose, otp_hash, otp_type, expires_at,
+                consumed_at, redirect_to, attempts_count
+            )
+            VALUES (
+                %s, %s, crypt(%s, gen_salt('bf', 10)), 'NUMERIC_CODE',
+                now() + interval '15 minutes', NULL, NULL, 0
+            )
+            ON CONFLICT (email, purpose)
+            DO UPDATE SET
+                otp_hash = EXCLUDED.otp_hash,
+                otp_type = EXCLUDED.otp_type,
+                expires_at = EXCLUDED.expires_at,
+                consumed_at = NULL,
+                redirect_to = NULL,
+                attempts_count = 0,
+                updated_at = now()
+            """,
+            (email, purpose, code),
+        )
+    print(f"acceptance {purpose} OTP seeded")
+
+
+def insert_audit_event(
+    connection: psycopg.Connection,
+    *,
+    action: str,
+    subject_type: str,
+    subject_id: str,
+    details: dict[str, object],
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO thesistrace_control.management_audit_events (
+            id, occurred_at, actor, action, outcome, reason_code,
+            subject_type, subject_id, details_json
+        )
+        VALUES (%s, now(), 'release-acceptance', %s, 'succeeded', NULL,
+                %s, %s, %s::jsonb)
+        """,
+        (
+            f"audit_acceptance_{uuid4().hex}",
+            action,
+            subject_type,
+            subject_id,
+            json.dumps(details, sort_keys=True, separators=(",", ":")),
+        ),
+    )
+
+
+def inspect_publication(database_url: str, publication_id: str) -> None:
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            """
+            SELECT publication.status, publication.result_release_id,
+                   count(attempt.id) AS attempt_count
+            FROM thesistrace_product.dataset_publications AS publication
+            LEFT JOIN thesistrace_product.dataset_publication_attempts AS attempt
+              ON attempt.publication_id = publication.id
+            WHERE publication.id = %s
+            GROUP BY publication.id
+            """,
+            (publication_id,),
+        ).fetchone()
+    if row is None:
+        raise SystemExit("Dataset Publication not found")
+    print(
+        json.dumps(
+            {
+                "status": row[0],
+                "result_release_id": row[1],
+                "attempt_count": int(row[2]),
+            },
+            sort_keys=True,
+        )
+    )
+
+
+def inspect_storage(database_url: str) -> None:
+    with psycopg.connect(database_url) as connection:
+        row = connection.execute(
+            """
+            SELECT
+                (SELECT count(*)
+                   FROM thesistrace_control.stored_objects),
+                (SELECT count(DISTINCT object_key)
+                   FROM thesistrace_control.storage_references),
+                (SELECT count(*)
+                   FROM thesistrace_control.stored_objects AS stored
+                  WHERE NOT EXISTS (
+                      SELECT 1
+                      FROM thesistrace_control.storage_references AS reference
+                      WHERE reference.object_key = stored.object_key
+                  ))
+            """
+        ).fetchone()
+    if row is None:
+        raise SystemExit("Storage index is unavailable")
+    print(
+        json.dumps(
+            {
+                "stored_object_count": int(row[0]),
+                "referenced_object_count": int(row[1]),
+                "unreferenced_object_count": int(row[2]),
+            },
+            sort_keys=True,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

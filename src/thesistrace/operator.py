@@ -14,6 +14,7 @@ from thesistrace.capacity import (
 )
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher
+from thesistrace.launch import LaunchQualificationService
 from thesistrace.management import (
     HOSTED_TUSHARE_SCOPE,
     SourceAuthorizationError,
@@ -68,6 +69,10 @@ def build_parser() -> argparse.ArgumentParser:
     capacity_record.add_argument("--release-bundle-id", required=True)
     capacity_record.add_argument("--evidence", type=Path, required=True)
     capacity_commands.add_parser("inspect")
+
+    launch = resources.add_parser("launch-qualification")
+    launch_commands = launch.add_subparsers(dest="command", required=True)
+    launch_commands.add_parser("inspect")
 
     invitations = resources.add_parser("invitation")
     invitation_commands = invitations.add_subparsers(dest="command", required=True)
@@ -206,6 +211,17 @@ def run(
             )
             return 2
         print(json.dumps(qualification, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if arguments.resource == "launch-qualification":
+        launch_service = LaunchQualificationService(management_store)
+        print(
+            json.dumps(
+                launch_service.inspect(),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        )
         return 0
 
     if arguments.resource == "tracking-generation-rebuild":

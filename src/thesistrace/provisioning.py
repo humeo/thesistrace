@@ -5,6 +5,7 @@ from typing import Protocol
 from thesistrace.auth import InsForgeIdentity
 from thesistrace.capacity import CapacityQualificationService
 from thesistrace.config import Settings
+from thesistrace.launch import LaunchQualificationService
 from thesistrace.management import SourceAuthorizationService
 
 
@@ -74,6 +75,10 @@ class CapacityGate(Protocol):
     def is_qualified(self) -> bool: ...
 
 
+class LaunchGate(Protocol):
+    def is_qualified(self) -> bool: ...
+
+
 class RegistrationService:
     def __init__(
         self,
@@ -81,10 +86,12 @@ class RegistrationService:
         store: ProvisioningStore,
         source_authorization: SourceAuthorizationService,
         capacity_qualification: CapacityGate,
+        launch_qualification: LaunchGate,
     ) -> None:
         self.store = store
         self.source_authorization = source_authorization
         self.capacity_qualification = capacity_qualification
+        self.launch_qualification = launch_qualification
 
     def issue_invitation(
         self,
@@ -151,6 +158,18 @@ class RegistrationService:
             raise ProvisioningError(
                 "CAPACITY_QUALIFICATION_REQUIRED",
                 "a passing capacity qualification is required before invitation issuance",
+            )
+        if not self.launch_qualification.is_qualified():
+            self.store.record_invitation_rejection(
+                actor=normalized_actor,
+                action="registration_invitation.issue",
+                reason_code="LAUNCH_QUALIFICATION_REQUIRED",
+                subject_id="new",
+                now=occurred_at,
+            )
+            raise ProvisioningError(
+                "LAUNCH_QUALIFICATION_REQUIRED",
+                "a passing launch qualification is required before invitation issuance",
             )
         return self.store.issue_invitation(
             actor=normalized_actor,
@@ -224,9 +243,17 @@ def build_registration_service(
     from thesistrace.hosted.provisioning import PostgresProvisioningStore
 
     return RegistrationService(
-        store=PostgresProvisioningStore(settings.database_url),
+        store=PostgresProvisioningStore(
+            settings.database_url,
+            required_release_bundle_id=settings.release_bundle_id,
+        ),
         source_authorization=source_authorization,
         capacity_qualification=CapacityQualificationService(
-            source_authorization.store
+            source_authorization.store,
+            required_release_bundle_id=settings.release_bundle_id,
+        ),
+        launch_qualification=LaunchQualificationService(
+            source_authorization.store,
+            required_release_bundle_id=settings.release_bundle_id,
         ),
     )

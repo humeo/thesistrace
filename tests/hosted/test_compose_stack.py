@@ -509,7 +509,7 @@ def test_busy_recovery_lock_rejects_before_prepare_mutates_host_state(
     assert not (state_root / "hosted.env").exists()
     assert not (state_root / "secrets").exists()
     assert not (state_root / "recovery").exists()
-    outbox = state_root / "backup-health" / "recovery-audit-outbox"
+    outbox = state_root / "backup-health" / "operator-audit-outbox"
     events = list(outbox.glob("audit_recovery_busy_*.json"))
     assert len(events) == 1
     assert json.loads(events[0].read_text())["reason_code"] == (

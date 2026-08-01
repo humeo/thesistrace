@@ -1,4 +1,4 @@
-.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-config hosted-dispatch-probe hosted-recovery-probe-start hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore
+.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-dispatch-probe hosted-recovery-probe-start hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore hosted-release-acceptance
 
 dev:
 	bun run --cwd web dev
@@ -24,6 +24,12 @@ hosted-restart:
 
 hosted-smoke:
 	./scripts/hosted-stack smoke
+
+hosted-health-check:
+	./scripts/hosted-stack health-check
+
+hosted-smtp-configure:
+	./scripts/hosted-stack smtp-configure $(CONFIG) $(PASSWORD_FILE) $(ACTOR)
 
 hosted-config:
 	./scripts/hosted-stack config
@@ -54,3 +60,10 @@ hosted-backup:
 
 hosted-restore:
 	./scripts/hosted-stack restore $(BACKUP_ID)
+
+hosted-release-acceptance:
+	.venv/bin/python scripts/hosted/release_acceptance.py \
+		--release-bundle-id "$(RELEASE_BUNDLE_ID)" \
+		--capacity-evidence "$(CAPACITY_EVIDENCE)" \
+		--recovery-evidence "$(RECOVERY_EVIDENCE)" \
+		--output "$(OUTPUT)"

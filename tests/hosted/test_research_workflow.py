@@ -263,6 +263,8 @@ def test_resource_exhaustion_is_attempted_at_most_twice(tmp_path: Path) -> None:
         objects,
         calculator=exhaust,
     )
+    manifest_paths = set((objects.root / "manifests").glob("*.json"))
+    payload_paths = set((objects.root / "sha256").glob("*/*"))
 
     first = service.execute(str(run["id"]))
     second = service.execute(str(run["id"]))
@@ -276,6 +278,10 @@ def test_resource_exhaustion_is_attempted_at_most_twice(tmp_path: Path) -> None:
         attempt["diagnostic"]["reason_code"]
         for attempt in second["attempts"]
     } == {"RESOURCE_EXHAUSTED"}
+    assert second.get("result_manifest_sha256") is None
+    assert set((objects.root / "manifests").glob("*.json")) == manifest_paths
+    assert set((objects.root / "sha256").glob("*/*")) == payload_paths
+    assert not (objects.root / "staging" / str(run["id"])).exists()
 
 
 def test_activity_redelivery_fences_the_abandoned_attempt(tmp_path: Path) -> None:

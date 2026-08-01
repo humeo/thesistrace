@@ -170,6 +170,52 @@ def test_equivalence_publishes_only_first_divergence(
     }
 
 
+def test_equivalence_resource_exhaustion_publishes_no_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, track = active_track(tmp_path)
+    requested, _created = service.request_equivalence(
+        str(track["id"]),
+        "equivalence-resource-exhaustion",
+    )
+    prior_head_id = track["head_checkpoint_id"]
+    manifest_paths = set(
+        (service.tracking.objects.root / "manifests").glob("*.json")
+    )
+    payload_paths = set(
+        (service.tracking.objects.root / "sha256").glob("*/*")
+    )
+
+    monkeypatch.setattr(
+        service.tracking,
+        "verify_equivalence",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryError),
+    )
+
+    with pytest.raises(MemoryError):
+        service.execute_equivalence(str(requested["id"]))
+    with pytest.raises(MemoryError):
+        service.execute_equivalence(str(requested["id"]))
+    failed = service.fail_equivalence(
+        str(requested["id"]),
+        "RESOURCE_EXHAUSTED",
+    )
+    current = service.tracking.get_track(str(track["id"]))
+
+    assert failed["status"] == "failed"
+    assert failed["diagnostic"] == {"reason_code": "RESOURCE_EXHAUSTED"}
+    assert "result" not in failed
+    assert current is not None
+    assert current["head_checkpoint_id"] == prior_head_id
+    assert set(
+        (service.tracking.objects.root / "manifests").glob("*.json")
+    ) == manifest_paths
+    assert set(
+        (service.tracking.objects.root / "sha256").glob("*/*")
+    ) == payload_paths
+
+
 def test_equivalence_api_returns_async_resource_and_idempotent_status(
     tmp_path: Path,
 ) -> None:
@@ -425,6 +471,12 @@ def test_generation_rebuild_propagates_nested_resource_exhaustion(
         idempotency_key="rebuild-nested-exhaustion",
         operator_authorized=True,
     )
+    manifest_paths = set(
+        (service.tracking.objects.root / "manifests").glob("*.json")
+    )
+    payload_paths = set(
+        (service.tracking.objects.root / "sha256").glob("*/*")
+    )
 
     def exhaust(*_args, **_kwargs):
         raise MemoryError
@@ -455,6 +507,13 @@ def test_generation_rebuild_propagates_nested_resource_exhaustion(
     assert current["current_generation_id"] == track[
         "current_generation_id"
     ]
+    assert current["head_checkpoint_id"] == track["head_checkpoint_id"]
+    assert set(
+        (service.tracking.objects.root / "manifests").glob("*.json")
+    ) == manifest_paths
+    assert set(
+        (service.tracking.objects.root / "sha256").glob("*/*")
+    ) == payload_paths
 
 
 def test_generation_rebuild_cancellation_removes_prepared_generation(
