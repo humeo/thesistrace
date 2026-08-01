@@ -167,7 +167,11 @@ interrupted operation therefore remains a rejected `OPERATION_INTERRUPTED`
 record even when PostgreSQL is unavailable. Completion atomically updates the
 same event to its final succeeded or rejected outcome; the operator surface
 retries the idempotent database append and removes the outbox file only after
-PostgreSQL accepts it.
+PostgreSQL accepts it. File contents and directory entries are `fsync`ed before
+the mutation starts. Target initialization, backup, and restore share one
+non-blocking host lock, so the timer and a manual recovery command cannot stop,
+read, or replace the same volumes concurrently. A competing command is rejected
+as `RECOVERY_OPERATION_BUSY` and leaves its own durable audit-outbox event.
 
 Install the supplied systemd timer on a host whose checkout is
 `/opt/thesistrace`, or substitute the actual absolute checkout path in the
@@ -196,7 +200,9 @@ make hosted-restore BACKUP_ID=backup_YYYYMMDDTHHMMSSZ_xxxxxxxxxxxx
 
 Restore is destructive to the four authoritative named volumes and clears the
 disposable Working Cache. It keeps `edge` stopped, authenticates and checksums
-the encrypted set, restores the separately encrypted role secrets, selects the
+the encrypted set, records the exact authenticated selection, and rejects a
+selection whose backup time exceeds the six-hour incident RPO before erasing
+live volumes. It restores the separately encrypted role secrets, selects the
 recovered Release Bundle, and refuses to continue if its exact locked images
 are unavailable. It starts PostgreSQL, Temporal, private Storage, and API
 internally; API startup reconciles all pending Resource Tombstones. The restore
@@ -209,7 +215,9 @@ health and the dedicated recovery view must both become `available`; `degraded`
 is not sufficient. The recovery view requires the launch-critical System,
 Data, and Quantitative checks, while deliberately excluding the still-closed
 public Origin, external Tushare and trace export, and historical publication
-checks that are not properties of the restored runtime. The public Origin
+checks that are not properties of the restored runtime. It also excludes the
+new node's local backup-status history: the separate restore gate has already
+verified the exact authenticated Recovery Set and its RPO. The public Origin
 opens only after those gates and must then pass smoke.
 
 The launch recovery exercise must additionally prove that Temporal persistence

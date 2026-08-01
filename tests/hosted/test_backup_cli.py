@@ -1,5 +1,8 @@
 import json
+import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -166,6 +169,103 @@ def test_management_audit_outbox_survives_database_failure(
         backup_cli._flush_recovery_audits(outbox, "postgresql://operator")
 
     assert staged.is_file()
+
+
+def test_recovery_lock_rejects_a_concurrent_operator_and_records_busy(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "recovery.lock"
+    first = backup_cli._acquire_recovery_lock(lock_path)
+    try:
+        with pytest.raises(backup_cli.RecoveryOperationBusy):
+            backup_cli._acquire_recovery_lock(lock_path)
+    finally:
+        os.close(first)
+
+
+def test_recovery_lock_survives_exec_and_busy_attempt_is_audited(
+    tmp_path: Path,
+) -> None:
+    lock_path = tmp_path / "recovery.lock"
+    outbox = tmp_path / "audit-outbox"
+    ready = tmp_path / "ready"
+    common = [
+        sys.executable,
+        "-m",
+        "thesistrace.hosted.backup_cli",
+        "lock-run",
+        "--lock",
+        str(lock_path),
+        "--outbox",
+        str(outbox),
+        "--action",
+        "backup.create",
+        "--subject-id",
+        "recovery-operation",
+    ]
+    holder = subprocess.Popen(
+        [
+            *common,
+            "--event-id",
+            "audit_recovery_holder",
+            "--",
+            sys.executable,
+            "-c",
+            "from pathlib import Path; import sys,time; "
+            "Path(sys.argv[1]).write_text('ready'); time.sleep(2)",
+            str(ready),
+        ]
+    )
+    try:
+        deadline = time.monotonic() + 1
+        while not ready.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert ready.exists()
+        contender = subprocess.run(
+            [
+                *common,
+                "--event-id",
+                "audit_recovery_contender",
+                "--",
+                sys.executable,
+                "-c",
+                "raise AssertionError('must not execute')",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        holder.wait(timeout=5)
+
+    assert contender.returncode == 75
+    busy = json.loads(
+        (outbox / "audit_recovery_contender.json").read_bytes()
+    )
+    assert busy["outcome"] == "rejected"
+    assert busy["reason_code"] == "RECOVERY_OPERATION_BUSY"
+
+
+def test_audit_stage_fsyncs_file_and_directory(monkeypatch, tmp_path: Path) -> None:
+    synced: list[int] = []
+    real_fsync = backup_cli.os.fsync
+
+    def recording_fsync(descriptor: int) -> None:
+        synced.append(descriptor)
+        real_fsync(descriptor)
+
+    monkeypatch.setattr(backup_cli.os, "fsync", recording_fsync)
+
+    backup_cli._stage_recovery_audit(
+        tmp_path / "outbox",
+        event_id="audit_recovery_fsync",
+        action="backup.create",
+        outcome="rejected",
+        subject_id="backup-attempt-fsync",
+        reason_code="OPERATION_INTERRUPTED",
+    )
+
+    assert len(synced) >= 2
 
 
 def test_workflow_recovery_evidence_is_recorded_atomically(

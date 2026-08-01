@@ -292,6 +292,7 @@ def test_recovery_health_requires_restored_platform_not_external_or_historical_c
     assert recovery["checks"]["quantitative.deterministic_regression"] is True
     assert "system.public_origin" not in recovery["checks"]
     assert "system.trace_export" not in recovery["checks"]
+    assert "system.backup" not in recovery["checks"]
     assert "data.tushare" not in recovery["checks"]
     assert "data.validation" not in recovery["checks"]
     assert "quantitative.equivalence" not in recovery["checks"]

@@ -64,7 +64,6 @@ RECOVERY_REQUIRED_CHECKS = {
         "outbox_lag",
         "disk_pressure",
         "workflow_capacity",
-        "backup",
     ),
     "data": (
         "release_freshness",

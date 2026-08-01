@@ -778,6 +778,7 @@ services:
       - ${THESISTRACE_RECOVERY_DIR:-.hosted/recovery}:/restore/secrets
       - ${THESISTRACE_SECRET_DIR:-.hosted/secrets}:/restore/secret-files
       - ${THESISTRACE_OFF_NODE_BACKUP_DIR:-.hosted/off-node-backups}:/backup/off-node:ro
+      - ${THESISTRACE_BACKUP_STATUS_DIR:-.hosted/backup-health}:/restore/status
     secrets:
       - backup_passphrase
       - recovery_passphrase

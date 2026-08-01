@@ -452,6 +452,13 @@ def test_backup_schedule_and_launcher_enforce_the_recovery_gate() -> None:
     assert "audit-stage" in launcher
     assert "audit-flush" in launcher
     assert "OPERATION_INTERRUPTED" in launcher
+    assert "lock-run" in launcher
+    backup_cli = (
+        ROOT / "src" / "thesistrace" / "hosted" / "backup_cli.py"
+    ).read_text()
+    assert "RECOVERY_OPERATION_BUSY" in backup_cli
+    assert "--recovery-selection" in launcher
+    assert "--expected-backup-id" in launcher
     assert "thesistrace-recovery-probe verify" in launcher
     assert "--health-url http://health-service:8020/health/recovery" in launcher
     restore_section = launcher.split("restore_backup()", 1)[1].split(

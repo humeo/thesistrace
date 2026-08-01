@@ -27,6 +27,7 @@ BACKUP_FORMAT = "thesistrace-coordinated-backup-v1"
 BACKUP_TARGET_FORMAT = "thesistrace-off-node-backup-target-v1"
 BACKUP_TARGET_MARKER = ".thesistrace-backup-target.json"
 BACKUP_STATUS_FORMAT = "thesistrace-backup-status-v1"
+RECOVERY_SELECTION_FORMAT = "thesistrace-authenticated-recovery-selection-v1"
 BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
 BACKUP_RETENTION = timedelta(days=7)
 GCM_TAG_BYTES = 16
@@ -283,6 +284,11 @@ def _write_status(path: Path, value: Mapping[str, object]) -> None:
         os.fsync(stream.fileno())
     temporary.replace(path)
     path.chmod(0o644)
+    directory = os.open(path.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
 
 
 def perform_backup(
@@ -680,8 +686,18 @@ def restore_recovery_set(
     restore_root: Path,
     working_cache: Path,
     passphrase: str,
+    incident_at: datetime | None = None,
+    selection_output: Path | None = None,
 ) -> dict[str, object]:
-    verify_recovery_set(manifest_path=manifest_path, passphrase=passphrase)
+    manifest = verify_recovery_set(
+        manifest_path=manifest_path,
+        passphrase=passphrase,
+    )
+    selection = authenticated_recovery_selection(
+        manifest,
+        manifest_sha256=_file_sha256(manifest_path),
+        incident_at=incident_at or datetime.now(UTC),
+    )
     required_targets = [
         restore_root / archive_name for archive_name in SOURCE_LAYOUT.values()
     ]
@@ -695,14 +711,86 @@ def restore_recovery_set(
     for target in required_targets:
         _clear_directory(target)
     _clear_directory(working_cache)
-    manifest = extract_recovery_set(
+    extracted_manifest = extract_recovery_set(
         manifest_path=manifest_path,
         destination=restore_root,
         passphrase=passphrase,
         _cleanup_on_failure=False,
     )
     restore_release_configuration_modes(restore_root / "metadata/release-state")
+    if extracted_manifest != manifest:
+        raise BackupOperationError("authenticated recovery manifest changed during restore")
+    if selection_output is not None:
+        _write_status(selection_output, selection)
     return manifest
+
+
+def authenticated_recovery_selection(
+    manifest: Mapping[str, object],
+    *,
+    manifest_sha256: str,
+    incident_at: datetime,
+) -> dict[str, object]:
+    try:
+        created_at = datetime.fromisoformat(str(manifest["created_at"])).astimezone(UTC)
+        incident = incident_at.astimezone(UTC)
+        backup_id = str(manifest["backup_id"])
+        release_bundle_id = str(manifest["release_bundle_id"])
+    except (KeyError, ValueError) as error:
+        raise BackupOperationError("recovery selection metadata is invalid") from error
+    if incident < created_at:
+        raise BackupOperationError("recovery incident precedes the selected backup")
+    state_loss = int((incident - created_at).total_seconds())
+    if state_loss > BACKUP_INTERVAL_SECONDS:
+        raise BackupOperationError("selected recovery set exceeds the six-hour RPO")
+    if re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None:
+        raise BackupOperationError("recovery selection manifest identity is invalid")
+    return {
+        "format": RECOVERY_SELECTION_FORMAT,
+        "backup_id": backup_id,
+        "release_bundle_id": release_bundle_id,
+        "backup_created_at": created_at.isoformat(),
+        "incident_at": incident.isoformat(),
+        "committed_state_loss_bound_seconds": state_loss,
+        "manifest_sha256": manifest_sha256,
+        "authenticated": True,
+    }
+
+
+def verify_authenticated_recovery_selection(
+    selection: Mapping[str, object],
+    *,
+    expected_backup_id: str,
+) -> dict[str, object]:
+    try:
+        backup_id = str(selection["backup_id"])
+        created_at = datetime.fromisoformat(
+            str(selection["backup_created_at"])
+        ).astimezone(UTC)
+        incident_at = datetime.fromisoformat(str(selection["incident_at"])).astimezone(UTC)
+        state_loss = int(selection["committed_state_loss_bound_seconds"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise RestoreVerificationError(
+            "authenticated recovery selection is invalid"
+        ) from error
+    calculated_loss = int((incident_at - created_at).total_seconds())
+    if (
+        selection.get("format") != RECOVERY_SELECTION_FORMAT
+        or selection.get("authenticated") is not True
+        or backup_id != expected_backup_id
+        or calculated_loss < 0
+        or state_loss != calculated_loss
+        or re.fullmatch(r"[0-9a-f]{64}", str(selection.get("manifest_sha256", "")))
+        is None
+    ):
+        raise RestoreVerificationError("authenticated recovery selection is invalid")
+    if state_loss > BACKUP_INTERVAL_SECONDS:
+        raise RestoreVerificationError("authenticated recovery set exceeds the six-hour RPO")
+    return {
+        "backup_id": backup_id,
+        "recovery_set_authenticated": True,
+        "committed_state_loss_bound_seconds": state_loss,
+    }
 
 
 def restore_secret_recovery_bundle(

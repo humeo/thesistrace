@@ -15,6 +15,7 @@ from thesistrace.hosted.backup_operations import (
     restore_recovery_set,
     restore_secret_recovery_bundle,
     validate_backup_target,
+    verify_authenticated_recovery_selection,
     verify_restored_state,
     write_recovery_exercise,
 )
@@ -491,6 +492,38 @@ def test_restore_gate_uses_tombstones_and_the_object_index_before_reopening(
                 "latest_dataset_release_id": "dsr_latest",
                 "objects": [],
             },
+        )
+
+
+def test_restore_gate_requires_the_authenticated_selected_set_within_rpo() -> None:
+    selection = {
+        "format": "thesistrace-authenticated-recovery-selection-v1",
+        "backup_id": "backup_20260801T000000Z_aaaaaaaaaaaa",
+        "release_bundle_id": "bundle-1",
+        "backup_created_at": "2026-08-01T00:00:00+00:00",
+        "incident_at": "2026-08-01T05:59:00+00:00",
+        "committed_state_loss_bound_seconds": 21_540,
+        "manifest_sha256": "a" * 64,
+        "authenticated": True,
+    }
+
+    assert verify_authenticated_recovery_selection(
+        selection,
+        expected_backup_id="backup_20260801T000000Z_aaaaaaaaaaaa",
+    ) == {
+        "backup_id": "backup_20260801T000000Z_aaaaaaaaaaaa",
+        "recovery_set_authenticated": True,
+        "committed_state_loss_bound_seconds": 21_540,
+    }
+
+    with pytest.raises(RestoreVerificationError, match="six-hour RPO"):
+        verify_authenticated_recovery_selection(
+            {
+                **selection,
+                "incident_at": "2026-08-01T06:00:01+00:00",
+                "committed_state_loss_bound_seconds": 21_601,
+            },
+            expected_backup_id="backup_20260801T000000Z_aaaaaaaaaaaa",
         )
 
 
