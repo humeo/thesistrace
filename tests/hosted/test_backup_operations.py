@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -341,6 +342,24 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
         write(restore_root / relative / "live", b"preserve on rejected restore")
     working_cache = tmp_path / "working-cache"
     write(working_cache / "live", b"preserve")
+
+    original_manifest = created.manifest_path.read_bytes()
+    tampered_manifest = json.loads(original_manifest)
+    tampered_manifest["created_at"] = "2026-08-01T05:59:59+00:00"
+    created.manifest_path.write_text(json.dumps(tampered_manifest))
+    with pytest.raises(BackupOperationError, match="authenticated metadata"):
+        restore_recovery_set(
+            manifest_path=created.manifest_path,
+            restore_root=restore_root,
+            working_cache=working_cache,
+            passphrase="correct-passphrase-123",
+            incident_at=datetime(2026, 8, 1, 6, 0, tzinfo=UTC),
+        )
+    assert (restore_root / "volumes/postgres-data/live").read_bytes() == (
+        b"preserve on rejected restore"
+    )
+    assert (working_cache / "live").read_bytes() == b"preserve"
+    created.manifest_path.write_bytes(original_manifest)
 
     with pytest.raises(BackupOperationError, match="authentication"):
         restore_recovery_set(

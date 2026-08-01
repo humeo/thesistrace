@@ -1,4 +1,6 @@
+import fcntl
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -476,6 +478,42 @@ def test_backup_schedule_and_launcher_enforce_the_recovery_gate() -> None:
     assert '--volume "$root:/workspace:ro"' not in restore_section
     assert launcher.index("compose stop --timeout 30 edge") < launcher.index(
         "python -m thesistrace.hosted.backup_cli verify-restore"
+    )
+
+
+def test_busy_recovery_lock_rejects_before_prepare_mutates_host_state(
+    tmp_path: Path,
+) -> None:
+    state_root = tmp_path / "hosted-state"
+    lock_path = state_root / "backup-health" / "recovery-operation.lock"
+    lock_path.parent.mkdir(parents=True)
+    descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        completed = subprocess.run(
+            [str(ROOT / "scripts" / "hosted-stack"), "backup"],
+            cwd=ROOT,
+            env={
+                **os.environ,
+                "THESISTRACE_HOST_STATE_DIR": str(state_root),
+            },
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        os.close(descriptor)
+
+    assert completed.returncode == 75
+    assert "RECOVERY_OPERATION_BUSY" in completed.stdout
+    assert not (state_root / "hosted.env").exists()
+    assert not (state_root / "secrets").exists()
+    assert not (state_root / "recovery").exists()
+    outbox = state_root / "backup-health" / "recovery-audit-outbox"
+    events = list(outbox.glob("audit_recovery_busy_*.json"))
+    assert len(events) == 1
+    assert json.loads(events[0].read_text())["reason_code"] == (
+        "RECOVERY_OPERATION_BUSY"
     )
 
 

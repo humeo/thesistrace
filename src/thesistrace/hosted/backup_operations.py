@@ -564,6 +564,7 @@ def verify_recovery_set(
     manifest, artifact_path, artifact_size = _artifact_details(manifest_path)
     source: io.BufferedReader | None = None
     reader: io.BufferedReader | None = None
+    authenticated_metadata: dict[str, object] | None = None
     try:
         source, reader = _decrypted_reader(artifact_path, artifact_size, passphrase)
         with tarfile.open(fileobj=reader, mode="r|gz") as archive:
@@ -571,8 +572,25 @@ def verify_recovery_set(
                 tarfile.data_filter(member, "/restore")
                 payload = archive.extractfile(member) if member.isfile() else None
                 if payload is not None:
-                    while payload.read(1024 * 1024):
-                        pass
+                    if member.name == "metadata/recovery-set.json":
+                        if authenticated_metadata is not None or member.size > 4096:
+                            raise BackupOperationError(
+                                "authenticated recovery metadata is invalid"
+                            )
+                        try:
+                            value = json.loads(payload.read(4097))
+                        except json.JSONDecodeError as error:
+                            raise BackupOperationError(
+                                "authenticated recovery metadata is invalid"
+                            ) from error
+                        if not isinstance(value, dict):
+                            raise BackupOperationError(
+                                "authenticated recovery metadata is invalid"
+                            )
+                        authenticated_metadata = dict(value)
+                    else:
+                        while payload.read(1024 * 1024):
+                            pass
         while reader.read(1024 * 1024):
             pass
     except BackupOperationError:
@@ -586,6 +604,21 @@ def verify_recovery_set(
             reader.close()
         if source is not None:
             source.close()
+    if authenticated_metadata is None:
+        raise BackupOperationError("authenticated recovery metadata is missing")
+    authenticated_fields = (
+        "format",
+        "backup_id",
+        "created_at",
+        "release_bundle_id",
+    )
+    if any(
+        authenticated_metadata.get(field) != manifest.get(field)
+        for field in authenticated_fields
+    ):
+        raise BackupOperationError(
+            "recovery set manifest does not match authenticated metadata"
+        )
     return manifest
 
 

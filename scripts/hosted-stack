@@ -670,15 +670,15 @@ case "$action" in
         exit_maintenance
         ;;
     backup-target-init)
-        prepare
         lock_recovery_action "$@"
-        ensure_release
         target="${2:?usage: scripts/hosted-stack backup-target-init /absolute/off-node/path}"
-        flush_recovery_audits >/dev/null 2>&1 || true
         recovery_audit_id="audit_recovery_target_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
         stage_recovery_audit \
             backup.target.initialize rejected backup-target \
             OPERATION_INTERRUPTED
+        prepare
+        ensure_release
+        flush_recovery_audits >/dev/null 2>&1 || true
         target_result=0
         "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-init \
             --target "$target" \
@@ -702,14 +702,14 @@ case "$action" in
         exit "$audit_result"
         ;;
     backup)
-        prepare
         lock_recovery_action "$@"
-        ensure_release
         backup_attempt_id="backup-attempt-$(date -u '+%Y%m%dT%H%M%SZ')"
-        flush_recovery_audits >/dev/null 2>&1 || true
         recovery_audit_id="audit_recovery_backup_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
         stage_recovery_audit \
             backup.create rejected "$backup_attempt_id" OPERATION_INTERRUPTED
+        prepare
+        ensure_release
+        flush_recovery_audits >/dev/null 2>&1 || true
         backup_result=0
         create_backup || backup_result="$?"
         if [ "$backup_result" -eq 0 ]; then
@@ -726,14 +726,14 @@ case "$action" in
         exit "$audit_result"
         ;;
     restore)
-        prepare
         lock_recovery_action "$@"
-        ensure_release
         backup_id="${2:?usage: scripts/hosted-stack restore BACKUP_ID}"
-        flush_recovery_audits >/dev/null 2>&1 || true
         recovery_audit_id="audit_recovery_restore_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
         stage_recovery_audit \
             backup.restore rejected "$backup_id" OPERATION_INTERRUPTED
+        prepare
+        ensure_release
+        flush_recovery_audits >/dev/null 2>&1 || true
         restore_result=0
         restore_backup "$backup_id" || restore_result="$?"
         if [ "$restore_result" -eq 0 ]; then
