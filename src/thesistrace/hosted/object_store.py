@@ -279,17 +279,26 @@ class RemoteObjectStore:
     def _request(self, method: str, path: str, **options) -> httpx.Response:
         retry_conflict = bool(options.pop("retry_conflict", False))
         retry_deadline = time.monotonic() + 120
+        transport_attempts = 3 if method.upper() == "GET" else 1
+        transport_attempt = 0
         request_headers = dict(options.pop("headers", {}))
         try:
             while True:
                 headers = dict(request_headers)
                 headers["Authorization"] = f"Bearer {self.token}"
-                response = self.client.request(
-                    method,
-                    path,
-                    headers=headers,
-                    **options,
-                )
+                try:
+                    response = self.client.request(
+                        method,
+                        path,
+                        headers=headers,
+                        **options,
+                    )
+                except httpx.TransportError:
+                    transport_attempt += 1
+                    if transport_attempt >= transport_attempts:
+                        raise
+                    time.sleep(0.1 * (2 ** (transport_attempt - 1)))
+                    continue
                 if (
                     response.status_code == 409
                     and retry_conflict

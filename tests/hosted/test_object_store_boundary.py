@@ -1,6 +1,7 @@
 import time
 from pathlib import Path
 
+import httpx
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
@@ -77,6 +78,50 @@ def test_remote_readiness_covers_the_constrained_cpu_budget() -> None:
 
     assert objects.ready() is True
     assert requested == [("/ready", 15)]
+
+
+def test_private_object_store_retries_transient_read_disconnects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b'{"value":"canonical"}'
+    requested: list[tuple[str, str]] = []
+    sleeps: list[float] = []
+
+    class Client:
+        def request(
+            self,
+            method: str,
+            path: str,
+            **_options: object,
+        ) -> httpx.Response:
+            requested.append((method, path))
+            if len(requested) == 1:
+                raise httpx.RemoteProtocolError(
+                    "server disconnected without sending a response"
+                )
+            return httpx.Response(
+                200,
+                content=payload,
+                request=httpx.Request(method, f"http://object-store{path}"),
+            )
+
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    objects = RemoteObjectStore(
+        "http://object-store",
+        TOKENS["compute"],
+        client=Client(),
+    )
+
+    digest = (
+        "31b824660c304dcb39024ba5a6df5dd5cddb2dd6f00b2f3b4ce3dd3a7f77eb01"
+    )
+
+    assert objects.read_json(digest) == {"value": "canonical"}
+    assert requested == [
+        ("GET", f"/v1/objects/{digest}/json"),
+        ("GET", f"/v1/objects/{digest}/json"),
+    ]
+    assert sleeps == [0.1]
 
 
 def test_private_object_store_preserves_typed_object_contract(
