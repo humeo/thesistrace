@@ -480,7 +480,16 @@ async def run_with_worker_heartbeat(
 ) -> None:
     async def heartbeat() -> None:
         while True:
-            record_heartbeat(datetime.now(UTC))
+            try:
+                await asyncio.to_thread(
+                    record_heartbeat,
+                    datetime.now(UTC),
+                )
+            except Exception:
+                logger.warning(
+                    "Compute Worker product heartbeat failed; retrying",
+                    exc_info=True,
+                )
             await asyncio.sleep(interval_seconds)
 
     worker_task = asyncio.create_task(worker)
