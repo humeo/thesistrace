@@ -1,4 +1,4 @@
-.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-config hosted-dispatch-probe hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore
+.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-config hosted-dispatch-probe hosted-recovery-probe-start hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore
 
 dev:
 	bun run --cwd web dev
@@ -30,6 +30,9 @@ hosted-config:
 
 hosted-dispatch-probe:
 	./scripts/hosted-stack dispatch-probe
+
+hosted-recovery-probe-start:
+	./scripts/hosted-stack recovery-probe-start $(PROBE_ID)
 
 hosted-operator:
 	./scripts/hosted-stack operator $(ARGS)

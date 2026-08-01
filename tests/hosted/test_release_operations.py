@@ -686,10 +686,12 @@ def test_existing_up_and_restart_never_rebuild_the_active_bundle() -> None:
 
 def test_maintenance_exit_restarts_only_workers_without_dependencies() -> None:
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    start_block = launcher.split("start_workers() {", 1)[1].split("\n}", 1)[0]
     exit_block = launcher.split("exit_maintenance() {", 1)[1].split("\n}", 1)[0]
 
-    assert "compose up --detach --no-deps" in exit_block
-    assert "compose start" not in exit_block
+    assert "start_workers" in exit_block
+    assert "compose up --detach --no-deps" in start_block
+    assert "compose start" not in start_block
 
 
 def test_compatible_rollback_does_not_rerun_migration_jobs() -> None:

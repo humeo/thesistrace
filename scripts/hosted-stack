@@ -13,6 +13,7 @@ release_config_root="$root/deploy/hosted"
 release_manifest="$root/deploy/hosted/release.json"
 release_state="$state_dir/releases"
 backup_status_dir="$state_dir/backup-health"
+recovery_audit_outbox="$backup_status_dir/recovery-audit-outbox"
 recovery_dir="$state_dir/recovery"
 
 random_secret() {
@@ -203,6 +204,30 @@ configured_backup_target() {
     printf '%s\n' "$target"
 }
 
+stage_recovery_audit() {
+    audit_action="$1"
+    audit_outcome="$2"
+    audit_subject_id="$3"
+    audit_reason_code="${4:-}"
+    set -- "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
+        audit-stage \
+        --outbox "$recovery_audit_outbox" \
+        --event-id "$recovery_audit_id" \
+        --action "$audit_action" \
+        --outcome "$audit_outcome" \
+        --subject-id "$audit_subject_id"
+    if [ -n "$audit_reason_code" ]; then
+        set -- "$@" --reason-code "$audit_reason_code"
+    fi
+    "$@" >/dev/null
+}
+
+flush_recovery_audits() {
+    compose --profile operator run --rm --no-deps -T restore-gate \
+        python -m thesistrace.hosted.backup_cli audit-flush \
+        --outbox /run/thesistrace-backup/recovery-audit-outbox
+}
+
 select_release() {
     pointer_name="$1"
     pointer_path="$release_state/$pointer_name.json"
@@ -338,10 +363,14 @@ enter_maintenance() {
         compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
 }
 
-exit_maintenance() {
+start_workers() {
     compose up --detach --no-deps \
         execution-relay data-worker \
         compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+}
+
+exit_maintenance() {
+    start_workers
     compose run --rm --no-deps -T thesistrace-migrations \
         python -m thesistrace.hosted.release_cli maintenance-exit
 }
@@ -382,20 +411,27 @@ create_backup() {
     enter_maintenance
     stop_for_cold_snapshot
     backup_result=0
-    compose --profile operator run --rm --no-deps -T backup-tool \
-        python -m thesistrace.hosted.backup_cli create \
+    set -- python -m thesistrace.hosted.backup_cli create \
         --target /backup/off-node \
         --source-root /backup/source \
         --release-bundle-id "$release_bundle_id" \
         --passphrase-file /run/secrets/backup_passphrase \
-        --status-path /backup/status/backup-status.json \
+        --status-path /backup/status/backup-status.json
+    workflow_probe_id="${THESISTRACE_RECOVERY_PROBE_ID:-}"
+    if [ -n "$workflow_probe_id" ]; then
+        set -- "$@" --workflow-probe-id "$workflow_probe_id"
+    fi
+    compose --profile operator run --rm --no-deps -T backup-tool \
+        "$@" \
         || backup_result="$?"
     restart_result=0
     restart_after_cold_snapshot || restart_result="$?"
     if [ "$backup_result" -ne 0 ]; then
         return "$backup_result"
     fi
-    return "$restart_result"
+    if [ "$restart_result" -ne 0 ]; then
+        return "$restart_result"
+    fi
 }
 
 restore_backup() {
@@ -404,8 +440,14 @@ restore_backup() {
     incident_at="${THESISTRACE_RECOVERY_INCIDENT_AT:-$restore_started_at}"
     detected_at="${THESISTRACE_RECOVERY_DETECTED_AT:-$restore_started_at}"
     case "$backup_id" in
-        backup_[0-9A-Za-z_]*) ;;
+        backup_?*) ;;
         *)
+            echo "backup ID is invalid" >&2
+            return 2
+            ;;
+    esac
+    case "$backup_id" in
+        *[!0-9A-Za-z_]*)
             echo "backup ID is invalid" >&2
             return 2
             ;;
@@ -421,6 +463,7 @@ restore_backup() {
         echo "complete recovery set is unavailable: $backup_id" >&2
         return 1
     fi
+    workflow_probe_id="$("$root/.venv/bin/python" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("workflow_probe_id", ""))' "$manifest")"
     enter_maintenance
     stop_for_cold_snapshot
     compose --profile operator run --rm --no-deps -T restore-tool \
@@ -447,6 +490,20 @@ restore_backup() {
     compose --profile operator run --rm --no-deps -T restore-gate \
         python -m thesistrace.hosted.backup_cli verify-restore \
         --output /run/thesistrace-backup/restore-verification.json
+    start_workers
+    compose --profile operator run --rm --no-deps -T restore-gate \
+        python -m thesistrace.hosted.backup_cli verify-runtime \
+        --api-url http://api:8000/api/v1/health \
+        --health-url http://health-service:8020/health/recovery
+    if [ -n "$workflow_probe_id" ]; then
+        compose --profile operator run --rm --no-deps -T recovery-probe \
+            thesistrace-recovery-probe verify \
+            --probe-id "$workflow_probe_id"
+        "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
+            record-workflow-recovery \
+            --verification "$backup_status_dir/restore-verification.json" \
+            --workflow-id "$workflow_probe_id"
+    fi
     exit_maintenance
     compose up --detach --wait --no-build edge
     set -a
@@ -538,6 +595,14 @@ case "$action" in
             compute-worker-1 \
             python /workspace/scripts/hosted/temporal_dispatch_probe.py
         ;;
+    recovery-probe-start)
+        prepare
+        select_current_release
+        probe_id="${2:?usage: scripts/hosted-stack recovery-probe-start PROBE_ID}"
+        compose --profile operator run --rm --no-deps -T recovery-probe \
+            thesistrace-recovery-probe start \
+            --probe-id "$probe_id"
+        ;;
     operator)
         prepare
         select_current_release
@@ -572,25 +637,83 @@ case "$action" in
         ;;
     backup-target-init)
         prepare
+        ensure_release
         target="${2:?usage: scripts/hosted-stack backup-target-init /absolute/off-node/path}"
+        flush_recovery_audits >/dev/null 2>&1 || true
+        recovery_audit_id="audit_recovery_target_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+        stage_recovery_audit \
+            backup.target.initialize rejected backup-target \
+            OPERATION_INTERRUPTED
+        target_result=0
         "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-init \
             --target "$target" \
             --repository-root "$root" \
-            --state-root "$state_dir"
-        set_environment_value THESISTRACE_OFF_NODE_BACKUP_DIR "$target"
+            --state-root "$state_dir" \
+            || target_result="$?"
+        if [ "$target_result" -eq 0 ]; then
+            set_environment_value THESISTRACE_OFF_NODE_BACKUP_DIR "$target"
+            stage_recovery_audit \
+                backup.target.initialize succeeded backup-target
+        else
+            stage_recovery_audit \
+                backup.target.initialize rejected backup-target \
+                TARGET_INITIALIZATION_FAILED
+        fi
+        audit_result=0
+        flush_recovery_audits || audit_result="$?"
+        if [ "$target_result" -ne 0 ]; then
+            exit "$target_result"
+        fi
+        exit "$audit_result"
         ;;
     backup)
         prepare
         ensure_release
-        create_backup
+        backup_attempt_id="backup-attempt-$(date -u '+%Y%m%dT%H%M%SZ')"
+        flush_recovery_audits >/dev/null 2>&1 || true
+        recovery_audit_id="audit_recovery_backup_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+        stage_recovery_audit \
+            backup.create rejected "$backup_attempt_id" OPERATION_INTERRUPTED
+        backup_result=0
+        create_backup || backup_result="$?"
+        if [ "$backup_result" -eq 0 ]; then
+            stage_recovery_audit backup.create succeeded "$backup_attempt_id"
+        else
+            stage_recovery_audit \
+                backup.create rejected "$backup_attempt_id" BACKUP_FAILED
+        fi
+        audit_result=0
+        flush_recovery_audits || audit_result="$?"
+        if [ "$backup_result" -ne 0 ]; then
+            exit "$backup_result"
+        fi
+        exit "$audit_result"
         ;;
     restore)
         prepare
         ensure_release
-        restore_backup "${2:?usage: scripts/hosted-stack restore BACKUP_ID}"
+        backup_id="${2:?usage: scripts/hosted-stack restore BACKUP_ID}"
+        flush_recovery_audits >/dev/null 2>&1 || true
+        recovery_audit_id="audit_recovery_restore_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+        stage_recovery_audit \
+            backup.restore rejected "$backup_id" OPERATION_INTERRUPTED
+        restore_result=0
+        restore_backup "$backup_id" || restore_result="$?"
+        if [ "$restore_result" -eq 0 ]; then
+            stage_recovery_audit backup.restore succeeded "$backup_id"
+        else
+            stage_recovery_audit \
+                backup.restore rejected "$backup_id" RESTORE_FAILED
+        fi
+        audit_result=0
+        flush_recovery_audits || audit_result="$?"
+        if [ "$restore_result" -ne 0 ]; then
+            exit "$restore_result"
+        fi
+        exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|dispatch-probe|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

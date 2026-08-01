@@ -1,5 +1,9 @@
 import argparse
 import json
+import re
+import time
+import urllib.error
+import urllib.request
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,7 +22,15 @@ from thesistrace.hosted.backup_operations import (
     verify_restored_state,
     write_recovery_exercise,
 )
+from thesistrace.hosted.management import PostgresManagementStore
 from thesistrace.objects import canonical_json_bytes
+
+RECOVERY_AUDIT_ACTIONS = (
+    "backup.target.initialize",
+    "backup.create",
+    "backup.restore",
+)
+RECOVERY_AUDIT_ID = re.compile(r"audit_recovery_[0-9A-Za-z_-]{1,96}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -41,6 +53,7 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--release-bundle-id", required=True)
     create.add_argument("--passphrase-file", type=Path, required=True)
     create.add_argument("--status-path", type=Path, required=True)
+    create.add_argument("--workflow-probe-id")
 
     restore = commands.add_parser("restore")
     restore.add_argument("--manifest", type=Path, required=True)
@@ -60,6 +73,34 @@ def parser() -> argparse.ArgumentParser:
         default=Path("/var/lib/thesistrace/objects"),
     )
     verify.add_argument("--output", type=Path)
+
+    runtime = commands.add_parser("verify-runtime")
+    runtime.add_argument("--api-url", required=True)
+    runtime.add_argument("--health-url", required=True)
+    runtime.add_argument("--timeout-seconds", type=int, default=120)
+
+    audit_stage = commands.add_parser("audit-stage")
+    audit_stage.add_argument("--outbox", type=Path, required=True)
+    audit_stage.add_argument("--event-id", required=True)
+    audit_stage.add_argument(
+        "--action",
+        choices=RECOVERY_AUDIT_ACTIONS,
+        required=True,
+    )
+    audit_stage.add_argument(
+        "--outcome",
+        choices=("succeeded", "rejected"),
+        required=True,
+    )
+    audit_stage.add_argument("--subject-id", required=True)
+    audit_stage.add_argument("--reason-code")
+
+    audit_flush = commands.add_parser("audit-flush")
+    audit_flush.add_argument("--outbox", type=Path, required=True)
+
+    workflow_evidence = commands.add_parser("record-workflow-recovery")
+    workflow_evidence.add_argument("--verification", type=Path, required=True)
+    workflow_evidence.add_argument("--workflow-id", required=True)
 
     exercise = commands.add_parser("record-exercise")
     exercise.add_argument("--manifest", type=Path, required=True)
@@ -81,6 +122,98 @@ def _passphrase(path: Path) -> str:
     if len(value) < 16:
         raise BackupOperationError("backup passphrase must contain at least 16 characters")
     return value
+
+
+def _wait_for_available_runtime(
+    api_url: str,
+    health_url: str,
+    timeout_seconds: int,
+) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+    while time.monotonic() < deadline:
+        try:
+            for url in (api_url, health_url):
+                with urllib.request.urlopen(url, timeout=5) as response:
+                    payload = json.loads(response.read())
+                if response.status != 200 or payload.get("status") != "available":
+                    raise BackupOperationError("runtime health is degraded")
+            return
+        except (
+            BackupOperationError,
+            OSError,
+            ValueError,
+            urllib.error.URLError,
+        ) as error:
+            last_error = error
+        time.sleep(2)
+    raise BackupOperationError(f"runtime health did not become available: {last_error}")
+
+
+def _stage_recovery_audit(
+    outbox: Path,
+    *,
+    event_id: str,
+    action: str,
+    outcome: str,
+    subject_id: str,
+    reason_code: str | None,
+) -> Path:
+    if RECOVERY_AUDIT_ID.fullmatch(event_id) is None or not subject_id:
+        raise BackupOperationError("recovery audit identity is invalid")
+    outbox.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = outbox / f"{event_id}.json"
+    occurred_at = datetime.now(UTC).isoformat()
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_bytes())
+            occurred_at = str(existing["occurred_at"])
+        except (OSError, json.JSONDecodeError, KeyError, TypeError) as error:
+            raise BackupOperationError("recovery audit outbox is invalid") from error
+    event = {
+        "id": event_id,
+        "occurred_at": occurred_at,
+        "actor": "operator",
+        "action": action,
+        "outcome": outcome,
+        "reason_code": reason_code,
+        "subject_type": "hosted_recovery",
+        "subject_id": subject_id,
+        "details": {},
+    }
+    temporary = path.with_suffix(".tmp")
+    temporary.write_bytes(canonical_json_bytes(event))
+    temporary.replace(path)
+    path.chmod(0o600)
+    return path
+
+
+def _flush_recovery_audits(outbox: Path, database_url: str) -> int:
+    if not outbox.exists():
+        return 0
+    store = PostgresManagementStore(database_url)
+    flushed = 0
+    for path in sorted(outbox.glob("audit_recovery_*.json")):
+        try:
+            event = json.loads(path.read_bytes())
+        except (OSError, json.JSONDecodeError) as error:
+            raise BackupOperationError("recovery audit outbox is invalid") from error
+        if (
+            not isinstance(event, dict)
+            or RECOVERY_AUDIT_ID.fullmatch(str(event.get("id", ""))) is None
+            or event.get("action") not in RECOVERY_AUDIT_ACTIONS
+            or event.get("outcome") not in {"succeeded", "rejected"}
+            or event.get("actor") != "operator"
+            or event.get("subject_type") != "hosted_recovery"
+            or not isinstance(event.get("subject_id"), str)
+            or not event["subject_id"]
+            or event.get("details") != {}
+        ):
+            raise BackupOperationError("recovery audit outbox is invalid")
+        store.append_management_audit_event_idempotent(event)
+        path.unlink()
+        flushed += 1
+    return flushed
 
 
 def main() -> None:
@@ -110,6 +243,7 @@ def main() -> None:
             release_bundle_id=arguments.release_bundle_id,
             passphrase=_passphrase(arguments.passphrase_file),
             status_path=arguments.status_path,
+            workflow_probe_id=arguments.workflow_probe_id,
         )
         output = {
             "status": "complete",
@@ -156,6 +290,46 @@ def main() -> None:
             temporary = arguments.output.with_suffix(".tmp")
             temporary.write_bytes(canonical_json_bytes(output))
             temporary.replace(arguments.output)
+    elif arguments.command == "verify-runtime":
+        _wait_for_available_runtime(
+            arguments.api_url,
+            arguments.health_url,
+            arguments.timeout_seconds,
+        )
+        output = {"status": "verified"}
+    elif arguments.command == "audit-stage":
+        path = _stage_recovery_audit(
+            arguments.outbox,
+            event_id=arguments.event_id,
+            action=arguments.action,
+            outcome=arguments.outcome,
+            subject_id=arguments.subject_id,
+            reason_code=arguments.reason_code,
+        )
+        output = {"status": "staged", "path": str(path)}
+    elif arguments.command == "audit-flush":
+        database_url = database_url_from_environment()
+        if not database_url:
+            raise BackupOperationError("management audit database credentials are required")
+        output = {
+            "status": "recorded",
+            "flushed": _flush_recovery_audits(arguments.outbox, database_url),
+        }
+    elif arguments.command == "record-workflow-recovery":
+        try:
+            verification = json.loads(arguments.verification.read_bytes())
+        except (OSError, json.JSONDecodeError) as error:
+            raise BackupOperationError(
+                "restore verification evidence is unavailable"
+            ) from error
+        if not isinstance(verification, dict):
+            raise BackupOperationError("restore verification evidence is invalid")
+        verification["workflow_recovery_verified"] = True
+        verification["workflow_probe_id"] = arguments.workflow_id
+        temporary = arguments.verification.with_suffix(".tmp")
+        temporary.write_bytes(canonical_json_bytes(verification))
+        temporary.replace(arguments.verification)
+        output = {"status": "recorded"}
     else:
         try:
             verification = json.loads(arguments.verification.read_bytes())

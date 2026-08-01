@@ -158,9 +158,16 @@ its independent failure domain. A missing marker, a path under the repository
 or Hosted state, a missing physical database, mismatched Release Bundle, or
 missing encrypted secret recovery file prevents a successful manifest. The
 System Health `backup` check reports the latest attempt and the age of the last
-success without changing API readiness. Complete recovery sets older than
-seven days expire after each successful run; failed or partial temporary files
-are never advertised as recoverable.
+success without changing API readiness. Every scheduled or manual attempt first
+expires complete recovery sets older than seven days, including when the new
+attempt later fails. Failed or partial temporary files are never advertised as
+recoverable. Target initialization, backup attempts, and restore attempts first
+create a sanitized host-side audit-outbox record before changing state. An
+interrupted operation therefore remains a rejected `OPERATION_INTERRUPTED`
+record even when PostgreSQL is unavailable. Completion atomically updates the
+same event to its final succeeded or rejected outcome; the operator surface
+retries the idempotent database append and removes the outbox file only after
+PostgreSQL accepts it.
 
 Install the supplied systemd timer on a host whose checkout is
 `/opt/thesistrace`, or substitute the actual absolute checkout path in the
@@ -175,10 +182,10 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now thesistrace-backup.timer
 ```
 
-The persistent timer runs at 00:00, 06:00, 12:00, and 18:00 with a bounded
-five-minute spread. Inspect `systemctl status thesistrace-backup.timer`, the
-latest off-node complete manifest, and System Health at least once per calendar
-day.
+The persistent timer runs exactly at 00:00, 06:00, 12:00, and 18:00 so the
+maximum scheduled interval is six hours. Inspect
+`systemctl status thesistrace-backup.timer`, the latest off-node complete
+manifest, and System Health at least once per calendar day.
 
 Restore only the latest complete recovery set unless the incident record
 justifies an older set:
@@ -197,14 +204,37 @@ gate then requires no Tombstone-owned or unreferenced index rows, no resurrected
 private resource, complete Personal Workspace RLS, a valid latest Dataset
 Release pointer, and exact size and SHA-256 for every indexed object. Bytes that
 exist only in an unexpired backup have no live metadata reference and remain
-unreachable. Workers and schedules resume only after this gate; the public
-Origin opens last and must pass smoke.
+unreachable. Workers start while maintenance remains active. Internal API
+health and the dedicated recovery view must both become `available`; `degraded`
+is not sufficient. The recovery view requires the launch-critical System,
+Data, and Quantitative checks, while deliberately excluding the still-closed
+public Origin, external Tushare and trace export, and historical publication
+checks that are not properties of the restored runtime. The public Origin
+opens only after those gates and must then pass smoke.
+
+The launch recovery exercise must additionally prove that Temporal persistence
+is usable rather than merely present. Start one open probe Workflow, bind its ID
+into the recovery-set manifest, and restore that exact recovery set:
+
+```sh
+PROBE_ID="recovery-probe-$(date -u +%Y%m%dT%H%M%SZ)"
+make hosted-recovery-probe-start PROBE_ID="$PROBE_ID"
+THESISTRACE_RECOVERY_PROBE_ID="$PROBE_ID" make hosted-backup
+make hosted-restore BACKUP_ID=backup_YYYYMMDDTHHMMSSZ_xxxxxxxxxxxx
+```
+
+During restore, the release-bundled, operator-only recovery-probe service
+requires the recovered Workflow to still be running, signals it, and waits for
+`continued_after_restore`. It has no host source mount, secrets, or access
+beyond the internal execution network. Failure keeps the Origin closed and
+prevents successful recovery evidence.
 
 For every launch recovery exercise, retain evidence with the selected backup
 time, incident detection time, restore start/end time, restored Dataset
-Release, object count, and public-Origin smoke result. Acceptance is a latest
-complete backup no older than six hours, daily detection no later than 24
-hours, and completed recovery within eight hours. Backup existence alone is
+Release, object count, recovered Workflow ID, and public-Origin smoke result.
+Acceptance is a latest complete backup no older than six hours, daily detection
+no later than 24 hours, completed recovery within eight hours, successful
+Workflow continuation, and successful public smoke. Backup existence alone is
 not recovery evidence.
 
 ## Cloudflare and origin edge

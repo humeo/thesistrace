@@ -60,6 +60,7 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
         release_bundle_id="bundle-1",
         passphrase="backup-passphrase-123",
         now=datetime(2026, 8, 1, 0, 0, tzinfo=UTC),
+        workflow_probe_id="recovery-probe-launch-exercise",
     )
 
     encrypted = created.artifact_path.read_bytes()
@@ -67,6 +68,28 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
     assert b"encrypted-secrets" not in encrypted
     assert created.manifest["status"] == "complete"
     assert created.manifest["release_bundle_id"] == "bundle-1"
+    assert created.manifest["workflow_probe_id"] == (
+        "recovery-probe-launch-exercise"
+    )
+
+    with pytest.raises(BackupOperationError, match="probe ID is invalid"):
+        create_recovery_set(
+            target=tmp_path / "off-node",
+            sources={
+                name: source / name
+                for name in (
+                    "postgres-data",
+                    "temporal-data",
+                    "immutable-objects",
+                    "insforge-storage",
+                    "release-state",
+                    "secret-recovery",
+                )
+            },
+            release_bundle_id="bundle-1",
+            passphrase="backup-passphrase-123",
+            workflow_probe_id="unscoped-probe",
+        )
 
     restored = tmp_path / "restored"
     extract_recovery_set(
@@ -211,6 +234,26 @@ def test_expiry_removes_only_complete_recovery_sets_older_than_seven_days(
     assert current.manifest_path.exists()
     assert current.artifact_path.exists()
     assert unrelated.exists()
+
+    stale_on_failed_attempt = create_recovery_set(
+        target=target,
+        sources=sources,
+        release_bundle_id="bundle-current",
+        passphrase="backup-passphrase-123",
+        now=datetime(2026, 7, 23, 0, 0, tzinfo=UTC),
+    )
+    (sources["postgres-data"] / "PG_VERSION").unlink()
+    with pytest.raises(BackupOperationError, match="incomplete"):
+        perform_backup(
+            target=target,
+            sources=sources,
+            release_bundle_id="bundle-current",
+            passphrase="backup-passphrase-123",
+            status_path=tmp_path / "backup-status.json",
+            now=datetime(2026, 8, 1, 0, 0, tzinfo=UTC),
+        )
+    assert not stale_on_failed_attempt.manifest_path.exists()
+    assert not stale_on_failed_attempt.artifact_path.exists()
 
 
 def test_restore_rejects_the_wrong_key_without_leaving_partial_plaintext(
@@ -487,6 +530,7 @@ def test_recovery_exercise_records_rpo_detection_and_execution_objectives(
         '"backup_id":"backup_20260801T000000Z_aaaaaaaaaaaa","status":"complete",'
         '"created_at":"2026-08-01T00:00:00+00:00",'
         '"release_bundle_id":"bundle-1",'
+        '"workflow_probe_id":"recovery-probe-exercise",'
         '"artifact":"backup_20260801T000000Z_aaaaaaaaaaaa.ttsb",'
         '"artifact_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}'
     )
@@ -501,6 +545,8 @@ def test_recovery_exercise_records_rpo_detection_and_execution_objectives(
         verification={
             "latest_dataset_release_id": "dsr_latest",
             "verified_objects": 42,
+            "workflow_recovery_verified": True,
+            "workflow_probe_id": "recovery-probe-exercise",
         },
         public_origin_smoke=True,
     )
@@ -515,4 +561,5 @@ def test_recovery_exercise_records_rpo_detection_and_execution_objectives(
         "detection_within_24h": True,
         "recovery_execution_within_8h": True,
         "public_origin_smoke": True,
+        "workflow_recovery": True,
     }

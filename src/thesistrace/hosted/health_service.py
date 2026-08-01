@@ -52,6 +52,36 @@ CORE_SYSTEM_CHECKS = (
     "object_store",
     "temporal",
 )
+RECOVERY_REQUIRED_CHECKS = {
+    "system": (
+        "api",
+        "identity",
+        "database",
+        "object_store",
+        "temporal",
+        "telemetry",
+        "task_queues",
+        "outbox_lag",
+        "disk_pressure",
+        "workflow_capacity",
+        "backup",
+    ),
+    "data": (
+        "release_freshness",
+        "coverage",
+        "schema",
+        "lineage",
+        "previous_release_preserved",
+        "failed_publication",
+    ),
+    "quantitative": (
+        "deterministic_regression",
+        "numeric_invariants",
+        "accounting_invariants",
+        "checksums",
+        "missingness",
+    ),
+}
 
 
 class RoutedHTTPSConnection(http.client.HTTPSConnection):
@@ -410,6 +440,22 @@ def create_health_app(
     @app.get("/health/quantitative")
     def quantitative_health() -> dict[str, object]:
         return views()["quantitative"]
+
+    @app.get("/health/recovery")
+    def recovery_health() -> dict[str, object]:
+        current = views()
+        checks: dict[str, bool] = {}
+        for view_name, required in RECOVERY_REQUIRED_CHECKS.items():
+            view_checks = mapping(current[view_name].get("checks"))
+            checks.update(
+                {
+                    f"{view_name}.{check_name}": bool(
+                        view_checks.get(check_name, False)
+                    )
+                    for check_name in required
+                }
+            )
+        return health_view(checks, {})
 
     @app.get("/metrics", response_class=PlainTextResponse)
     def metrics() -> str:

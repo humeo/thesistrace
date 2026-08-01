@@ -4,7 +4,6 @@ Description=Run the ThesisTrace coordinated backup every six hours
 [Timer]
 OnCalendar=*-*-* 00,06,12,18:00:00
 Persistent=true
-RandomizedDelaySec=5m
 Unit=thesistrace-backup.service
 
 [Install]

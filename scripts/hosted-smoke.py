@@ -39,7 +39,7 @@ def main() -> None:
                 and "text/html" in web_content_type
                 and api_status == 200
                 and "application/json" in api_content_type
-                and health.get("status") in {"available", "degraded"}
+                and health.get("status") == "available"
             ):
                 print("hosted public-Origin smoke passed")
                 return

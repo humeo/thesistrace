@@ -35,9 +35,21 @@ Origin.
   not erase live volumes, and backup-only unreferenced payload bytes are not
   exposed through the authoritative object index.
 - The final real exercise used recovery set
-  `backup_20260731T224324Z_8d53cc635bd0` (46,676,597 bytes), restored Release
-  Bundle `0.1.0-1a95cbbcc867824c`, reconciled a real pending Resource Tombstone
-  to `completed`, and preserved latest Dataset Release
-  `dsr_5c5940e719ac9cae9732`. Recorded evidence passed with 87 seconds of
-  committed-state loss bound, zero-second simulated detection, 160 seconds of
-  recovery execution, and a successful public-Origin smoke.
+  `backup_20260801T003141Z_e7e5ea1c05d9`, restored Release Bundle
+  `0.1.0-14b6c6be7ead376d`, and preserved latest Dataset Release
+  `dsr_5c5940e719ac9cae9732`. The recovered Temporal Workflow
+  `recovery-probe-h21-audit-20260801T002952Z` remained running and completed
+  only after the release-bundled probe received its continuation signal.
+  Recorded evidence passed with a 97-second committed-state-loss bound,
+  zero-second simulated detection, 172 seconds of recovery execution, both
+  internal recovery health gates available before reopening Edge, and a
+  successful public-Origin smoke.
+- The strict gate exposed a previously hidden Hosted health defect: Compute
+  Workers did not update the product Worker heartbeat and the old smoke check
+  accepted `degraded`. Compute Workers now publish that heartbeat every two
+  seconds, smoke accepts only `available`, and the regression test plus the
+  original private health repro both pass.
+- Every recovery mutation now stages a sanitized host-side audit-outbox event
+  before changing state, retains it across database failures, and flushes it
+  idempotently only after PostgreSQL accepts the event. The final exercise
+  recorded the successful restore and left the outbox empty.

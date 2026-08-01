@@ -40,6 +40,45 @@ class PostgresManagementStore:
             with connection.transaction():
                 self._insert_audit_event(connection, event)
 
+    def append_management_audit_event_idempotent(
+        self,
+        event: dict[str, object],
+    ) -> None:
+        with psycopg.connect(self.database_url) as connection:
+            with connection.transaction():
+                connection.execute(
+                    """
+                    INSERT INTO thesistrace_control.management_audit_events (
+                        id,
+                        occurred_at,
+                        actor,
+                        action,
+                        outcome,
+                        reason_code,
+                        subject_type,
+                        subject_id,
+                        details_json
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (id) DO NOTHING
+                    """,
+                    (
+                        event["id"],
+                        event["occurred_at"],
+                        event["actor"],
+                        event["action"],
+                        event["outcome"],
+                        event["reason_code"],
+                        event["subject_type"],
+                        event["subject_id"],
+                        json.dumps(
+                            event["details"],
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                )
+
     def latest_source_authorization(self) -> dict[str, object] | None:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             row = connection.execute(

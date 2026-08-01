@@ -411,6 +411,14 @@ def test_backup_and_restore_are_bounded_operator_only_surfaces() -> None:
         for volume in restore_gate["volumes"]
     )
 
+    recovery_probe = services["recovery-probe"]
+    assert recovery_probe["profiles"] == ["operator"]
+    assert recovery_probe["read_only"] is True
+    assert recovery_probe["cap_drop"] == ["ALL"]
+    assert set(recovery_probe["networks"]) == {"execution"}
+    assert "volumes" not in recovery_probe
+    assert "secrets" not in recovery_probe
+
     health = services["health-service"]
     assert health["environment"]["THESISTRACE_BACKUP_STATUS_FILE"] == (
         "/run/thesistrace-backup/backup-status.json"
@@ -426,6 +434,7 @@ def test_backup_schedule_and_launcher_enforce_the_recovery_gate() -> None:
     timer = (ROOT / "deploy/hosted/systemd/thesistrace-backup.timer").read_text()
     assert "OnCalendar=*-*-* 00,06,12,18:00:00" in timer
     assert "Persistent=true" in timer
+    assert "RandomizedDelaySec" not in timer
 
     launcher = (ROOT / "scripts/hosted-stack").read_text()
     assert "backup-target-init)" in launcher
@@ -433,13 +442,31 @@ def test_backup_schedule_and_launcher_enforce_the_recovery_gate() -> None:
     assert "restore)" in launcher
     assert "compose stop --timeout 30 edge" in launcher
     assert "python -m thesistrace.hosted.backup_cli verify-restore" in launcher
+    assert "python -m thesistrace.hosted.backup_cli verify-runtime" in launcher
     assert "restore-release-modes --release-state" in launcher
+    assert "backup.target.initialize succeeded" in launcher
+    assert "backup.create succeeded" in launcher
+    assert "backup.create rejected" in launcher
+    assert "backup.restore succeeded" in launcher
+    assert "backup.restore rejected" in launcher
+    assert "audit-stage" in launcher
+    assert "audit-flush" in launcher
+    assert "OPERATION_INTERRUPTED" in launcher
+    assert "thesistrace-recovery-probe verify" in launcher
+    assert "--health-url http://health-service:8020/health/recovery" in launcher
     restore_section = launcher.split("restore_backup()", 1)[1].split(
         "action=", 1
     )[0]
     assert restore_section.index('. "$env_file"') < restore_section.index(
         '"$root/scripts/hosted-smoke.py"'
     )
+    assert restore_section.index("verify-runtime") < restore_section.index(
+        "compose up --detach --wait --no-build edge"
+    )
+    assert restore_section.index("thesistrace-recovery-probe verify") < (
+        restore_section.index("compose up --detach --wait --no-build edge")
+    )
+    assert '--volume "$root:/workspace:ro"' not in restore_section
     assert launcher.index("compose stop --timeout 30 edge") < launcher.index(
         "python -m thesistrace.hosted.backup_cli verify-restore"
     )
@@ -613,6 +640,7 @@ def test_otel_sampling_and_export_failure_are_bounded_and_visible() -> None:
 def test_public_origin_smoke_uses_no_private_service_address() -> None:
     smoke = (ROOT / "scripts" / "hosted-smoke.py").read_text()
     assert "THESISTRACE_HOSTED_ORIGIN" in smoke
+    assert 'health.get("status") == "available"' in smoke
     for private_address in (
         "api:8000",
         "postgres:5432",

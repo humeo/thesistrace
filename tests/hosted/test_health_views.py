@@ -259,6 +259,60 @@ def test_tushare_and_telemetry_failures_do_not_kill_system_readiness() -> None:
         assert data["checks"]["tushare"] is False
 
 
+def test_recovery_health_requires_restored_platform_not_external_or_historical_checks(
+) -> None:
+    dependencies = healthy_dependencies()
+    dependencies["public_origin"] = False
+    dependencies["trace_export"] = False
+    dependencies["tushare"] = False
+
+    class NoHistoricalEvidenceStore(StubHealthStore):
+        def snapshot(self) -> dict[str, object]:
+            snapshot = super().snapshot()
+            data = dict(snapshot["data"])
+            data["publication_validation_succeeded"] = False
+            snapshot["data"] = data
+            quantitative = dict(snapshot["quantitative"])
+            quantitative["equivalence_status"] = "not_run"
+            snapshot["quantitative"] = quantitative
+            return snapshot
+
+    app = create_health_app(
+        NoHistoricalEvidenceStore(),
+        dependency_status=lambda: dependencies,
+        semantic_state=complete_semantic_state(),
+        run_regression_on_startup=False,
+    )
+    with TestClient(app) as client:
+        recovery = client.get("/health/recovery").json()
+
+    assert recovery["status"] == "available"
+    assert recovery["checks"]["system.workflow_capacity"] is True
+    assert recovery["checks"]["data.schema"] is True
+    assert recovery["checks"]["quantitative.deterministic_regression"] is True
+    assert "system.public_origin" not in recovery["checks"]
+    assert "system.trace_export" not in recovery["checks"]
+    assert "data.tushare" not in recovery["checks"]
+    assert "data.validation" not in recovery["checks"]
+    assert "quantitative.equivalence" not in recovery["checks"]
+
+
+def test_recovery_health_degrades_when_a_restored_compute_slot_is_missing() -> None:
+    dependencies = healthy_dependencies()
+    dependencies["worker_slots_ready"] = 3
+    app = create_health_app(
+        StubHealthStore(),
+        dependency_status=lambda: dependencies,
+        semantic_state=complete_semantic_state(),
+        run_regression_on_startup=False,
+    )
+    with TestClient(app) as client:
+        recovery = client.get("/health/recovery").json()
+
+    assert recovery["status"] == "degraded"
+    assert recovery["checks"]["system.workflow_capacity"] is False
+
+
 def test_disk_warning_degrades_only_system_health_without_killing_readiness() -> None:
     dependencies = healthy_dependencies()
     dependencies["storage_pressure"] = {

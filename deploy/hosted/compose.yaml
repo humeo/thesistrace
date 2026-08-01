@@ -810,6 +810,22 @@ services:
     restart: "no"
     logging: *bounded-logging
 
+  recovery-probe:
+    <<: *app
+    profiles: [operator]
+    command: ["thesistrace-recovery-probe"]
+    user: "10004:10004"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks: [execution]
+    restart: "no"
+    logging: *bounded-logging
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.136.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]

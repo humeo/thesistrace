@@ -31,6 +31,7 @@ BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
 BACKUP_RETENTION = timedelta(days=7)
 GCM_TAG_BYTES = 16
 HEADER_BYTES = len(BACKUP_MAGIC) + 16 + 12
+WORKFLOW_PROBE_ID = re.compile(r"recovery-probe-[0-9A-Za-z_-]{1,96}")
 SOURCE_LAYOUT = {
     "postgres-data": "volumes/postgres-data",
     "temporal-data": "volumes/temporal-data",
@@ -292,18 +293,20 @@ def perform_backup(
     passphrase: str,
     status_path: Path,
     now: datetime | None = None,
+    workflow_probe_id: str | None = None,
 ) -> RecoverySet:
     attempted_at = (now or datetime.now(UTC)).astimezone(UTC)
     previous = _read_status(status_path)
     try:
+        expire_recovery_sets(target, now=attempted_at)
         created = create_recovery_set(
             target=target,
             sources=sources,
             release_bundle_id=release_bundle_id,
             passphrase=passphrase,
             now=attempted_at,
+            workflow_probe_id=workflow_probe_id,
         )
-        expire_recovery_sets(target, now=attempted_at)
     except Exception:
         _write_status(
             status_path,
@@ -387,10 +390,13 @@ def create_recovery_set(
     release_bundle_id: str,
     passphrase: str,
     now: datetime | None = None,
+    workflow_probe_id: str | None = None,
 ) -> RecoverySet:
     source_paths = _require_sources(sources)
     if not release_bundle_id:
         raise BackupOperationError("release Bundle identity is required")
+    if workflow_probe_id and not WORKFLOW_PROBE_ID.fullmatch(workflow_probe_id):
+        raise BackupOperationError("Workflow recovery probe ID is invalid")
     _validate_coordinated_sources(source_paths, release_bundle_id)
     created_at = (now or datetime.now(UTC)).astimezone(UTC)
     target.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -453,6 +459,8 @@ def create_recovery_set(
             "artifact_bytes": artifact_path.stat().st_size,
             "artifact_sha256": _file_sha256(artifact_path),
         }
+        if workflow_probe_id:
+            manifest["workflow_probe_id"] = workflow_probe_id
         manifest_temporary = target / f".{backup_id}.json.{os.getpid()}.tmp"
         manifest_descriptor = os.open(
             manifest_temporary,
@@ -911,6 +919,12 @@ def write_recovery_exercise(
         "recovery_execution_within_8h": execution <= 8 * 60 * 60,
         "public_origin_smoke": bool(public_origin_smoke),
     }
+    workflow_probe_id = manifest.get("workflow_probe_id")
+    if workflow_probe_id is not None:
+        objectives["workflow_recovery"] = bool(
+            verification.get("workflow_recovery_verified") is True
+            and verification.get("workflow_probe_id") == workflow_probe_id
+        )
     evidence = {
         "format": "thesistrace-recovery-exercise-v1",
         "backup_id": manifest["backup_id"],
@@ -925,6 +939,11 @@ def write_recovery_exercise(
         "recovery_execution_seconds": execution,
         "latest_dataset_release_id": latest_release,
         "verified_objects": verified_objects,
+        **(
+            {"workflow_probe_id": workflow_probe_id}
+            if workflow_probe_id is not None
+            else {}
+        ),
         "objectives": objectives,
         "status": "passed" if all(objectives.values()) else "failed",
     }

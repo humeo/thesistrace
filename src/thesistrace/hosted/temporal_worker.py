@@ -3,7 +3,7 @@ import logging
 import os
 from collections.abc import Awaitable, Callable, Sequence
 from concurrent.futures import Executor, ThreadPoolExecutor
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from temporalio import activity
 from temporalio.client import Client
@@ -47,6 +47,7 @@ from thesistrace.tracking_operations import TrackingOperationService
 
 logger = logging.getLogger(__name__)
 TRACKING_FANOUT_PAGE_SIZE = 100
+WORKER_HEARTBEAT_INTERVAL_SECONDS = 2.0
 
 
 def _tracking_service(runtime) -> DailyTrackingService:
@@ -450,6 +451,34 @@ async def run_compute_slot(
         await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def run_with_worker_heartbeat(
+    worker: Awaitable[None],
+    record_heartbeat: Callable[[datetime], None],
+    *,
+    interval_seconds: float = WORKER_HEARTBEAT_INTERVAL_SECONDS,
+) -> None:
+    async def heartbeat() -> None:
+        while True:
+            record_heartbeat(datetime.now(UTC))
+            await asyncio.sleep(interval_seconds)
+
+    worker_task = asyncio.create_task(worker)
+    heartbeat_task = asyncio.create_task(heartbeat())
+    tasks = (worker_task, heartbeat_task)
+    try:
+        done, _ = await asyncio.wait(
+            tasks,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        for task in done:
+            await task
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
 def build_compute_workflow_worker(
     client: Client,
     *,
@@ -510,6 +539,7 @@ def build_compute_activity_worker(
 
 async def run() -> None:
     settings = settings_from_environment()
+    runtime = build_runtime(settings)
     state = ProcessProbeState(
         service="compute-worker",
         slot=os.environ.get(
@@ -545,11 +575,14 @@ async def run() -> None:
                 )
 
             await monitor_role(
-                run_compute_slot(
-                    preference=settings.compute_slot_preference,
-                    workflow_worker=workflow_worker,
-                    activity_worker=activity_worker,
-                    backlog=backlog,
+                run_with_worker_heartbeat(
+                    run_compute_slot(
+                        preference=settings.compute_slot_preference,
+                        workflow_worker=workflow_worker,
+                        activity_worker=activity_worker,
+                        backlog=backlog,
+                    ),
+                    runtime.control_metadata.record_worker_heartbeat,
                 ),
                 state,
             )
