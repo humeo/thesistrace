@@ -341,7 +341,7 @@ services:
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:7133/health"]
       interval: 5s
-      timeout: 3s
+      timeout: 20s
       retries: 40
     networks: [control]
     volumes:
@@ -375,7 +375,7 @@ services:
           "fetch('http://127.0.0.1:7130/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
         ]
       interval: 5s
-      timeout: 3s
+      timeout: 20s
       retries: 40
     networks: [control]
     volumes:
@@ -426,10 +426,10 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/ready', timeout=15)",
         ]
       interval: 5s
-      timeout: 3s
+      timeout: 20s
       retries: 40
     networks:
       - storage
@@ -522,10 +522,10 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=15)",
         ]
       interval: 5s
-      timeout: 10s
+      timeout: 30s
       retries: 40
     mem_limit: 128m
     memswap_limit: 128m
@@ -552,7 +552,7 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=15)",
         ]
       interval: 5s
       timeout: 30s
@@ -604,10 +604,10 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=15)",
         ]
       interval: 5s
-      timeout: 10s
+      timeout: 30s
       retries: 40
 
   compute-worker-1:
@@ -643,10 +643,10 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=15)",
         ]
       interval: 5s
-      timeout: 10s
+      timeout: 30s
       retries: 40
     secrets: &compute-secrets
       - compute_database_password
@@ -741,10 +741,10 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/ready', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/ready', timeout=15)",
         ]
       interval: 5s
-      timeout: 10s
+      timeout: 30s
       retries: 40
     networks:
       - edge
@@ -960,7 +960,7 @@ services:
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:2019/ready"]
       interval: 5s
-      timeout: 3s
+      timeout: 20s
       retries: 40
     restart: unless-stopped
     mem_limit: 128m

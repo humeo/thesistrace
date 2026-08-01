@@ -79,6 +79,29 @@ def test_api_readiness_window_covers_its_constrained_cpu_budget() -> None:
     assert "timeout=15" in " ".join(api["healthcheck"]["test"])
 
 
+def test_application_healthchecks_cover_full_stack_cpu_contention() -> None:
+    services = compose_model()["services"]
+
+    for name in (
+        "deno",
+        "insforge",
+        "object-store",
+        "api",
+        "execution-relay",
+        "tushare-egress",
+        "data-worker",
+        "compute-worker-1",
+        "compute-worker-2",
+        "compute-worker-3",
+        "compute-worker-4",
+        "health-service",
+        "edge",
+    ):
+        healthcheck = services[name]["healthcheck"]
+        assert int(healthcheck["timeout"].removesuffix("s")) >= 20, name
+        assert "timeout=2" not in " ".join(healthcheck["test"]), name
+
+
 def test_postgres_health_checks_wait_for_the_final_tcp_server() -> None:
     services = compose_model()["services"]
 
