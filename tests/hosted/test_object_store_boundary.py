@@ -58,6 +58,27 @@ def contract() -> ParquetWriterContract:
     )
 
 
+def test_remote_readiness_covers_the_constrained_cpu_budget() -> None:
+    requested: list[tuple[str, int]] = []
+
+    class Response:
+        status_code = 200
+
+    class Client:
+        def get(self, path: str, *, timeout: int) -> Response:
+            requested.append((path, timeout))
+            return Response()
+
+    objects = RemoteObjectStore(
+        "http://object-store",
+        TOKENS["api"],
+        client=Client(),
+    )
+
+    assert objects.ready() is True
+    assert requested == [("/ready", 15)]
+
+
 def test_private_object_store_preserves_typed_object_contract(
     tmp_path: Path,
 ) -> None:

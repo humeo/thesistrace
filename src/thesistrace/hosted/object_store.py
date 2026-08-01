@@ -79,7 +79,7 @@ class RemoteObjectStore:
 
     def ready(self) -> bool:
         try:
-            response = self.client.get("/ready", timeout=2)
+            response = self.client.get("/ready", timeout=15)
             return response.status_code == 200
         except httpx.HTTPError:
             return False

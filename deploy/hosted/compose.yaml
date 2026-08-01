@@ -480,10 +480,10 @@ services:
           "CMD",
           "python",
           "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=2)",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/ready', timeout=15)",
         ]
       interval: 5s
-      timeout: 3s
+      timeout: 20s
       retries: 40
     mem_limit: 512m
     memswap_limit: 512m
