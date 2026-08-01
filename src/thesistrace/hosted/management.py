@@ -107,6 +107,58 @@ class PostgresManagementStore:
             == "hosted-shared-dataset-releases"
         )
 
+    def record_capacity_qualification(
+        self,
+        qualification: dict[str, object],
+        audit_event: dict[str, object],
+    ) -> None:
+        with psycopg.connect(self.database_url) as connection:
+            with connection.transaction():
+                self._insert_audit_event(connection, audit_event)
+                connection.execute(
+                    """
+                    INSERT INTO thesistrace_control.capacity_qualifications (
+                        id, status, release_bundle_id, evidence_sha256,
+                        evidence_json, failures_json, recorded_by, measured_at,
+                        audit_event_id
+                    )
+                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
+                    """,
+                    (
+                        qualification["id"],
+                        qualification["status"],
+                        qualification["release_bundle_id"],
+                        qualification["evidence_sha256"],
+                        json.dumps(
+                            qualification["evidence"],
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        json.dumps(
+                            qualification["failures"],
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        ),
+                        qualification["recorded_by"],
+                        qualification["measured_at"],
+                        qualification["audit_event_id"],
+                    ),
+                )
+
+    def latest_capacity_qualification(self) -> dict[str, object] | None:
+        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
+            row = connection.execute(
+                """
+                SELECT id, status, release_bundle_id, evidence_sha256,
+                       evidence_json AS evidence, failures_json AS failures,
+                       recorded_by, measured_at, audit_event_id
+                FROM thesistrace_control.capacity_qualifications
+                ORDER BY measured_at DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        return self._serialize_row(row)
+
     def list_management_audit_events(self) -> list[dict[str, object]]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             rows = connection.execute(

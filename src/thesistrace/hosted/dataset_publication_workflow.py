@@ -4,7 +4,10 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.exceptions import ActivityError, ApplicationError
 
-from thesistrace.hosted.activity_policy import heavy_activity_retry_policy
+from thesistrace.hosted.activity_policy import (
+    HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT,
+    heavy_activity_retry_policy,
+)
 
 DATASET_PUBLICATION_TASK_QUEUE = "thesistrace-data"
 
@@ -27,7 +30,7 @@ class DatasetPublicationWorkflow:
                 request,
                 result_type=dict,
                 start_to_close_timeout=timedelta(hours=2),
-                heartbeat_timeout=timedelta(seconds=30),
+                heartbeat_timeout=HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT,
                 retry_policy=heavy_activity_retry_policy(),
                 cancellation_type=(
                     workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED

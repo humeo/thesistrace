@@ -8,6 +8,7 @@ from thesistrace.activity_contract import (
     MAX_AUTOMATIC_ACTIVITY_EXECUTIONS,
 )
 from thesistrace.hosted.activity_policy import (
+    HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT,
     heavy_activity_retry_policy,
     resource_aware_activity_retry_policy,
 )
@@ -35,7 +36,7 @@ class TrackingReleaseWorkflow:
                     page_request,
                     result_type=dict,
                     start_to_close_timeout=timedelta(minutes=10),
-                    heartbeat_timeout=timedelta(seconds=30),
+                    heartbeat_timeout=HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT,
                     retry_policy=resource_aware_activity_retry_policy(),
                     task_queue=P1_ACTIVITY_TASK_QUEUE,
                     priority=platform_activity_priority(),
@@ -85,7 +86,7 @@ class TrackingAdvanceWorkflow:
                 request,
                 result_type=dict,
                 start_to_close_timeout=timedelta(hours=2),
-                heartbeat_timeout=timedelta(seconds=30),
+                heartbeat_timeout=HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT,
                 retry_policy=heavy_activity_retry_policy(),
                 task_queue=P1_ACTIVITY_TASK_QUEUE,
                 priority=activity_priority(request["workspace_id"]),

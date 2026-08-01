@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from temporalio import workflow as temporal_workflow
+from temporalio.service import RPCError, RPCStatusCode
 
 from thesistrace.hosted.compute_dispatch import (
     COMPUTE_WORKFLOW_TASK_QUEUE,
@@ -234,6 +235,46 @@ def test_slot_switches_from_fallback_to_preferred_without_a_second_scheduler() -
         f"shutdown:{P3_ACTIVITY_TASK_QUEUE}",
     ]
     assert events[-1] == f"stopped:{P1_ACTIVITY_TASK_QUEUE}"
+
+
+def test_transient_backlog_rpc_failure_does_not_stop_activity_worker() -> None:
+    events: list[str] = []
+    calls = 0
+
+    async def backlog() -> tuple[int, int]:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RPCError(
+                "injected timeout",
+                RPCStatusCode.DEADLINE_EXCEEDED,
+                b"",
+            )
+        raise asyncio.CancelledError
+
+    def worker_factory(task_queue: str) -> FakeWorker:
+        return FakeWorker(task_queue, events)
+
+    async def scenario() -> None:
+        task = asyncio.create_task(
+            run_preferred_activity_poller(
+                preference="p1",
+                worker_factory=worker_factory,
+                backlog=backlog,
+                poll_interval_seconds=0,
+            )
+        )
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
+
+    assert calls == 2
+    assert events == [
+        f"poll:{P1_ACTIVITY_TASK_QUEUE}",
+        f"shutdown:{P1_ACTIVITY_TASK_QUEUE}",
+        f"stopped:{P1_ACTIVITY_TASK_QUEUE}",
+    ]
 
 
 def test_poller_requires_exactly_one_primary_tier() -> None:

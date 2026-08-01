@@ -1319,7 +1319,7 @@ def create_app(
                 detail={"reason_code": "LIVE_PREDECESSOR_REQUIRED"},
             )
         try:
-            canonical = publisher.materialize_canonical(predecessor)
+            canonical = publisher.materialize_canonical_tail(predecessor, 20)
             instruments = canonical.get("instruments")
             calendar = canonical.get("research_calendar")
             if (

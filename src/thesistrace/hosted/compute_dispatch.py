@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -8,6 +9,9 @@ from temporalio.api.taskqueue.v1 import TaskQueue
 from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
 from temporalio.client import Client
 from temporalio.common import Priority
+from temporalio.service import RPCError
+
+logger = logging.getLogger(__name__)
 
 COMPUTE_WORKFLOW_TASK_QUEUE = "thesistrace-compute-workflows"
 P1_ACTIVITY_TASK_QUEUE = "thesistrace-compute-p1"
@@ -109,7 +113,14 @@ async def run_preferred_activity_poller(
                 if runner.done():
                     await runner
                     raise RuntimeError("Temporal activity Worker stopped unexpectedly")
-                p1_backlog, p3_backlog = await backlog()
+                try:
+                    p1_backlog, p3_backlog = await backlog()
+                except RPCError:
+                    logger.warning(
+                        "Temporal activity backlog lookup failed; retaining queue",
+                        exc_info=True,
+                    )
+                    continue
                 target_queue = choose_activity_task_queue(
                     preference,
                     p1_backlog=p1_backlog,

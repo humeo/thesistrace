@@ -560,6 +560,35 @@ def test_activity_heartbeat_persists_cancellation_once(
     assert recorded == ["cancelled"]
 
 
+def test_activity_heartbeat_retries_after_transient_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def heartbeat(_details: dict[str, str]) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise TimeoutError("injected timeout")
+
+    class StopAfterTwoWaits:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def wait(self, _interval: float) -> bool:
+            self.calls += 1
+            return self.calls > 2
+
+    monkeypatch.setattr(activity_heartbeat.activity, "is_cancelled", lambda: False)
+    monkeypatch.setattr(activity_heartbeat.activity, "heartbeat", heartbeat)
+    heartbeat_loop = ActivityHeartbeat()
+    heartbeat_loop.stop_event = StopAfterTwoWaits()
+
+    heartbeat_loop._run()
+
+    assert calls == 2
+
+
 def test_dataset_candidate_builder_uses_staged_writer_without_committing(
     tmp_path: Path,
 ) -> None:

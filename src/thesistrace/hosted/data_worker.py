@@ -15,7 +15,13 @@ from thesistrace.activity_contract import (
     is_resource_exhaustion,
 )
 from thesistrace.config import settings_from_environment
+from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.activity_heartbeat import ActivityHeartbeat
+from thesistrace.hosted.capacity_corpus import (
+    publish_capacity_corpus,
+    publish_capacity_increment,
+)
+from thesistrace.hosted.capacity_workflow import CapacityQualificationDataWorkflow
 from thesistrace.hosted.dataset_publication_workflow import (
     DATASET_PUBLICATION_TASK_QUEUE,
     DatasetPublicationWorkflow,
@@ -35,6 +41,36 @@ from thesistrace.platform_publications import (
 from thesistrace.runtime import build_runtime
 
 logger = logging.getLogger(__name__)
+
+
+@activity.defn(name="execute_capacity_qualification_data")
+def execute_capacity_qualification_data(
+    request: dict[str, str],
+) -> dict[str, object]:
+    runtime = build_runtime(settings_from_environment())
+    publisher = DatasetPublisher(runtime.control_metadata, runtime.objects)
+    with ActivityHeartbeat():
+        if request["operation"] == "prepare":
+            release, created = publish_capacity_corpus(
+                publisher,
+                idempotency_key=request["idempotency_key"],
+            )
+        elif request["operation"] == "increment":
+            release, created = publish_capacity_increment(
+                publisher,
+                idempotency_key=request["idempotency_key"],
+            )
+        else:
+            raise RuntimeError("unknown capacity Data operation")
+    return {
+        "status": "succeeded",
+        "release_id": release["id"],
+        "created": created,
+        "worker_slot": os.environ.get("THESISTRACE_SERVICE_SLOT", "unknown"),
+        "workflow_id": activity.info().workflow_id,
+        "activity_id": activity.info().activity_id,
+        "activity_attempt": activity.info().attempt,
+    }
 
 
 @activity.defn(name="execute_dataset_publication")
@@ -213,6 +249,7 @@ def build_data_worker(
         else [
             DatasetPublicationWorkflow,
             ScheduledDatasetPublicationWorkflow,
+            CapacityQualificationDataWorkflow,
         ],
         activities=activities
         if activities is not None
@@ -221,6 +258,7 @@ def build_data_worker(
             finalize_dataset_publication_delivery_failure,
             finalize_dataset_publication_resource_exhaustion,
             request_scheduled_dataset_publication,
+            execute_capacity_qualification_data,
         ],
         activity_executor=executor,
         max_concurrent_activities=1,

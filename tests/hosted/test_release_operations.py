@@ -181,6 +181,8 @@ def test_temporal_maintenance_counts_pending_activities_in_running_workflows() -
     assert count == 3
     assert client.workflow_queries == [
         'ExecutionStatus="Running" AND ('
+        'WorkflowType="CapacityQualificationComputeWorkflow" OR '
+        'WorkflowType="CapacityQualificationDataWorkflow" OR '
         'WorkflowType="DatasetPublicationWorkflow" OR '
         'WorkflowType="ScheduledDatasetPublicationWorkflow" OR '
         'WorkflowType="ResearchWorkflow" OR '
@@ -749,6 +751,9 @@ def test_forward_deploy_drains_old_bundle_before_installing_new_bundle() -> None
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
     deploy_block = launcher.split("    deploy)", 1)[1].split("        ;;", 1)[0]
 
+    assert deploy_block.index("ensure_maintenance_runtime") < deploy_block.index(
+        "enter_maintenance"
+    )
     assert deploy_block.index("enter_maintenance") < deploy_block.index("stage_release")
     assert "build_candidate_images" in deploy_block
     migration_phase, steady_phase = deploy_block.split("recreate_steady_services", 1)
@@ -761,3 +766,14 @@ def test_forward_deploy_drains_old_bundle_before_installing_new_bundle() -> None
     assert deploy_block.rindex("exit_maintenance") > deploy_block.index(
         "activate_candidate"
     )
+
+
+def test_interrupted_deploy_recovery_waits_only_for_steady_dependencies() -> None:
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    recovery = launcher.split("ensure_maintenance_runtime() {", 1)[1].split(
+        "\n}", 1
+    )[0]
+
+    assert "postgres temporal-postgres temporal" in recovery
+    assert "temporal-schema" not in recovery
+    assert "temporal-namespace" not in recovery

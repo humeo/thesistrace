@@ -434,7 +434,7 @@ class DatasetPublicationService:
             raise InvalidFixtureError(
                 "live increment requires a live Dataset Release predecessor"
             )
-        canonical = publisher.materialize_canonical(predecessor)
+        canonical = publisher.materialize_canonical_tail(predecessor, 20)
         instruments = canonical.get("instruments")
         calendar = canonical.get("research_calendar")
         if (

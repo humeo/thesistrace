@@ -22,6 +22,8 @@ from thesistrace.hosted.release_operations import (
 )
 
 PRODUCTION_WORKFLOW_TYPES = (
+    "CapacityQualificationComputeWorkflow",
+    "CapacityQualificationDataWorkflow",
     "DatasetPublicationWorkflow",
     "ScheduledDatasetPublicationWorkflow",
     "ResearchWorkflow",

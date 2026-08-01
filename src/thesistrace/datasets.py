@@ -515,29 +515,41 @@ class DatasetPublisher:
         appended = canonical_delta.get("research_calendar_append")
         if not isinstance(appended, list) or not appended:
             raise InvalidFixtureError("incremental publication has no new Research Session")
-        prior = self.materialize_canonical(predecessor)
-        prior_calendar = prior.get("research_calendar")
-        if (
-            not isinstance(prior_calendar, list)
-            or not prior_calendar
-            or str(appended[0]) <= str(prior_calendar[-1])
-        ):
+        predecessor_range = predecessor.get("appended_session_range")
+        prior_final_session = (
+            str(predecessor_range.get("end"))
+            if isinstance(predecessor_range, dict)
+            else ""
+        )
+        if not prior_final_session or str(appended[0]) <= prior_final_session:
             raise InvalidFixtureError("incremental sessions do not follow the latest Release")
-        materialized = json.loads(json.dumps(prior, ensure_ascii=False, allow_nan=False))
-        apply_canonical_delta(materialized, canonical_delta)
-        instruments = materialized.get("instruments")
-        calendar = materialized.get("research_calendar")
-        if not isinstance(instruments, list) or not isinstance(calendar, list):
+        instruments = canonical_delta.get("instruments_replace")
+        if not isinstance(instruments, list):
             raise InvalidFixtureError("incremental canonical data is incomplete")
 
         source_object = self.objects.put_json(source)
         predecessor_objects = predecessor.get("objects")
         if not isinstance(predecessor_objects, list):
             raise InvalidFixtureError("predecessor object manifest is invalid")
+        corrections = canonical_delta.get("price_corrections", [])
+        universe_replacements = canonical_delta.get(
+            "liquidity_universes_replace",
+            {},
+        )
+        if corrections or universe_replacements:
+            raise InvalidFixtureError(
+                "live incremental publication does not accept historical replacements"
+            )
         canonical_entries = update_canonical_partitions(
             self.objects,
             canonical_partition_entries(predecessor_objects),
-            materialized,
+            {
+                "instruments": instruments,
+                "industry_membership": canonical_delta.get(
+                    "industry_membership_replace",
+                    [],
+                ),
+            },
             canonical_delta,
         )
         objects = [
@@ -546,6 +558,10 @@ class DatasetPublisher:
             *canonical_entries,
         ]
         corrections = source.get("corrections", [])
+        predecessor_session_count = int(predecessor.get("session_count", 0))
+        canonical_tables = predecessor.get("canonical_tables")
+        if not isinstance(canonical_tables, list):
+            raise InvalidFixtureError("predecessor Canonical table manifest is invalid")
         manifest_core: dict[str, object] = {
             "predecessor_id": predecessor["id"],
             "created_at": datetime.now(UTC).isoformat(),
@@ -553,16 +569,14 @@ class DatasetPublisher:
                 "start": appended[0],
                 "end": appended[-1],
             },
-            "session_count": len(calendar),
+            "session_count": predecessor_session_count + len(appended),
             "instrument_count": len(instruments),
             "correction_change_set": corrections,
-            "canonical_schema_version": materialized.get(
-                "schema_version",
+            "canonical_schema_version": predecessor.get(
+                "canonical_schema_version",
                 "canonical-eod-v1",
             ),
-            "canonical_tables": sorted(
-                key for key in materialized if key != "schema_version"
-            ),
+            "canonical_tables": sorted(str(key) for key in canonical_tables),
             "schemas": [
                 *[
                     item

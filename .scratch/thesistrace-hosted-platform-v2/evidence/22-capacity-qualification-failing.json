@@ -1,0 +1,16 @@
+{
+  "universe": "top3000",
+  "compute_workers": [],
+  "dataset_publication": {},
+  "nonworker_services": {
+    "memory_limit_mib": 5121,
+    "cpu_limit": 2.01
+  },
+  "swap_used": true,
+  "oom_kill": false,
+  "unexpected_restart": false,
+  "missing_heartbeat": false,
+  "duplicate_publication": false,
+  "incorrect_result": false,
+  "production_paths": {}
+}

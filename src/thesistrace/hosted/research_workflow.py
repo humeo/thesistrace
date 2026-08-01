@@ -3,7 +3,10 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.exceptions import ActivityError
 
-from thesistrace.hosted.activity_policy import heavy_activity_retry_policy
+from thesistrace.hosted.activity_policy import (
+    HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT,
+    heavy_activity_retry_policy,
+)
 from thesistrace.hosted.compute_dispatch import (
     COMPUTE_WORKFLOW_TASK_QUEUE,
     P3_ACTIVITY_TASK_QUEUE,
@@ -23,7 +26,7 @@ class ResearchWorkflow:
                 request,
                 result_type=dict,
                 start_to_close_timeout=timedelta(hours=2),
-                heartbeat_timeout=timedelta(seconds=30),
+                heartbeat_timeout=HEAVY_ACTIVITY_HEARTBEAT_TIMEOUT,
                 retry_policy=heavy_activity_retry_policy(),
                 task_queue=P3_ACTIVITY_TASK_QUEUE,
                 priority=activity_priority(request["workspace_id"]),

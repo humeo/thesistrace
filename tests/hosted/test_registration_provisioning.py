@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
 from thesistrace.auth import InsForgeIdentity
+from thesistrace.capacity import CapacityQualificationService
 from thesistrace.config import Settings
 from thesistrace.hosted.management import PostgresManagementStore
 from thesistrace.hosted.migrations import apply_migrations
@@ -34,6 +35,14 @@ class OpenSourceGate:
 
     def is_authorized(self) -> bool:
         return self.authorized
+
+
+class OpenCapacityGate:
+    def __init__(self, qualified: bool = True) -> None:
+        self.qualified = qualified
+
+    def is_qualified(self) -> bool:
+        return self.qualified
 
 
 class RecordingStore:
@@ -106,6 +115,7 @@ def test_invitation_issue_normalizes_email_and_requires_open_source_gate() -> No
     service = RegistrationService(
         store=store,
         source_authorization=OpenSourceGate(False),
+        capacity_qualification=OpenCapacityGate(),
     )
 
     with pytest.raises(ProvisioningError, match="authorization") as closed:
@@ -132,12 +142,37 @@ def test_invitation_issue_normalizes_email_and_requires_open_source_gate() -> No
     assert invitation["actor"] == "operator-1"
 
 
+def test_invitation_issue_requires_a_passing_capacity_gate() -> None:
+    store = RecordingStore()
+    now = datetime(2026, 7, 31, tzinfo=UTC)
+    service = RegistrationService(
+        store=store,
+        source_authorization=OpenSourceGate(True),
+        capacity_qualification=OpenCapacityGate(False),
+    )
+
+    with pytest.raises(ProvisioningError) as closed:
+        service.issue_invitation(
+            actor="operator-1",
+            email="researcher@example.com",
+            expires_at=now + timedelta(days=1),
+            now=now,
+        )
+
+    assert closed.value.reason_code == "CAPACITY_QUALIFICATION_REQUIRED"
+    assert store.issued == []
+    assert store.rejections[-1]["reason_code"] == (
+        "CAPACITY_QUALIFICATION_REQUIRED"
+    )
+
+
 def test_invalid_email_and_nonfuture_expiry_are_audited() -> None:
     store = RecordingStore()
     now = datetime(2026, 7, 31, tzinfo=UTC)
     service = RegistrationService(
         store=store,
         source_authorization=OpenSourceGate(True),
+        capacity_qualification=OpenCapacityGate(),
     )
 
     with pytest.raises(ProvisioningError) as invalid_email:
@@ -169,6 +204,7 @@ def test_operator_cli_issues_inspects_and_revokes_without_an_admin_api(
     service = RegistrationService(
         store=store,
         source_authorization=OpenSourceGate(True),
+        capacity_qualification=OpenCapacityGate(),
     )
     settings = Settings(
         metadata_path=tmp_path / "metadata.sqlite3",
@@ -315,6 +351,43 @@ def prepare_postgres() -> None:
         actor="operator-test",
         scope=HOSTED_TUSHARE_SCOPE,
     )
+    CapacityQualificationService(
+        PostgresManagementStore(TEST_DATABASE_URL)
+    ).record(
+        actor="operator-test",
+        release_bundle_id="test-release",
+        evidence=passing_capacity_evidence(),
+    )
+
+
+def passing_capacity_evidence() -> dict[str, object]:
+    return {
+        "universe": "top3000",
+        "compute_workers": [
+            {
+                "status": "succeeded",
+                "p99_memory_mib": 600,
+                "peak_memory_mib": 650,
+            }
+            for _index in range(4)
+        ],
+        "dataset_publication": {"status": "succeeded", "worker_slot": "data"},
+        "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
+        "swap_used": False,
+        "oom_kill": False,
+        "unexpected_restart": False,
+        "missing_heartbeat": False,
+        "duplicate_publication": False,
+        "incorrect_result": False,
+        "production_paths": {
+            "parquet": True,
+            "result_bundle": True,
+            "working_cache": True,
+            "postgresql": True,
+            "temporal": True,
+            "object_store": True,
+        },
+    }
 
 
 @pytest.mark.skipif(
@@ -381,6 +454,46 @@ def test_postgres_provisioning_is_atomic_idempotent_and_single_winner() -> None:
         ).fetchone()[0]
     assert user_count == 1
     assert workspace_count == 1
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_postgres_invitation_issue_is_fenced_by_latest_capacity_measurement() -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    management = PostgresManagementStore(TEST_DATABASE_URL)
+    failing = passing_capacity_evidence()
+    failing["compute_workers"][0]["p99_memory_mib"] = 701
+    CapacityQualificationService(management).record(
+        actor="operator-test",
+        release_bundle_id="test-release",
+        evidence=failing,
+    )
+    now = datetime.now(UTC)
+    store = PostgresProvisioningStore(TEST_DATABASE_URL)
+
+    with pytest.raises(ProvisioningError) as rejected:
+        store.issue_invitation(
+            actor="operator-test",
+            normalized_email=f"capacity-closed-{now.timestamp()}@example.com",
+            expires_at=now + timedelta(hours=1),
+            now=now,
+        )
+
+    assert rejected.value.reason_code == "CAPACITY_QUALIFICATION_REQUIRED"
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        audit = connection.execute(
+            """
+            SELECT reason_code
+            FROM thesistrace_control.management_audit_events
+            WHERE action = 'registration_invitation.issue'
+            ORDER BY occurred_at DESC, id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert audit[0] == "CAPACITY_QUALIFICATION_REQUIRED"
 
 
 @pytest.mark.skipif(

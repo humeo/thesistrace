@@ -1,6 +1,7 @@
 import hashlib
 import math
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
@@ -161,22 +162,51 @@ def run_strategy(
     skipped_sessions = skip_execution_sessions or set()
 
     instruments = {str(item["instrument_id"]): item for item in canonical["instruments"]}
-    prices = {
-        (str(item["session"]), str(item["instrument_id"])): item for item in canonical["prices"]
-    }
-    states = {
-        (str(item["session"]), str(item["instrument_id"])): str(item["state"])
-        for item in canonical["trading_states"]
-    }
-    limits = {
-        (str(item["session"]), str(item["instrument_id"])): item
-        for item in canonical["price_limits"]
-    }
-    alpha_by_session = {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
-    universes = {
-        str(item["session"]): [str(value) for value in item["instrument_ids"]]
-        for item in canonical["liquidity_universes"][str(definition["universe"])]
-    }
+    price_source = canonical["prices"]
+    prices = (
+        price_source
+        if isinstance(price_source, Mapping)
+        else {
+            (str(item["session"]), str(item["instrument_id"])): item
+            for item in price_source
+        }
+    )
+    state_source = canonical["trading_states"]
+    states = (
+        state_source
+        if isinstance(state_source, Mapping)
+        else {
+            (str(item["session"]), str(item["instrument_id"])): str(item["state"])
+            for item in state_source
+        }
+    )
+    limit_source = canonical["price_limits"]
+    limits = (
+        limit_source
+        if isinstance(limit_source, Mapping)
+        else {
+            (str(item["session"]), str(item["instrument_id"])): item
+            for item in limit_source
+        }
+    )
+    value_store = alpha_matrix.get("value_store")
+    alpha_by_session = (
+        value_store
+        if isinstance(value_store, Mapping)
+        else {
+            str(item["session"]): item["values"]
+            for item in alpha_matrix["sessions"]
+        }
+    )
+    universe_source = canonical["liquidity_universes"][str(definition["universe"])]
+    universes = (
+        universe_source
+        if isinstance(universe_source, Mapping)
+        else {
+            str(item["session"]): [str(value) for value in item["instrument_ids"]]
+            for item in universe_source
+        }
+    )
 
     if continuation is None:
         positions: dict[str, Position] = {}
@@ -831,6 +861,10 @@ def latest_adjusted_open_before(
     instrument_id: str,
     prices: dict[tuple[str, str], dict[str, object]],
 ) -> Decimal | None:
+    optimized = getattr(prices, "latest_adjusted_open_before", None)
+    if callable(optimized):
+        value = optimized(session, instrument_id)
+        return None if value is None else Decimal(str(value))
     candidates = [
         (price_session, Decimal(str(row["open_adj"])))
         for (price_session, price_instrument), row in prices.items()

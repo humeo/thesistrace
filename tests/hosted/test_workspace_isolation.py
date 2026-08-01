@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
 from thesistrace.auth import InsForgeIdentity
+from thesistrace.capacity import CapacityQualificationService
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.control import PostgresControlMetadataStore
@@ -63,6 +64,41 @@ class OpenSourceGate:
         return True
 
 
+class OpenCapacityGate:
+    def is_qualified(self) -> bool:
+        return True
+
+
+def passing_capacity_evidence() -> dict[str, object]:
+    return {
+        "universe": "top3000",
+        "compute_workers": [
+            {
+                "status": "succeeded",
+                "p99_memory_mib": 600,
+                "peak_memory_mib": 650,
+            }
+            for _index in range(4)
+        ],
+        "dataset_publication": {"status": "succeeded", "worker_slot": "data"},
+        "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
+        "swap_used": False,
+        "oom_kill": False,
+        "unexpected_restart": False,
+        "missing_heartbeat": False,
+        "duplicate_publication": False,
+        "incorrect_result": False,
+        "production_paths": {
+            "parquet": True,
+            "result_bundle": True,
+            "working_cache": True,
+            "postgresql": True,
+            "temporal": True,
+            "object_store": True,
+        },
+    }
+
+
 class HeaderIdentityVerifier:
     def __init__(self, identities: dict[str, InsForgeIdentity]) -> None:
         self.identities = identities
@@ -84,6 +120,13 @@ def prepare_postgres() -> None:
     ).record(
         actor="operator-isolation-test",
         scope=HOSTED_TUSHARE_SCOPE,
+    )
+    CapacityQualificationService(
+        PostgresManagementStore(TEST_DATABASE_URL)
+    ).record(
+        actor="operator-isolation-test",
+        release_bundle_id="test-release",
+        evidence=passing_capacity_evidence(),
     )
 
 
@@ -163,6 +206,7 @@ def build_hosted_app(
     registration = RegistrationService(
         store=PostgresProvisioningStore(TEST_DATABASE_URL),
         source_authorization=OpenSourceGate(),
+        capacity_qualification=OpenCapacityGate(),
     )
     app = create_app(
         settings,

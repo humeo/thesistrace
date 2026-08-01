@@ -88,6 +88,9 @@ services:
       - postgres_password
       - insforge_encryption_key
     restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.2
     logging: *bounded-logging
 
   temporal-postgres:
@@ -106,6 +109,9 @@ services:
     secrets:
       - temporal_database_password
     restart: unless-stopped
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 0.15
     logging: *bounded-logging
 
   insforge-migrations:
@@ -199,6 +205,9 @@ services:
     command: ["/etc/temporal/entrypoint.sh"]
     secrets:
       - temporal_database_password
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.25
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -288,6 +297,9 @@ services:
     secrets:
       - insforge_database_url
       - insforge_jwt_secret
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -338,6 +350,9 @@ services:
       - postgres_password
       - insforge_encryption_key
       - insforge_jwt_secret
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.1
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -373,6 +388,9 @@ services:
       - insforge_encryption_key
       - insforge_admin_password
       - insforge_database_url
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.2
     restart: unless-stopped
     logging: *bounded-logging
 
@@ -385,8 +403,9 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 256
-    mem_limit: 1g
-    cpus: 0.5
+    mem_limit: 768m
+    memswap_limit: 768m
+    cpus: 0.3
     tmpfs:
       - /tmp:size=128m,mode=1777
     environment:
@@ -466,6 +485,9 @@ services:
       interval: 5s
       timeout: 3s
       retries: 40
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.15
 
   execution-relay:
     <<: *app
@@ -505,6 +527,9 @@ services:
       interval: 5s
       timeout: 10s
       retries: 40
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.1
 
   tushare-egress:
     <<: *app
@@ -516,7 +541,8 @@ services:
       - no-new-privileges:true
     pids_limit: 128
     mem_limit: 128m
-    cpus: 0.1
+    memswap_limit: 128m
+    cpus: 0.05
     tmpfs:
       - /tmp:size=16m,mode=1777
     environment: {}
@@ -552,6 +578,7 @@ services:
       THESISTRACE_SERVICE_SLOT: data-1
     user: "10003:10003"
     mem_limit: 1g
+    memswap_limit: 1g
     cpus: 0.5
     networks:
       - control
@@ -601,6 +628,7 @@ services:
     user: &compute-user "10004:10004"
     group_add: &compute-groups ["11000"]
     mem_limit: &compute-memory 1g
+    memswap_limit: &compute-memory-swap 1g
     cpus: &compute-cpus 0.75
     networks: &compute-networks
       - control
@@ -634,6 +662,7 @@ services:
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
+    memswap_limit: *compute-memory-swap
     cpus: *compute-cpus
     networks: *compute-networks
     volumes: *compute-volumes
@@ -650,6 +679,7 @@ services:
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
+    memswap_limit: *compute-memory-swap
     cpus: *compute-cpus
     networks: *compute-networks
     volumes: *compute-volumes
@@ -667,6 +697,7 @@ services:
     user: *compute-user
     group_add: *compute-groups
     mem_limit: *compute-memory
+    memswap_limit: *compute-memory-swap
     cpus: *compute-cpus
     networks: *compute-networks
     volumes: *compute-volumes
@@ -682,8 +713,9 @@ services:
     security_opt:
       - no-new-privileges:true
     pids_limit: 128
-    mem_limit: 512m
-    cpus: 0.25
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.2
     tmpfs:
       - /tmp:size=64m,mode=1777
     environment:
@@ -837,6 +869,9 @@ services:
       - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
     networks: [observability]
     restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
     logging: *bounded-logging
 
   prometheus:
@@ -855,6 +890,9 @@ services:
         condition: service_started
     networks: [observability]
     restart: unless-stopped
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 0.05
     logging: *bounded-logging
 
   grafana:
@@ -878,6 +916,9 @@ services:
     secrets:
       - grafana_admin_password
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.05
     logging: *bounded-logging
 
   edge:
@@ -922,6 +963,9 @@ services:
       timeout: 3s
       retries: 40
     restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
     logging: *bounded-logging
 
 secrets:

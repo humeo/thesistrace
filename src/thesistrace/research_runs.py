@@ -11,6 +11,10 @@ from thesistrace.activity_contract import (
     should_retry_resource_exhaustion,
 )
 from thesistrace.alpha import evaluate_alpha_matrix
+from thesistrace.bounded_research import (
+    calculate_bounded_research,
+    load_columnar_research_window,
+)
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.objects import canonical_json_bytes
@@ -79,7 +83,7 @@ class ResearchRunService:
         self.metadata = metadata
         self.datasets = datasets
         self.objects = objects
-        self.calculator = calculator or calculate_research
+        self.calculator = calculator
         self.progress = progress or (lambda _stage: None)
 
     def execute_next(self) -> dict[str, object] | None:
@@ -109,12 +113,33 @@ class ResearchRunService:
             release = self.metadata.dataset_release(str(run["dataset_release_id"]))
             if frozen is None or release is None:
                 raise RuntimeError("ResearchRun input metadata is missing")
-            canonical = research_input_history(self.datasets.materialize_canonical(release))
-            self.progress("inputs_loaded")
             content = frozen["content"]
             if not isinstance(content, dict):
                 raise RuntimeError("frozen Research Definition is invalid")
-            artifacts = self.calculator(canonical, content)
+            if self.calculator is not None:
+                canonical = research_input_history(
+                    self.datasets.materialize_canonical(release)
+                )
+                self.progress("inputs_loaded")
+                artifacts = self.calculator(canonical, content)
+            elif any(
+                isinstance(entry, dict)
+                and entry.get("kind") == "canonical_partition"
+                for entry in release.get("objects", [])
+            ):
+                window = load_columnar_research_window(
+                    self.objects,
+                    release,
+                    content,
+                )
+                self.progress("inputs_loaded")
+                artifacts = calculate_bounded_research(window, content)
+            else:
+                canonical = research_input_history(
+                    self.datasets.materialize_canonical(release)
+                )
+                self.progress("inputs_loaded")
+                artifacts = calculate_research(canonical, content)
             self.progress("calculated")
             with self.objects.publication_guard(run_id):
                 latest = self.metadata.research_run(run_id)

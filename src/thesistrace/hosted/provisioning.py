@@ -65,6 +65,33 @@ class PostgresProvisioningStore:
                     "SOURCE_AUTHORIZATION_REQUIRED",
                     "hosted shared Tushare authorization is required",
                 )
+            elif not connection.execute(
+                """
+                SELECT COALESCE(
+                    (
+                        SELECT status = 'passed'
+                        FROM thesistrace_control.capacity_qualifications
+                        ORDER BY measured_at DESC, id DESC
+                        LIMIT 1
+                    ),
+                    false
+                ) AS qualified
+                """
+            ).fetchone()["qualified"]:
+                self._insert_audit(
+                    connection,
+                    actor=actor,
+                    action="registration_invitation.issue",
+                    outcome="rejected",
+                    reason_code="CAPACITY_QUALIFICATION_REQUIRED",
+                    subject_id=invitation_id,
+                    occurred_at=now,
+                    details={"invitation_id": invitation_id},
+                )
+                failure = ProvisioningError(
+                    "CAPACITY_QUALIFICATION_REQUIRED",
+                    "a passing capacity qualification is required",
+                )
             else:
                 existing = connection.execute(
                     """

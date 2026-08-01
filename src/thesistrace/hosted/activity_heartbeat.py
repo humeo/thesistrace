@@ -1,4 +1,5 @@
 import contextvars
+import logging
 import sys
 from collections.abc import Callable
 from threading import Event, Lock, Thread
@@ -7,6 +8,8 @@ from temporalio import activity
 
 from thesistrace.activity_contract import CooperativeActivityCancellation
 from thesistrace.hosted.observability import operation_span
+
+logger = logging.getLogger(__name__)
 
 
 class ActivityHeartbeat:
@@ -58,7 +61,13 @@ class ActivityHeartbeat:
             if activity.is_cancelled():
                 self._record_cancellation()
                 return
-            activity.heartbeat({"stage": "running"})
+            try:
+                activity.heartbeat({"stage": "running"})
+            except TimeoutError:
+                logger.warning(
+                    "Temporal activity heartbeat timed out; retrying",
+                    exc_info=True,
+                )
 
     def _record_cancellation(self) -> None:
         if self.on_cancel is None:

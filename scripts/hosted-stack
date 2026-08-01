@@ -393,6 +393,11 @@ enter_maintenance() {
         compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
 }
 
+ensure_maintenance_runtime() {
+    compose up --detach --wait --no-build \
+        postgres temporal-postgres temporal
+}
+
 start_workers() {
     compose up --detach --no-deps \
         execution-relay data-worker \
@@ -573,6 +578,7 @@ case "$action" in
         fi
         prepare
         select_current_release
+        ensure_maintenance_runtime
         enter_maintenance
         stage_release
         validate_public_edge
@@ -641,7 +647,7 @@ case "$action" in
         prepare
         select_current_release
         shift
-        compose exec -T api thesistrace-operator "$@"
+        compose run --rm --no-deps -T thesistrace-migrations thesistrace-operator "$@"
         ;;
     maintenance-enter)
         prepare

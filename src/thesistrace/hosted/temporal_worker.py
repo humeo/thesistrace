@@ -17,6 +17,8 @@ from thesistrace.activity_contract import (
 from thesistrace.config import settings_from_environment
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.activity_heartbeat import ActivityHeartbeat
+from thesistrace.hosted.capacity_probe import run_worker as run_capacity_worker
+from thesistrace.hosted.capacity_workflow import CapacityQualificationComputeWorkflow
 from thesistrace.hosted.compute_dispatch import (
     COMPUTE_WORKFLOW_TASK_QUEUE,
     DEFAULT_COMPUTE_TASK_QUEUES,
@@ -48,6 +50,25 @@ from thesistrace.tracking_operations import TrackingOperationService
 logger = logging.getLogger(__name__)
 TRACKING_FANOUT_PAGE_SIZE = 100
 WORKER_HEARTBEAT_INTERVAL_SECONDS = 2.0
+
+
+@activity.defn(name="execute_capacity_qualification_compute")
+def execute_capacity_qualification_compute(
+    request: dict[str, str],
+) -> dict[str, object]:
+    runtime = build_runtime(settings_from_environment())
+    release = runtime.control_metadata.dataset_release(request["release_id"])
+    if release is None:
+        raise RuntimeError("capacity Dataset Release is unavailable")
+    with ActivityHeartbeat():
+        result = run_capacity_worker(runtime, release)
+    return {
+        **result,
+        "workflow_id": activity.info().workflow_id,
+        "activity_id": activity.info().activity_id,
+        "activity_attempt": activity.info().attempt,
+        "worker_slot": os.environ.get("THESISTRACE_SERVICE_SLOT", "unknown"),
+    }
 
 
 def _tracking_service(runtime) -> DailyTrackingService:
@@ -496,6 +517,7 @@ def build_compute_workflow_worker(
             TrackingAdvanceWorkflow,
             TrackingEquivalenceWorkflow,
             TrackingGenerationRebuildWorkflow,
+            CapacityQualificationComputeWorkflow,
         ],
         no_remote_activities=True,
         disable_eager_activity_execution=True,
@@ -528,6 +550,7 @@ def build_compute_activity_worker(
             finalize_tracking_equivalence_failure,
             execute_tracking_generation_rebuild,
             finalize_tracking_generation_rebuild_failure,
+            execute_capacity_qualification_compute,
         ],
         activity_executor=executor,
         max_concurrent_activities=1,

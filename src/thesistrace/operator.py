@@ -4,9 +4,14 @@ import sys
 from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import cast
 from uuid import uuid4
 
+from thesistrace.capacity import (
+    CapacityQualificationError,
+    CapacityQualificationService,
+)
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.management import (
@@ -55,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     record.add_argument("--scope", required=True)
 
     commands.add_parser("inspect")
+
+    capacity = resources.add_parser("capacity-qualification")
+    capacity_commands = capacity.add_subparsers(dest="command", required=True)
+    capacity_record = capacity_commands.add_parser("record")
+    capacity_record.add_argument("--actor", required=True)
+    capacity_record.add_argument("--release-bundle-id", required=True)
+    capacity_record.add_argument("--evidence", type=Path, required=True)
+    capacity_commands.add_parser("inspect")
 
     invitations = resources.add_parser("invitation")
     invitation_commands = invitations.add_subparsers(dest="command", required=True)
@@ -154,6 +167,46 @@ def run(
         local_store.initialize()
     management_store = build_management_store(active_settings, local_store)
     service = SourceAuthorizationService(management_store)
+
+    if arguments.resource == "capacity-qualification":
+        capacity_service = CapacityQualificationService(management_store)
+        if arguments.command == "inspect":
+            print(
+                json.dumps(
+                    capacity_service.inspect(),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                )
+            )
+            return 0
+        try:
+            evidence = json.loads(arguments.evidence.read_text(encoding="utf-8"))
+            if not isinstance(evidence, dict):
+                raise ValueError("capacity evidence must be a JSON object")
+            qualification = capacity_service.record(
+                actor=arguments.actor,
+                release_bundle_id=arguments.release_bundle_id,
+                evidence=evidence,
+            )
+        except (OSError, ValueError, CapacityQualificationError) as error:
+            print(
+                json.dumps(
+                    {
+                        "reason_code": getattr(
+                            error,
+                            "reason_code",
+                            "CAPACITY_QUALIFICATION_INVALID",
+                        ),
+                        "message": str(error),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                file=sys.stderr,
+            )
+            return 2
+        print(json.dumps(qualification, ensure_ascii=False, sort_keys=True))
+        return 0
 
     if arguments.resource == "tracking-generation-rebuild":
         actor = arguments.actor.strip()
