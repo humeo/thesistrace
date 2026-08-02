@@ -1615,6 +1615,102 @@ def run_local_api_relay_recovery() -> dict[str, object]:
     )
 
 
+def run_local_compute_recovery() -> dict[str, object]:
+    origin = _local_origin()
+    token_a, _token_b, credentials, product = _fresh_local_logins()
+    run_id = _required_text(product, "run_id")
+    suffix = _required_text(product, "suffix")
+    stack("acceptance-start-interruption", "compute-worker-1")
+    recovery_run = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/rerun",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-compute-recovery-{suffix}"},
+        ),
+        (200, 202),
+        "local Compute recovery ResearchRun",
+    )
+    recovery_run_id = require_resource_id(
+        recovery_run,
+        "local Compute recovery ResearchRun",
+    )
+    killed = False
+    try:
+        deadline = time.monotonic() + 120
+        last_run: dict[str, object] = {}
+        while time.monotonic() < deadline:
+            last_run = require_status(
+                request(
+                    origin,
+                    f"/api/v1/research-runs/{recovery_run_id}",
+                    token=token_a,
+                ),
+                200,
+                "local running Compute Activity",
+            )
+            if last_run.get("status") == "running":
+                stack("acceptance-kill-service", "compute-worker-1")
+                killed = True
+                break
+            if last_run.get("status") in {"succeeded", "failed", "cancelled"}:
+                raise AcceptanceFailure(
+                    "local Compute Activity completed before its Worker was interrupted"
+                )
+            time.sleep(0.05)
+        else:
+            raise AcceptanceFailure(f"local Compute Activity was never claimed: {last_run}")
+        stack("acceptance-start-service", "compute-worker-1")
+        token_a = login_user(
+            _required_text(credentials, "email_a"),
+            _required_text(credentials, "password_a"),
+            origin,
+            label="User A login during Compute heartbeat recovery",
+        )
+        recovered = poll(
+            lambda: request(
+                origin,
+                f"/api/v1/research-runs/{recovery_run_id}",
+                token=token_a,
+            ),
+            lambda value: value.get("status") == "succeeded",
+            "local Compute heartbeat redelivery",
+            timeout=600,
+        )
+    finally:
+        stack("acceptance-start-service", "compute-worker-1")
+    attempts = recovered.get("attempts")
+    if not killed or not isinstance(attempts, list) or len(attempts) < 2:
+        raise AcceptanceFailure("local Compute interruption produced no later Attempt")
+    require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{recovery_run_id}/result?daily_limit=1",
+            token=token_a,
+        ),
+        200,
+        "single local Compute recovery result",
+    )
+    assert_single_resource(
+        origin,
+        token_a,
+        "/api/v1/research-runs",
+        recovery_run_id,
+        "local Compute recovery ResearchRun",
+    )
+    assert_storage_invariants()
+    _update_local_product_context(compute_recovery_run_id=recovery_run_id)
+    return _local_gate_evidence(
+        "compute-recovery",
+        heartbeat_timeout=True,
+        redelivery=True,
+        later_attempt=True,
+        exactly_one_result=True,
+        partial_authoritative_artifact=False,
+    )
+
+
 def run_public_origin_acceptance(
     profile_name: str = "launch",
 ) -> dict[str, object]:
