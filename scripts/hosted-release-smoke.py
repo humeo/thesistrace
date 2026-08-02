@@ -1525,8 +1525,7 @@ def run_local_api_relay_recovery() -> dict[str, object]:
         except urllib.error.URLError:
             return 0, {}
 
-    for service in ("compute-worker-1", "execution-relay"):
-        stack("acceptance-stop-service", service)
+    stack("acceptance-stop-service", "execution-relay")
     try:
         stack("acceptance-stop-service", "api")
         try:
@@ -1577,7 +1576,6 @@ def run_local_api_relay_recovery() -> dict[str, object]:
             "local API/relay ResearchRun",
         )
         stack("acceptance-start-service", "execution-relay")
-        stack("acceptance-start-service", "compute-worker-1")
         recovered = poll(
             lambda: request(
                 origin,
@@ -1601,7 +1599,7 @@ def run_local_api_relay_recovery() -> dict[str, object]:
             "local API/relay recovered result",
         )
     finally:
-        for service in ("api", "execution-relay", "compute-worker-1"):
+        for service in ("api", "execution-relay"):
             stack("acceptance-start-service", service)
 
     _update_local_product_context(api_relay_run_id=recovery_run_id)
@@ -1610,6 +1608,7 @@ def run_local_api_relay_recovery() -> dict[str, object]:
         api_unavailable=True,
         concurrent_idempotency=True,
         durable_outbox=True,
+        compute_or_data_worker_stopped=False,
         exactly_one_workflow=True,
         exactly_one_result=True,
     )

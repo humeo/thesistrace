@@ -1076,6 +1076,17 @@ def test_local_public_smoke_dispatches_exactly_one_named_gate(monkeypatch) -> No
     assert evidence == {"status": "passed", "gate": "compute-recovery"}
 
 
+def test_local_api_relay_gate_never_stops_a_compute_or_data_worker() -> None:
+    script = (ROOT / "scripts" / "hosted-release-smoke.py").read_text()
+    gate = script.split("def run_local_api_relay_recovery()", 1)[1].split(
+        "def run_local_compute_recovery()", 1
+    )[0]
+
+    assert 'acceptance-stop-service", "execution-relay"' in gate
+    assert 'acceptance-stop-service", "compute-worker' not in gate
+    assert 'acceptance-stop-service", "data-worker' not in gate
+
+
 def test_local_product_context_keeps_credentials_private_and_rejects_tokens(
     tmp_path: Path,
 ) -> None:
