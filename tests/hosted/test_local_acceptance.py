@@ -83,6 +83,15 @@ def local_ops_module() -> ModuleType:
     return module
 
 
+def local_frontend_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "local_frontend_acceptance.py"
+    spec = importlib.util.spec_from_file_location("hosted_local_frontend", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def release_acceptance_module() -> ModuleType:
     path = ROOT / "scripts" / "hosted" / "release_acceptance.py"
     spec = importlib.util.spec_from_file_location("hosted_release_acceptance_local", path)
@@ -1673,6 +1682,23 @@ def test_local_frontend_checks_run_after_the_browser_preflight() -> None:
     assert "HOSTED_LOCAL_EVIDENCE" in acceptance_target
     target = makefile.split("hosted-local-frontend:", 1)[1]
     assert "scripts/hosted/local_frontend_acceptance.py" in target
+
+
+def test_local_frontend_reproducibility_build_is_isolated(tmp_path: Path) -> None:
+    frontend = (ROOT / "scripts" / "hosted" / "local_frontend_acceptance.py").read_text()
+    module = local_frontend_module()
+    distribution = tmp_path / "dist"
+    distribution.mkdir()
+    (distribution / "index.html").write_text("first")
+    before = module.tree_digest(distribution)
+    (distribution / "index.html").write_text("second")
+
+    assert '["bun", "run", "build"]' not in frontend
+    assert 'build_root = state_dir / "frontend-build-scratch"' in frontend
+    assert '"--outDir", str(build_root)' in frontend
+    assert "verify_staged_assets(origin, build_root)" in frontend
+    assert "tree_digest(WEB / \"dist\") != active_dist_before" in frontend
+    assert module.tree_digest(distribution) != before
 
 
 def test_browser_preflight_keeps_the_product_core_online() -> None:

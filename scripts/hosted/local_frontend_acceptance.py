@@ -3,10 +3,17 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import urllib.request
 from pathlib import Path
+
+from thesistrace.hosted.release_operations import (
+    sha256_files,
+    sha256_named_payloads,
+    source_files,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 WEB = ROOT / "web"
@@ -65,8 +72,7 @@ def asset_paths(index: bytes) -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
-def verify_staged_assets(origin: str) -> dict[str, str]:
-    distribution = WEB / "dist"
+def verify_staged_assets(origin: str, distribution: Path) -> dict[str, str]:
     local_index = (distribution / "index.html").read_bytes()
     served_index = fetch(origin, "/")
     if served_index != local_index:
@@ -88,6 +94,30 @@ def verify_staged_assets(origin: str) -> dict[str, str]:
     return manifest
 
 
+def tree_digest(root: Path) -> str | None:
+    if not root.is_dir():
+        return None
+    return sha256_named_payloads(
+        {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+    )
+
+
+def locked_web_source_sha256(bundle: dict[str, object]) -> str:
+    manifest = json.loads((ROOT / "deploy" / "hosted" / "release.json").read_text())
+    source_paths = manifest["components"]["web"]["source_paths"]
+    expected = bundle["components"]["web"]["source_sha256"]
+    actual = sha256_files(ROOT, source_files(ROOT, source_paths))
+    if actual != expected:
+        raise FrontendAcceptanceError(
+            "current Web source/dependency inputs differ from the staged Release Bundle"
+        )
+    return actual
+
+
 def main() -> None:
     state_value = os.environ.get("THESISTRACE_HOST_STATE_DIR")
     origin = os.environ.get("THESISTRACE_HOSTED_ORIGIN")
@@ -104,13 +134,31 @@ def main() -> None:
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         raise FrontendAcceptanceError("the staged Release Bundle is unavailable") from error
     image_lock = release_root / "bundles" / bundle_id / "image-lock.json"
+    bundle_path = release_root / "bundles" / bundle_id / "bundle.json"
+    try:
+        bundle = json.loads(bundle_path.read_text())
+    except (OSError, TypeError, json.JSONDecodeError) as error:
+        raise FrontendAcceptanceError("the staged Release Bundle is invalid") from error
     pointer_before = sha256(current_path)
     lock_before = sha256(image_lock)
+    web_source_sha256 = locked_web_source_sha256(bundle)
+    active_dist_before = tree_digest(WEB / "dist")
+    build_root = state_dir / "frontend-build-scratch"
+    if build_root.exists():
+        shutil.rmtree(build_root)
+    build_root.mkdir(parents=True)
 
     run(["bun", "install", "--frozen-lockfile"], cwd=WEB)
     run(["bun", "run", "typecheck"], cwd=WEB)
-    run(["bun", "run", "build"], cwd=WEB)
-    assets = verify_staged_assets(origin)
+    run(
+        ["bunx", "vite", "build", "--outDir", str(build_root), "--emptyOutDir"],
+        cwd=WEB,
+    )
+    assets = verify_staged_assets(origin, build_root)
+    if tree_digest(WEB / "dist") != active_dist_before:
+        raise FrontendAcceptanceError(
+            "the workspace Web distribution changed during the isolated build"
+        )
     if sha256(current_path) != pointer_before:
         raise FrontendAcceptanceError("the active Release pointer changed during Web proof")
     if sha256(image_lock) != lock_before:
@@ -150,12 +198,14 @@ def main() -> None:
         "schema_version": "hosted-local-frontend-v1",
         "release_bundle_id": bundle_id,
         "image_lock_sha256": lock_before,
+        "web_source_sha256": web_source_sha256,
         "dependency_lock_sha256": sha256(dependency_lock),
         "web_asset_manifest": assets,
         "browser_evidence": str(browser_evidence),
         "screenshots": str(screenshots),
         "active_release_mutated": False,
         "fault_injected": False,
+        "reproducibility_build_isolated": True,
         "not_claimed": [
             "cloudflare",
             "external_dns_tls",
@@ -164,6 +214,7 @@ def main() -> None:
             "real_smtp_delivery",
         ],
     }
+    shutil.rmtree(build_root)
     print(json.dumps(payload, sort_keys=True))
 
 
