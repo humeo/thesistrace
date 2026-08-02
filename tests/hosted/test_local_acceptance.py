@@ -56,6 +56,15 @@ def local_postgres_module() -> ModuleType:
     return module
 
 
+def local_boundary_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "local_boundary_acceptance.py"
+    spec = importlib.util.spec_from_file_location("hosted_local_boundary", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def local_recovery_module() -> ModuleType:
     path = ROOT / "scripts" / "hosted" / "local_recovery_acceptance.py"
     spec = importlib.util.spec_from_file_location("hosted_local_recovery", path)
@@ -1066,6 +1075,35 @@ def test_local_postgres_acceptance_uses_an_isolated_real_database(
     assert evidence["database"] == "isolated-runtime-postgresql"
     assert evidence["tests"] == list(module.postgres_test_targets())
     assert "local-db-secret" not in json.dumps(evidence)
+
+
+def test_local_boundary_gate_combines_isolated_postgres_and_controlled_security() -> None:
+    module = local_boundary_module()
+    calls: list[tuple[str, ...]] = []
+
+    def runner(command: tuple[str, ...]):
+        calls.append(command)
+        if command[1].endswith("local_postgres_acceptance.py"):
+            return b'{"status":"passed","database":"isolated-runtime-postgresql"}\n'
+        return b"12 passed in 1.00s\n"
+
+    evidence = module.run_boundary_acceptance(runner=runner)
+
+    assert len(calls) == 1 + len(module.CONTROLLED_TARGETS)
+    assert calls[0][0].endswith("python")
+    for target in (
+        "tests/hosted/test_edge_policy.py",
+        "tests/hosted/test_edge_rate_limits.py",
+        "tests/hosted/test_container_boundaries.py",
+        "tests/hosted/test_storage_admission.py",
+        "tests/hosted/test_object_store_boundary.py",
+        "tests/hosted/test_health_views.py",
+    ):
+        assert any(target in " ".join(call) for call in calls[1:])
+    assert evidence["status"] == "passed"
+    assert evidence["schema_version"] == "hosted-local-boundary-v1"
+    assert evidence["postgresql"]["database"] == "isolated-runtime-postgresql"
+    assert set(evidence["controlled_tests"]) == set(module.CONTROLLED_TARGETS)
 
 
 def test_local_resource_sampler_records_per_phase_peaks_and_failures() -> None:
