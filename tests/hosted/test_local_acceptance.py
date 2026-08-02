@@ -1199,6 +1199,117 @@ def test_local_product_context_keeps_credentials_private_and_rejects_tokens(
         )
 
 
+def test_local_identity_post_state_records_every_retained_resource(monkeypatch) -> None:
+    module = public_smoke_module()
+    credentials = {
+        "email_a": "user-a@example.invalid",
+        "password_a": "password-a",
+        "email_b": "user-b@example.invalid",
+        "password_b": "password-b",
+    }
+    product = {
+        "workspace_a": "workspace-a",
+        "workspace_b": "workspace-b",
+        "release_id": "release-1",
+        "run_id": "run-1",
+        "track_id": "track-1",
+        "equivalence_id": "equivalence-1",
+    }
+
+    monkeypatch.setattr(
+        module,
+        "login_user",
+        lambda email, _password, _origin, *, label: f"token-{email}-{label}",
+    )
+
+    def fake_request(_origin: str, path: str, *, token: str, **_kwargs):
+        if path == "/api/v1/session":
+            suffix = "a" if "user-a" in token else "b"
+            return 200, {
+                "user_id": f"user-{suffix}",
+                "workspace_id": f"workspace-{suffix}",
+            }
+        if path == "/api/v1/research-runs/run-1":
+            return 200, {"id": "run-1", "status": "succeeded"}
+        if path.startswith("/api/v1/research-runs/run-1/result"):
+            return 200, {"strategy_backtest": {"daily": [{"session": "1"}]}}
+        if path == "/api/v1/daily-tracks/track-1":
+            return 200, {"id": "track-1", "status": "stopped"}
+        if path.startswith("/api/v1/daily-tracks/track-1/current"):
+            return 200, {"track_id": "track-1", "window": {"maximum_sessions": 1}}
+        if path.endswith("/equivalence-requests/equivalence-1"):
+            return 200, {"id": "equivalence-1", "status": "succeeded"}
+        if path.endswith("/data-contract"):
+            return 200, {"release_id": "release-1", "columns": ["close"]}
+        if path == "/api/v1/dataset-releases":
+            return 200, {"items": [{"id": "release-1"}]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(module, "request", fake_request)
+
+    observed = module._identity_post_state(
+        "https://localhost", credentials, product
+    )
+
+    assert observed["user_a_id"] == "user-a"
+    assert observed["user_b_id"] == "user-b"
+    assert str(observed["result_id"]).startswith("result_")
+    assert set(observed["post_state_digests"]) == {
+        "user_a",
+        "user_b",
+        "workspace_a",
+        "workspace_b",
+        "dataset_release",
+        "research_run",
+        "result",
+        "daily_track",
+        "equivalence",
+    }
+    assert "token" not in json.dumps(observed).casefold()
+
+
+def test_cross_workspace_stateful_probes_reacquire_authentication(monkeypatch) -> None:
+    module = public_smoke_module()
+    issued: list[str] = []
+    stateful_tokens: list[str] = []
+
+    def refresh() -> str:
+        token = f"fresh-{len(issued) + 1}"
+        issued.append(token)
+        return token
+
+    def fake_request(_origin: str, path: str, *, method: str = "GET", token: str, **_kwargs):
+        if method != "GET":
+            stateful_tokens.append(token)
+        if path == "/api/v1/research-definitions" and method == "POST":
+            return 422, {"detail": {"reason_code": "CLIENT_WORKSPACE_FORBIDDEN"}}
+        if method == "GET" and path in {
+            "/api/v1/research-definitions",
+            "/api/v1/research-runs",
+            "/api/v1/daily-tracks",
+        }:
+            return 200, {"items": []}
+        return 404, {}
+
+    monkeypatch.setattr(module, "request", fake_request)
+
+    module.assert_cross_workspace_denial(
+        "https://localhost",
+        "original",
+        foreign_workspace_id="workspace-a",
+        draft_id="draft-a",
+        run_id="run-a",
+        track_id="track-a",
+        advance_id="advance-a",
+        suffix="acceptance",
+        token_refresher=refresh,
+    )
+
+    assert stateful_tokens == issued
+    assert len(stateful_tokens) == len(set(stateful_tokens))
+    assert "original" not in stateful_tokens
+
+
 def test_local_postgres_acceptance_uses_an_isolated_real_database(
     tmp_path: Path,
 ) -> None:

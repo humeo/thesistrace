@@ -344,11 +344,13 @@ def seed_user(email: str, password: str, origin: str) -> tuple[str, str]:
     if not isinstance(token, str):
         raise AcceptanceFailure("email verification did not return an access token")
 
+    token = login_user(email, password, origin, label="login before first provisioning")
     first = require_eventual_status(
         lambda: request(origin, "/api/v1/provision", method="POST", token=token),
         201,
         "first provisioning",
     )
+    token = login_user(email, password, origin, label="login before provisioning retry")
     second = require_eventual_status(
         lambda: request(origin, "/api/v1/provision", method="POST", token=token),
         200,
@@ -360,6 +362,7 @@ def seed_user(email: str, password: str, origin: str) -> tuple[str, str]:
         or second.get("created") is not False
     ):
         raise AcceptanceFailure("provisioning did not preserve exactly one identity")
+    token = login_user(email, password, origin, label="login after provisioning")
     session = require_status(
         request(origin, "/api/v1/session", token=token),
         200,
@@ -421,6 +424,7 @@ def assert_cross_workspace_denial(
     track_id: str,
     advance_id: str,
     suffix: str,
+    token_refresher: Callable[[], str] | None = None,
 ) -> None:
     list_resources = (
         ("/api/v1/research-definitions", draft_id),
@@ -474,12 +478,17 @@ def assert_cross_workspace_denial(
         ("DELETE", f"/api/v1/research-runs/{run_id}", None, None),
     )
     for method, path, body, headers in denied:
+        operation_token = (
+            refresh_access_token(token, token_refresher, f"login before {method} {path}")
+            if method != "GET"
+            else token
+        )
         status, payload = request(
             origin,
             path,
             method=method,
             body=body,
-            token=token,
+            token=operation_token,
             headers=headers,
         )
         if status != 404:
@@ -488,6 +497,7 @@ def assert_cross_workspace_denial(
                 f"{status} {payload}"
             )
 
+    token = refresh_access_token(token, token_refresher, "login before Workspace forgery")
     forged = require_status(
         request(
             origin,
@@ -1049,6 +1059,160 @@ def _required_text(value: dict[str, object], name: str) -> str:
     return candidate
 
 
+def _canonical_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
+def _identity_post_state(
+    origin: str,
+    credentials: dict[str, object],
+    product: dict[str, object],
+) -> dict[str, object]:
+    token_a = login_user(
+        _required_text(credentials, "email_a"),
+        _required_text(credentials, "password_a"),
+        origin,
+        label="User A post-state login",
+    )
+    token_b = login_user(
+        _required_text(credentials, "email_b"),
+        _required_text(credentials, "password_b"),
+        origin,
+        label="User B post-state login",
+    )
+    session_a = require_status(
+        request(origin, "/api/v1/session", token=token_a),
+        200,
+        "User A post-state session",
+    )
+    session_b = require_status(
+        request(origin, "/api/v1/session", token=token_b),
+        200,
+        "User B post-state session",
+    )
+    for label, session, workspace_id in (
+        ("User A", session_a, _required_text(product, "workspace_a")),
+        ("User B", session_b, _required_text(product, "workspace_b")),
+    ):
+        if session.get("workspace_id") != workspace_id:
+            raise AcceptanceFailure(f"{label} resolved a different retained Workspace")
+
+    run_id = _required_text(product, "run_id")
+    retained_run = require_status(
+        request(origin, f"/api/v1/research-runs/{run_id}", token=token_a),
+        200,
+        "retained ResearchRun",
+    )
+    if retained_run.get("status") != "succeeded":
+        raise AcceptanceFailure("retained ResearchRun is no longer succeeded")
+    result = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/result?daily_limit=1&position_limit=1",
+            token=token_a,
+        ),
+        200,
+        "retained bounded result",
+    )
+    track_id = _required_text(product, "track_id")
+    track = require_status(
+        request(origin, f"/api/v1/daily-tracks/{track_id}", token=token_a),
+        200,
+        "retained DailyTrack",
+    )
+    current = require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{track_id}/current?limit=1",
+            token=token_a,
+        ),
+        200,
+        "retained DailyTrack witness",
+    )
+    equivalence = require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{track_id}"
+            f"/equivalence-requests/{_required_text(product, 'equivalence_id')}",
+            token=token_a,
+        ),
+        200,
+        "retained equivalence witness",
+    )
+    release_id = _required_text(product, "release_id")
+    contract_a = require_status(
+        request(
+            origin,
+            f"/api/v1/dataset-releases/{release_id}/data-contract",
+            token=token_a,
+        ),
+        200,
+        "User A retained data contract",
+    )
+    contract_b = require_status(
+        request(
+            origin,
+            f"/api/v1/dataset-releases/{release_id}/data-contract",
+            token=token_b,
+        ),
+        200,
+        "User B retained data contract",
+    )
+    if contract_a != contract_b:
+        raise AcceptanceFailure("retained Dataset contract differed by local User")
+    for label, token in (
+        ("User A shared release", token_a),
+        ("User B shared release", token_b),
+    ):
+        releases = require_status(
+            request(origin, "/api/v1/dataset-releases", token=token),
+            200,
+            label,
+        )
+        if release_id not in {
+            str(item.get("id"))
+            for item in releases.get("items", [])
+            if isinstance(item, dict)
+        }:
+            raise AcceptanceFailure(f"{label} lost the retained Dataset Release")
+
+    result_digest = _canonical_sha256(result)
+    result_identity = _canonical_sha256(
+        {"research_run_id": run_id, "public_result_sha256": result_digest}
+    )
+    user_a_id = _required_text(session_a, "user_id")
+    user_b_id = _required_text(session_b, "user_id")
+    return {
+        "user_a_id": user_a_id,
+        "user_b_id": user_b_id,
+        "result_id": f"result_{result_identity[:32]}",
+        "result_identity_kind": "public_view_sha256",
+        "post_state_digests": {
+            "user_a": _canonical_sha256({"id": user_a_id}),
+            "user_b": _canonical_sha256({"id": user_b_id}),
+            "workspace_a": _canonical_sha256(
+                {"id": _required_text(product, "workspace_a")}
+            ),
+            "workspace_b": _canonical_sha256(
+                {"id": _required_text(product, "workspace_b")}
+            ),
+            "dataset_release": _canonical_sha256(contract_a),
+            "research_run": _canonical_sha256(retained_run),
+            "result": result_digest,
+            "daily_track": _canonical_sha256({"resource": track, "current": current}),
+            "equivalence": _canonical_sha256(equivalence),
+        },
+    }
+
+
 def _local_gate_evidence(gate: str, **values: object) -> dict[str, object]:
     return {
         "status": "passed",
@@ -1090,60 +1254,21 @@ def _retained_identity_evidence(
     credentials: dict[str, object],
     product: dict[str, object],
 ) -> dict[str, object]:
+    observed = _identity_post_state(origin, credentials, product)
+    for name in (
+        "user_a_id",
+        "user_b_id",
+        "result_id",
+        "result_identity_kind",
+        "post_state_digests",
+    ):
+        if observed[name] != product.get(name):
+            raise AcceptanceFailure(f"retained identity post-state changed: {name}")
     token_a = login_user(
         _required_text(credentials, "email_a"),
         _required_text(credentials, "password_a"),
         origin,
-        label="User A retained product login",
-    )
-    token_b = login_user(
-        _required_text(credentials, "email_b"),
-        _required_text(credentials, "password_b"),
-        origin,
-        label="User B retained product login",
-    )
-    for label, token, workspace_id in (
-        ("User A retained session", token_a, _required_text(product, "workspace_a")),
-        ("User B retained session", token_b, _required_text(product, "workspace_b")),
-    ):
-        session = require_status(request(origin, "/api/v1/session", token=token), 200, label)
-        if session.get("workspace_id") != workspace_id:
-            raise AcceptanceFailure(f"{label} resolved a different Workspace")
-    run_id = _required_text(product, "run_id")
-    retained_run = require_status(
-        request(origin, f"/api/v1/research-runs/{run_id}", token=token_a),
-        200,
-        "retained ResearchRun",
-    )
-    if retained_run.get("status") != "succeeded":
-        raise AcceptanceFailure("retained ResearchRun is no longer succeeded")
-    require_status(
-        request(
-            origin,
-            f"/api/v1/research-runs/{run_id}/result?daily_limit=1&position_limit=1",
-            token=token_a,
-        ),
-        200,
-        "retained bounded result",
-    )
-    require_status(
-        request(
-            origin,
-            f"/api/v1/daily-tracks/{_required_text(product, 'track_id')}/current?limit=1",
-            token=token_a,
-        ),
-        200,
-        "retained DailyTrack witness",
-    )
-    require_status(
-        request(
-            origin,
-            f"/api/v1/daily-tracks/{_required_text(product, 'track_id')}"
-            f"/equivalence-requests/{_required_text(product, 'equivalence_id')}",
-            token=token_a,
-        ),
-        200,
-        "retained equivalence witness",
+        label="User A retained Tombstone login",
     )
     for kind, resource_id in (
         ("research-runs", _required_text(product, "tombstone_run_id")),
@@ -1154,18 +1279,6 @@ def _retained_identity_evidence(
             404,
             f"retained {kind} Tombstone",
         )
-    for label, token in (("User A shared release", token_a), ("User B shared release", token_b)):
-        releases = require_status(
-            request(origin, "/api/v1/dataset-releases", token=token),
-            200,
-            label,
-        )
-        if _required_text(product, "release_id") not in {
-            str(item.get("id"))
-            for item in releases.get("items", [])
-            if isinstance(item, dict)
-        }:
-            raise AcceptanceFailure(f"{label} lost the retained Dataset Release")
     evidence = product.get("identity_evidence")
     if not isinstance(evidence, dict):
         raise AcceptanceFailure("retained identity evidence is unavailable")
@@ -1217,11 +1330,19 @@ def run_local_identity_product() -> dict[str, object]:
     token_a = password_recovery(origin, email_a, password_a)
     password_a = f"{password_a}-reset"
 
+    def fresh_user_a(label: str) -> str:
+        return login_user(email_a, password_a, origin, label=label)
+
+    def fresh_user_b(label: str) -> str:
+        return login_user(email_b, password_b, origin, label=label)
+
+    token_a = fresh_user_a("User A login before shared Release read")
     releases_a = poll(
         lambda: request(origin, "/api/v1/dataset-releases", token=token_a),
         lambda value: bool(value.get("items")),
         "shared local Dataset Release",
     )
+    token_b = fresh_user_b("User B login before shared Release read")
     releases_b = require_status(
         request(origin, "/api/v1/dataset-releases", token=token_b),
         200,
@@ -1251,6 +1372,7 @@ def run_local_identity_product() -> dict[str, object]:
     if contract_a != contract_b:
         raise AcceptanceFailure("shared Dataset contract differed by local User")
 
+    token_a = fresh_user_a("User A login before local draft creation")
     draft_a = require_status(
         request(
             origin,
@@ -1262,6 +1384,7 @@ def run_local_identity_product() -> dict[str, object]:
         201,
         "User A local draft",
     )
+    token_b = fresh_user_b("User B login before local draft creation")
     require_status(
         request(
             origin,
@@ -1273,6 +1396,7 @@ def run_local_identity_product() -> dict[str, object]:
         201,
         "User B local draft",
     )
+    token_a = fresh_user_a("User A login before ResearchRun request")
     run_response = require_status(
         request(
             origin,
@@ -1306,6 +1430,7 @@ def run_local_identity_product() -> dict[str, object]:
     if len(daily) > 1 or len(positions) > 1:
         raise AcceptanceFailure("local Result Bundle ignored bounded view limits")
 
+    token_a = fresh_user_a("User A login before DailyTrack activation")
     track = require_status(
         request(
             origin,
@@ -1348,6 +1473,7 @@ def run_local_identity_product() -> dict[str, object]:
         ),
     )
     advance_id = str(advanced["advances"][-1]["id"])
+    token_a = fresh_user_a("User A login before equivalence request")
     equivalence = require_status(
         request(
             origin,
@@ -1390,6 +1516,9 @@ def run_local_identity_product() -> dict[str, object]:
         track_id=track_id,
         advance_id=advance_id,
         suffix=suffix,
+        token_refresher=lambda: fresh_user_b(
+            "User B login before cross-Workspace stateful probe"
+        ),
     )
     stack(
         "operator",
@@ -1402,6 +1531,7 @@ def run_local_identity_product() -> dict[str, object]:
         "--max-active-daily-tracks",
         "1",
     )
+    token_a = fresh_user_a("User A login before quota probe")
     quota = require_status(
         request(
             origin,
@@ -1415,6 +1545,7 @@ def run_local_identity_product() -> dict[str, object]:
     )
     if quota.get("detail", {}).get("dimension") != "max_active_daily_tracks":
         raise AcceptanceFailure("local quota rejection lost its bounded dimension")
+    token_a = fresh_user_a("User A login before retained DailyTrack stop")
     require_status(
         request(
             origin,
@@ -1426,6 +1557,7 @@ def run_local_identity_product() -> dict[str, object]:
         "retained local DailyTrack stop",
     )
 
+    token_a = fresh_user_a("User A login before Tombstone probe rerun")
     tombstone_run = require_status(
         request(
             origin,
@@ -1438,6 +1570,7 @@ def run_local_identity_product() -> dict[str, object]:
         "local Tombstone probe run",
     )
     tombstone_run_id = require_resource_id(tombstone_run, "local Tombstone probe run")
+    token_a = fresh_user_a("User A login before idempotent Tombstone rerun")
     repeated_tombstone_run = require_status(
         request(
             origin,
@@ -1463,6 +1596,7 @@ def run_local_identity_product() -> dict[str, object]:
         lambda value: value.get("status") == "succeeded",
         "local Tombstone probe ResearchRun",
     )
+    token_a = fresh_user_a("User A login before Tombstone DailyTrack activation")
     tombstone_track = require_status(
         request(
             origin,
@@ -1475,6 +1609,7 @@ def run_local_identity_product() -> dict[str, object]:
         "local Tombstone probe DailyTrack",
     )
     tombstone_track_id = str(tombstone_track["id"])
+    token_a = fresh_user_a("User A login before Tombstone DailyTrack stop")
     require_status(
         request(
             origin,
@@ -1485,6 +1620,7 @@ def run_local_identity_product() -> dict[str, object]:
         200,
         "local Tombstone probe stop",
     )
+    token_a = fresh_user_a("User A login before DailyTrack deletion")
     require_status(
         request(
             origin,
@@ -1495,6 +1631,7 @@ def run_local_identity_product() -> dict[str, object]:
         202,
         "local DailyTrack Tombstone",
     )
+    token_a = fresh_user_a("User A login before ResearchRun deletion")
     require_status(
         request(
             origin,
@@ -1524,10 +1661,44 @@ def run_local_identity_product() -> dict[str, object]:
         if status != 404:
             raise AcceptanceFailure(f"raw or signed local Storage route is reachable: {path}")
 
+    credentials = {
+        "email_a": email_a,
+        "password_a": password_a,
+        "email_b": email_b,
+        "password_b": password_b,
+    }
+    product = {
+        "suffix": suffix,
+        "workspace_a": workspace_a,
+        "workspace_b": workspace_b,
+        "release_id": release_id,
+        "draft_a_id": str(draft_a["id"]),
+        "run_id": run_id,
+        "track_id": track_id,
+        "advance_id": advance_id,
+        "equivalence_id": equivalence_id,
+        "tombstone_run_id": tombstone_run_id,
+        "tombstone_track_id": tombstone_track_id,
+    }
+    post_state = _identity_post_state(origin, credentials, product)
+    product.update(post_state)
     evidence = _local_gate_evidence(
         "identity-product",
         two_users=True,
         personal_workspaces=2,
+        stable_resource_identifiers=True,
+        resource_ids={
+            "user_a": post_state["user_a_id"],
+            "user_b": post_state["user_b_id"],
+            "workspace_a": workspace_a,
+            "workspace_b": workspace_b,
+            "dataset_release": release_id,
+            "research_run": run_id,
+            "result": post_state["result_id"],
+            "daily_track": track_id,
+            "equivalence": equivalence_id,
+        },
+        post_state_digests=post_state["post_state_digests"],
         shared_release_id=release_id,
         bounded_result=True,
         bounded_time_series=True,
@@ -1539,29 +1710,8 @@ def run_local_identity_product() -> dict[str, object]:
         cross_workspace_operations=16,
         reused=False,
     )
-    write_local_acceptance_context(
-        state_dir,
-        {
-            "email_a": email_a,
-            "password_a": password_a,
-            "email_b": email_b,
-            "password_b": password_b,
-        },
-        {
-            "suffix": suffix,
-            "workspace_a": workspace_a,
-            "workspace_b": workspace_b,
-            "release_id": release_id,
-            "draft_a_id": str(draft_a["id"]),
-            "run_id": run_id,
-            "track_id": track_id,
-            "advance_id": advance_id,
-            "equivalence_id": equivalence_id,
-            "tombstone_run_id": tombstone_run_id,
-            "tombstone_track_id": tombstone_track_id,
-            "identity_evidence": evidence,
-        },
-    )
+    product["identity_evidence"] = evidence
+    write_local_acceptance_context(state_dir, credentials, product)
     return evidence
 
 
