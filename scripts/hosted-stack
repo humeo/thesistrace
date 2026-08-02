@@ -279,6 +279,20 @@ prepare_local_acceptance() {
     prepare
 }
 
+reset_local_release_state() {
+    case "$release_state" in
+        "$state_dir"/releases) ;;
+        *) echo "local Release state escaped Hosted state" >&2; exit 2 ;;
+    esac
+    case "$state_dir" in
+        /|"$HOME"|"$root")
+            echo "unsafe Hosted Local Acceptance state directory" >&2
+            exit 2
+            ;;
+    esac
+    rm -rf -- "$release_state"
+}
+
 require_acceptance_service() {
     case "$1" in
         api|execution-relay|data-worker|compute-worker-1|compute-worker-2|compute-worker-3|compute-worker-4) ;;
@@ -417,6 +431,10 @@ local_compose() {
 }
 
 seed_local_source_authorization() {
+    local marker="$state_dir/local-source-authorization"
+    if [ -f "$marker" ] && [ "$(sed -n '1p' "$marker")" = "$release_bundle_id" ]; then
+        return
+    fi
     local_compose run --rm --no-deps -T \
         --volume "$root:/workspace:ro" \
         --env PYTHONPATH=/workspace/src \
@@ -425,6 +443,9 @@ seed_local_source_authorization() {
         thesistrace-migrations \
         python /workspace/scripts/hosted/seed_acceptance_state.py \
         local-source-authorization
+    printf '%s\n' "$release_bundle_id" > "$marker.tmp"
+    chmod 600 "$marker.tmp"
+    mv "$marker.tmp" "$marker"
 }
 
 enter_maintenance() {
@@ -655,15 +676,25 @@ case "$action" in
         fi
         local_compose --profile local-ops --profile launch-capacity \
             down --volumes --remove-orphans
+        reset_local_release_state
+        rm -f -- "$state_dir/local-source-authorization"
         printf '{"status":"passed"}\n'
         ;;
     local-up)
         prepare_local_acceptance
-        stage_release
+        if [ -f "$release_state/current.json" ]; then
+            ensure_release
+            release_images verify-images
+        else
+            stage_release
+            build_candidate_images
+            activate_candidate
+        fi
         validate_public_edge
-        build_candidate_images
-        activate_candidate
-        local_compose up --detach --wait --no-build
+        if ! local_compose up --detach --wait --no-build; then
+            echo "local core convergence failed once; retrying the same staged release" >&2
+            local_compose up --detach --wait --no-build
+        fi
         seed_local_source_authorization >/dev/null
         printf '{"release_bundle_id":"%s","status":"passed"}\n' \
             "$release_bundle_id"

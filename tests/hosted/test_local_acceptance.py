@@ -727,6 +727,25 @@ def test_core_session_state_rejects_extra_compute_or_observability_services() ->
                 {**valid, "topology": [*valid["topology"], {"service": forbidden}]},
                 "release-local",
             )
+
+
+def test_reusable_core_keeps_release_and_source_authorization_state() -> None:
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    local_up = launcher.split("    local-up)", 1)[1].split("        ;;", 1)[0]
+    local_reset = launcher.split("    local-reset)", 1)[1].split("        ;;", 1)[0]
+    seed = launcher.split("seed_local_source_authorization()", 1)[1].split("}\n", 1)[0]
+
+    assert 'if [ -f "$release_state/current.json" ]' in local_up
+    assert "release_images verify-images" in local_up
+    assert local_up.count("stage_release") == 1
+    assert local_up.count("build_candidate_images") == 1
+    assert "local core convergence failed once" in local_up
+    assert "local-source-authorization" in seed
+    assert 'sed -n \'1p\' "$marker"' in seed
+    assert 'mv "$marker.tmp" "$marker"' in seed
+    assert 'rm -f -- "$state_dir/local-source-authorization"' in local_reset
+
+
 def test_local_acceptance_writes_distinct_non_launch_evidence(
     tmp_path: Path,
 ) -> None:
