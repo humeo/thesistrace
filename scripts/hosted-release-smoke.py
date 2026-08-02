@@ -14,6 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 STACK = ROOT / "scripts" / "hosted-stack"
 VERIFY_CODE = "471025"
 RESET_CODE = "830614"
+LOCAL_CREDENTIALS_FILE = "public-origin-credentials.json"
+LOCAL_CONTEXT_FILE = "public-origin-context.json"
 
 
 class AcceptanceFailure(RuntimeError):
@@ -51,6 +53,67 @@ def acceptance_profile(name: str) -> AcceptanceProfile:
             invitation_gate_reason="CAPACITY_QUALIFICATION_REQUIRED",
         )
     raise AcceptanceFailure(f"unknown public-origin acceptance profile: {name}")
+
+
+def _write_private_json(path: Path, value: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(value, sort_keys=True, separators=(",", ":")))
+    temporary.chmod(0o600)
+    temporary.replace(path)
+    path.chmod(0o600)
+
+
+def _reject_persisted_tokens(value: object, *, path: str = "context") -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized = str(key).lower().replace("-", "_")
+            if "token" in normalized or normalized == "authorization":
+                raise AcceptanceFailure(
+                    f"access or session token is forbidden in local {path}"
+                )
+            _reject_persisted_tokens(item, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_persisted_tokens(item, path=f"{path}[{index}]")
+
+
+def write_local_acceptance_context(
+    state_dir: Path,
+    credentials: dict[str, object],
+    product: dict[str, object],
+) -> None:
+    required_credentials = {"email_a", "password_a", "email_b", "password_b"}
+    if set(credentials) != required_credentials or any(
+        not isinstance(credentials[name], str) or not credentials[name]
+        for name in required_credentials
+    ):
+        raise AcceptanceFailure("local acceptance credentials are incomplete")
+    _reject_persisted_tokens(product)
+    resolved = state_dir.resolve()
+    _write_private_json(resolved / LOCAL_CREDENTIALS_FILE, credentials)
+    _write_private_json(resolved / LOCAL_CONTEXT_FILE, product)
+
+
+def read_local_acceptance_context(
+    state_dir: Path,
+) -> tuple[dict[str, object], dict[str, object]]:
+    try:
+        credentials = json.loads((state_dir / LOCAL_CREDENTIALS_FILE).read_text())
+        product = json.loads((state_dir / LOCAL_CONTEXT_FILE).read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise AcceptanceFailure("local acceptance product context is unavailable") from error
+    if not isinstance(credentials, dict) or not isinstance(product, dict):
+        raise AcceptanceFailure("local acceptance product context is invalid")
+    _reject_persisted_tokens(product)
+    return credentials, product
+
+
+def local_acceptance_state_dir() -> Path:
+    value = os.environ.get("THESISTRACE_HOST_STATE_DIR")
+    if not value:
+        raise AcceptanceFailure("THESISTRACE_HOST_STATE_DIR is required")
+    return Path(value).resolve()
 
 
 def read_json_object(response) -> dict[str, object]:
@@ -142,6 +205,27 @@ def require_status(
     return payload
 
 
+def require_eventual_status(
+    operation: Callable[[], tuple[int, dict[str, object]]],
+    expected: int | tuple[int, ...],
+    label: str,
+    *,
+    attempts: int = 3,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> dict[str, object]:
+    accepted = (expected,) if isinstance(expected, int) else expected
+    last: tuple[int, dict[str, object]] = (0, {})
+    for attempt in range(attempts):
+        last = operation()
+        if last[0] in accepted:
+            return last[1]
+        if last[0] not in {500, 502, 503, 504}:
+            return require_status(last, accepted, label)
+        if attempt + 1 < attempts:
+            sleeper(2)
+    return require_status(last, accepted, label)
+
+
 def require_resource_id(payload: dict[str, object], label: str) -> str:
     resource_id = payload.get("id")
     if not isinstance(resource_id, str) or not resource_id:
@@ -170,8 +254,8 @@ def poll(
 
 
 def register_user(email: str, password: str, origin: str) -> tuple[str, str]:
-    anon_key_payload = require_status(
-        request(origin, "/api/auth/anon-key"),
+    anon_key_payload = require_eventual_status(
+        lambda: request(origin, "/api/auth/anon-key"),
         200,
         "public anon key",
     )
@@ -179,8 +263,8 @@ def register_user(email: str, password: str, origin: str) -> tuple[str, str]:
     if not isinstance(anon_key, str) or not anon_key.startswith("anon_"):
         raise AcceptanceFailure("public anon key was missing or malformed")
 
-    registration = require_status(
-        request(
+    registration = require_eventual_status(
+        lambda: request(
             origin,
             "/api/auth/users?client_type=server",
             method="POST",
@@ -203,8 +287,8 @@ def login_user(
     *,
     label: str = "login",
 ) -> str:
-    logged_in = require_status(
-        request(
+    logged_in = require_eventual_status(
+        lambda: request(
             origin,
             "/api/auth/sessions?client_type=server",
             method="POST",
@@ -244,8 +328,8 @@ def seed_user(email: str, password: str, origin: str) -> tuple[str, str]:
         raise AcceptanceFailure("unverified identity was not classified explicitly")
 
     stack("acceptance-seed-otp", email, "VERIFY_EMAIL", VERIFY_CODE)
-    verified = require_status(
-        request(
+    verified = require_eventual_status(
+        lambda: request(
             origin,
             "/api/auth/email/verify?client_type=server",
             method="POST",
@@ -258,13 +342,13 @@ def seed_user(email: str, password: str, origin: str) -> tuple[str, str]:
     if not isinstance(token, str):
         raise AcceptanceFailure("email verification did not return an access token")
 
-    first = require_status(
-        request(origin, "/api/v1/provision", method="POST", token=token),
+    first = require_eventual_status(
+        lambda: request(origin, "/api/v1/provision", method="POST", token=token),
         201,
         "first provisioning",
     )
-    second = require_status(
-        request(origin, "/api/v1/provision", method="POST", token=token),
+    second = require_eventual_status(
+        lambda: request(origin, "/api/v1/provision", method="POST", token=token),
         200,
         "idempotent provisioning",
     )
@@ -418,8 +502,8 @@ def assert_cross_workspace_denial(
 
 
 def password_recovery(origin: str, email: str, old_password: str) -> str:
-    require_status(
-        request(
+    require_eventual_status(
+        lambda: request(
             origin,
             "/api/auth/email/send-reset-password",
             method="POST",
@@ -429,8 +513,8 @@ def password_recovery(origin: str, email: str, old_password: str) -> str:
         "non-disclosing reset request",
     )
     stack("acceptance-seed-otp", email, "RESET_PASSWORD", RESET_CODE)
-    exchanged = require_status(
-        request(
+    exchanged = require_eventual_status(
+        lambda: request(
             origin,
             "/api/auth/email/exchange-reset-password-token",
             method="POST",
@@ -443,8 +527,8 @@ def password_recovery(origin: str, email: str, old_password: str) -> str:
     if not isinstance(reset_token, str):
         raise AcceptanceFailure("password recovery did not return a reset token")
     new_password = f"{old_password}-reset"
-    require_status(
-        request(
+    require_eventual_status(
+        lambda: request(
             origin,
             "/api/auth/email/reset-password",
             method="POST",
@@ -889,6 +973,536 @@ def run_recovery_interruption_matrix(
     if profile.whole_node_recovery:
         result.update({"maintenance": True, "node": True})
     return result, recovery_run_id
+
+
+def _local_origin() -> str:
+    origin = os.environ.get("THESISTRACE_HOSTED_ORIGIN")
+    if not origin:
+        raise AcceptanceFailure("THESISTRACE_HOSTED_ORIGIN is required")
+    return origin
+
+
+def _required_text(value: dict[str, object], name: str) -> str:
+    candidate = value.get(name)
+    if not isinstance(candidate, str) or not candidate:
+        raise AcceptanceFailure(f"local acceptance context has no {name}")
+    return candidate
+
+
+def _local_gate_evidence(gate: str, **values: object) -> dict[str, object]:
+    return {
+        "status": "passed",
+        "schema_version": "hosted-local-public-origin-gate-v1",
+        "profile": "local",
+        "gate": gate,
+        **values,
+    }
+
+
+def _update_local_product_context(**values: object) -> dict[str, object]:
+    state_dir = local_acceptance_state_dir()
+    credentials, product = read_local_acceptance_context(state_dir)
+    product.update(values)
+    write_local_acceptance_context(state_dir, credentials, product)
+    return product
+
+
+def _fresh_local_logins() -> tuple[str, str, dict[str, object], dict[str, object]]:
+    credentials, product = read_local_acceptance_context(local_acceptance_state_dir())
+    origin = _local_origin()
+    token_a = login_user(
+        _required_text(credentials, "email_a"),
+        _required_text(credentials, "password_a"),
+        origin,
+        label="User A fresh local gate login",
+    )
+    token_b = login_user(
+        _required_text(credentials, "email_b"),
+        _required_text(credentials, "password_b"),
+        origin,
+        label="User B fresh local gate login",
+    )
+    return token_a, token_b, credentials, product
+
+
+def _retained_identity_evidence(
+    origin: str,
+    credentials: dict[str, object],
+    product: dict[str, object],
+) -> dict[str, object]:
+    token_a = login_user(
+        _required_text(credentials, "email_a"),
+        _required_text(credentials, "password_a"),
+        origin,
+        label="User A retained product login",
+    )
+    token_b = login_user(
+        _required_text(credentials, "email_b"),
+        _required_text(credentials, "password_b"),
+        origin,
+        label="User B retained product login",
+    )
+    for label, token, workspace_id in (
+        ("User A retained session", token_a, _required_text(product, "workspace_a")),
+        ("User B retained session", token_b, _required_text(product, "workspace_b")),
+    ):
+        session = require_status(request(origin, "/api/v1/session", token=token), 200, label)
+        if session.get("workspace_id") != workspace_id:
+            raise AcceptanceFailure(f"{label} resolved a different Workspace")
+    run_id = _required_text(product, "run_id")
+    retained_run = require_status(
+        request(origin, f"/api/v1/research-runs/{run_id}", token=token_a),
+        200,
+        "retained ResearchRun",
+    )
+    if retained_run.get("status") != "succeeded":
+        raise AcceptanceFailure("retained ResearchRun is no longer succeeded")
+    require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/result?daily_limit=1&position_limit=1",
+            token=token_a,
+        ),
+        200,
+        "retained bounded result",
+    )
+    require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{_required_text(product, 'track_id')}/current?limit=1",
+            token=token_a,
+        ),
+        200,
+        "retained DailyTrack witness",
+    )
+    require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{_required_text(product, 'track_id')}"
+            f"/equivalence-requests/{_required_text(product, 'equivalence_id')}",
+            token=token_a,
+        ),
+        200,
+        "retained equivalence witness",
+    )
+    for kind, resource_id in (
+        ("research-runs", _required_text(product, "tombstone_run_id")),
+        ("daily-tracks", _required_text(product, "tombstone_track_id")),
+    ):
+        require_status(
+            request(origin, f"/api/v1/{kind}/{resource_id}", token=token_a),
+            404,
+            f"retained {kind} Tombstone",
+        )
+    for label, token in (("User A shared release", token_a), ("User B shared release", token_b)):
+        releases = require_status(
+            request(origin, "/api/v1/dataset-releases", token=token),
+            200,
+            label,
+        )
+        if _required_text(product, "release_id") not in {
+            str(item.get("id"))
+            for item in releases.get("items", [])
+            if isinstance(item, dict)
+        }:
+            raise AcceptanceFailure(f"{label} lost the retained Dataset Release")
+    evidence = product.get("identity_evidence")
+    if not isinstance(evidence, dict):
+        raise AcceptanceFailure("retained identity evidence is unavailable")
+    return {**evidence, "reused": True}
+
+
+def run_local_identity_product() -> dict[str, object]:
+    origin = _local_origin()
+    state_dir = local_acceptance_state_dir()
+    if (state_dir / LOCAL_CREDENTIALS_FILE).exists() or (state_dir / LOCAL_CONTEXT_FILE).exists():
+        credentials, product = read_local_acceptance_context(state_dir)
+        return _retained_identity_evidence(origin, credentials, product)
+
+    profile = acceptance_profile("local")
+    suffix = uuid4().hex
+    email_a = f"local-a-{suffix}@example.invalid"
+    email_b = f"local-b-{suffix}@example.invalid"
+    password_a = f"Local-A-{suffix[:12]}!9"
+    password_b = f"Local-B-{suffix[:12]}!9"
+
+    stack("acceptance-assert-clean")
+    blocked = stack(
+        "operator",
+        "invitation",
+        "issue",
+        "--actor",
+        profile.actor,
+        "--email",
+        f"blocked-{suffix}@example.invalid",
+        "--expires-at",
+        "2099-01-01T00:00:00Z",
+        expect=2,
+    )
+    if blocked.get("reason_code") != profile.invitation_gate_reason:
+        raise AcceptanceFailure(f"closed local invitation gate was not enforced: {blocked}")
+    stack(
+        "operator",
+        "dataset-publication",
+        "request",
+        "--actor",
+        profile.actor,
+        "--kind",
+        "fixture_bootstrap",
+        "--idempotency-key",
+        f"local-bootstrap-{suffix}",
+    )
+    token_a, workspace_a = seed_user(email_a, password_a, origin)
+    token_b, workspace_b = seed_user(email_b, password_b, origin)
+    token_a = password_recovery(origin, email_a, password_a)
+    password_a = f"{password_a}-reset"
+
+    releases_a = poll(
+        lambda: request(origin, "/api/v1/dataset-releases", token=token_a),
+        lambda value: bool(value.get("items")),
+        "shared local Dataset Release",
+    )
+    releases_b = require_status(
+        request(origin, "/api/v1/dataset-releases", token=token_b),
+        200,
+        "User B shared local Dataset Release",
+    )
+    if releases_a != releases_b:
+        raise AcceptanceFailure("local Users received different shared Release views")
+    release_id = str(releases_a["items"][-1]["id"])
+    contract_a = require_status(
+        request(
+            origin,
+            f"/api/v1/dataset-releases/{release_id}/data-contract",
+            token=token_a,
+        ),
+        200,
+        "User A shared data contract",
+    )
+    contract_b = require_status(
+        request(
+            origin,
+            f"/api/v1/dataset-releases/{release_id}/data-contract",
+            token=token_b,
+        ),
+        200,
+        "User B shared data contract",
+    )
+    if contract_a != contract_b:
+        raise AcceptanceFailure("shared Dataset contract differed by local User")
+
+    draft_a = require_status(
+        request(
+            origin,
+            "/api/v1/research-definitions",
+            method="POST",
+            body=definition("Local acceptance A"),
+            token=token_a,
+        ),
+        201,
+        "User A local draft",
+    )
+    require_status(
+        request(
+            origin,
+            "/api/v1/research-definitions",
+            method="POST",
+            body=definition("Local acceptance B"),
+            token=token_b,
+        ),
+        201,
+        "User B local draft",
+    )
+    run_response = require_status(
+        request(
+            origin,
+            f"/api/v1/research-definitions/{draft_a['id']}/runs",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-run-{suffix}"},
+        ),
+        202,
+        "local ResearchRun request",
+    )
+    run_id = str(run_response["run"]["id"])
+    run = poll(
+        lambda: request(origin, f"/api/v1/research-runs/{run_id}", token=token_a),
+        lambda value: value.get("status") == "succeeded",
+        "local ResearchRun",
+    )
+    if "result_manifest_sha256" in run:
+        raise AcceptanceFailure("local ResearchRun disclosed its storage identity")
+    result = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/result?daily_limit=1&position_limit=1",
+            token=token_a,
+        ),
+        200,
+        "local bounded Result Bundle",
+    )
+    daily = result.get("strategy_backtest", {}).get("daily", [])
+    positions = result.get("terminal_strategy_state", {}).get("positions", [])
+    if len(daily) > 1 or len(positions) > 1:
+        raise AcceptanceFailure("local Result Bundle ignored bounded view limits")
+
+    track = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/daily-tracks",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-track-{suffix}"},
+        ),
+        (200, 201),
+        "local DailyTrack activation",
+    )
+    track_id = str(track["id"])
+    initial_release_count = len(releases_a["items"])
+    stack(
+        "operator",
+        "dataset-publication",
+        "request",
+        "--actor",
+        profile.actor,
+        "--kind",
+        "fixture_increment",
+        "--new-sessions",
+        "1",
+        "--idempotency-key",
+        f"local-increment-{suffix}",
+    )
+    poll(
+        lambda: request(origin, "/api/v1/dataset-releases", token=token_a),
+        lambda value: len(value.get("items", [])) > initial_release_count,
+        "local Dataset Publication increment",
+    )
+    advanced = poll(
+        lambda: request(origin, f"/api/v1/daily-tracks/{track_id}", token=token_a),
+        lambda value: any(
+            item.get("status") == "succeeded" for item in value.get("advances", [])
+        ),
+        "local DailyTrack Advance",
+        terminal_failure=lambda value: any(
+            item.get("status") == "failed" for item in value.get("advances", [])
+        ),
+    )
+    advance_id = str(advanced["advances"][-1]["id"])
+    equivalence = require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{track_id}/equivalence-requests",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-equivalence-{suffix}"},
+        ),
+        202,
+        "local Batch-Incremental Equivalence request",
+    )
+    equivalence_id = str(equivalence["id"])
+    poll(
+        lambda: request(
+            origin,
+            f"/api/v1/daily-tracks/{track_id}/equivalence-requests/{equivalence_id}",
+            token=token_a,
+        ),
+        lambda value: value.get("status") == "succeeded",
+        "local Batch-Incremental Equivalence",
+    )
+    current = require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{track_id}/current?limit=1",
+            token=token_a,
+        ),
+        200,
+        "local bounded DailyTrack view",
+    )
+    if current.get("window", {}).get("maximum_sessions") != 1:
+        raise AcceptanceFailure("local DailyTrack view ignored the requested bound")
+
+    assert_cross_workspace_denial(
+        origin,
+        token_b,
+        foreign_workspace_id=workspace_a,
+        draft_id=str(draft_a["id"]),
+        run_id=run_id,
+        track_id=track_id,
+        advance_id=advance_id,
+        suffix=suffix,
+    )
+    stack(
+        "operator",
+        "quota",
+        "override",
+        "--actor",
+        profile.actor,
+        "--workspace-id",
+        workspace_a,
+        "--max-active-daily-tracks",
+        "1",
+    )
+    quota = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/daily-tracks",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-quota-track-{suffix}"},
+        ),
+        409,
+        "local DailyTrack quota",
+    )
+    if quota.get("detail", {}).get("dimension") != "max_active_daily_tracks":
+        raise AcceptanceFailure("local quota rejection lost its bounded dimension")
+    require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{track_id}/stop",
+            method="POST",
+            token=token_a,
+        ),
+        200,
+        "retained local DailyTrack stop",
+    )
+
+    tombstone_run = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/rerun",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-tombstone-run-{suffix}"},
+        ),
+        (200, 202),
+        "local Tombstone probe run",
+    )
+    tombstone_run_id = require_resource_id(tombstone_run, "local Tombstone probe run")
+    repeated_tombstone_run = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/rerun",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-tombstone-run-{suffix}"},
+        ),
+        (200, 202),
+        "idempotent local Tombstone probe rerun",
+    )
+    if require_resource_id(
+        repeated_tombstone_run,
+        "idempotent local Tombstone probe rerun",
+    ) != tombstone_run_id:
+        raise AcceptanceFailure("local rerun idempotency created a duplicate ResearchRun")
+    poll(
+        lambda: request(
+            origin,
+            f"/api/v1/research-runs/{tombstone_run_id}",
+            token=token_a,
+        ),
+        lambda value: value.get("status") == "succeeded",
+        "local Tombstone probe ResearchRun",
+    )
+    tombstone_track = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{tombstone_run_id}/daily-tracks",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"local-tombstone-track-{suffix}"},
+        ),
+        (200, 201),
+        "local Tombstone probe DailyTrack",
+    )
+    tombstone_track_id = str(tombstone_track["id"])
+    require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{tombstone_track_id}/stop",
+            method="POST",
+            token=token_a,
+        ),
+        200,
+        "local Tombstone probe stop",
+    )
+    require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{tombstone_track_id}",
+            method="DELETE",
+            token=token_a,
+        ),
+        202,
+        "local DailyTrack Tombstone",
+    )
+    require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{tombstone_run_id}",
+            method="DELETE",
+            token=token_a,
+        ),
+        202,
+        "local ResearchRun Tombstone",
+    )
+    for path in (
+        f"/api/v1/daily-tracks/{tombstone_track_id}",
+        f"/api/v1/research-runs/{tombstone_run_id}",
+    ):
+        status, _payload = request(origin, path, token=token_a)
+        if status != 404:
+            raise AcceptanceFailure(f"local deleted resource remained reachable: {path}")
+    for path in (
+        f"/api/v1/objects/{'a' * 64}",
+        "/api/storage/acceptance",
+        "/storage/acceptance",
+        "/storage/nested/acceptance",
+        "/storage/%2e%2e/acceptance",
+        "/storage/v1/object/sign/acceptance",
+    ):
+        status, _payload = request(origin, path, token=token_a)
+        if status != 404:
+            raise AcceptanceFailure(f"raw or signed local Storage route is reachable: {path}")
+
+    evidence = _local_gate_evidence(
+        "identity-product",
+        two_users=True,
+        personal_workspaces=2,
+        shared_release_id=release_id,
+        bounded_result=True,
+        bounded_time_series=True,
+        quota=True,
+        tombstones=True,
+        deleted_resources_inaccessible=True,
+        raw_storage_absent=True,
+        equivalence_retained=True,
+        cross_workspace_operations=16,
+        reused=False,
+    )
+    write_local_acceptance_context(
+        state_dir,
+        {
+            "email_a": email_a,
+            "password_a": password_a,
+            "email_b": email_b,
+            "password_b": password_b,
+        },
+        {
+            "suffix": suffix,
+            "workspace_a": workspace_a,
+            "workspace_b": workspace_b,
+            "release_id": release_id,
+            "draft_a_id": str(draft_a["id"]),
+            "run_id": run_id,
+            "track_id": track_id,
+            "advance_id": advance_id,
+            "equivalence_id": equivalence_id,
+            "tombstone_run_id": tombstone_run_id,
+            "tombstone_track_id": tombstone_track_id,
+            "identity_evidence": evidence,
+        },
+    )
+    return evidence
 
 
 def run_public_origin_acceptance(

@@ -38,6 +38,15 @@ def public_smoke_module() -> ModuleType:
     return module
 
 
+def local_public_smoke_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted-local-smoke.py"
+    spec = importlib.util.spec_from_file_location("hosted_local_public_smoke", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def local_postgres_module() -> ModuleType:
     path = ROOT / "scripts" / "hosted" / "local_postgres_acceptance.py"
     spec = importlib.util.spec_from_file_location("hosted_local_postgres", path)
@@ -949,10 +958,72 @@ def test_local_ops_reports_the_failing_endpoint_name_and_url(monkeypatch) -> Non
 def test_local_public_smoke_is_distinct_and_reuses_the_real_product_flow() -> None:
     script = (ROOT / "scripts" / "hosted-local-smoke.py").read_text()
 
-    assert 'run_public_origin_acceptance("local")' in script
-    assert "hosted-local-public-origin-v1" in script
+    for gate in (
+        "identity-product",
+        "api-relay-recovery",
+        "compute-recovery",
+        "publication-recovery",
+    ):
+        assert gate in script
+    assert "hosted-local-public-origin-gate-v1" in script
     assert "acceptance-record-launch" not in script
     assert "capacity-qualification" not in script
+
+
+def test_local_public_smoke_dispatches_exactly_one_named_gate(monkeypatch) -> None:
+    module = local_public_smoke_module()
+    calls: list[str] = []
+
+    class ReleaseSmoke:
+        def run_local_identity_product(self):
+            calls.append("identity-product")
+            return {"status": "passed", "gate": "identity-product"}
+
+        def run_local_api_relay_recovery(self):
+            calls.append("api-relay-recovery")
+            return {"status": "passed", "gate": "api-relay-recovery"}
+
+        def run_local_compute_recovery(self):
+            calls.append("compute-recovery")
+            return {"status": "passed", "gate": "compute-recovery"}
+
+        def run_local_publication_recovery(self):
+            calls.append("publication-recovery")
+            return {"status": "passed", "gate": "publication-recovery"}
+
+    monkeypatch.setattr(module, "release_smoke_module", lambda: ReleaseSmoke())
+
+    evidence = module.run_gate("compute-recovery")
+
+    assert calls == ["compute-recovery"]
+    assert evidence == {"status": "passed", "gate": "compute-recovery"}
+
+
+def test_local_product_context_keeps_credentials_private_and_rejects_tokens(
+    tmp_path: Path,
+) -> None:
+    module = public_smoke_module()
+    credentials = {
+        "email_a": "user-a@example.invalid",
+        "password_a": "acceptance-only-a",
+        "email_b": "user-b@example.invalid",
+        "password_b": "acceptance-only-b",
+    }
+    product = {"workspace_a": "workspace-a", "run_id": "run-a"}
+
+    module.write_local_acceptance_context(tmp_path, credentials, product)
+    loaded_credentials, loaded_product = module.read_local_acceptance_context(tmp_path)
+
+    assert loaded_credentials == credentials
+    assert loaded_product == product
+    for name in ("public-origin-credentials.json", "public-origin-context.json"):
+        assert stat.S_IMODE((tmp_path / name).stat().st_mode) == 0o600
+    with pytest.raises(module.AcceptanceFailure, match="token"):
+        module.write_local_acceptance_context(
+            tmp_path,
+            credentials,
+            {**product, "access_token": "forbidden"},
+        )
 
 
 def test_local_postgres_acceptance_uses_an_isolated_real_database(

@@ -217,6 +217,33 @@ def test_public_smoke_can_reauthenticate_after_long_recovery(monkeypatch) -> Non
     assert matrix < refreshed_b < isolation
 
 
+def test_public_smoke_retries_only_transient_gateway_failures() -> None:
+    module = public_smoke_module()
+    responses = iter(
+        [
+            (500, {"message": "connection timeout"}),
+            (200, {"accessToken": "verified"}),
+        ]
+    )
+    sleeps: list[float] = []
+
+    assert module.require_eventual_status(
+        lambda: next(responses),
+        200,
+        "email verification",
+        sleeper=sleeps.append,
+    ) == {"accessToken": "verified"}
+    assert sleeps == [2]
+
+    with pytest.raises(module.AcceptanceFailure, match="expected"):
+        module.require_eventual_status(
+            lambda: (409, {"reason": "conflict"}),
+            200,
+            "non-transient conflict",
+            sleeper=lambda _seconds: None,
+        )
+
+
 def test_public_smoke_preserves_real_equivalence_evidence_after_tombstone_checks() -> None:
     script = (ROOT / "scripts" / "hosted-release-smoke.py").read_text()
 
