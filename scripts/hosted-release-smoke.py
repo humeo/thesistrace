@@ -6,6 +6,7 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import NamedTuple
 from uuid import uuid4
@@ -1503,6 +1504,115 @@ def run_local_identity_product() -> dict[str, object]:
         },
     )
     return evidence
+
+
+def run_local_api_relay_recovery() -> dict[str, object]:
+    origin = _local_origin()
+    token_a, _token_b, credentials, product = _fresh_local_logins()
+    run_id = _required_text(product, "run_id")
+    suffix = _required_text(product, "suffix")
+    rerun_key = f"local-api-relay-{suffix}"
+
+    def attempt(token: str) -> tuple[int, dict[str, object]]:
+        try:
+            return request(
+                origin,
+                f"/api/v1/research-runs/{run_id}/rerun",
+                method="POST",
+                token=token,
+                headers={"Idempotency-Key": rerun_key},
+            )
+        except urllib.error.URLError:
+            return 0, {}
+
+    for service in ("compute-worker-1", "execution-relay"):
+        stack("acceptance-stop-service", service)
+    try:
+        stack("acceptance-stop-service", "api")
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                unavailable = list(pool.map(lambda _index: attempt(token_a), range(2)))
+        finally:
+            stack("acceptance-start-service", "api")
+        if any(status != 0 and status < 500 for status, _payload in unavailable):
+            raise AcceptanceFailure(
+                f"API accepted a request while explicitly unavailable: {unavailable}"
+            )
+        poll(
+            lambda: request(origin, "/api/v1/session", token=token_a),
+            lambda value: bool(value.get("workspace_id")),
+            "local API recovery",
+        )
+        token_a = login_user(
+            _required_text(credentials, "email_a"),
+            _required_text(credentials, "password_a"),
+            origin,
+            label="User A login after local API recovery",
+        )
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            admitted = list(pool.map(lambda _index: attempt(token_a), range(3)))
+        accepted = [
+            require_status(response, (200, 202), "concurrent idempotent API recovery")
+            for response in admitted
+        ]
+        recovery_ids = {
+            require_resource_id(value, "concurrent idempotent API recovery")
+            for value in accepted
+        }
+        if len(recovery_ids) != 1:
+            raise AcceptanceFailure("concurrent API recovery created duplicate ResearchRuns")
+        recovery_run_id = recovery_ids.pop()
+        queued = require_status(
+            request(origin, f"/api/v1/research-runs/{recovery_run_id}", token=token_a),
+            200,
+            "ResearchRun queued behind stopped relay",
+        )
+        if queued.get("status") != "queued":
+            raise AcceptanceFailure("ResearchRun escaped the durable outbox while relay was down")
+        assert_single_resource(
+            origin,
+            token_a,
+            "/api/v1/research-runs",
+            recovery_run_id,
+            "local API/relay ResearchRun",
+        )
+        stack("acceptance-start-service", "execution-relay")
+        stack("acceptance-start-service", "compute-worker-1")
+        recovered = poll(
+            lambda: request(
+                origin,
+                f"/api/v1/research-runs/{recovery_run_id}",
+                token=token_a,
+            ),
+            lambda value: value.get("status") == "succeeded",
+            "local outbox relay recovery",
+            timeout=300,
+        )
+        attempts = recovered.get("attempts")
+        if not isinstance(attempts, list) or len(attempts) != 1:
+            raise AcceptanceFailure("API/relay recovery did not execute exactly one Attempt")
+        require_status(
+            request(
+                origin,
+                f"/api/v1/research-runs/{recovery_run_id}/result?daily_limit=1",
+                token=token_a,
+            ),
+            200,
+            "local API/relay recovered result",
+        )
+    finally:
+        for service in ("api", "execution-relay", "compute-worker-1"):
+            stack("acceptance-start-service", service)
+
+    _update_local_product_context(api_relay_run_id=recovery_run_id)
+    return _local_gate_evidence(
+        "api-relay-recovery",
+        api_unavailable=True,
+        concurrent_idempotency=True,
+        durable_outbox=True,
+        exactly_one_workflow=True,
+        exactly_one_result=True,
+    )
 
 
 def run_public_origin_acceptance(
