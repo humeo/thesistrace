@@ -1159,6 +1159,7 @@ def test_local_postgres_acceptance_uses_an_isolated_real_database(
 def test_local_boundary_gate_combines_isolated_postgres_and_controlled_security() -> None:
     module = local_boundary_module()
     calls: list[tuple[str, ...]] = []
+    state_calls = 0
 
     def runner(command: tuple[str, ...]):
         calls.append(command)
@@ -1166,7 +1167,19 @@ def test_local_boundary_gate_combines_isolated_postgres_and_controlled_security(
             return b'{"status":"passed","database":"isolated-runtime-postgresql"}\n'
         return b"12 passed in 1.00s\n"
 
-    evidence = module.run_boundary_acceptance(runner=runner)
+    def state_reader():
+        nonlocal state_calls
+        state_calls += 1
+        return {"authoritative_state_sha256": "a" * 64}
+
+    evidence = module.run_boundary_acceptance(
+        runner=runner,
+        state_reader=state_reader,
+        edge_prober=lambda: {
+            "status": "passed",
+            "routes": {"/api/v1/session": {"status": 200}},
+        },
+    )
 
     assert len(calls) == 1 + len(module.CONTROLLED_TARGETS)
     assert calls[0][0].endswith("python")
@@ -1183,6 +1196,31 @@ def test_local_boundary_gate_combines_isolated_postgres_and_controlled_security(
     assert evidence["schema_version"] == "hosted-local-boundary-v1"
     assert evidence["postgresql"]["database"] == "isolated-runtime-postgresql"
     assert set(evidence["controlled_tests"]) == set(module.CONTROLLED_TARGETS)
+    assert evidence["edge_routes"]["status"] == "passed"
+    assert evidence["core_state"]["restored"] is True
+    assert state_calls == 2
+
+
+def test_local_boundary_gate_rejects_shared_core_mutation() -> None:
+    module = local_boundary_module()
+    digests = iter(
+        [
+            {"authoritative_state_sha256": "a" * 64},
+            {"authoritative_state_sha256": "b" * 64},
+        ]
+    )
+
+    def runner(command: tuple[str, ...]):
+        if command[1].endswith("local_postgres_acceptance.py"):
+            return b'{"status":"passed","database":"isolated-runtime-postgresql"}\n'
+        return b"1 passed\n"
+
+    with pytest.raises(module.LocalBoundaryAcceptanceError, match="Core state digest"):
+        module.run_boundary_acceptance(
+            runner=runner,
+            state_reader=lambda: next(digests),
+            edge_prober=lambda: {"status": "passed", "routes": {}},
+        )
 
 
 def test_local_resource_sampler_records_per_phase_peaks_and_failures() -> None:
