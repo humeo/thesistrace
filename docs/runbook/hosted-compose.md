@@ -426,33 +426,71 @@ make hosted-operator ARGS="quota override \
 Use Hosted Local Acceptance for development on a Docker runtime with at least
 2 logical CPUs and 3.5 GiB of memory:
 
+Start development with one gate or a bounded range. The reset chooses a unique
+`thesistrace-hosted-local-*` Compose project and writes a private session
+manifest under `.hosted/local-acceptance`:
+
 ```sh
-make hosted-local-acceptance
+make hosted-local-acceptance HOSTED_LOCAL_ARGS="--phase reset"
+make hosted-local-acceptance HOSTED_LOCAL_ARGS="--phase core_session"
+make hosted-local-acceptance HOSTED_LOCAL_ARGS="--resume"
+make hosted-local-acceptance HOSTED_LOCAL_ARGS="--from identity_product --until postgres_edge_storage"
 ```
 
-The command owns the Compose project `thesistrace-hosted-local`, uses isolated
-state under `.hosted/local-acceptance`, and replaces any prior disposable local
-acceptance containers and volumes. Do not point those paths or that project
-name at a development stack whose data must be retained.
+An exact gate never starts a missing prerequisite. `--resume` runs only the
+next canonical non-passed gate. Source, lock, runtime, port, project, release,
+topology, or authoritative-state drift invalidates the affected checkpoint and
+requires an explicit reset. The default cleanup policy is `never`, so failure
+state, private logs, and retry instructions remain available. Remove only the
+session-owned resources with the cleanup command printed in failed evidence,
+or explicitly run:
+
+```sh
+make hosted-local-acceptance HOSTED_LOCAL_ARGS="--cleanup"
+```
+
+Do not reuse these paths or the guarded project namespace for a development
+stack whose data must be retained.
 
 The run starts the pinned production application, InsForge, PostgreSQL,
 Temporal, ObjectStore, role, migration, network, and edge implementations. It
 keeps one Compute Worker and the independent Data Worker, runs heavy product
 work serially, and starts Collector, Prometheus, and Grafana only for the
 operational phase. Each phase has its own timeout and resource samples. The
-final frontend phase type-checks and builds the Web application and runs the
-browser suite after the core containers have been paused.
+final frontend phase installs the frozen dependency lock, type-checks and
+reproducibly builds the Web application, compares every built asset with the
+already staged Caddy artifact, and runs the Hosted browser suite. The browser
+preflight requires no queued or running Workflow and stops only the bounded
+observability profile; API, Caddy, the single Compute Worker, and the Data
+Worker stay online for visible product flows.
 
 Successful evidence is written to
-`.hosted/evidence/hosted-v2-local.json`. The artifact has schema
+`.hosted/evidence/hosted-v2-local.json`. Per-gate evidence and mode-0600 logs
+remain below `.hosted/local-acceptance`. The final artifact has schema
 `hosted-v2-local-v1`, records Docker runtime totals and per-phase diagnostic
-peaks, and always records `launch_qualified: false`. A failed run still cleans
-up the disposable stack and identifies the first failing phase on stderr.
+peaks, and always records `launch_qualified: false`. A failure identifies the
+first failing gate, preserves diagnostics by default, invalidates downstream
+checkpoints, and records exact retry and guarded cleanup commands.
+
+After every gate passes independently, run the sole clean 2C4G certification
+once. Expect the Compute and Dataset Publication recovery gates to include two
+real Temporal heartbeat/redelivery waits of roughly five minutes each:
+
+```sh
+make hosted-local-acceptance-final
+```
+
+The final target creates a new state epoch, runs the full canonical order
+without checkpoint reuse, and cleans its disposable Docker resources only on
+success while retaining the final evidence. On failure it leaves the exact
+state in place for diagnosis. This command certifies development acceptance;
+it does not sign evidence, open invitations, or qualify a production launch.
 
 This command is deliberately not Launch Qualification. It does not prove or
 claim:
 
-- four-Worker Top3000 capacity or the production host reserve;
+- physical production capacity, co-resident maximum load, or the production
+  host reserve;
 - off-node backup independence or the production RPO/RTO;
 - the Cloudflare path or direct-Origin behavior outside the local edge;
 - real SMTP delivery; or

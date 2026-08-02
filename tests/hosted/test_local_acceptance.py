@@ -773,7 +773,7 @@ def test_local_acceptance_writes_distinct_non_launch_evidence(
     def executor(phase, environment):
         calls.append((phase.name, phase.command))
         payload: dict[str, object] = {"status": "passed"}
-        if phase.name == "core_stack":
+        if phase.name == "core_session":
             payload["release_bundle_id"] = "release-local"
         return payload, {
             "status": "passed",
@@ -785,20 +785,22 @@ def test_local_acceptance_writes_distinct_non_launch_evidence(
         arguments(module, tmp_path),
         executor=executor,
         runtime_reader=runtime_capacity,
+        state_reader=stable_runtime_state,
     )
 
     assert [name for name, _command in calls] == [
         "reset",
-        "core_stack",
-        "public_origin",
-        "postgresql_rls",
-        "temporal_and_failure_contracts",
-        "security_and_storage",
+        "core_session",
+        "identity_product",
+        "postgres_edge_storage",
+        "api_relay_recovery",
+        "compute_recovery",
+        "publication_recovery",
+        "controlled_workflows",
         "operational_health",
         "local_recovery",
-        "pause_core",
-        "frontend",
-        "cleanup",
+        "browser_ready",
+        "frontend_browser",
     ]
     assert evidence["schema_version"] == "hosted-v2-local-v1"
     assert evidence["status"] == "passed"
@@ -808,7 +810,10 @@ def test_local_acceptance_writes_distinct_non_launch_evidence(
     assert evidence["production_only_not_claimed"] == [
         "capacity_qualification",
         "cloudflare",
+        "co_resident_maximum_load",
+        "external_dns_tls",
         "off_node_recovery",
+        "production_invitation_admission",
         "production_rto_rpo",
         "real_smtp_delivery",
         "whole_node_resilience",
@@ -821,16 +826,7 @@ def test_local_acceptance_writes_distinct_non_launch_evidence(
     assert json.loads(arguments(module, tmp_path).output.read_text()) == evidence
 
 
-def test_local_public_origin_timeout_covers_two_real_heartbeat_windows() -> None:
-    module = local_acceptance_module()
-    public_origin = next(
-        phase for phase in module.local_phases() if phase.name == "public_origin"
-    )
-
-    assert public_origin.timeout_seconds == 2700
-
-
-def test_local_acceptance_records_the_first_failure_and_still_cleans_up(
+def test_clean_final_run_executes_every_gate_once_without_checkpoint_reuse(
     tmp_path: Path,
 ) -> None:
     module = local_acceptance_module()
@@ -838,26 +834,98 @@ def test_local_acceptance_records_the_first_failure_and_still_cleans_up(
 
     def executor(phase, environment):
         calls.append(phase.name)
-        if phase.name == "public_origin":
+        payload = {"status": "passed"}
+        if phase.name == "core_session":
+            payload["release_bundle_id"] = "release-local"
+        return payload, {"status": "passed"}
+
+    evidence = module.run_acceptance(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--fresh",
+            "--cleanup-policy",
+            "on-success",
+        ),
+        executor=executor,
+        runtime_reader=runtime_capacity,
+        fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+        state_reader=stable_runtime_state,
+    )
+
+    assert calls == [*module.CANONICAL_GATE_NAMES, "cleanup"]
+    assert evidence["clean_run"] is True
+    assert evidence["checkpoint_reused"] is False
+    assert evidence["selected_gates"] == list(module.CANONICAL_GATE_NAMES)
+    assert evidence["records"]["cleanup"]["status"] == "passed"
+
+
+def test_local_recovery_gates_each_cover_a_real_heartbeat_window() -> None:
+    module = local_acceptance_module()
+    phases = {phase.name: phase for phase in module.local_phases()}
+
+    assert phases["compute_recovery"].timeout_seconds == 900
+    assert phases["publication_recovery"].timeout_seconds == 900
+
+
+def test_local_acceptance_records_the_first_failure_and_preserves_by_default(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    calls: list[str] = []
+
+    def executor(phase, environment):
+        calls.append(phase.name)
+        if phase.name == "identity_product":
             raise module.LocalAcceptanceError("public boundary failed")
-        return {"status": "passed"}, {"status": "passed"}
+        payload = {"status": "passed"}
+        if phase.name == "core_session":
+            payload["release_bundle_id"] = "release-local"
+        return payload, {"status": "passed"}
 
     with pytest.raises(module.LocalAcceptanceError, match="public boundary failed"):
         module.run_acceptance(
             arguments(module, tmp_path),
             executor=executor,
             runtime_reader=runtime_capacity,
+            state_reader=stable_runtime_state,
         )
 
-    assert calls == ["reset", "core_stack", "public_origin", "cleanup"]
+    assert calls == ["reset", "core_session", "identity_product"]
     evidence = json.loads(arguments(module, tmp_path).output.read_text())
     assert evidence["status"] == "failed"
     assert evidence["launch_qualified"] is False
     assert evidence["failure"] == {
-        "phase": "public_origin",
+        "phase": "identity_product",
         "message": "public boundary failed",
     }
-    assert evidence["records"]["cleanup"]["status"] == "passed"
+    assert evidence["diagnostics"]["preserved"] is True
+
+
+def test_local_acceptance_records_an_operator_interrupt_before_exit(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    def executor(phase, environment):
+        if phase.name == "identity_product":
+            raise KeyboardInterrupt
+        payload = {"status": "passed"}
+        if phase.name == "core_session":
+            payload["release_bundle_id"] = "release-local"
+        return payload, {"status": "passed"}
+
+    with pytest.raises(module.LocalAcceptanceError, match="operator signal"):
+        module.run_acceptance(
+            arguments(module, tmp_path),
+            executor=executor,
+            runtime_reader=runtime_capacity,
+            state_reader=stable_runtime_state,
+        )
+
+    evidence = json.loads(arguments(module, tmp_path).output.read_text())
+    assert evidence["failure"]["phase"] == "identity_product"
+    assert evidence["diagnostics"]["preserved"] is True
 
 
 def test_local_acceptance_rejects_a_runtime_smaller_than_2c4g(
@@ -1440,7 +1508,12 @@ def test_hosted_stack_exposes_local_actions_behind_an_explicit_gate() -> None:
     assert "local-source-authorization" in launcher
     local_up = launcher.split("    local-up)", 1)[1].split("        ;;", 1)[0]
     assert local_up.count("stage_release") == 1
-    assert 'if [ -f "$release_state/current.json" ]' not in local_up
+    assert 'if [ -f "$release_state/current.json" ]' in local_up
+    assert "release_images verify-images" in local_up
+    assert "local core convergence failed once" in local_up
+    assert local_up.count("local_compose up --detach --wait --no-build") == 2
+    local_reset = launcher.split("    local-reset)", 1)[1].split("        ;;", 1)[0]
+    assert "reset_local_release_state" in local_reset
     for action in (
         "local-reset)",
         "local-up)",
