@@ -845,7 +845,34 @@ case "$action" in
         prepare
         select_current_release
         shift
-        compose run --rm --no-deps -T thesistrace-migrations thesistrace-operator "$@"
+        case "${1:-}:${2:-}" in
+            capacity-qualification:record)
+                operator_evidence_path=""
+                operator_previous_argument=""
+                for operator_argument in "$@"; do
+                    if [ "$operator_previous_argument" = "--evidence" ]; then
+                        operator_evidence_path="$operator_argument"
+                        break
+                    fi
+                    operator_previous_argument="$operator_argument"
+                done
+                case "$operator_evidence_path" in
+                    /*) ;;
+                    *) echo "capacity evidence path must be absolute" >&2; exit 2 ;;
+                esac
+                if [ ! -f "$operator_evidence_path" ]; then
+                    echo "capacity evidence file does not exist" >&2
+                    exit 2
+                fi
+                compose run --rm --no-deps -T \
+                    --volume "$operator_evidence_path:$operator_evidence_path:ro" \
+                    thesistrace-migrations thesistrace-operator "$@"
+                ;;
+            *)
+                compose run --rm --no-deps -T \
+                    thesistrace-migrations thesistrace-operator "$@"
+                ;;
+        esac
         ;;
     maintenance-enter)
         prepare

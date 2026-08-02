@@ -547,6 +547,21 @@ def test_backup_schedule_and_launcher_enforce_the_recovery_gate() -> None:
     assert "audit-flush" in launcher
     assert "OPERATION_INTERRUPTED" in launcher
     assert "lock-run" in launcher
+
+
+def test_operator_mounts_capacity_evidence_from_the_host_read_only() -> None:
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    operator_section = launcher.split("    operator)", 1)[1].split(
+        "    maintenance-enter)", 1
+    )[0]
+
+    assert "capacity-qualification:record)" in operator_section
+    assert 'operator_evidence_path="$operator_argument"' in operator_section
+    assert 'if [ ! -f "$operator_evidence_path" ]; then' in operator_section
+    assert (
+        '--volume "$operator_evidence_path:$operator_evidence_path:ro"'
+        in operator_section
+    )
     backup_cli = (
         ROOT / "src" / "thesistrace" / "hosted" / "backup_cli.py"
     ).read_text()
