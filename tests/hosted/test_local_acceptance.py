@@ -1087,6 +1087,42 @@ def test_local_api_relay_gate_never_stops_a_compute_or_data_worker() -> None:
     assert 'acceptance-stop-service", "data-worker' not in gate
 
 
+def test_local_compute_attempt_evidence_requires_real_redelivery_identities() -> None:
+    module = public_smoke_module()
+    interrupted = {
+        "id": "attempt-1",
+        "ordinal": 1,
+        "status": "running",
+        "heartbeat_at": "2026-08-03T00:00:00Z",
+    }
+    recovered = {
+        "status": "succeeded",
+        "attempts": [
+            {
+                **interrupted,
+                "status": "failed",
+                "diagnostic": {"reason_code": "ACTIVITY_REDELIVERED"},
+            },
+            {
+                "id": "attempt-2",
+                "ordinal": 2,
+                "status": "succeeded",
+                "heartbeat_at": "2026-08-03T00:05:01Z",
+            },
+        ],
+    }
+
+    evidence = module._compute_attempt_evidence(interrupted, recovered)
+
+    assert evidence["interrupted_attempt_id"] == "attempt-1"
+    assert evidence["redelivered_attempt_id"] == "attempt-2"
+    assert evidence["timeout_reason_code"] == "ACTIVITY_REDELIVERED"
+
+    recovered["attempts"][0]["diagnostic"] = {"reason_code": "SYNTHETIC_TIMEOUT"}
+    with pytest.raises(module.AcceptanceFailure, match="identities"):
+        module._compute_attempt_evidence(interrupted, recovered)
+
+
 def test_local_product_context_keeps_credentials_private_and_rejects_tokens(
     tmp_path: Path,
 ) -> None:

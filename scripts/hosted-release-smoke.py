@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import ssl
@@ -1614,6 +1615,120 @@ def run_local_api_relay_recovery() -> dict[str, object]:
     )
 
 
+def _running_attempt(run: dict[str, object], label: str) -> dict[str, object]:
+    attempts = run.get("attempts")
+    running = (
+        [item for item in attempts if isinstance(item, dict) and item.get("status") == "running"]
+        if isinstance(attempts, list)
+        else []
+    )
+    if len(running) != 1:
+        raise AcceptanceFailure(f"{label} has no unique running Attempt: {attempts}")
+    attempt = running[0]
+    for field in ("id", "ordinal", "started_at", "heartbeat_at"):
+        if attempt.get(field) in {None, ""}:
+            raise AcceptanceFailure(f"{label} running Attempt has no {field}")
+    return attempt
+
+
+def _compute_attempt_evidence(
+    interrupted: dict[str, object],
+    recovered: dict[str, object],
+) -> dict[str, object]:
+    attempts = recovered.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) < 2:
+        raise AcceptanceFailure("local Compute interruption produced no later Attempt")
+    first = attempts[0] if isinstance(attempts[0], dict) else {}
+    later = attempts[-1] if isinstance(attempts[-1], dict) else {}
+    diagnostic = first.get("diagnostic")
+    if (
+        first.get("id") != interrupted.get("id")
+        or first.get("status") != "failed"
+        or not isinstance(diagnostic, dict)
+        or diagnostic.get("reason_code") != "ACTIVITY_REDELIVERED"
+        or later.get("status") != "succeeded"
+        or later.get("id") == first.get("id")
+        or not isinstance(first.get("ordinal"), int)
+        or not isinstance(later.get("ordinal"), int)
+        or int(later["ordinal"]) <= int(first["ordinal"])
+    ):
+        raise AcceptanceFailure(
+            f"local Compute timeout/redelivery identities are incomplete: {attempts}"
+        )
+    return {
+        "interrupted_attempt_id": str(first["id"]),
+        "interrupted_attempt_ordinal": int(first["ordinal"]),
+        "interrupted_heartbeat_at": str(first["heartbeat_at"]),
+        "timeout_reason_code": str(diagnostic["reason_code"]),
+        "redelivered_attempt_id": str(later["id"]),
+        "redelivered_attempt_ordinal": int(later["ordinal"]),
+        "redelivered_heartbeat_at": str(later["heartbeat_at"]),
+        "terminal_status": str(recovered.get("status")),
+    }
+
+
+def _run_compute_cancellation_probe(
+    origin: str,
+    token: str,
+    *,
+    run_id: str,
+    suffix: str,
+) -> dict[str, object]:
+    response = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{run_id}/rerun",
+            method="POST",
+            token=token,
+            headers={"Idempotency-Key": f"local-compute-cancel-{suffix}"},
+        ),
+        (200, 202),
+        "local Compute cancellation probe",
+    )
+    cancellation_run_id = require_resource_id(response, "local Compute cancellation probe")
+    running = poll(
+        lambda: request(
+            origin,
+            f"/api/v1/research-runs/{cancellation_run_id}",
+            token=token,
+        ),
+        lambda value: value.get("status") == "running",
+        "local Compute cancellation running state",
+        timeout=120,
+    )
+    attempt = _running_attempt(running, "local Compute cancellation")
+    cancelled = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{cancellation_run_id}/cancel",
+            method="POST",
+            token=token,
+        ),
+        200,
+        "local Compute cancellation",
+    )
+    if cancelled.get("status") != "cancelled":
+        raise AcceptanceFailure("local Compute cancellation did not become terminal")
+    status, _payload = request(
+        origin,
+        f"/api/v1/research-runs/{cancellation_run_id}/result?daily_limit=1",
+        token=token,
+    )
+    if status != 409:
+        raise AcceptanceFailure("cancelled Compute run exposed a late Result Bundle")
+    return {
+        "run_id": cancellation_run_id,
+        "attempt_id": str(attempt["id"]),
+        "attempt_ordinal": int(attempt["ordinal"]),
+        "terminal_status": "cancelled",
+        "late_result_status": status,
+        "fencing_contract": (
+            "tests/hosted/test_research_workflow.py::"
+            "test_cancelled_run_rejects_a_late_success_publication"
+        ),
+    }
+
+
 def run_local_compute_recovery() -> dict[str, object]:
     origin = _local_origin()
     token_a, _token_b, credentials, product = _fresh_local_logins()
@@ -1636,6 +1751,8 @@ def run_local_compute_recovery() -> dict[str, object]:
         "local Compute recovery ResearchRun",
     )
     killed = False
+    interrupted_attempt: dict[str, object] = {}
+    worker_state: dict[str, object] = {}
     try:
         deadline = time.monotonic() + 120
         last_run: dict[str, object] = {}
@@ -1650,6 +1767,22 @@ def run_local_compute_recovery() -> dict[str, object]:
                 "local running Compute Activity",
             )
             if last_run.get("status") == "running":
+                interrupted_attempt = _running_attempt(
+                    last_run,
+                    "local Compute interruption",
+                )
+                worker_state = stack(
+                    "acceptance-service-state",
+                    "compute-worker-1",
+                )
+                if (
+                    worker_state.get("service") != "compute-worker-1"
+                    or worker_state.get("status") != "running"
+                    or not worker_state.get("container_id")
+                ):
+                    raise AcceptanceFailure(
+                        f"Compute Worker ownership was not confirmed: {worker_state}"
+                    )
                 stack("acceptance-kill-service", "compute-worker-1")
                 killed = True
                 break
@@ -1679,10 +1812,10 @@ def run_local_compute_recovery() -> dict[str, object]:
         )
     finally:
         stack("acceptance-start-service", "compute-worker-1")
-    attempts = recovered.get("attempts")
-    if not killed or not isinstance(attempts, list) or len(attempts) < 2:
+    if not killed:
         raise AcceptanceFailure("local Compute interruption produced no later Attempt")
-    require_status(
+    attempt_evidence = _compute_attempt_evidence(interrupted_attempt, recovered)
+    result = require_status(
         request(
             origin,
             f"/api/v1/research-runs/{recovery_run_id}/result?daily_limit=1",
@@ -1699,13 +1832,33 @@ def run_local_compute_recovery() -> dict[str, object]:
         "local Compute recovery ResearchRun",
     )
     assert_storage_invariants()
-    _update_local_product_context(compute_recovery_run_id=recovery_run_id)
+    cancellation = _run_compute_cancellation_probe(
+        origin,
+        token_a,
+        run_id=run_id,
+        suffix=suffix,
+    )
+    state_digest = hashlib.sha256(
+        json.dumps(
+            {"run": recovered, "result": result},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    _update_local_product_context(
+        compute_recovery_run_id=recovery_run_id,
+        compute_cancellation_run_id=cancellation["run_id"],
+    )
     return _local_gate_evidence(
         "compute-recovery",
         heartbeat_timeout=True,
         redelivery=True,
-        later_attempt=True,
+        worker_ownership=worker_state,
+        attempt_transition=attempt_evidence,
+        cancellation_and_late_result_fencing=cancellation,
         exactly_one_result=True,
+        output_state_sha256=state_digest,
+        working_cache_entry_leaked=False,
         partial_authoritative_artifact=False,
     )
 

@@ -953,6 +953,19 @@ case "$action" in
         require_acceptance_service "$acceptance_service"
         compose up --detach --no-build --no-deps "$acceptance_service"
         ;;
+    acceptance-service-state)
+        prepare_acceptance "acceptance service inspection is disabled"
+        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-service-state SERVICE}"
+        require_acceptance_service "$acceptance_service"
+        acceptance_container_id="$(compose ps --quiet "$acceptance_service")"
+        if [ -z "$acceptance_container_id" ]; then
+            echo "acceptance service has no container: $acceptance_service" >&2
+            exit 1
+        fi
+        acceptance_container_status="$(docker inspect --format '{{.State.Status}}' "$acceptance_container_id")"
+        printf '{"container_id":"%s","service":"%s","status":"%s"}\n' \
+            "$acceptance_container_id" "$acceptance_service" "$acceptance_container_status"
+        ;;
     acceptance-kill-service)
         prepare_acceptance "acceptance abrupt interruption is disabled"
         acceptance_service="${2:?usage: scripts/hosted-stack acceptance-kill-service SERVICE}"
