@@ -1446,28 +1446,59 @@ def test_hosted_stack_exposes_local_actions_behind_an_explicit_gate() -> None:
         "local-up)",
         "local-ops-check)",
         "local-recovery-smoke)",
-        "local-pause)",
+        "local-browser-ready)",
         "local-down)",
     ):
         assert action in launcher
 
 
-def test_local_frontend_checks_run_after_the_core_stack_is_paused() -> None:
+def test_local_frontend_checks_run_after_the_browser_preflight() -> None:
     module = local_acceptance_module()
     phases = module.local_phases()
     names = [phase.name for phase in phases]
     makefile = (ROOT / "Makefile").read_text()
 
-    assert names.index("pause_core") < names.index("frontend")
+    assert names.index("browser_ready") < names.index("frontend_browser")
     assert "hosted-local-frontend:" in makefile
     assert "hosted-local-acceptance:" in makefile
     acceptance_target = makefile.split("hosted-local-acceptance:", 1)[1]
     assert "scripts/hosted/local_acceptance.py" in acceptance_target
     assert "HOSTED_LOCAL_EVIDENCE" in acceptance_target
     target = makefile.split("hosted-local-frontend:", 1)[1]
-    assert "bun run --cwd web typecheck" in target
-    assert "bun run --cwd web build" in target
-    assert "bun run --cwd web test:e2e" in target
+    assert "scripts/hosted/local_frontend_acceptance.py" in target
+
+
+def test_browser_preflight_keeps_the_product_core_online() -> None:
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    action = launcher.split("    local-browser-ready)", 1)[1].split(
+        "        ;;", 1
+    )[0]
+
+    assert "assert-idle" in action
+    assert "grafana prometheus otel-collector" in action
+    for service in ("api", "caddy", "compute-worker-1", "data-worker"):
+        assert f"stop --timeout 30 {service}" not in action
+
+
+def test_resource_sampler_requires_swap_only_for_running_containers() -> None:
+    module = local_acceptance_module()
+    sampler = module.DockerPhaseSampler("acceptance")
+
+    sampler.observe_snapshot(
+        {
+            "stopped-job": {
+                "running": False,
+                "swap_peak_bytes": None,
+            },
+            "running-api": {
+                "running": True,
+                "swap_peak_bytes": None,
+            },
+        }
+    )
+
+    assert sampler.swap_unavailable_containers == {"running-api"}
+    assert module.RESOURCE_SAMPLE_INTERVAL_SECONDS == 30.0
 
 
 def test_local_controlled_suites_cover_heartbeat_health_and_telemetry_redaction() -> None:

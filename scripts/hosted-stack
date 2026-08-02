@@ -721,6 +721,18 @@ case "$action" in
         exec "$root/.venv/bin/python" \
             "$root/scripts/hosted/local_recovery_acceptance.py"
         ;;
+    local-browser-ready)
+        prepare_local_acceptance
+        ensure_release
+        local_compose --profile local-ops stop --timeout 30 \
+            grafana prometheus otel-collector >/dev/null 2>&1 || true
+        local_compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/seed_acceptance_state.py assert-idle
+        ;;
     local-cold-stop)
         prepare_local_acceptance
         ensure_release
@@ -1153,7 +1165,7 @@ case "$action" in
         exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-browser-ready|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

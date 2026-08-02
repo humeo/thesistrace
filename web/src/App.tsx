@@ -12,6 +12,9 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import "./app.css";
+import { apiFetch } from "./hostedAuth";
+
+const fetch = apiFetch;
 
 type ResourceCounts = {
   dataset_releases: number;

@@ -75,6 +75,4 @@ hosted-local-acceptance:
 		--output "$(HOSTED_LOCAL_EVIDENCE)"
 
 hosted-local-frontend:
-	bun run --cwd web typecheck
-	bun run --cwd web build
-	bun run --cwd web test:e2e
+	.venv/bin/python scripts/hosted/local_frontend_acceptance.py
