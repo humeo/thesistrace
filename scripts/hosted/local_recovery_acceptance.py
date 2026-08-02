@@ -52,6 +52,20 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _tree_sha256(root: Path) -> str:
+    digest = hashlib.sha256()
+    files = sorted(path for path in root.rglob("*") if path.is_file())
+    if not files:
+        raise LocalRecoveryAcceptanceError("restore object namespace is empty")
+    for path in files:
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(b"\0")
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
 class RuntimeRecoveryOperations:
     def __init__(self, *, state_dir: Path, port: int, project: str) -> None:
         self.state_dir = state_dir.resolve()
@@ -60,6 +74,7 @@ class RuntimeRecoveryOperations:
         self.backup_root = self.state_dir / "local-recovery-scratch"
         self.dump_path = self.backup_root / "postgres.dump"
         self.object_root = self.backup_root / "objects"
+        self.restore_object_root = self.backup_root / "restore-object-namespace"
         self.captured_context: dict[str, object] | None = None
         self.password = self._password()
 
@@ -321,10 +336,21 @@ class RuntimeRecoveryOperations:
             raise LocalRecoveryAcceptanceError(
                 "restored PostgreSQL state differs from the captured snapshot"
             )
-        return verify_restored_state(
-            object_root=self.object_root,
+        if self.restore_object_root.parent != self.backup_root:
+            raise LocalRecoveryAcceptanceError(
+                "restore object namespace escaped gate-owned scratch state"
+            )
+        shutil.rmtree(self.restore_object_root, ignore_errors=True)
+        shutil.copytree(self.object_root, self.restore_object_root)
+        verified = verify_restored_state(
+            object_root=self.restore_object_root,
             snapshot=restored,
         )
+        return {
+            **verified,
+            "object_namespace": str(self.restore_object_root),
+            "object_namespace_sha256": _tree_sha256(self.restore_object_root),
+        }
 
     def cleanup(self) -> None:
         self._manage_restore_database("drop")
@@ -334,6 +360,7 @@ class RuntimeRecoveryOperations:
 
 
 def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
+    succeeded = False
     try:
         backup_started = time.monotonic()
         before, backup = operations.capture_backup()
@@ -351,6 +378,8 @@ def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
         restore_seconds = round(time.monotonic() - restore_started, 3)
         latest_release = restored.get("latest_dataset_release_id")
         verified_objects = restored.get("verified_objects")
+        object_namespace = restored.get("object_namespace")
+        object_namespace_sha256 = restored.get("object_namespace_sha256")
         dump_sha256 = backup.get("database_dump_sha256")
         backup_bytes = backup.get("backup_bytes")
         context_fields = (
@@ -372,6 +401,10 @@ def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
             or len(dump_sha256) != 64
             or not isinstance(backup_bytes, int)
             or backup_bytes <= 0
+            or not isinstance(object_namespace, str)
+            or not object_namespace
+            or not isinstance(object_namespace_sha256, str)
+            or len(object_namespace_sha256) != 64
             or any(
                 not isinstance(backup.get(field), str) or not backup[field]
                 for field in context_fields
@@ -380,7 +413,7 @@ def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
             raise LocalRecoveryAcceptanceError(
                 "local backup/restore evidence is incomplete"
             )
-        return {
+        evidence = {
             "status": "passed",
             "schema_version": "hosted-local-recovery-v1",
             "cold_restart": True,
@@ -389,6 +422,8 @@ def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
             "object_index_and_payload_verified": True,
             "latest_dataset_release_id": latest_release,
             "verified_objects": verified_objects,
+            "restore_object_namespace": object_namespace,
+            "restore_object_namespace_sha256": object_namespace_sha256,
             "database_dump_sha256": dump_sha256,
             "backup_bytes": backup_bytes,
             "recovery_context": {field: backup[field] for field in context_fields},
@@ -401,8 +436,11 @@ def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
             "production_rpo_rto_claimed": False,
             "whole_node_resilience_claimed": False,
         }
+        succeeded = True
+        return evidence
     finally:
-        operations.cleanup()
+        if succeeded:
+            operations.cleanup()
 
 
 def main() -> None:

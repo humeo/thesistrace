@@ -1461,7 +1461,12 @@ def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:
         def restore_and_verify(self, expected_snapshot):
             calls.append("restore_and_verify")
             assert expected_snapshot == snapshot
-            return {"latest_dataset_release_id": "release-local", "verified_objects": 1}
+            return {
+                "latest_dataset_release_id": "release-local",
+                "verified_objects": 1,
+                "object_namespace": "local-recovery/restore-object-namespace",
+                "object_namespace_sha256": "7" * 64,
+            }
 
         def cleanup(self):
             calls.append("cleanup")
@@ -1483,6 +1488,10 @@ def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:
     assert evidence["object_index_and_payload_verified"] is True
     assert evidence["latest_dataset_release_id"] == "release-local"
     assert evidence["verified_objects"] == 1
+    assert evidence["restore_object_namespace"] == (
+        "local-recovery/restore-object-namespace"
+    )
+    assert evidence["restore_object_namespace_sha256"] == "7" * 64
     assert evidence["database_dump_sha256"] == "b" * 64
     assert evidence["backup_bytes"] == 1234
     assert evidence["recovery_context"] == context
@@ -1496,7 +1505,7 @@ def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:
     assert evidence["whole_node_resilience_claimed"] is False
 
 
-def test_local_recovery_fails_when_authoritative_state_changes_and_cleans_up() -> None:
+def test_local_recovery_preserves_failure_state_when_authoritative_state_changes() -> None:
     module = local_recovery_module()
     cleaned: list[bool] = []
 
@@ -1533,7 +1542,7 @@ def test_local_recovery_fails_when_authoritative_state_changes_and_cleans_up() -
     with pytest.raises(module.LocalRecoveryAcceptanceError, match="cold restart"):
         module.run_local_recovery(Operations())
 
-    assert cleaned == [True]
+    assert cleaned == []
 
 
 def test_every_production_evidence_consumer_rejects_local_evidence(
