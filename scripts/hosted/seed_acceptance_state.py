@@ -18,6 +18,7 @@ def parser() -> argparse.ArgumentParser:
     )
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("assert-clean")
+    commands.add_parser("assert-idle")
     commands.add_parser("storage-status")
     commands.add_parser("local-source-authorization")
     invitation = commands.add_parser("invitation")
@@ -44,6 +45,9 @@ def main() -> None:
         raise SystemExit("THESISTRACE_DATABASE_URL is required")
     if arguments.command == "assert-clean":
         assert_clean(database_url)
+        return
+    if arguments.command == "assert-idle":
+        assert_idle(database_url)
         return
     if arguments.command == "storage-status":
         inspect_storage(database_url)
@@ -95,6 +99,29 @@ def assert_clean(database_url: str) -> None:
     if populated:
         raise SystemExit(f"Hosted acceptance requires a clean stack: {populated}")
     print("clean Hosted acceptance state verified")
+
+
+def assert_idle(database_url: str) -> None:
+    tables = (
+        "thesistrace_product.research_runs",
+        "thesistrace_product.dataset_publications",
+        "thesistrace_product.tracking_advances",
+        "thesistrace_product.tracking_equivalence_requests",
+        "thesistrace_product.tracking_generation_rebuilds",
+    )
+    with psycopg.connect(database_url) as connection:
+        counts = {
+            table: int(
+                connection.execute(
+                    f"SELECT count(*) FROM {table} WHERE status IN ('queued', 'running')"
+                ).fetchone()[0]
+            )
+            for table in tables
+        }
+    busy = {table: count for table, count in counts.items() if count}
+    if busy:
+        raise SystemExit(f"Hosted browser acceptance requires an idle stack: {busy}")
+    print(json.dumps({"status": "passed", "workflow_running": 0}, sort_keys=True))
 
 
 def seed_invitation(database_url: str, email: str) -> None:

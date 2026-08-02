@@ -89,11 +89,17 @@ def probe() -> dict[str, object]:
             f"telemetry contains sensitive markers: {leaked}"
         )
     return {
+        "configured_limits": {
+            "grafana": {"cpu": 0.25, "memory": "384m", "swap": "disabled"},
+            "otel_collector": {"cpu": 0.1, "memory": "256m", "swap": "disabled"},
+            "prometheus": {"cpu": 0.1},
+        },
         "health_planes": views,
         "local_expected_degraded_checks": sorted(expected_gaps),
         "status": "passed",
         "telemetry_endpoints": sorted(TELEMETRY_URLS),
         "telemetry_redaction": True,
+        "production_capacity_claimed": False,
     }
 
 

@@ -703,6 +703,13 @@ case "$action" in
         prepare_local_acceptance
         ensure_release
         trap 'local_compose stop --timeout 30 grafana prometheus otel-collector >/dev/null 2>&1 || true' 0
+        local_compose run --rm --no-deps -T \
+            --volume "$root:/workspace:ro" \
+            --env PYTHONPATH=/workspace/src \
+            --env THESISTRACE_ACCEPTANCE_MODE=1 \
+            thesistrace-migrations \
+            python /workspace/scripts/hosted/seed_acceptance_state.py assert-idle \
+            >/dev/null
         local_compose --profile local-ops up --detach --wait --no-build \
             otel-collector prometheus grafana
         local_compose exec -T health-service python - \

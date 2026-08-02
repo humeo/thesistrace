@@ -1108,7 +1108,7 @@ def test_local_boundary_gate_combines_isolated_postgres_and_controlled_security(
 
 def test_local_resource_sampler_records_per_phase_peaks_and_failures() -> None:
     module = local_acceptance_module()
-    sampler = module.DockerPhaseSampler("thesistrace-local-test")
+    sampler = module.DockerPhaseSampler("thesistrace-hosted-local-test")
 
     sampler.observe_snapshot(
         {
@@ -1159,7 +1159,7 @@ def test_local_resource_sampler_does_not_exec_when_swap_is_disabled_by_docker() 
 
     class Client:
         def project_containers(self, project):
-            assert project == "thesistrace-local-test"
+            assert project == "thesistrace-hosted-local-test"
             return [{"Id": "container-1", "Names": ["/api"]}]
 
         def container_json(self, container_id, endpoint):
@@ -1185,7 +1185,7 @@ def test_local_resource_sampler_does_not_exec_when_swap_is_disabled_by_docker() 
             raise AssertionError("swap-disabled containers must not create Docker execs")
 
     snapshot = module.docker_project_snapshot(
-        "thesistrace-local-test",
+        "thesistrace-hosted-local-test",
         client=Client(),
     )
 
@@ -1206,18 +1206,22 @@ def test_local_acceptance_fails_closed_on_unsafe_runtime_observations(
             "peak_swap_bytes": 0,
             "unexpected_restart_containers": [],
             "oom_killed_containers": ["compute-worker-1"]
-            if phase.name == "public_origin"
+            if phase.name == "compute_recovery"
             else [],
             "unhealthy_containers": [],
             "sampling_errors": [],
         }
-        return {"status": "passed"}, {"status": "passed", "resources": resources}
+        payload = {"status": "passed"}
+        if phase.name == "core_session":
+            payload["release_bundle_id"] = "release-local"
+        return payload, {"status": "passed", "resources": resources}
 
     with pytest.raises(module.LocalAcceptanceError, match="OOM kill"):
         module.run_acceptance(
             arguments(module, tmp_path),
             executor=executor,
             runtime_reader=runtime_capacity,
+            state_reader=stable_runtime_state,
         )
 
     evidence = json.loads(arguments(module, tmp_path).output.read_text())
