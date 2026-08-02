@@ -362,6 +362,8 @@ def test_local_gate_command_failure_writes_a_private_diagnostic_log(
     assert failed.value.record["status"] == "failed"
     assert failed.value.record["returncode"] == 7
     assert failed.value.record["resources"]["sample_count"] == 1
+    assert failed.value.record["started_at"].endswith("+00:00")
+    assert failed.value.record["completed_at"].endswith("+00:00")
 
 
 def test_local_resume_runs_only_the_next_canonical_compatible_gate(
@@ -505,6 +507,81 @@ def test_source_fingerprint_covers_untracked_inputs_but_excludes_runtime_outputs
     assert before["files_sha256"] != changed["files_sha256"]
     assert changed == excluded
     assert ".hosted" in changed["excluded_roots"]
+
+
+def test_release_core_and_harness_fingerprints_are_independent(tmp_path: Path) -> None:
+    module = local_acceptance_module()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "src" / "app.py").write_text("release = 1\n")
+    (tmp_path / "tests" / "test_runner.py").write_text("assert True\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "src/app.py", "tests/test_runner.py"],
+        check=True,
+    )
+
+    core_before = module.source_fingerprint(tmp_path, include_roots=("src",))
+    harness_before = module.source_fingerprint(tmp_path, include_roots=("tests",))
+    (tmp_path / "tests" / "test_runner.py").write_text("assert 1 == 1\n")
+
+    assert module.source_fingerprint(tmp_path, include_roots=("src",)) == core_before
+    assert (
+        module.source_fingerprint(tmp_path, include_roots=("tests",))
+        != harness_before
+    )
+
+
+def test_harness_change_invalidates_evidence_without_destroying_core_state() -> None:
+    module = local_acceptance_module()
+    manifest = {
+        "fingerprint": {
+            "release_core": {"source": "release-a"},
+            "harness": {"source": "harness-a"},
+        },
+        "current_state_digest": "runtime-after-failed-gate",
+        "gates": {
+            "reset": {"status": "passed", "output_state_digest": "reset"},
+            "core_session": {"status": "passed", "output_state_digest": "core"},
+            "identity_product": {
+                "status": "failed",
+                "output_state_digest": "runtime-after-failed-gate",
+            },
+        },
+    }
+    changed = {
+        "release_core": {"source": "release-a"},
+        "harness": {"source": "harness-b"},
+    }
+
+    assert module.reconcile_fingerprint(manifest, changed) == "harness"
+    assert manifest["gates"]["core_session"]["status"] == "passed"
+    assert manifest["gates"]["identity_product"]["status"] == "invalidated"
+    assert manifest["current_state_digest"] == "runtime-after-failed-gate"
+    assert manifest["fingerprint"] == changed
+
+
+def test_release_core_change_requires_a_new_state_epoch() -> None:
+    module = local_acceptance_module()
+    manifest = {
+        "fingerprint": {
+            "release_core": {"source": "release-a"},
+            "harness": {"source": "harness-a"},
+        },
+        "gates": {"core_session": {"status": "passed"}},
+    }
+
+    assert (
+        module.reconcile_fingerprint(
+            manifest,
+            {
+                "release_core": {"source": "release-b"},
+                "harness": {"source": "harness-a"},
+            },
+        )
+        == "release_core"
+    )
+    assert manifest["gates"]["core_session"]["status"] == "passed"
 
 
 def test_state_mismatch_invalidates_the_gate_and_every_later_checkpoint(

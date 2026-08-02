@@ -15,6 +15,7 @@ import time
 import urllib.request
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote, urlencode
@@ -550,6 +551,7 @@ def invalidate_from(
     gate_name: str,
     *,
     reason: str,
+    preserve_runtime_state: bool = False,
 ) -> None:
     gate_records = manifest.get("gates")
     if not isinstance(gate_records, dict):
@@ -566,13 +568,14 @@ def invalidate_from(
                 "status": "invalidated",
                 "invalidation_reason": reason,
             }
-    prior_digests = [
-        gate_records[name].get("output_state_digest")
-        for name in CANONICAL_GATE_NAMES[:start]
-        if isinstance(gate_records.get(name), dict)
-        and gate_records[name].get("status") == "passed"
-    ]
-    manifest["current_state_digest"] = prior_digests[-1] if prior_digests else None
+    if not preserve_runtime_state:
+        prior_digests = [
+            gate_records[name].get("output_state_digest")
+            for name in CANONICAL_GATE_NAMES[:start]
+            if isinstance(gate_records.get(name), dict)
+            and gate_records[name].get("status") == "passed"
+        ]
+        manifest["current_state_digest"] = prior_digests[-1] if prior_digests else None
 
 
 def new_session_manifest(
@@ -650,7 +653,11 @@ def public_web_asset_manifest(
         return None
 
 
-def source_fingerprint(root: Path = ROOT) -> dict[str, object]:
+def source_fingerprint(
+    root: Path = ROOT,
+    *,
+    include_roots: tuple[str, ...] | None = None,
+) -> dict[str, object]:
     resolved = root.resolve()
     excluded_roots = (
         ".git",
@@ -672,6 +679,11 @@ def source_fingerprint(root: Path = ROOT) -> dict[str, object]:
             continue
         relative = Path(os.fsdecode(raw_path))
         portable = relative.as_posix()
+        if include_roots is not None and not any(
+            portable == included or portable.startswith(included.rstrip("/") + "/")
+            for included in include_roots
+        ):
+            continue
         if any(
             portable == excluded
             or portable.startswith(excluded + "/")
@@ -693,25 +705,41 @@ def source_fingerprint(root: Path = ROOT) -> dict[str, object]:
                     digest.update(chunk)
         else:
             digest.update(b"missing\0")
-    try:
-        head = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"],
-            cwd=resolved,
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except subprocess.CalledProcessError:
-        head = None
     return {
-        "head": head,
         "files_sha256": digest.hexdigest(),
         "file_count": len(paths),
+        "include_roots": list(include_roots) if include_roots is not None else None,
         "excluded_roots": list(excluded_roots),
     }
 
 
 def default_fingerprint() -> dict[str, object]:
-    return source_fingerprint(ROOT)
+    release_core_roots = (
+        "deploy/hosted",
+        "src/thesistrace",
+        "pyproject.toml",
+        "uv.lock",
+        "web/src",
+        "web/package.json",
+        "web/bun.lock",
+    )
+    harness_roots = (
+        "Makefile",
+        "scripts/hosted-local-smoke.py",
+        "scripts/hosted-release-smoke.py",
+        "scripts/hosted/local_acceptance.py",
+        "scripts/hosted/local_boundary_acceptance.py",
+        "scripts/hosted/local_frontend_acceptance.py",
+        "scripts/hosted/local_ops_probe.py",
+        "scripts/hosted/local_recovery_acceptance.py",
+        "scripts/hosted/local_workflow_acceptance.py",
+        "scripts/hosted/seed_acceptance_state.py",
+        "tests/hosted",
+    )
+    return {
+        "release_core": source_fingerprint(ROOT, include_roots=release_core_roots),
+        "harness": source_fingerprint(ROOT, include_roots=harness_roots),
+    }
 
 
 def compatibility_fingerprint(
@@ -720,18 +748,59 @@ def compatibility_fingerprint(
     source: dict[str, object],
     runtime: dict[str, object],
 ) -> dict[str, object]:
+    release_core_source = source.get("release_core", source)
+    harness_source = source.get("harness", source)
     return {
-        "source": source,
-        "runtime": runtime,
-        "configuration": {
-            "project": arguments.project,
-            "http_port": arguments.http_port,
-            "https_port": arguments.https_port,
-            "postgres_port": arguments.postgres_port,
-            "grafana_port": arguments.grafana_port,
+        "release_core": {
+            "source": release_core_source,
+            "runtime": runtime,
+            "configuration": {
+                "project": arguments.project,
+                "http_port": arguments.http_port,
+                "https_port": arguments.https_port,
+                "postgres_port": arguments.postgres_port,
+                "grafana_port": arguments.grafana_port,
+            },
+        },
+        "harness": {
+            "source": harness_source,
             "canonical_gates": list(CANONICAL_GATE_NAMES),
         },
     }
+
+
+def reconcile_fingerprint(
+    manifest: dict[str, object],
+    fingerprint: dict[str, object],
+) -> str | None:
+    previous = manifest.get("fingerprint")
+    if previous == fingerprint:
+        return None
+    if not isinstance(previous, dict) or "release_core" not in previous:
+        gates = manifest.get("gates")
+        core = gates.get("core_session") if isinstance(gates, dict) else None
+        if not isinstance(core, dict) or core.get("status") != "passed":
+            return "release_core"
+        manifest["fingerprint"] = fingerprint
+        invalidate_from(
+            manifest,
+            "identity_product",
+            reason="acceptance harness model changed",
+            preserve_runtime_state=True,
+        )
+        return "harness"
+    if previous.get("release_core") != fingerprint.get("release_core"):
+        return "release_core"
+    if previous.get("harness") != fingerprint.get("harness"):
+        manifest["fingerprint"] = fingerprint
+        invalidate_from(
+            manifest,
+            "identity_product",
+            reason="acceptance harness inputs changed",
+            preserve_runtime_state=True,
+        )
+        return "harness"
+    return None
 
 
 def default_state(environment: dict[str, str]) -> dict[str, object]:
@@ -974,6 +1043,7 @@ def execute_phase(
 ) -> tuple[dict[str, object], dict[str, object]]:
     print(f"[{phase.name}] {' '.join(phase.command)}", flush=True)
     started = time.monotonic()
+    started_at = datetime.now(UTC).isoformat()
     sampler = DockerPhaseSampler(environment["THESISTRACE_COMPOSE_PROJECT_NAME"])
     sampler.start()
     completed: subprocess.CompletedProcess[bytes] | None = None
@@ -1019,6 +1089,8 @@ def execute_phase(
     log_path.chmod(0o600)
     record: dict[str, object] = {
         "status": status,
+        "started_at": started_at,
+        "completed_at": datetime.now(UTC).isoformat(),
         "elapsed_seconds": elapsed,
         "output_sha256": hashlib.sha256(output).hexdigest(),
         "log_path": str(log_path),
@@ -1167,16 +1239,19 @@ def run_acceptance(
                 raise LocalAcceptanceError("no local acceptance session is available to resume")
             if manifest.get("cleaned") is True:
                 raise LocalAcceptanceError("cleaned local acceptance state cannot be resumed")
-            if manifest.get("fingerprint") != fingerprint:
+            fingerprint_change = reconcile_fingerprint(manifest, fingerprint)
+            if fingerprint_change == "release_core":
                 invalidate_from(
                     manifest,
                     "reset",
-                    reason="acceptance inputs changed",
+                    reason="Release/Core inputs changed",
                 )
                 _write_private_json(session_manifest_path(arguments), manifest)
                 raise LocalAcceptanceError(
-                    "local acceptance inputs changed; run an explicit reset"
+                    "local Release/Core inputs changed; run an explicit reset"
                 )
+            if fingerprint_change == "harness":
+                _write_private_json(session_manifest_path(arguments), manifest)
             gate_records = manifest.get("gates")
             if not isinstance(gate_records, dict):
                 raise LocalAcceptanceError("local acceptance gate records are invalid")
@@ -1222,16 +1297,19 @@ def run_acceptance(
                 raise LocalAcceptanceError("local acceptance session could not be created")
             if manifest.get("project") != arguments.project:
                 raise LocalAcceptanceError("local acceptance project does not match the session")
-            if manifest.get("fingerprint") != fingerprint:
+            fingerprint_change = reconcile_fingerprint(manifest, fingerprint)
+            if fingerprint_change == "release_core":
                 invalidate_from(
                     manifest,
                     selected_phases[0].name,
-                    reason="acceptance inputs changed",
+                    reason="Release/Core inputs changed",
                 )
                 _write_private_json(session_manifest_path(arguments), manifest)
                 raise LocalAcceptanceError(
-                    "local acceptance inputs changed; run an explicit reset"
+                    "local Release/Core inputs changed; run an explicit reset"
                 )
+            if fingerprint_change == "harness":
+                _write_private_json(session_manifest_path(arguments), manifest)
             gate_records = manifest.get("gates")
             if not isinstance(gate_records, dict):
                 raise LocalAcceptanceError("local acceptance gate records are invalid")
