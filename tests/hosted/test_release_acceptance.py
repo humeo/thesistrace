@@ -1,7 +1,9 @@
 import importlib.util
+import io
 import json
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 from types import ModuleType
 
@@ -39,6 +41,7 @@ def public_smoke_module() -> ModuleType:
 
 def capacity_evidence(release_bundle_id: str) -> dict[str, object]:
     return {
+        "schema_version": "capacity-qualification-v2",
         "release_bundle_id": release_bundle_id,
         "universe": "top3000",
         "compute_workers": [
@@ -56,6 +59,11 @@ def capacity_evidence(release_bundle_id: str) -> dict[str, object]:
             "activity_attempt": 1,
         },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
+        "runtime_capacity": {
+            "source": "docker-info",
+            "logical_cpu": 6,
+            "memory_bytes": 12 * 1024**3,
+        },
         "swap_used": False,
         "oom_kill": False,
         "unexpected_restart": False,
@@ -141,6 +149,27 @@ def test_release_acceptance_names_every_exhaustion_and_recovery_boundary() -> No
     assert "compose stop --timeout 0" in launcher
 
 
+def test_activity_fault_injection_does_not_wait_for_worker_readiness() -> None:
+    public_smoke = (ROOT / "scripts" / "hosted-release-smoke.py").read_text()
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+
+    assert 'stack("acceptance-start-interruption", "compute-worker-1")' in (
+        public_smoke
+    )
+    assert 'stack("acceptance-kill-service", "compute-worker-1")' in public_smoke
+    assert 'stack("acceptance-arm-publication-interruption")' in public_smoke
+    assert 'stack("acceptance-interrupt-publication", publication_id)' in (
+        public_smoke
+    )
+    assert "acceptance-start-interruption)" in launcher
+    assert "compose up --detach --no-build --no-deps" in launcher
+    assert "acceptance-kill-service)" in launcher
+    assert 'compose kill --signal SIGKILL "$acceptance_service"' in launcher
+    assert "acceptance-arm-publication-interruption)" in launcher
+    assert "acceptance-interrupt-publication)" in launcher
+    assert "FROM thesistrace_product.dataset_publications" in launcher
+
+
 def test_public_smoke_uses_the_published_anon_key_for_registration(monkeypatch) -> None:
     module = public_smoke_module()
     calls: list[tuple[str, str | None]] = []
@@ -160,6 +189,160 @@ def test_public_smoke_uses_the_published_anon_key_for_registration(monkeypatch) 
     assert calls == [
         ("/api/auth/anon-key", None),
         ("/api/auth/users?client_type=server", "anon_acceptance"),
+    ]
+
+
+def test_public_smoke_can_reauthenticate_after_long_recovery(monkeypatch) -> None:
+    module = public_smoke_module()
+
+    monkeypatch.setattr(
+        module,
+        "request",
+        lambda *_args, **_kwargs: (200, {"accessToken": "fresh-token"}),
+    )
+
+    assert module.login_user(
+        "user@example.com",
+        "password",
+        "https://localhost",
+        label="login after recovery",
+    ) == "fresh-token"
+
+    script = (ROOT / "scripts" / "hosted-release-smoke.py").read_text()
+    matrix = script.index("interruption_matrix, recovery_run_id = (")
+    refreshed_a = script.index("token_a = login_user(", matrix)
+    refreshed_b = script.index("token_b = login_user(", matrix)
+    isolation = script.index("assert_cross_workspace_denial(", matrix)
+    assert matrix < refreshed_a < isolation
+    assert matrix < refreshed_b < isolation
+
+
+def test_public_smoke_preserves_real_equivalence_evidence_after_tombstone_checks() -> None:
+    script = (ROOT / "scripts" / "hosted-release-smoke.py").read_text()
+
+    assert "interruption_matrix, recovery_run_id = (" in script
+    assert 'f"/api/v1/research-runs/{recovery_run_id}/daily-tracks"' in script
+    assert 'f"/api/v1/daily-tracks/{tombstone_track_id}"' in script
+    assert 'f"/api/v1/research-runs/{recovery_run_id}"' in script
+    deletion = script.split('"DailyTrack Tombstone"', 1)[0].rsplit(
+        'request(', 1
+    )[1]
+    assert 'f"/api/v1/daily-tracks/{track_id}"' not in deletion
+
+
+def test_recovery_matrix_refreshes_tokens_around_long_activity_timeouts() -> None:
+    module = public_smoke_module()
+
+    assert module.refresh_access_token(
+        "expired-token",
+        lambda: "fresh-token",
+        "after Activity interruption",
+    ) == "fresh-token"
+    with pytest.raises(module.AcceptanceFailure, match="returned no access token"):
+        module.refresh_access_token(
+            "expired-token",
+            lambda: "",
+            "after Activity interruption",
+        )
+
+    script = (ROOT / "scripts" / "hosted-release-smoke.py").read_text()
+    matrix = script.index("def run_recovery_interruption_matrix(")
+    compute_start = script.index(
+        'stack("acceptance-start-interruption", "compute-worker-1")',
+        matrix,
+    )
+    releases_before = script.index("releases_before =", matrix)
+    releases_after = script.index("releases_after =", releases_before)
+    first_refresh = script.index("token = refresh_access_token(", matrix)
+    second_refresh = script.index("token = refresh_access_token(", first_refresh + 1)
+    third_refresh = script.index("token = refresh_access_token(", second_refresh + 1)
+    assert matrix < first_refresh < compute_start
+    assert compute_start < second_refresh < releases_before
+    assert releases_before < third_refresh < releases_after
+
+
+def test_cross_workspace_lists_allow_owned_resources_but_exclude_foreign_ids() -> None:
+    module = public_smoke_module()
+
+    module.assert_list_excludes_resource(
+        {"items": [{"id": "draft_owned"}]},
+        "draft_foreign",
+        "/api/v1/research-definitions",
+    )
+    with pytest.raises(module.AcceptanceFailure, match="disclosed foreign resource"):
+        module.assert_list_excludes_resource(
+            {"items": [{"id": "draft_foreign"}]},
+            "draft_foreign",
+            "/api/v1/research-definitions",
+        )
+
+
+def test_public_smoke_preserves_status_for_empty_or_non_json_responses() -> None:
+    module = public_smoke_module()
+
+    assert module.read_json_object(io.BytesIO(b"")) == {}
+    assert module.read_json_object(io.BytesIO(b"<html>not json</html>")) == {}
+    assert module.read_json_object(io.BytesIO(b'{"detail":"not found"}')) == {
+        "detail": "not found"
+    }
+
+
+def test_public_smoke_reads_the_direct_hosted_rerun_response_contract() -> None:
+    module = public_smoke_module()
+
+    assert module.require_resource_id(
+        {"id": "run_recovered", "status": "queued"},
+        "idempotent API recovery",
+    ) == "run_recovered"
+    with pytest.raises(module.AcceptanceFailure, match="missing resource id"):
+        module.require_resource_id(
+            {"run": {"id": "legacy_envelope"}},
+            "idempotent API recovery",
+        )
+
+
+def test_api_interruption_uses_an_explicit_unavailable_window(monkeypatch) -> None:
+    module = public_smoke_module()
+    api_up = True
+    operations: list[str] = []
+
+    def fake_stack(operation: str, service: str) -> dict[str, object]:
+        nonlocal api_up
+        assert service == "api"
+        operations.append(operation)
+        api_up = operation == "acceptance-start-service"
+        return {}
+
+    def fake_request(
+        _origin: str,
+        path: str,
+        *,
+        method: str = "GET",
+        **_kwargs,
+    ) -> tuple[int, dict[str, object]]:
+        if path == "/api/v1/session":
+            assert api_up
+            return 200, {"workspace_id": "workspace-1"}
+        assert method == "POST"
+        if not api_up:
+            raise urllib.error.URLError("API unavailable")
+        return (202 if not operations else 200), {
+            "id": "run_recovered",
+            "status": "queued",
+        }
+
+    monkeypatch.setattr(module, "stack", fake_stack)
+    monkeypatch.setattr(module, "request", fake_request)
+
+    assert module.interrupt_api_rerun(
+        "https://localhost",
+        "token",
+        run_id="run_source",
+        rerun_key="recovery-key",
+    ) == "run_recovered"
+    assert operations == [
+        "acceptance-stop-service",
+        "acceptance-start-service",
     ]
 
 

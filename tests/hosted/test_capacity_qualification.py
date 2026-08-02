@@ -1,8 +1,10 @@
 import asyncio
+import importlib.util
 import json
 import sqlite3
 from datetime import timedelta
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import yaml
 from temporalio.service import RPCError, RPCStatusCode
@@ -15,6 +17,15 @@ from thesistrace.operator import run
 from thesistrace.storage import MetadataStore
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def capacity_runner_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "capacity_qualification.py"
+    spec = importlib.util.spec_from_file_location("hosted_capacity_qualification", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_heavy_activity_heartbeat_tolerates_constrained_cpu_sections() -> None:
@@ -210,6 +221,7 @@ def test_capacity_result_wait_outlives_a_fixed_transient_failure_budget(
 
 def passing_evidence() -> dict[str, object]:
     return {
+        "schema_version": "capacity-qualification-v2",
         "universe": "top3000",
         "compute_workers": [
             {
@@ -226,6 +238,11 @@ def passing_evidence() -> dict[str, object]:
             "activity_attempt": 1,
         },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
+        "runtime_capacity": {
+            "source": "docker-info",
+            "logical_cpu": 6,
+            "memory_bytes": 12 * 1024 * 1024 * 1024,
+        },
         "swap_used": False,
         "oom_kill": False,
         "unexpected_restart": False,
@@ -241,6 +258,57 @@ def passing_evidence() -> dict[str, object]:
             "object_store": True,
         },
     }
+
+
+def test_capacity_qualification_rejects_legacy_evidence_without_runtime_totals(
+    tmp_path: Path,
+) -> None:
+    store = MetadataStore(tmp_path / "metadata.sqlite3")
+    store.initialize()
+    service = CapacityQualificationService(store)
+    legacy = passing_evidence()
+    legacy["schema_version"] = "capacity-qualification-v1"
+    del legacy["runtime_capacity"]
+
+    recorded = service.record(
+        actor="operator-1",
+        release_bundle_id="release-1",
+        evidence=legacy,
+    )
+
+    assert recorded["status"] == "failed"
+    assert recorded["failures"] == [
+        "capacity_schema_version",
+        "runtime_capacity_missing",
+    ]
+    assert service.is_qualified() is False
+
+
+def test_capacity_qualification_rejects_a_2c4g_runtime_despite_valid_work(
+    tmp_path: Path,
+) -> None:
+    store = MetadataStore(tmp_path / "metadata.sqlite3")
+    store.initialize()
+    service = CapacityQualificationService(store)
+    constrained = passing_evidence()
+    constrained["runtime_capacity"] = {
+        "source": "docker-info",
+        "logical_cpu": 2,
+        "memory_bytes": 4 * 1024 * 1024 * 1024,
+    }
+
+    recorded = service.record(
+        actor="operator-1",
+        release_bundle_id="release-1",
+        evidence=constrained,
+    )
+
+    assert recorded["status"] == "failed"
+    assert recorded["failures"] == [
+        "runtime_cpu_budget_insufficient",
+        "runtime_memory_budget_insufficient",
+    ]
+    assert service.is_qualified() is False
 
 
 def test_capacity_evidence_rejects_retried_measured_activities(tmp_path: Path) -> None:
@@ -396,6 +464,83 @@ def test_capacity_probe_coordinator_runs_in_the_data_worker() -> None:
 
     assert '_container_id(arguments.project, DATA_SERVICE)' in script
     assert '_container_id(arguments.project, "execution-relay")' not in script
+
+
+def test_capacity_runner_records_the_same_docker_runtime_totals(monkeypatch) -> None:
+    module = capacity_runner_module()
+    service_names = (
+        *module.STEADY_SERVICES,
+        *module.COMPUTE_SERVICES,
+        module.DATA_SERVICE,
+    )
+    state = {
+        name: {
+            "memory_limit_bytes": 0,
+            "cpu_limit": 0,
+            "restart_count": 0,
+            "oom_killed": False,
+            "health": "healthy",
+            "swap_disabled": True,
+        }
+        for name in service_names
+    }
+    scenario = {
+        "probe_id": "probe-1",
+        "wall_seconds": 1,
+        "prepare": {"created": True},
+        "compute_workers": [
+            {
+                "status": "succeeded",
+                "activity_attempt": 1,
+                "worker_slot": f"compute-{index}",
+                "alpha_checksum": "alpha",
+                "strategy_checksum": "strategy",
+                "result_bytes": 1,
+                "result_kinds": ["strategy_summary"],
+                "workflow_id": f"workflow-{index}",
+                "working_cache_verified": True,
+                "swap_used": False,
+            }
+            for index in range(4)
+        ],
+        "dataset_publication": {
+            "status": "succeeded",
+            "activity_attempt": 1,
+            "worker_slot": "data-1",
+            "workflow_id": "publication",
+            "created": True,
+        },
+    }
+    calls: list[tuple[str, ...]] = []
+
+    def check_output(command: list[str], **_kwargs: object) -> str:
+        calls.append(tuple(command))
+        if command[:2] == ["docker", "exec"]:
+            return json.dumps(scenario)
+        if command[:2] == ["docker", "info"]:
+            return json.dumps({"NCPU": 8, "MemTotal": 16 * 1024**3})
+        raise AssertionError(command)
+
+    monkeypatch.setattr(module, "container_state", lambda _arguments: state)
+    monkeypatch.setattr(module, "_container_id", lambda *_arguments: "data-id")
+    monkeypatch.setattr(module.subprocess, "check_output", check_output)
+
+    evidence = module.run(
+        SimpleNamespace(
+            namespace="thesistrace",
+            compose_file=ROOT / "deploy" / "hosted" / "compose.yaml",
+            project="qualification",
+            release_bundle_id="release-1",
+        )
+    )
+
+    assert evidence["schema_version"] == "capacity-qualification-v2"
+    assert evidence["runtime_capacity"] == {
+        "source": "docker-info",
+        "logical_cpu": 8,
+        "memory_bytes": 16 * 1024**3,
+    }
+    assert ("docker", "info", "--format", "{{json .}}") in calls
 
 
 def test_hosted_operator_uses_the_admin_database_boundary() -> None:

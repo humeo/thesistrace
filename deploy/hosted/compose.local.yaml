@@ -1,0 +1,37 @@
+services:
+  postgres:
+    networks: [control, local-admin]
+    ports:
+      - target: 5432
+        published: "${THESISTRACE_LOCAL_POSTGRES_PORT:-25432}"
+        host_ip: 127.0.0.1
+        protocol: tcp
+
+  compute-worker-2:
+    profiles: [launch-capacity]
+
+  compute-worker-3:
+    profiles: [launch-capacity]
+
+  compute-worker-4:
+    profiles: [launch-capacity]
+
+  otel-collector:
+    profiles: [local-ops]
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.1
+
+  prometheus:
+    profiles: [local-ops]
+    cpus: 0.1
+
+  grafana:
+    profiles: [local-ops]
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 0.25
+
+networks:
+  local-admin:
+    driver: bridge

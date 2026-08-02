@@ -24,7 +24,7 @@
 		respond 403
 	}
 
-	@private_edge_paths path /api/storage /api/storage/* /api/v1/objects /api/v1/objects/* /api/auth/admin /api/auth/admin/*
+	@private_edge_paths path /api/storage /api/storage/* /storage /storage/* /api/v1/objects /api/v1/objects/* /api/auth/admin /api/auth/admin/*
 	handle @private_edge_paths {
 		respond 404
 	}

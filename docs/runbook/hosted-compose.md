@@ -421,6 +421,48 @@ make hosted-operator ARGS="quota override \
   --max-private-storage-bytes 1073741824"
 ```
 
+## Constrained local acceptance
+
+Use Hosted Local Acceptance for development on a Docker runtime with at least
+2 logical CPUs and 3.5 GiB of memory:
+
+```sh
+make hosted-local-acceptance
+```
+
+The command owns the Compose project `thesistrace-hosted-local`, uses isolated
+state under `.hosted/local-acceptance`, and replaces any prior disposable local
+acceptance containers and volumes. Do not point those paths or that project
+name at a development stack whose data must be retained.
+
+The run starts the pinned production application, InsForge, PostgreSQL,
+Temporal, ObjectStore, role, migration, network, and edge implementations. It
+keeps one Compute Worker and the independent Data Worker, runs heavy product
+work serially, and starts Collector, Prometheus, and Grafana only for the
+operational phase. Each phase has its own timeout and resource samples. The
+final frontend phase type-checks and builds the Web application and runs the
+browser suite after the core containers have been paused.
+
+Successful evidence is written to
+`.hosted/evidence/hosted-v2-local.json`. The artifact has schema
+`hosted-v2-local-v1`, records Docker runtime totals and per-phase diagnostic
+peaks, and always records `launch_qualified: false`. A failed run still cleans
+up the disposable stack and identifies the first failing phase on stderr.
+
+This command is deliberately not Launch Qualification. It does not prove or
+claim:
+
+- four-Worker Top3000 capacity or the production host reserve;
+- off-node backup independence or the production RPO/RTO;
+- the Cloudflare path or direct-Origin behavior outside the local edge;
+- real SMTP delivery; or
+- production invitation admission or Launch Qualification.
+
+The local artifact is unsigned, is rejected by production capacity and launch
+evidence consumers, and must never be used with an Operator command that opens
+registration. Run the release-grade procedure below on the accepted qualifying
+runtime for that purpose.
+
 ## Final release qualification
 
 Every Release Bundle is closed to new invitations until its own evidence is

@@ -11,6 +11,9 @@ COMPUTE_P99_MEMORY_LIMIT_MIB = 700
 COMPUTE_PEAK_MEMORY_LIMIT_MIB = 800
 NONWORKER_MEMORY_LIMIT_MIB = 5 * 1024
 NONWORKER_CPU_LIMIT = 2.0
+CAPACITY_EVIDENCE_SCHEMA_VERSION = "capacity-qualification-v2"
+MINIMUM_RUNTIME_LOGICAL_CPU = 6.0
+MINIMUM_RUNTIME_MEMORY_BYTES = 12 * 1024 * 1024 * 1024
 
 
 class CapacityQualificationStore(Protocol):
@@ -76,6 +79,24 @@ class CapacityQualificationService:
 
 def qualification_failures(evidence: dict[str, object]) -> list[str]:
     failures: list[str] = []
+    if evidence.get("schema_version") != CAPACITY_EVIDENCE_SCHEMA_VERSION:
+        failures.append("capacity_schema_version")
+    runtime_capacity = evidence.get("runtime_capacity")
+    if not isinstance(runtime_capacity, dict):
+        failures.append("runtime_capacity_missing")
+    else:
+        try:
+            logical_cpu = float(runtime_capacity["logical_cpu"])
+            memory_bytes = int(runtime_capacity["memory_bytes"])
+        except (KeyError, TypeError, ValueError, OverflowError):
+            failures.append("runtime_capacity_invalid")
+        else:
+            if runtime_capacity.get("source") != "docker-info":
+                failures.append("runtime_capacity_invalid")
+            if logical_cpu < MINIMUM_RUNTIME_LOGICAL_CPU:
+                failures.append("runtime_cpu_budget_insufficient")
+            if memory_bytes < MINIMUM_RUNTIME_MEMORY_BYTES:
+                failures.append("runtime_memory_budget_insufficient")
     workers = evidence.get("compute_workers")
     if not isinstance(workers, list) or len(workers) != COMPUTE_ACTIVITY_COUNT:
         failures.append("four_compute_activities_required")

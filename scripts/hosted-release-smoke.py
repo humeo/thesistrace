@@ -5,8 +5,9 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,47 @@ RESET_CODE = "830614"
 
 class AcceptanceFailure(RuntimeError):
     pass
+
+
+class AcceptanceProfile(NamedTuple):
+    name: str
+    actor: str
+    compute_services: tuple[str, ...]
+    whole_node_recovery: bool
+    backup_and_three_health_planes: bool
+    invitation_gate_reason: str
+
+
+def acceptance_profile(name: str) -> AcceptanceProfile:
+    if name == "launch":
+        return AcceptanceProfile(
+            name="launch",
+            actor="release-acceptance",
+            compute_services=tuple(
+                f"compute-worker-{index}" for index in range(1, 5)
+            ),
+            whole_node_recovery=True,
+            backup_and_three_health_planes=True,
+            invitation_gate_reason="LAUNCH_QUALIFICATION_REQUIRED",
+        )
+    if name == "local":
+        return AcceptanceProfile(
+            name="local",
+            actor="local-acceptance",
+            compute_services=("compute-worker-1",),
+            whole_node_recovery=False,
+            backup_and_three_health_planes=False,
+            invitation_gate_reason="CAPACITY_QUALIFICATION_REQUIRED",
+        )
+    raise AcceptanceFailure(f"unknown public-origin acceptance profile: {name}")
+
+
+def read_json_object(response) -> dict[str, object]:
+    try:
+        payload = json.load(response)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def request(
@@ -52,13 +94,10 @@ def request(
             timeout=120,
             context=context,
         ) as response:
-            payload = json.load(response)
+            payload = read_json_object(response)
             return response.status, payload
     except urllib.error.HTTPError as error:
-        try:
-            payload = json.load(error)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            payload = {}
+        payload = read_json_object(error)
         return error.code, payload
 
 
@@ -103,12 +142,20 @@ def require_status(
     return payload
 
 
+def require_resource_id(payload: dict[str, object], label: str) -> str:
+    resource_id = payload.get("id")
+    if not isinstance(resource_id, str) or not resource_id:
+        raise AcceptanceFailure(f"{label}: response is missing resource id: {payload}")
+    return resource_id
+
+
 def poll(
     operation,
     predicate,
     label: str,
     *,
     timeout: float = 900,
+    terminal_failure=None,
 ) -> dict[str, object]:
     deadline = time.monotonic() + timeout
     last: dict[str, object] = {}
@@ -116,6 +163,8 @@ def poll(
         status, last = operation()
         if status == 200 and predicate(last):
             return last
+        if status == 200 and terminal_failure is not None and terminal_failure(last):
+            raise AcceptanceFailure(f"{label} failed before convergence: {last}")
         time.sleep(2)
     raise AcceptanceFailure(f"{label} did not converge: {last}")
 
@@ -145,6 +194,42 @@ def register_user(email: str, password: str, origin: str) -> tuple[str, str]:
     if not isinstance(access_token, str):
         raise AcceptanceFailure("registration did not return an access token")
     return access_token, anon_key
+
+
+def login_user(
+    email: str,
+    password: str,
+    origin: str,
+    *,
+    label: str = "login",
+) -> str:
+    logged_in = require_status(
+        request(
+            origin,
+            "/api/auth/sessions?client_type=server",
+            method="POST",
+            body={"email": email, "password": password},
+        ),
+        200,
+        label,
+    )
+    token = logged_in.get("accessToken")
+    if not isinstance(token, str):
+        raise AcceptanceFailure(f"{label} returned no access token")
+    return token
+
+
+def refresh_access_token(
+    current_token: str,
+    refresher: Callable[[], str] | None,
+    label: str,
+) -> str:
+    if refresher is None:
+        return current_token
+    token = refresher()
+    if not token:
+        raise AcceptanceFailure(f"{label} returned no access token")
+    return token
 
 
 def seed_user(email: str, password: str, origin: str) -> tuple[str, str]:
@@ -223,6 +308,23 @@ def definition(title: str) -> dict[str, object]:
     }
 
 
+def assert_list_excludes_resource(
+    payload: dict[str, object],
+    foreign_resource_id: str,
+    path: str,
+) -> None:
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise AcceptanceFailure(f"cross-Workspace list is malformed: {path}")
+    if any(
+        isinstance(item, dict) and item.get("id") == foreign_resource_id
+        for item in items
+    ):
+        raise AcceptanceFailure(
+            f"cross-Workspace list disclosed foreign resource: {path}"
+        )
+
+
 def assert_cross_workspace_denial(
     origin: str,
     token: str,
@@ -234,15 +336,14 @@ def assert_cross_workspace_denial(
     advance_id: str,
     suffix: str,
 ) -> None:
-    list_paths = (
-        "/api/v1/research-definitions",
-        "/api/v1/research-runs",
-        "/api/v1/daily-tracks",
+    list_resources = (
+        ("/api/v1/research-definitions", draft_id),
+        ("/api/v1/research-runs", run_id),
+        ("/api/v1/daily-tracks", track_id),
     )
-    for path in list_paths:
+    for path, foreign_resource_id in list_resources:
         payload = require_status(request(origin, path, token=token), 200, path)
-        if payload.get("items"):
-            raise AcceptanceFailure(f"cross-Workspace list disclosed data: {path}")
+        assert_list_excludes_resource(payload, foreign_resource_id, path)
 
     denied = (
         ("GET", f"/api/v1/research-definitions/{draft_id}", None, None),
@@ -352,20 +453,12 @@ def password_recovery(origin: str, email: str, old_password: str) -> str:
         200,
         "password reset",
     )
-    logged_in = require_status(
-        request(
-            origin,
-            "/api/auth/sessions?client_type=server",
-            method="POST",
-            body={"email": email, "password": new_password},
-        ),
-        200,
-        "login after password reset",
+    return login_user(
+        email,
+        new_password,
+        origin,
+        label="login after password reset",
     )
-    token = logged_in.get("accessToken")
-    if not isinstance(token, str):
-        raise AcceptanceFailure("login after password reset returned no token")
-    return token
 
 
 def wait_for_three_health_planes() -> None:
@@ -401,6 +494,61 @@ def assert_single_resource(
         raise AcceptanceFailure(f"{label} was not published exactly once")
 
 
+def interrupt_api_rerun(
+    origin: str,
+    token: str,
+    *,
+    run_id: str,
+    rerun_key: str,
+) -> str:
+    def attempt_rerun() -> tuple[int, dict[str, object]]:
+        try:
+            return request(
+                origin,
+                f"/api/v1/research-runs/{run_id}/rerun",
+                method="POST",
+                token=token,
+                headers={"Idempotency-Key": rerun_key},
+            )
+        except urllib.error.URLError:
+            return 0, {}
+
+    admitted = require_status(
+        attempt_rerun(),
+        (200, 202),
+        "ResearchRun before API interruption",
+    )
+    recovery_run_id = require_resource_id(
+        admitted,
+        "ResearchRun before API interruption",
+    )
+
+    stack("acceptance-stop-service", "api")
+    try:
+        interrupted_status, interrupted_payload = attempt_rerun()
+    finally:
+        stack("acceptance-start-service", "api")
+    if interrupted_status != 0 and interrupted_status < 500:
+        raise AcceptanceFailure(
+            "API request remained available during the explicit interruption: "
+            f"{interrupted_status}: {interrupted_payload}"
+        )
+
+    poll(
+        lambda: request(origin, "/api/v1/session", token=token),
+        lambda value: bool(value.get("workspace_id")),
+        "API recovery",
+    )
+    replayed = require_status(
+        attempt_rerun(),
+        200,
+        "idempotent API recovery",
+    )
+    if require_resource_id(replayed, "idempotent API recovery") != recovery_run_id:
+        raise AcceptanceFailure("API recovery created a duplicate ResearchRun")
+    return recovery_run_id
+
+
 def wait_for_publication_status(
     publication_id: str,
     accepted: set[str],
@@ -432,230 +580,16 @@ def assert_storage_invariants() -> None:
         raise AcceptanceFailure(f"partial staged artifacts remain: {physical}")
 
 
-def run_recovery_interruption_matrix(
+def run_whole_node_recovery(
     origin: str,
     token: str,
     *,
     run_id: str,
+    recovery_run_id: str,
     track_id: str,
     suffix: str,
-) -> dict[str, bool]:
-    compute_services = tuple(f"compute-worker-{index}" for index in range(1, 5))
-    for service in compute_services:
-        stack("acceptance-stop-service", service)
-    stack("acceptance-stop-service", "execution-relay")
-    rerun_key = f"recovery-rerun-{suffix}"
-
-    def attempt_rerun() -> tuple[int, dict[str, object]]:
-        try:
-            return request(
-                origin,
-                f"/api/v1/research-runs/{run_id}/rerun",
-                method="POST",
-                token=token,
-                headers={"Idempotency-Key": rerun_key},
-            )
-        except urllib.error.URLError:
-            return 0, {}
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        attempts = [executor.submit(attempt_rerun) for _index in range(8)]
-        time.sleep(0.01)
-        stack("acceptance-stop-service", "api")
-        stack("acceptance-start-service", "api")
-        api_results = [attempt.result() for attempt in attempts]
-    if not any(status == 0 or status >= 500 for status, _payload in api_results):
-        raise AcceptanceFailure(
-            f"no in-flight API request crossed the interruption: {api_results}"
-        )
-    poll(
-        lambda: request(origin, "/api/v1/session", token=token),
-        lambda value: bool(value.get("workspace_id")),
-        "API recovery",
-    )
-    rerun = require_status(
-        attempt_rerun(),
-        (200, 202),
-        "idempotent API recovery",
-    )
-    recovery_run_id = str(rerun["run"]["id"])
-    repeated_rerun = require_status(
-        request(
-            origin,
-            f"/api/v1/research-runs/{run_id}/rerun",
-            method="POST",
-            token=token,
-            headers={"Idempotency-Key": rerun_key},
-        ),
-        200,
-        "idempotent outbox ResearchRun",
-    )
-    if repeated_rerun.get("run", {}).get("id") != recovery_run_id:
-        raise AcceptanceFailure("outbox retry created a duplicate ResearchRun")
-    queued = require_status(
-        request(origin, f"/api/v1/research-runs/{recovery_run_id}", token=token),
-        200,
-        "queued ResearchRun while relay is unavailable",
-    )
-    if queued.get("status") != "queued":
-        raise AcceptanceFailure("ResearchRun escaped its durable outbox while relay was down")
-    assert_single_resource(
-        origin,
-        token,
-        "/api/v1/research-runs",
-        recovery_run_id,
-        "outbox ResearchRun",
-    )
-
-    stack("acceptance-start-service", "execution-relay")
-    stack("acceptance-start-service", "compute-worker-1")
-    deadline = time.monotonic() + 120
-    last_run: dict[str, object] = {}
-    while time.monotonic() < deadline:
-        last_run = require_status(
-            request(
-                origin,
-                f"/api/v1/research-runs/{recovery_run_id}",
-                token=token,
-            ),
-            200,
-            "Research Activity interruption target",
-        )
-        if last_run.get("status") == "running":
-            stack("acceptance-stop-service", "compute-worker-1")
-            break
-        if last_run.get("status") in {"succeeded", "failed", "cancelled"}:
-            raise AcceptanceFailure(
-                "Research Activity completed before its Worker was interrupted"
-            )
-        time.sleep(0.05)
-    else:
-        raise AcceptanceFailure(f"Research Activity was never claimed: {last_run}")
-
-    stack("acceptance-start-service", "compute-worker-1")
-    recovered_run = poll(
-        lambda: request(
-            origin,
-            f"/api/v1/research-runs/{recovery_run_id}",
-            token=token,
-        ),
-        lambda value: value.get("status") == "succeeded",
-        "interrupted Research Activity recovery",
-        timeout=600,
-    )
-    if recovered_run.get("status") != "succeeded":
-        raise AcceptanceFailure("interrupted ResearchRun did not recover")
-    run_attempts = recovered_run.get("attempts")
-    if not isinstance(run_attempts, list) or len(run_attempts) < 2:
-        raise AcceptanceFailure(
-            "Research Activity interruption did not produce a second Attempt"
-        )
-    require_status(
-        request(
-            origin,
-            f"/api/v1/research-runs/{recovery_run_id}/result?daily_limit=1",
-            token=token,
-        ),
-        200,
-        "single recovered Research result",
-    )
-    assert_single_resource(
-        origin,
-        token,
-        "/api/v1/research-runs",
-        recovery_run_id,
-        "recovered ResearchRun",
-    )
-    for service in compute_services[1:]:
-        stack("acceptance-start-service", service)
-
-    releases_before = require_status(
-        request(origin, "/api/v1/dataset-releases", token=token),
-        200,
-        "pre-interruption Dataset Releases",
-    )
-    release_ids_before = {
-        str(item["id"])
-        for item in releases_before.get("items", [])
-        if isinstance(item, dict)
-    }
-    stack("acceptance-stop-service", "data-worker")
-    publication_key = f"recovery-publication-{suffix}"
-    publication = stack(
-        "operator",
-        "dataset-publication",
-        "request",
-        "--actor",
-        "release-acceptance",
-        "--kind",
-        "fixture_increment",
-        "--new-sessions",
-        "20",
-        "--idempotency-key",
-        publication_key,
-    )
-    publication_record = publication.get("publication")
-    if not isinstance(publication_record, dict):
-        raise AcceptanceFailure("Dataset Publication request returned no resource")
-    publication_id = str(publication_record["id"])
-    repeated_publication = stack(
-        "operator",
-        "dataset-publication",
-        "request",
-        "--actor",
-        "release-acceptance",
-        "--kind",
-        "fixture_increment",
-        "--new-sessions",
-        "20",
-        "--idempotency-key",
-        publication_key,
-    )
-    if (
-        repeated_publication.get("created") is not False
-        or repeated_publication.get("publication", {}).get("id") != publication_id
-    ):
-        raise AcceptanceFailure("publication retry created a duplicate request")
-    stack("acceptance-start-service", "data-worker")
-    publication_running = wait_for_publication_status(
-        publication_id,
-        {"running", "succeeded", "failed", "cancelled"},
-    )
-    if publication_running.get("status") != "running":
-        raise AcceptanceFailure(
-            "Dataset Publication completed before its Data Worker was interrupted"
-        )
-    stack("acceptance-stop-service", "data-worker")
-    stack("acceptance-start-service", "data-worker")
-    completed_publication = wait_for_publication_status(
-        publication_id,
-        {"succeeded", "failed", "cancelled"},
-        timeout=600,
-    )
-    if completed_publication.get("status") != "succeeded":
-        raise AcceptanceFailure(
-            f"interrupted Dataset Publication did not recover: {completed_publication}"
-        )
-    if int(completed_publication.get("attempt_count", 0)) < 2:
-        raise AcceptanceFailure("publication interruption did not produce a redelivery")
-    releases_after = poll(
-        lambda: request(origin, "/api/v1/dataset-releases", token=token),
-        lambda value: len(value.get("items", [])) == len(release_ids_before) + 1,
-        "single interrupted Dataset Release",
-        timeout=600,
-    )
-    release_ids_after = {
-        str(item["id"])
-        for item in releases_after.get("items", [])
-        if isinstance(item, dict)
-    }
-    if (
-        release_ids_after - release_ids_before
-        != {str(completed_publication["result_release_id"])}
-    ):
-        raise AcceptanceFailure("publication recovery exposed duplicate or partial Releases")
-    assert_storage_invariants()
-
+    release_ids_after: set[str],
+) -> None:
     stack("maintenance-enter")
     try:
         maintenance_rejection = require_status(
@@ -739,20 +673,228 @@ def run_recovery_interruption_matrix(
         recovery_run_id,
         "ResearchRun after node recovery",
     )
-    return {
+
+
+def run_recovery_interruption_matrix(
+    origin: str,
+    token: str,
+    *,
+    run_id: str,
+    track_id: str,
+    suffix: str,
+    profile_name: str = "launch",
+    token_refresher: Callable[[], str] | None = None,
+) -> tuple[dict[str, bool], str]:
+    profile = acceptance_profile(profile_name)
+    compute_services = profile.compute_services
+    for service in compute_services:
+        stack("acceptance-stop-service", service)
+    stack("acceptance-stop-service", "execution-relay")
+    rerun_key = f"recovery-rerun-{suffix}"
+    recovery_run_id = interrupt_api_rerun(
+        origin,
+        token,
+        run_id=run_id,
+        rerun_key=rerun_key,
+    )
+    queued = require_status(
+        request(origin, f"/api/v1/research-runs/{recovery_run_id}", token=token),
+        200,
+        "queued ResearchRun while relay is unavailable",
+    )
+    if queued.get("status") != "queued":
+        raise AcceptanceFailure("ResearchRun escaped its durable outbox while relay was down")
+    assert_single_resource(
+        origin,
+        token,
+        "/api/v1/research-runs",
+        recovery_run_id,
+        "outbox ResearchRun",
+    )
+
+    stack("acceptance-start-service", "execution-relay")
+    token = refresh_access_token(
+        token,
+        token_refresher,
+        "login before Research Activity interruption",
+    )
+    stack("acceptance-start-interruption", "compute-worker-1")
+    deadline = time.monotonic() + 120
+    last_run: dict[str, object] = {}
+    while time.monotonic() < deadline:
+        last_run = require_status(
+            request(
+                origin,
+                f"/api/v1/research-runs/{recovery_run_id}",
+                token=token,
+            ),
+            200,
+            "Research Activity interruption target",
+        )
+        if last_run.get("status") == "running":
+            stack("acceptance-kill-service", "compute-worker-1")
+            break
+        if last_run.get("status") in {"succeeded", "failed", "cancelled"}:
+            raise AcceptanceFailure(
+                "Research Activity completed before its Worker was interrupted"
+            )
+        time.sleep(0.05)
+    else:
+        raise AcceptanceFailure(f"Research Activity was never claimed: {last_run}")
+
+    stack("acceptance-start-service", "compute-worker-1")
+    recovered_run = poll(
+        lambda: request(
+            origin,
+            f"/api/v1/research-runs/{recovery_run_id}",
+            token=token,
+        ),
+        lambda value: value.get("status") == "succeeded",
+        "interrupted Research Activity recovery",
+        timeout=600,
+    )
+    if recovered_run.get("status") != "succeeded":
+        raise AcceptanceFailure("interrupted ResearchRun did not recover")
+    run_attempts = recovered_run.get("attempts")
+    if not isinstance(run_attempts, list) or len(run_attempts) < 2:
+        raise AcceptanceFailure(
+            "Research Activity interruption did not produce a second Attempt"
+        )
+    require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{recovery_run_id}/result?daily_limit=1",
+            token=token,
+        ),
+        200,
+        "single recovered Research result",
+    )
+    assert_single_resource(
+        origin,
+        token,
+        "/api/v1/research-runs",
+        recovery_run_id,
+        "recovered ResearchRun",
+    )
+    for service in compute_services[1:]:
+        stack("acceptance-start-service", service)
+
+    token = refresh_access_token(
+        token,
+        token_refresher,
+        "login after Research Activity interruption",
+    )
+    releases_before = require_status(
+        request(origin, "/api/v1/dataset-releases", token=token),
+        200,
+        "pre-interruption Dataset Releases",
+    )
+    release_ids_before = {
+        str(item["id"])
+        for item in releases_before.get("items", [])
+        if isinstance(item, dict)
+    }
+    stack("acceptance-arm-publication-interruption")
+    publication_key = f"recovery-publication-{suffix}"
+    publication = stack(
+        "operator",
+        "dataset-publication",
+        "request",
+        "--actor",
+        profile.actor,
+        "--kind",
+        "fixture_increment",
+        "--new-sessions",
+        "20",
+        "--idempotency-key",
+        publication_key,
+    )
+    publication_record = publication.get("publication")
+    if not isinstance(publication_record, dict):
+        raise AcceptanceFailure("Dataset Publication request returned no resource")
+    publication_id = str(publication_record["id"])
+    repeated_publication = stack(
+        "operator",
+        "dataset-publication",
+        "request",
+        "--actor",
+        profile.actor,
+        "--kind",
+        "fixture_increment",
+        "--new-sessions",
+        "20",
+        "--idempotency-key",
+        publication_key,
+    )
+    if (
+        repeated_publication.get("created") is not False
+        or repeated_publication.get("publication", {}).get("id") != publication_id
+    ):
+        raise AcceptanceFailure("publication retry created a duplicate request")
+    stack("acceptance-interrupt-publication", publication_id)
+    stack("acceptance-start-service", "data-worker")
+    completed_publication = wait_for_publication_status(
+        publication_id,
+        {"succeeded", "failed", "cancelled"},
+        timeout=600,
+    )
+    if completed_publication.get("status") != "succeeded":
+        raise AcceptanceFailure(
+            f"interrupted Dataset Publication did not recover: {completed_publication}"
+        )
+    if int(completed_publication.get("attempt_count", 0)) < 2:
+        raise AcceptanceFailure("publication interruption did not produce a redelivery")
+    token = refresh_access_token(
+        token,
+        token_refresher,
+        "login after Dataset Publication interruption",
+    )
+    releases_after = poll(
+        lambda: request(origin, "/api/v1/dataset-releases", token=token),
+        lambda value: len(value.get("items", [])) == len(release_ids_before) + 1,
+        "single interrupted Dataset Release",
+        timeout=600,
+    )
+    release_ids_after = {
+        str(item["id"])
+        for item in releases_after.get("items", [])
+        if isinstance(item, dict)
+    }
+    if (
+        release_ids_after - release_ids_before
+        != {str(completed_publication["result_release_id"])}
+    ):
+        raise AcceptanceFailure("publication recovery exposed duplicate or partial Releases")
+    assert_storage_invariants()
+
+    if profile.whole_node_recovery:
+        run_whole_node_recovery(
+            origin,
+            token,
+            run_id=run_id,
+            recovery_run_id=recovery_run_id,
+            track_id=track_id,
+            suffix=suffix,
+            release_ids_after=release_ids_after,
+        )
+    result = {
         "api": True,
         "outbox_relay": True,
         "temporal_worker": True,
         "activity": True,
         "publication": True,
-        "maintenance": True,
-        "node": True,
         "no_duplicate_domain_result": True,
         "no_partial_authoritative_artifact": True,
     }
+    if profile.whole_node_recovery:
+        result.update({"maintenance": True, "node": True})
+    return result, recovery_run_id
 
 
-def main() -> None:
+def run_public_origin_acceptance(
+    profile_name: str = "launch",
+) -> dict[str, object]:
+    profile = acceptance_profile(profile_name)
     origin = os.environ.get("THESISTRACE_HOSTED_ORIGIN")
     if not origin:
         raise SystemExit("THESISTRACE_HOSTED_ORIGIN is required")
@@ -769,29 +911,31 @@ def main() -> None:
         "invitation",
         "issue",
         "--actor",
-        "release-acceptance",
+        profile.actor,
         "--email",
         f"blocked-{suffix}@example.invalid",
         "--expires-at",
         "2099-01-01T00:00:00Z",
         expect=2,
     )
-    if blocked.get("reason_code") != "LAUNCH_QUALIFICATION_REQUIRED":
-        raise AcceptanceFailure(f"launch-closed invitation gate was not enforced: {blocked}")
+    if blocked.get("reason_code") != profile.invitation_gate_reason:
+        raise AcceptanceFailure(
+            f"closed invitation gate was not enforced for {profile.name}: {blocked}"
+        )
 
     stack(
         "operator",
         "dataset-publication",
         "request",
         "--actor",
-        "release-acceptance",
+        profile.actor,
         "--kind",
         "fixture_bootstrap",
         "--idempotency-key",
         f"release-bootstrap-{suffix}",
     )
     token_a, workspace_a = seed_user(email_a, password_a, origin)
-    token_b, _workspace_b = seed_user(email_b, password_b, origin)
+    token_b, workspace_b = seed_user(email_b, password_b, origin)
     token_a = password_recovery(origin, email_a, password_a)
 
     releases_a = poll(
@@ -904,7 +1048,7 @@ def main() -> None:
         "dataset-publication",
         "request",
         "--actor",
-        "release-acceptance",
+        profile.actor,
         "--kind",
         "fixture_increment",
         "--new-sessions",
@@ -923,6 +1067,9 @@ def main() -> None:
             item.get("status") == "succeeded" for item in value.get("advances", [])
         ),
         "DailyTrack Advance",
+        terminal_failure=lambda value: any(
+            item.get("status") == "failed" for item in value.get("advances", [])
+        ),
     )
     advance_id = str(advanced["advances"][-1]["id"])
 
@@ -972,13 +1119,46 @@ def main() -> None:
     if any(term in serialized_current for term in ("manifest_sha256", "signed_url")):
         raise AcceptanceFailure("DailyTrack current view disclosed raw storage metadata")
 
-    interruption_matrix = run_recovery_interruption_matrix(
-        origin,
-        token_a,
-        run_id=run_id,
-        track_id=track_id,
-        suffix=suffix,
+    interruption_matrix, recovery_run_id = (
+        run_recovery_interruption_matrix(
+            origin,
+            token_a,
+            run_id=run_id,
+            track_id=track_id,
+            suffix=suffix,
+            profile_name=profile.name,
+            token_refresher=lambda: login_user(
+                email_a,
+                f"{password_a}-reset",
+                origin,
+                label="User A login inside recovery matrix",
+            ),
+        )
     )
+
+    token_a = login_user(
+        email_a,
+        f"{password_a}-reset",
+        origin,
+        label="User A login after recovery matrix",
+    )
+    token_b = login_user(
+        email_b,
+        password_b,
+        origin,
+        label="User B login after recovery matrix",
+    )
+    for label, token, workspace_id in (
+        ("User A session after recovery matrix", token_a, workspace_a),
+        ("User B session after recovery matrix", token_b, workspace_b),
+    ):
+        refreshed_session = require_status(
+            request(origin, "/api/v1/session", token=token),
+            200,
+            label,
+        )
+        if refreshed_session.get("workspace_id") != workspace_id:
+            raise AcceptanceFailure(f"{label} resolved a different Workspace")
 
     assert_cross_workspace_denial(
         origin,
@@ -990,15 +1170,16 @@ def main() -> None:
         advance_id=advance_id,
         suffix=suffix,
     )
-    stack("backup")
-    wait_for_three_health_planes()
+    if profile.backup_and_three_health_planes:
+        stack("backup")
+        wait_for_three_health_planes()
 
     stack(
         "operator",
         "quota",
         "override",
         "--actor",
-        "release-acceptance",
+        profile.actor,
         "--workspace-id",
         workspace_a,
         "--max-active-daily-tracks",
@@ -1028,10 +1209,32 @@ def main() -> None:
         200,
         "DailyTrack stop",
     )
+    tombstone_track = require_status(
+        request(
+            origin,
+            f"/api/v1/research-runs/{recovery_run_id}/daily-tracks",
+            method="POST",
+            token=token_a,
+            headers={"Idempotency-Key": f"tombstone-track-{suffix}"},
+        ),
+        (200, 201),
+        "DailyTrack Tombstone probe activation",
+    )
+    tombstone_track_id = str(tombstone_track["id"])
+    require_status(
+        request(
+            origin,
+            f"/api/v1/daily-tracks/{tombstone_track_id}/stop",
+            method="POST",
+            token=token_a,
+        ),
+        200,
+        "DailyTrack Tombstone probe stop",
+    )
     track_tombstone = require_status(
         request(
             origin,
-            f"/api/v1/daily-tracks/{track_id}",
+            f"/api/v1/daily-tracks/{tombstone_track_id}",
             method="DELETE",
             token=token_a,
         ),
@@ -1043,7 +1246,7 @@ def main() -> None:
     run_tombstone = require_status(
         request(
             origin,
-            f"/api/v1/research-runs/{run_id}",
+            f"/api/v1/research-runs/{recovery_run_id}",
             method="DELETE",
             token=token_a,
         ),
@@ -1054,10 +1257,10 @@ def main() -> None:
         raise AcceptanceFailure("ResearchRun deletion returned no Tombstone view")
 
     for path in (
-        f"/api/v1/daily-tracks/{track_id}",
-        f"/api/v1/daily-tracks/{track_id}/current",
-        f"/api/v1/research-runs/{run_id}",
-        f"/api/v1/research-runs/{run_id}/result",
+        f"/api/v1/daily-tracks/{tombstone_track_id}",
+        f"/api/v1/daily-tracks/{tombstone_track_id}/current",
+        f"/api/v1/research-runs/{recovery_run_id}",
+        f"/api/v1/research-runs/{recovery_run_id}/result",
     ):
         status, payload = request(origin, path, token=token_a)
         if status != 404:
@@ -1074,27 +1277,31 @@ def main() -> None:
         if status != 404:
             raise AcceptanceFailure(f"raw or signed Storage route is reachable: {path}")
 
-    print(
-        json.dumps(
-            {
-                "status": "passed",
-                "schema_version": "hosted-public-origin-acceptance-v1",
-                "two_users": True,
-                "personal_workspaces": 2,
-                "shared_release_id": release_id,
-                "cross_workspace_operations": 16,
-                "bounded_result": True,
-                "bounded_time_series": True,
-                "quota": True,
-                "tombstones": True,
-                "deleted_resources_inaccessible": True,
-                "raw_storage_absent": True,
-                "three_health_planes": True,
-                "interruption_matrix": interruption_matrix,
-            },
-            sort_keys=True,
-        )
-    )
+    return {
+        "status": "passed",
+        "schema_version": (
+            "hosted-public-origin-acceptance-v1"
+            if profile.name == "launch"
+            else "hosted-local-public-origin-v1"
+        ),
+        "profile": profile.name,
+        "two_users": True,
+        "personal_workspaces": 2,
+        "shared_release_id": release_id,
+        "cross_workspace_operations": 16,
+        "bounded_result": True,
+        "bounded_time_series": True,
+        "quota": True,
+        "tombstones": True,
+        "deleted_resources_inaccessible": True,
+        "raw_storage_absent": True,
+        "three_health_planes": profile.backup_and_three_health_planes,
+        "interruption_matrix": interruption_matrix,
+    }
+
+
+def main() -> None:
+    print(json.dumps(run_public_origin_acceptance("launch"), sort_keys=True))
 
 
 if __name__ == "__main__":

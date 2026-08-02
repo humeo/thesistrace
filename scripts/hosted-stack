@@ -5,10 +5,11 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 state_dir="${THESISTRACE_HOST_STATE_DIR:-$root/.hosted}"
 env_file="$state_dir/hosted.env"
 secret_dir="$state_dir/secrets"
-insforge_dir="$state_dir/insforge-v2.2.9"
+insforge_dir="${INSFORGE_SOURCE_DIR:-$state_dir/insforge-v2.2.9}"
 insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
 insforge_patch="$root/deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch"
 compose_file="$root/deploy/hosted/compose.yaml"
+local_compose_file="$root/deploy/hosted/compose.local.yaml"
 release_config_root="$root/deploy/hosted"
 release_manifest="$root/deploy/hosted/release.json"
 release_state="$state_dir/releases"
@@ -270,6 +271,14 @@ prepare_acceptance() {
     select_current_release
 }
 
+prepare_local_acceptance() {
+    if [ "${THESISTRACE_LOCAL_ACCEPTANCE:-0}" != "1" ]; then
+        echo "Hosted Local Acceptance operations are disabled" >&2
+        exit 1
+    fi
+    prepare
+}
+
 require_acceptance_service() {
     case "$1" in
         api|execution-relay|data-worker|compute-worker-1|compute-worker-2|compute-worker-3|compute-worker-4) ;;
@@ -401,6 +410,21 @@ compose() {
         --env-file "$env_file" \
         --file "$compose_file" \
         "$@"
+}
+
+local_compose() {
+    compose --file "$local_compose_file" "$@"
+}
+
+seed_local_source_authorization() {
+    local_compose run --rm --no-deps -T \
+        --volume "$root:/workspace:ro" \
+        --env PYTHONPATH=/workspace/src \
+        --env THESISTRACE_ACCEPTANCE_MODE=1 \
+        --env THESISTRACE_LOCAL_ACCEPTANCE=1 \
+        thesistrace-migrations \
+        python /workspace/scripts/hosted/seed_acceptance_state.py \
+        local-source-authorization
 }
 
 enter_maintenance() {
@@ -624,6 +648,57 @@ case "$action" in
             compose up --detach --wait --no-build
         fi
         ;;
+    local-reset)
+        prepare_local_acceptance
+        if [ -f "$release_state/current.json" ]; then
+            ensure_release
+        fi
+        local_compose --profile local-ops --profile launch-capacity \
+            down --volumes --remove-orphans
+        printf '{"status":"passed"}\n'
+        ;;
+    local-up)
+        prepare_local_acceptance
+        stage_release
+        validate_public_edge
+        build_candidate_images
+        activate_candidate
+        local_compose up --detach --wait --no-build
+        seed_local_source_authorization >/dev/null
+        printf '{"release_bundle_id":"%s","status":"passed"}\n' \
+            "$release_bundle_id"
+        ;;
+    local-ops-check)
+        prepare_local_acceptance
+        ensure_release
+        trap 'local_compose stop --timeout 30 grafana prometheus otel-collector >/dev/null 2>&1 || true' 0
+        local_compose --profile local-ops up --detach --wait --no-build \
+            otel-collector prometheus grafana
+        local_compose exec -T health-service python - \
+            < "$root/scripts/hosted/local_ops_probe.py"
+        ;;
+    local-recovery-smoke)
+        prepare_local_acceptance
+        ensure_release
+        exec "$root/.venv/bin/python" \
+            "$root/scripts/hosted/local_recovery_acceptance.py"
+        ;;
+    local-pause)
+        prepare_local_acceptance
+        ensure_release
+        local_compose --profile local-ops --profile launch-capacity \
+            stop --timeout 30
+        printf '{"status":"passed"}\n'
+        ;;
+    local-down)
+        prepare_local_acceptance
+        if [ -f "$release_state/current.json" ]; then
+            ensure_release
+        fi
+        local_compose --profile local-ops --profile launch-capacity \
+            down --volumes --remove-orphans
+        printf '{"status":"passed"}\n'
+        ;;
     down)
         prepare
         ensure_release
@@ -822,6 +897,65 @@ case "$action" in
             acceptance.service.recover succeeded "$acceptance_service"
         flush_recovery_audits
         ;;
+    acceptance-start-interruption)
+        prepare_acceptance "acceptance interruption setup is disabled"
+        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-start-interruption SERVICE}"
+        require_acceptance_service "$acceptance_service"
+        compose up --detach --no-build --no-deps "$acceptance_service"
+        ;;
+    acceptance-kill-service)
+        prepare_acceptance "acceptance abrupt interruption is disabled"
+        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-kill-service SERVICE}"
+        require_acceptance_service "$acceptance_service"
+        recovery_audit_id="audit_acceptance_kill_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+        compose kill --signal SIGKILL "$acceptance_service"
+        stage_recovery_audit \
+            acceptance.service.interrupt succeeded "$acceptance_service"
+        flush_recovery_audits
+        ;;
+    acceptance-arm-publication-interruption)
+        prepare_acceptance "acceptance publication interruption setup is disabled"
+        compose pause data-worker
+        ;;
+    acceptance-interrupt-publication)
+        prepare_acceptance "acceptance publication interruption is disabled"
+        acceptance_publication_id="${2:?usage: scripts/hosted-stack acceptance-interrupt-publication PUBLICATION_ID}"
+        case "$acceptance_publication_id" in
+            dsp_*) ;;
+            *) echo "publication id is not path-safe" >&2; exit 2 ;;
+        esac
+        acceptance_publication_suffix="${acceptance_publication_id#dsp_}"
+        case "$acceptance_publication_suffix" in
+            ""|*[!0-9a-f]*) echo "publication id is not path-safe" >&2; exit 2 ;;
+        esac
+        compose unpause data-worker
+        acceptance_deadline=$(($(date +%s) + 120))
+        while [ "$(date +%s)" -lt "$acceptance_deadline" ]; do
+            acceptance_publication_status="$(compose exec -T postgres \
+                psql -U "${POSTGRES_USER:-postgres}" \
+                -d "${POSTGRES_DB:-insforge}" -Atc \
+                "SELECT status FROM thesistrace_product.dataset_publications WHERE id = '$acceptance_publication_id'")"
+            case "$acceptance_publication_status" in
+                running)
+                    recovery_audit_id="audit_acceptance_publication_kill_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
+                    compose kill --signal SIGKILL data-worker
+                    stage_recovery_audit \
+                        acceptance.service.interrupt succeeded data-worker
+                    flush_recovery_audits
+                    printf '{"publication_id":"%s","status":"interrupted"}\n' \
+                        "$acceptance_publication_id"
+                    exit 0
+                    ;;
+                succeeded|failed|cancelled)
+                    echo "Dataset Publication reached $acceptance_publication_status before interruption" >&2
+                    exit 1
+                    ;;
+            esac
+            sleep 0.05
+        done
+        echo "Dataset Publication was not claimed before interruption timeout" >&2
+        exit 1
+        ;;
     acceptance-restart-node)
         prepare_acceptance "acceptance node interruption is disabled"
         recovery_audit_id="audit_acceptance_node_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
@@ -981,7 +1115,7 @@ case "$action" in
         exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-pause|local-down|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

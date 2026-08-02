@@ -57,6 +57,9 @@ services:
     volumes:
       - working-cache:/var/lib/thesistrace/working-cache
       - immutable-objects:/var/lib/thesistrace/objects
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
     restart: "no"
 
   postgres:
@@ -155,6 +158,9 @@ services:
       - insforge_encryption_key
       - insforge_admin_password
       - insforge_database_url
+    mem_limit: 512m
+    memswap_limit: 512m
+    cpus: 0.2
     restart: "no"
     logging: *bounded-logging
 
@@ -176,6 +182,9 @@ services:
       - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
     secrets:
       - temporal_database_password
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.15
     restart: "no"
     logging: *bounded-logging
 
@@ -224,6 +233,9 @@ services:
     networks: [execution]
     volumes:
       - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/temporal:/bootstrap:ro
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
     restart: "no"
     logging: *bounded-logging
 
@@ -246,6 +258,8 @@ services:
       THESISTRACE_INJECT_MIGRATION_FAILURE: ${THESISTRACE_INJECT_MIGRATION_FAILURE:-0}
       THESISTRACE_MIGRATIONS_DIR: /app/deploy/hosted/migrations
     depends_on:
+      insforge-migrations:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       volume-permissions:
@@ -258,6 +272,9 @@ services:
       - data_database_password
       - compute_database_password
       - health_database_password
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.1
     restart: "no"
 
   release-gate:
@@ -276,6 +293,9 @@ services:
     networks: [control]
     volumes:
       - ${THESISTRACE_RELEASE_BUNDLE_DIR:-.hosted/releases}:/run/thesistrace-release:ro
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
     restart: "no"
 
   postgrest:

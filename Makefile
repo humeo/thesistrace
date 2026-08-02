@@ -1,4 +1,6 @@
-.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-dispatch-probe hosted-recovery-probe-start hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore hosted-release-acceptance
+.PHONY: dev check hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-dispatch-probe hosted-recovery-probe-start hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore hosted-release-acceptance hosted-local-acceptance hosted-local-frontend
+
+HOSTED_LOCAL_EVIDENCE ?= .hosted/evidence/hosted-v2-local.json
 
 dev:
 	bun run --cwd web dev
@@ -67,3 +69,12 @@ hosted-release-acceptance:
 		--capacity-evidence "$(CAPACITY_EVIDENCE)" \
 		--recovery-evidence "$(RECOVERY_EVIDENCE)" \
 		--output "$(OUTPUT)"
+
+hosted-local-acceptance:
+	.venv/bin/python scripts/hosted/local_acceptance.py \
+		--output "$(HOSTED_LOCAL_EVIDENCE)"
+
+hosted-local-frontend:
+	bun run --cwd web typecheck
+	bun run --cwd web build
+	bun run --cwd web test:e2e

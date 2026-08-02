@@ -21,6 +21,8 @@ from thesistrace.objects import (
 MAX_CACHE_BYTES = 2_097_152
 MAX_PENDING_ALPHA_SESSIONS = 21
 MAX_ROLLING_FACTOR_ROWS = 1_512
+SHARED_DIRECTORY_MODE = 0o2770
+SHARED_FILE_MODE = 0o660
 
 PENDING_ALPHA_CONTRACT = ParquetWriterContract(
     name="working-cache.pending-alpha",
@@ -83,7 +85,8 @@ class WorkingCacheStore:
         if destination.exists():
             raise WorkingCacheError(f"Working Cache already exists for {track_id}")
         staging = self.root / ".staging" / f"{track_id}-{uuid4().hex}"
-        staging.mkdir(parents=True, exist_ok=False)
+        ensure_shared_directory(staging.parent)
+        ensure_shared_directory(staging, exist_ok=False)
         try:
             pending_entries: list[dict[str, object]] = []
             for session, rows in sorted(pending_alpha.items()):
@@ -120,7 +123,7 @@ class WorkingCacheStore:
                 int(entry["bytes"]) for entry in pending_entries
             ) + int(rolling_entry["bytes"])
             basis_payload = canonical_json_bytes(basis)
-            (staging / "basis.json").write_bytes(basis_payload)
+            write_shared_bytes(staging / "basis.json", basis_payload)
             total_bytes = sum(
                 path.stat().st_size for path in staging.rglob("*") if path.is_file()
             )
@@ -128,7 +131,7 @@ class WorkingCacheStore:
                 raise WorkingCacheError(
                     f"Working Cache seed is {total_bytes} bytes; limit is {MAX_CACHE_BYTES}"
                 )
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            ensure_shared_directory(destination.parent)
             with self._track_lock(track_id):
                 fence = self._read_fence(track_id)
                 if fence is not None and fence["stopped"]:
@@ -228,7 +231,8 @@ class WorkingCacheStore:
             / ".staging"
             / f"{track_id}-{path_safe_attempt(attempt_id)}-old-{uuid4().hex}"
         )
-        staging.mkdir(parents=True, exist_ok=False)
+        ensure_shared_directory(staging.parent)
+        ensure_shared_directory(staging, exist_ok=False)
         replaced = False
         try:
             pending_entries: list[dict[str, object]] = []
@@ -236,7 +240,7 @@ class WorkingCacheStore:
                 entry = dict(indexed[session])
                 source = destination / str(entry["path"])
                 target = staging / str(entry["path"])
-                target.parent.mkdir(parents=True, exist_ok=True)
+                ensure_shared_directory(target.parent)
                 os.link(source, target)
                 pending_entries.append(entry)
             for session, rows in sorted(new_pending_alpha.items()):
@@ -261,7 +265,7 @@ class WorkingCacheStore:
                 pending_entries,
                 rolling_entry,
             )
-            (staging / "basis.json").write_bytes(canonical_json_bytes(basis))
+            write_shared_bytes(staging / "basis.json", canonical_json_bytes(basis))
             total_bytes = directory_bytes(staging)
             if total_bytes > MAX_CACHE_BYTES:
                 raise WorkingCacheError(
@@ -386,11 +390,11 @@ class WorkingCacheStore:
                 "stopped": stopped or bool(current and current["stopped"]),
             }
             destination = self._fence_path(track_id)
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            ensure_shared_directory(destination.parent)
             temporary = destination.with_name(
                 f".{destination.name}.{uuid4().hex}.tmp"
             )
-            temporary.write_bytes(canonical_json_bytes(value))
+            write_shared_bytes(temporary, canonical_json_bytes(value))
             os.replace(temporary, destination)
             return value
 
@@ -420,7 +424,19 @@ class WorkingCacheStore:
     def _track_lock(self, track_id: str) -> Iterator[None]:
         self._track_path(track_id)
         path = self.root / "locks" / f"{track_id}.lock"
-        path.parent.mkdir(parents=True, exist_ok=True)
+        ensure_shared_directory(path.parent)
+        if not path.exists():
+            try:
+                descriptor = os.open(
+                    path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    SHARED_FILE_MODE,
+                )
+            except FileExistsError:
+                pass
+            else:
+                os.close(descriptor)
+                path.chmod(SHARED_FILE_MODE)
         with path.open("a+b") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
@@ -466,8 +482,8 @@ class WorkingCacheStore:
         digest = hashlib.sha256(payload).hexdigest()
         relative = Path(f"{stem}-{digest}.parquet")
         destination = staging / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_bytes(payload)
+        ensure_shared_directory(destination.parent)
+        write_shared_bytes(destination, payload)
         return {
             "path": relative.as_posix(),
             "sha256": digest,
@@ -519,3 +535,26 @@ def remove_empty_directory(path: Path) -> None:
         pass
     except OSError:
         pass
+
+
+def ensure_shared_directory(path: Path, *, exist_ok: bool = True) -> None:
+    if path.exists():
+        if not exist_ok or not path.is_dir():
+            raise FileExistsError(path)
+        return
+    try:
+        path.mkdir(
+            mode=SHARED_DIRECTORY_MODE,
+            parents=True,
+            exist_ok=False,
+        )
+    except FileExistsError:
+        if not exist_ok or not path.is_dir():
+            raise
+        return
+    path.chmod(SHARED_DIRECTORY_MODE)
+
+
+def write_shared_bytes(path: Path, payload: bytes) -> None:
+    path.write_bytes(payload)
+    path.chmod(SHARED_FILE_MODE)

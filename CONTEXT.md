@@ -46,6 +46,18 @@ User's Personal Workspace during the first hosted release. It grants no access
 to an existing Personal Workspace or research resource.
 _Avoid_: Workspace membership invitation, login token, resource permission
 
+**Hosted Local Acceptance**:
+Non-attested evidence that the real Hosted product and service boundaries work
+on a constrained development runtime. It cannot qualify a release, open the
+Registration Invitation gate, or prove production capacity and recovery.
+_Avoid_: Launch Qualification, production readiness, capacity qualification
+
+**Launch Qualification**:
+Release-bound, attested evidence that the complete production-like Hosted stack
+passes product, isolation, capacity, deployment, and recovery gates on its
+qualifying node before Registration Invitations are issued.
+_Avoid_: Hosted Local Acceptance, smoke test, build verification
+
 **System Health**:
 The operational truth of whether the hosted services can safely accept,
 schedule, execute, persist, and serve work. It covers Auth, API, PostgreSQL,

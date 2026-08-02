@@ -82,6 +82,32 @@ def test_api_readiness_window_covers_its_constrained_cpu_budget() -> None:
     assert "timeout=15" in " ".join(api["healthcheck"]["test"])
 
 
+def test_product_migrations_wait_for_the_insforge_identity_schema() -> None:
+    dependencies = compose_model()["services"]["thesistrace-migrations"]["depends_on"]
+
+    assert dependencies["insforge-migrations"] == {
+        "condition": "service_completed_successfully",
+        "required": True,
+    }
+
+
+def test_one_shot_bootstrap_services_disable_swap_at_the_container_boundary() -> None:
+    services = compose_model()["services"]
+
+    for name in (
+        "insforge-migrations",
+        "release-gate",
+        "temporal-namespace",
+        "temporal-schema",
+        "thesistrace-migrations",
+        "volume-permissions",
+    ):
+        service = services[name]
+        assert int(service["mem_limit"]) > 0, name
+        assert service["memswap_limit"] == service["mem_limit"], name
+        assert float(service["cpus"]) > 0, name
+
+
 def test_application_healthchecks_cover_full_stack_cpu_contention() -> None:
     services = compose_model()["services"]
 
@@ -194,9 +220,15 @@ def test_only_edge_is_public_and_grafana_is_loopback_only() -> None:
     assert "reverse_proxy api:8000" in caddyfile
     assert "reverse_proxy insforge:7130" in caddyfile
     assert "@private_edge_paths" in caddyfile
-    assert "/api/storage/*" in caddyfile
-    assert "/api/v1/objects/*" in caddyfile
-    assert "/api/auth/admin/*" in caddyfile
+    private_paths = next(
+        line.split()[2:]
+        for line in caddyfile.splitlines()
+        if line.strip().startswith("@private_edge_paths path ")
+    )
+    assert "/api/storage/*" in private_paths
+    assert "/storage/*" in private_paths
+    assert "/api/v1/objects/*" in private_paths
+    assert "/api/auth/admin/*" in private_paths
     assert "handle @private_edge_paths" in caddyfile
 
 

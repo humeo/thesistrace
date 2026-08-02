@@ -77,6 +77,7 @@ class OpenLaunchGate(OpenCapacityGate):
 
 def passing_capacity_evidence() -> dict[str, object]:
     return {
+        "schema_version": "capacity-qualification-v2",
         "universe": "top3000",
         "compute_workers": [
             {
@@ -93,6 +94,11 @@ def passing_capacity_evidence() -> dict[str, object]:
             "activity_attempt": 1,
         },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
+        "runtime_capacity": {
+            "source": "docker-info",
+            "logical_cpu": 6,
+            "memory_bytes": 12 * 1024**3,
+        },
         "swap_used": False,
         "oom_kill": False,
         "unexpected_restart": False,
@@ -1318,3 +1324,69 @@ def test_service_database_credentials_are_distinct_and_role_bound() -> None:
     )
     with pytest.raises(psycopg.OperationalError):
         psycopg.connect(wrong_password_url)
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_api_identity_directory_has_only_verification_column_access() -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    allowed = {"id", "email", "email_verified"}
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        columns = {
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = 'auth' AND table_name = 'users'
+                """
+            ).fetchall()
+        }
+        privileges = {
+            column: bool(
+                connection.execute(
+                    "SELECT has_column_privilege(%s, 'auth.users', %s, 'SELECT')",
+                    ("thesistrace_api", column),
+                ).fetchone()[0]
+            )
+            for column in columns
+        }
+
+    assert allowed <= columns
+    assert {column for column, granted in privileges.items() if granted} == allowed
+
+
+@pytest.mark.skipif(
+    not TEST_DATABASE_URL,
+    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
+)
+def test_api_role_has_only_the_control_table_access_needed_for_provisioning() -> None:
+    assert TEST_DATABASE_URL is not None
+    prepare_postgres()
+    expected = {
+        "management_audit_events": {"INSERT"},
+        "personal_workspaces": {"INSERT", "SELECT"},
+        "product_users": {"INSERT", "SELECT"},
+        "registration_invitations": {"SELECT", "UPDATE"},
+    }
+    with psycopg.connect(TEST_DATABASE_URL) as connection:
+        actual = {
+            table: {
+                privilege
+                for privilege in ("DELETE", "INSERT", "SELECT", "TRUNCATE", "UPDATE")
+                if connection.execute(
+                    "SELECT has_table_privilege(%s, %s, %s)",
+                    (
+                        "thesistrace_api",
+                        f"thesistrace_control.{table}",
+                        privilege,
+                    ),
+                ).fetchone()[0]
+            }
+            for table in expected
+        }
+
+    assert actual == expected

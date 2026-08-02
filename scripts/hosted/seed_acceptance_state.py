@@ -8,6 +8,8 @@ from uuid import uuid4
 import psycopg
 
 from thesistrace.config import database_url_from_environment
+from thesistrace.hosted.management import PostgresManagementStore
+from thesistrace.management import HOSTED_TUSHARE_SCOPE, SourceAuthorizationService
 
 
 def parser() -> argparse.ArgumentParser:
@@ -17,6 +19,7 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("assert-clean")
     commands.add_parser("storage-status")
+    commands.add_parser("local-source-authorization")
     invitation = commands.add_parser("invitation")
     invitation.add_argument("--email", required=True)
     otp = commands.add_parser("otp")
@@ -44,6 +47,18 @@ def main() -> None:
         return
     if arguments.command == "storage-status":
         inspect_storage(database_url)
+        return
+    if arguments.command == "local-source-authorization":
+        if os.environ.get("THESISTRACE_LOCAL_ACCEPTANCE") != "1":
+            raise SystemExit("local source authorization fixture is disabled")
+        service = SourceAuthorizationService(PostgresManagementStore(database_url))
+        declaration = service.inspect()
+        if declaration is None:
+            declaration = service.record(
+                actor="local-acceptance",
+                scope=HOSTED_TUSHARE_SCOPE,
+            )
+        print(json.dumps(declaration, sort_keys=True))
         return
     if arguments.command == "publication-status":
         inspect_publication(database_url, arguments.publication_id)

@@ -75,6 +75,11 @@ class LaunchQualificationService:
                 "LAUNCH_QUALIFICATION_INVALID",
                 "operator actor and release bundle are required",
             )
+        if evidence.get("schema_version") == "hosted-v2-local-v1":
+            raise LaunchQualificationError(
+                "LAUNCH_QUALIFICATION_LOCAL_EVIDENCE_FORBIDDEN",
+                "Hosted Local Acceptance evidence cannot be recorded as Launch Qualification",
+            )
         expected_attestation = launch_attestation(evidence, attestation_key)
         if not hmac.compare_digest(attestation, expected_attestation):
             raise LaunchQualificationError(

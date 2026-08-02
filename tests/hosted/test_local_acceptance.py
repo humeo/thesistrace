@@ -1,0 +1,712 @@
+import importlib.util
+import json
+import os
+import subprocess
+import urllib.error
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+import yaml
+
+from thesistrace.launch import (
+    LaunchQualificationError,
+    LaunchQualificationService,
+    launch_attestation,
+    launch_failures,
+)
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def local_acceptance_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "local_acceptance.py"
+    spec = importlib.util.spec_from_file_location("hosted_local_acceptance", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def public_smoke_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted-release-smoke.py"
+    spec = importlib.util.spec_from_file_location("hosted_release_smoke_local", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def local_postgres_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "local_postgres_acceptance.py"
+    spec = importlib.util.spec_from_file_location("hosted_local_postgres", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def local_recovery_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "local_recovery_acceptance.py"
+    spec = importlib.util.spec_from_file_location("hosted_local_recovery", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def local_ops_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "local_ops_probe.py"
+    spec = importlib.util.spec_from_file_location("hosted_local_ops", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def release_acceptance_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted" / "release_acceptance.py"
+    spec = importlib.util.spec_from_file_location("hosted_release_acceptance_local", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def arguments(module: ModuleType, tmp_path: Path):
+    return module.parser().parse_args(
+        [
+            "--output",
+            str(tmp_path / "local-evidence.json"),
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--project",
+            "thesistrace-local-test",
+        ]
+    )
+
+
+def runtime_capacity() -> dict[str, object]:
+    return {
+        "source": "docker-info",
+        "logical_cpu": 2,
+        "memory_bytes": 4_109_938_688,
+    }
+
+
+def test_local_acceptance_writes_distinct_non_launch_evidence(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def executor(phase, environment):
+        calls.append((phase.name, phase.command))
+        payload: dict[str, object] = {"status": "passed"}
+        if phase.name == "core_stack":
+            payload["release_bundle_id"] = "release-local"
+        return payload, {
+            "status": "passed",
+            "elapsed_seconds": 0.01,
+            "output_sha256": "0" * 64,
+        }
+
+    evidence = module.run_acceptance(
+        arguments(module, tmp_path),
+        executor=executor,
+        runtime_reader=runtime_capacity,
+    )
+
+    assert [name for name, _command in calls] == [
+        "reset",
+        "core_stack",
+        "public_origin",
+        "postgresql_rls",
+        "temporal_and_failure_contracts",
+        "security_and_storage",
+        "operational_health",
+        "local_recovery",
+        "pause_core",
+        "frontend",
+        "cleanup",
+    ]
+    assert evidence["schema_version"] == "hosted-v2-local-v1"
+    assert evidence["status"] == "passed"
+    assert evidence["launch_qualified"] is False
+    assert evidence["release_bundle_id"] == "release-local"
+    assert evidence["runtime_capacity"] == runtime_capacity()
+    assert evidence["production_only_not_claimed"] == [
+        "capacity_qualification",
+        "cloudflare",
+        "off_node_recovery",
+        "production_rto_rpo",
+        "real_smtp_delivery",
+        "whole_node_resilience",
+    ]
+    assert launch_failures(evidence)
+    serialized_commands = " ".join(" ".join(command) for _name, command in calls)
+    assert "acceptance-record-launch" not in serialized_commands
+    assert "capacity-qualification" not in serialized_commands
+    assert "hosted-release-acceptance" not in serialized_commands
+    assert json.loads(arguments(module, tmp_path).output.read_text()) == evidence
+
+
+def test_local_public_origin_timeout_covers_two_real_heartbeat_windows() -> None:
+    module = local_acceptance_module()
+    public_origin = next(
+        phase for phase in module.local_phases() if phase.name == "public_origin"
+    )
+
+    assert public_origin.timeout_seconds == 2700
+
+
+def test_local_acceptance_records_the_first_failure_and_still_cleans_up(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    calls: list[str] = []
+
+    def executor(phase, environment):
+        calls.append(phase.name)
+        if phase.name == "public_origin":
+            raise module.LocalAcceptanceError("public boundary failed")
+        return {"status": "passed"}, {"status": "passed"}
+
+    with pytest.raises(module.LocalAcceptanceError, match="public boundary failed"):
+        module.run_acceptance(
+            arguments(module, tmp_path),
+            executor=executor,
+            runtime_reader=runtime_capacity,
+        )
+
+    assert calls == ["reset", "core_stack", "public_origin", "cleanup"]
+    evidence = json.loads(arguments(module, tmp_path).output.read_text())
+    assert evidence["status"] == "failed"
+    assert evidence["launch_qualified"] is False
+    assert evidence["failure"] == {
+        "phase": "public_origin",
+        "message": "public boundary failed",
+    }
+    assert evidence["records"]["cleanup"]["status"] == "passed"
+
+
+def test_local_acceptance_rejects_a_runtime_smaller_than_2c4g(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    with pytest.raises(module.LocalAcceptanceError, match="at least 2 logical CPU"):
+        module.run_acceptance(
+            arguments(module, tmp_path),
+            executor=lambda *_arguments: ({"status": "passed"}, {}),
+            runtime_reader=lambda: {
+                "source": "docker-info",
+                "logical_cpu": 1,
+                "memory_bytes": 2 * 1024**3,
+            },
+        )
+
+    evidence = json.loads(arguments(module, tmp_path).output.read_text())
+    assert evidence["status"] == "failed"
+    assert evidence["failure"]["phase"] == "preflight"
+
+
+def test_public_origin_profiles_keep_launch_only_recovery_out_of_local_mode() -> None:
+    module = public_smoke_module()
+
+    launch = module.acceptance_profile("launch")
+    local = module.acceptance_profile("local")
+
+    assert launch.compute_services == (
+        "compute-worker-1",
+        "compute-worker-2",
+        "compute-worker-3",
+        "compute-worker-4",
+    )
+    assert launch.whole_node_recovery is True
+    assert launch.backup_and_three_health_planes is True
+    assert launch.invitation_gate_reason == "LAUNCH_QUALIFICATION_REQUIRED"
+    assert local.compute_services == ("compute-worker-1",)
+    assert local.whole_node_recovery is False
+    assert local.backup_and_three_health_planes is False
+    assert local.invitation_gate_reason == "CAPACITY_QUALIFICATION_REQUIRED"
+
+
+def test_public_origin_poll_fails_fast_on_a_terminal_failed_state() -> None:
+    module = public_smoke_module()
+
+    with pytest.raises(module.AcceptanceFailure, match="failed before convergence"):
+        module.poll(
+            lambda: (200, {"advances": [{"id": "advance-1", "status": "failed"}]}),
+            lambda value: any(
+                item.get("status") == "succeeded"
+                for item in value.get("advances", [])
+            ),
+            "DailyTrack Advance",
+            terminal_failure=lambda value: any(
+                item.get("status") == "failed"
+                for item in value.get("advances", [])
+            ),
+        )
+
+
+def test_local_ops_accepts_only_the_explicit_launch_only_system_gaps() -> None:
+    module = local_ops_module()
+    views = {
+        "system": {
+            "status": "degraded",
+            "checks": {
+                "api": True,
+                "backup": False,
+                "workflow_capacity": False,
+            },
+        },
+        "data": {"status": "available", "checks": {"schema": True}},
+        "quantitative": {
+            "status": "available",
+            "checks": {"deterministic_regression": True},
+        },
+    }
+
+    assert module.validate_local_health_views(views) == {
+        "backup",
+        "workflow_capacity",
+    }
+    views["system"]["checks"]["api"] = False
+    with pytest.raises(module.LocalOperationalHealthError, match="unexpected"):
+        module.validate_local_health_views(views)
+
+
+def test_local_ops_reports_the_failing_endpoint_name_and_url(monkeypatch) -> None:
+    module = local_ops_module()
+    url = "http://otel-collector:8888/metrics"
+
+    def refuse(_url: str, *, timeout: int):
+        assert timeout == 10
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", refuse)
+
+    with pytest.raises(
+        module.LocalOperationalHealthError,
+        match=r"collector .*otel-collector:8888/metrics.*connection refused",
+    ):
+        module.read_url("collector", url)
+
+
+def test_local_public_smoke_is_distinct_and_reuses_the_real_product_flow() -> None:
+    script = (ROOT / "scripts" / "hosted-local-smoke.py").read_text()
+
+    assert 'run_public_origin_acceptance("local")' in script
+    assert "hosted-local-public-origin-v1" in script
+    assert "acceptance-record-launch" not in script
+    assert "capacity-qualification" not in script
+
+
+def test_local_postgres_acceptance_uses_an_isolated_real_database(
+    tmp_path: Path,
+) -> None:
+    module = local_postgres_module()
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir()
+    (secret_dir / "postgres_password").write_text("local-db-secret")
+    lifecycle: list[tuple[str, str]] = []
+    test_environments: list[dict[str, str]] = []
+
+    def database_lifecycle(operation: str, admin_info: str, database_name: str):
+        lifecycle.append((operation, database_name))
+        assert "host=127.0.0.1" in admin_info
+        assert "port=25432" in admin_info
+        assert "password=local-db-secret" in admin_info
+
+    def test_runner(command: tuple[str, ...], environment: dict[str, str]):
+        test_environments.append(environment)
+        assert command[:4] == ("uv", "run", "pytest", "-q")
+        assert set(command[4:]) == set(module.postgres_test_targets())
+        return b"3 passed in 1.00s"
+
+    evidence = module.run_postgres_acceptance(
+        state_dir=tmp_path,
+        port=25432,
+        database_lifecycle=database_lifecycle,
+        test_runner=test_runner,
+    )
+
+    assert lifecycle == [
+        ("recreate", "thesistrace_local_acceptance_test"),
+        ("drop", "thesistrace_local_acceptance_test"),
+    ]
+    assert "dbname=thesistrace_local_acceptance_test" in (
+        test_environments[0]["THESISTRACE_TEST_DATABASE_URL"]
+    )
+    assert evidence["status"] == "passed"
+    assert evidence["database"] == "isolated-runtime-postgresql"
+    assert evidence["tests"] == list(module.postgres_test_targets())
+    assert "local-db-secret" not in json.dumps(evidence)
+
+
+def test_local_resource_sampler_records_per_phase_peaks_and_failures() -> None:
+    module = local_acceptance_module()
+    sampler = module.DockerPhaseSampler("thesistrace-local-test")
+
+    sampler.observe_snapshot(
+        {
+            "api": {
+                "memory_bytes": 100,
+                "cpu_percent": 10.0,
+                "swap_peak_bytes": 0,
+                "restart_count": 0,
+                "oom_killed": False,
+                "health": "healthy",
+            },
+            "compute-worker-1": {
+                "memory_bytes": 300,
+                "cpu_percent": 80.0,
+                "swap_peak_bytes": 0,
+                "restart_count": 0,
+                "oom_killed": False,
+                "health": "healthy",
+            },
+        }
+    )
+    sampler.observe_snapshot(
+        {
+            "api": {
+                "memory_bytes": 200,
+                "cpu_percent": 20.0,
+                "swap_peak_bytes": 4096,
+                "restart_count": 1,
+                "oom_killed": True,
+                "health": "unhealthy",
+            }
+        }
+    )
+
+    summary = sampler.summary()
+    assert summary["sample_count"] == 2
+    assert summary["peak_memory_bytes"] == 400
+    assert summary["peak_cpu_percent"] == 90.0
+    assert summary["peak_swap_bytes"] == 4096
+    assert summary["unexpected_restart_containers"] == ["api"]
+    assert summary["oom_killed_containers"] == ["api"]
+    assert summary["unhealthy_containers"] == ["api"]
+    assert summary["container_peaks"]["compute-worker-1"]["memory_bytes"] == 300
+
+
+def test_local_resource_sampler_does_not_exec_when_swap_is_disabled_by_docker() -> None:
+    module = local_acceptance_module()
+
+    class Client:
+        def project_containers(self, project):
+            assert project == "thesistrace-local-test"
+            return [{"Id": "container-1", "Names": ["/api"]}]
+
+        def container_json(self, container_id, endpoint):
+            assert container_id == "container-1"
+            if endpoint == "json":
+                return {
+                    "State": {
+                        "Running": True,
+                        "OOMKilled": False,
+                        "Health": {"Status": "healthy"},
+                    },
+                    "HostConfig": {"Memory": 512, "MemorySwap": 512},
+                    "RestartCount": 0,
+                }
+            assert endpoint == "stats?stream=false&one-shot=true"
+            return {
+                "memory_stats": {"usage": 100, "stats": {"inactive_file": 20}},
+                "cpu_stats": {},
+                "precpu_stats": {},
+            }
+
+        def container_swap_peak(self, container_id):
+            raise AssertionError("swap-disabled containers must not create Docker execs")
+
+    snapshot = module.docker_project_snapshot(
+        "thesistrace-local-test",
+        client=Client(),
+    )
+
+    assert snapshot["api"]["memory_bytes"] == 80
+    assert snapshot["api"]["swap_peak_bytes"] == 0
+
+
+def test_local_acceptance_fails_closed_on_unsafe_runtime_observations(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    def executor(phase, environment):
+        resources = {
+            "sample_count": 1,
+            "peak_memory_bytes": 100,
+            "peak_cpu_percent": 1.0,
+            "peak_swap_bytes": 0,
+            "unexpected_restart_containers": [],
+            "oom_killed_containers": ["compute-worker-1"]
+            if phase.name == "public_origin"
+            else [],
+            "unhealthy_containers": [],
+            "sampling_errors": [],
+        }
+        return {"status": "passed"}, {"status": "passed", "resources": resources}
+
+    with pytest.raises(module.LocalAcceptanceError, match="OOM kill"):
+        module.run_acceptance(
+            arguments(module, tmp_path),
+            executor=executor,
+            runtime_reader=runtime_capacity,
+        )
+
+    evidence = json.loads(arguments(module, tmp_path).output.read_text())
+    assert evidence["status"] == "failed"
+    assert evidence["failure"]["phase"] == "runtime_observations"
+    assert evidence["runtime_observations"]["oom_kill"] is True
+    assert evidence["launch_qualified"] is False
+
+
+def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:
+    module = local_recovery_module()
+    calls: list[str] = []
+    snapshot = {
+        "latest_dataset_release_id": "release-local",
+        "objects": [{"object_key": "content:abc", "sha256": "a" * 64}],
+    }
+
+    class Operations:
+        def capture_backup(self):
+            calls.append("capture_backup")
+            return snapshot, {
+                "database_dump_sha256": "b" * 64,
+                "backup_bytes": 1234,
+            }
+
+        def cold_restart_and_smoke(self):
+            calls.append("cold_restart_and_smoke")
+
+        def live_snapshot(self):
+            calls.append("live_snapshot")
+            return snapshot
+
+        def restore_and_verify(self, expected_snapshot):
+            calls.append("restore_and_verify")
+            assert expected_snapshot == snapshot
+            return {"latest_dataset_release_id": "release-local", "verified_objects": 1}
+
+        def cleanup(self):
+            calls.append("cleanup")
+
+    evidence = module.run_local_recovery(Operations())
+
+    assert calls == [
+        "capture_backup",
+        "cold_restart_and_smoke",
+        "live_snapshot",
+        "restore_and_verify",
+        "cleanup",
+    ]
+    assert evidence == {
+        "status": "passed",
+        "schema_version": "hosted-local-recovery-v1",
+        "cold_restart": True,
+        "database_restore": "disposable-runtime-postgresql",
+        "authoritative_state_survived": True,
+        "object_index_and_payload_verified": True,
+        "latest_dataset_release_id": "release-local",
+        "verified_objects": 1,
+        "database_dump_sha256": "b" * 64,
+        "backup_bytes": 1234,
+        "off_node": False,
+        "production_rpo_rto_claimed": False,
+        "whole_node_resilience_claimed": False,
+    }
+
+
+def test_local_recovery_fails_when_authoritative_state_changes_and_cleans_up() -> None:
+    module = local_recovery_module()
+    cleaned: list[bool] = []
+
+    class Operations:
+        def capture_backup(self):
+            return ({"latest_dataset_release_id": "before", "objects": []}, {})
+
+        def cold_restart_and_smoke(self):
+            return None
+
+        def live_snapshot(self):
+            return {"latest_dataset_release_id": "after", "objects": []}
+
+        def restore_and_verify(self, expected_snapshot):
+            raise AssertionError("restore must not run after state drift")
+
+        def cleanup(self):
+            cleaned.append(True)
+
+    with pytest.raises(module.LocalRecoveryAcceptanceError, match="cold restart"):
+        module.run_local_recovery(Operations())
+
+    assert cleaned == [True]
+
+
+def test_every_production_evidence_consumer_rejects_local_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence = {
+        "schema_version": "hosted-v2-local-v1",
+        "status": "passed",
+        "launch_qualified": False,
+        "release_bundle_id": "release-local",
+        "records": {},
+    }
+    recorded: list[object] = []
+
+    class Store:
+        def record_launch_qualification(self, qualification, audit_event):
+            recorded.append((qualification, audit_event))
+
+        def latest_launch_qualification(self):
+            return None
+
+    key = b"local-evidence-rejection-key-32b"
+    with pytest.raises(LaunchQualificationError) as rejected:
+        LaunchQualificationService(Store()).record(
+            actor="release-acceptance",
+            release_bundle_id="release-local",
+            evidence=evidence,
+            attestation=launch_attestation(evidence, key),
+            attestation_key=key,
+        )
+
+    assert rejected.value.reason_code == "LAUNCH_QUALIFICATION_LOCAL_EVIDENCE_FORBIDDEN"
+    assert recorded == []
+    path = tmp_path / "local-evidence.json"
+    path.write_text(json.dumps(evidence))
+    release = release_acceptance_module()
+    with pytest.raises(release.ReleaseAcceptanceError, match="capacity evidence failed"):
+        release.validate_capacity(path, "release-local")
+    with pytest.raises(release.ReleaseAcceptanceError, match="recovery evidence"):
+        release.validate_recovery(path, "release-local")
+
+
+def test_local_compose_profile_keeps_heavy_and_operational_phases_separate() -> None:
+    environment = {
+        **os.environ,
+        "THESISTRACE_LOCAL_POSTGRES_PORT": "25432",
+    }
+    composed = json.loads(
+        subprocess.check_output(
+            [
+                "docker",
+                "compose",
+                "--project-directory",
+                str(ROOT),
+                "--file",
+                str(ROOT / "deploy" / "hosted" / "compose.yaml"),
+                "--file",
+                str(ROOT / "deploy" / "hosted" / "compose.local.yaml"),
+                "--profile",
+                "*",
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            env=environment,
+            text=True,
+        )
+    )
+    services = composed["services"]
+
+    assert services["compute-worker-1"].get("profiles") is None
+    assert services["data-worker"].get("profiles") is None
+    for name in ("compute-worker-2", "compute-worker-3", "compute-worker-4"):
+        assert services[name]["profiles"] == ["launch-capacity"]
+    for name in ("otel-collector", "prometheus", "grafana"):
+        assert services[name]["profiles"] == ["local-ops"]
+    assert services["postgres"]["ports"] == [
+        {
+            "mode": "ingress",
+            "host_ip": "127.0.0.1",
+            "target": 5432,
+            "published": "25432",
+            "protocol": "tcp",
+        }
+    ]
+    assert set(services["postgres"]["networks"]) == {"control", "local-admin"}
+    assert composed["networks"]["local-admin"].get("internal", False) is False
+
+
+def test_hosted_stack_exposes_local_actions_behind_an_explicit_gate() -> None:
+    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+
+    assert 'THESISTRACE_LOCAL_ACCEPTANCE:-0}' in launcher
+    assert "local_compose()" in launcher
+    assert "seed_local_source_authorization()" in launcher
+    assert "local-source-authorization" in launcher
+    local_up = launcher.split("    local-up)", 1)[1].split("        ;;", 1)[0]
+    assert local_up.count("stage_release") == 1
+    assert 'if [ -f "$release_state/current.json" ]' not in local_up
+    for action in (
+        "local-reset)",
+        "local-up)",
+        "local-ops-check)",
+        "local-recovery-smoke)",
+        "local-pause)",
+        "local-down)",
+    ):
+        assert action in launcher
+
+
+def test_local_frontend_checks_run_after_the_core_stack_is_paused() -> None:
+    module = local_acceptance_module()
+    phases = module.local_phases()
+    names = [phase.name for phase in phases]
+    makefile = (ROOT / "Makefile").read_text()
+
+    assert names.index("pause_core") < names.index("frontend")
+    assert "hosted-local-frontend:" in makefile
+    assert "hosted-local-acceptance:" in makefile
+    acceptance_target = makefile.split("hosted-local-acceptance:", 1)[1]
+    assert "scripts/hosted/local_acceptance.py" in acceptance_target
+    assert "HOSTED_LOCAL_EVIDENCE" in acceptance_target
+    target = makefile.split("hosted-local-frontend:", 1)[1]
+    assert "bun run --cwd web typecheck" in target
+    assert "bun run --cwd web build" in target
+    assert "bun run --cwd web test:e2e" in target
+
+
+def test_local_controlled_suites_cover_heartbeat_health_and_telemetry_redaction() -> None:
+    module = local_acceptance_module()
+    commands = {
+        phase.name: " ".join(phase.command)
+        for phase in module.local_phases()
+    }
+
+    assert "tests/hosted/test_temporal_worker_heartbeat.py" in (
+        commands["temporal_and_failure_contracts"]
+    )
+    assert "tests/hosted/test_health_views.py" in commands["security_and_storage"]
+    assert (
+        "tests/hosted/test_compose_stack.py::"
+        "test_otel_sampling_and_export_failure_are_bounded_and_visible"
+    ) in commands["security_and_storage"]
+    probe = (ROOT / "scripts" / "hosted" / "local_ops_probe.py").read_text()
+    for endpoint in (
+        "http://otel-collector:8888/metrics",
+        "http://prometheus:9090/-/ready",
+        "http://grafana:3000/api/health",
+    ):
+        assert endpoint in probe
+    assert "telemetry_redaction" in probe
+
+
+def test_local_ops_overlay_gives_cold_start_services_a_bounded_bootstrap_budget() -> None:
+    overlay = yaml.safe_load(
+        (ROOT / "deploy" / "hosted" / "compose.local.yaml").read_text()
+    )
+    services = overlay["services"]
+
+    assert services["otel-collector"]["mem_limit"] == "256m"
+    assert services["grafana"]["mem_limit"] == "384m"
+    assert services["grafana"]["cpus"] == 0.25

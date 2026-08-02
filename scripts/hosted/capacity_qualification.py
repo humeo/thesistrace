@@ -4,6 +4,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from thesistrace.capacity import CAPACITY_EVIDENCE_SCHEMA_VERSION
+
 STEADY_SERVICES = (
     "postgres",
     "temporal-postgres",
@@ -36,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run(arguments: argparse.Namespace) -> dict[str, object]:
+    runtime_capacity = docker_runtime_capacity()
     before = container_state(arguments)
     coordinator_id = _container_id(arguments.project, DATA_SERVICE)
     scenario = json.loads(
@@ -84,7 +87,7 @@ def run(arguments: argparse.Namespace) -> dict[str, object]:
         for name in (*COMPUTE_SERVICES, DATA_SERVICE)
     )
     return {
-        "schema_version": "capacity-qualification-v1",
+        "schema_version": CAPACITY_EVIDENCE_SCHEMA_VERSION,
         "probe_id": scenario["probe_id"],
         "release_bundle_id": arguments.release_bundle_id,
         "universe": "top3000",
@@ -95,6 +98,7 @@ def run(arguments: argparse.Namespace) -> dict[str, object]:
             "memory_limit_mib": nonworker_memory / 1024 / 1024,
             "cpu_limit": nonworker_cpu,
         },
+        "runtime_capacity": runtime_capacity,
         "swap_used": any(bool(value["swap_used"]) for value in compute_workers)
         or any(
             after[name]["swap_disabled"] is not True
@@ -124,6 +128,24 @@ def run(arguments: argparse.Namespace) -> dict[str, object]:
         },
         "container_state_before": before,
         "container_state_after": after,
+    }
+
+
+def docker_runtime_capacity() -> dict[str, object]:
+    value = json.loads(
+        subprocess.check_output(
+            ["docker", "info", "--format", "{{json .}}"],
+            text=True,
+        )
+    )
+    logical_cpu = int(value["NCPU"])
+    memory_bytes = int(value["MemTotal"])
+    if logical_cpu <= 0 or memory_bytes <= 0:
+        raise RuntimeError("Docker runtime reported no usable CPU or memory")
+    return {
+        "source": "docker-info",
+        "logical_cpu": logical_cpu,
+        "memory_bytes": memory_bytes,
     }
 
 

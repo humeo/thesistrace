@@ -277,9 +277,13 @@ deterministic dispatch probe.
   Compute Workers has a 1-GiB memory hard limit and 0.75-CPU cap; the Data
   Worker has a 1-GiB memory hard limit and 0.5-CPU cap; non-worker services
   together receive at most 5 GiB and 2 CPU cores; at least 2 GiB and 0.5 CPU
-  remain outside those budgets for the host. Launch capacity evidence must
-  demonstrate representative maximum work under this complete stack before
-  invitations are issued.
+  remain outside those budgets for the host. Launch capacity evidence records
+  the same runtime's total logical CPU and memory and proves those configured
+  budgets leave the required host reserve; missing runtime totals cannot
+  qualify launch. Under the current envelope, the qualifying runtime therefore
+  exposes at least 6 logical CPU and 12 GiB. It must also demonstrate
+  representative maximum work under the complete stack before invitations are
+  issued.
 - Compute Workers run non-root with read-only root filesystems, bounded writable
   scratch, no Docker socket, no privileged capabilities, no physical Storage
   volume mount, and no general Internet or Tushare egress. The Data Worker has
@@ -331,7 +335,26 @@ deterministic dispatch probe.
   behavior. It does not assert container implementation details, private
   function calls, incidental SQL shape, object filenames, or Temporal history
   event order unless one of those is itself the explicit contract.
-- The primary acceptance seam starts the complete production-like single-node
+- Hosted Local Acceptance is a separate non-attested development seam for a
+  constrained Docker runtime. The accepted 2-CPU, 4-GiB profile starts the real
+  pinned core services with one Compute Worker and one Data Worker, serializes
+  their heavy work, and uses bounded fixture workloads. It exercises the real
+  Public Origin, PostgreSQL roles and RLS, Temporal dispatch, ObjectStore, and
+  production application paths rather than replacing them with mocks.
+- Hosted Local Acceptance interrupts API, relay, Compute Worker, and Data
+  Worker one boundary at a time. A separate operational pass starts Collector,
+  Prometheus, and Grafana while heavy work is idle and verifies the three Health
+  planes. A bounded local cold-restart and backup/restore smoke may prove state
+  survival, but it does not prove off-node independence, production RTO/RPO,
+  maximum co-resident load, or whole-node capacity.
+- Hosted Local Acceptance emits a distinct non-attested evidence schema. It
+  never records a Launch Qualification, opens Registration Invitation
+  admission, consumes production Capacity Qualification or recovery evidence,
+  or becomes launch evidence through a skip flag. Controlled tests may verify
+  four-slot dispatch, retry, and resource-exhaustion semantics, but only Launch
+  Qualification proves those contracts under complete co-resident maximum
+  load.
+- The Launch Qualification seam starts the complete production-like single-node
   Compose stack with pinned Web, Caddy, API, InsForge Auth and Storage,
   PostgreSQL, Temporal, Data Worker, four Compute Workers, Collector,
   Prometheus, and Grafana. Tests act only through the public Cloudflare/Caddy
@@ -468,5 +491,6 @@ deterministic dispatch probe.
   decisions; this specification is the complete feature acceptance boundary.
 - Implementation work should be split into individually reviewable issues only
   after this specification and its dependent storage specification are both
-  accepted. Each issue must preserve the three agreed test seams instead of
-  replacing them with isolated mock-only tests.
+  accepted. Each issue must preserve its applicable Hosted Local Acceptance,
+  Launch Qualification, PostgreSQL, and Temporal seams instead of replacing
+  them with isolated mock-only tests.

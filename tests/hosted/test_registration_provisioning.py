@@ -402,6 +402,7 @@ def prepare_postgres() -> None:
 
 def passing_capacity_evidence() -> dict[str, object]:
     return {
+        "schema_version": "capacity-qualification-v2",
         "universe": "top3000",
         "compute_workers": [
             {
@@ -418,6 +419,11 @@ def passing_capacity_evidence() -> dict[str, object]:
             "activity_attempt": 1,
         },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
+        "runtime_capacity": {
+            "source": "docker-info",
+            "logical_cpu": 6,
+            "memory_bytes": 12 * 1024**3,
+        },
         "swap_used": False,
         "oom_kill": False,
         "unexpected_restart": False,

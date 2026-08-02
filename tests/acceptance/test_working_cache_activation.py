@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
+from stat import S_IMODE
 from threading import Event
 
 import pytest
@@ -16,6 +17,7 @@ from thesistrace.tracking import DailyTrackingService
 from thesistrace.working_cache import (
     MAX_CACHE_BYTES,
     WorkingCacheStore,
+    ensure_shared_directory,
 )
 
 
@@ -33,6 +35,54 @@ class RejectingCheckpointStorageStore(MetadataStore):
             dimension="max_private_storage_bytes",
             limit=10,
         )
+
+
+def test_shared_working_cache_artifacts_are_group_writable(tmp_path: Path) -> None:
+    root = tmp_path / "working-cache"
+    cache = WorkingCacheStore(root)
+    cache.commit_seed(
+        {
+            "daily_track_id": "track_shared",
+            "generation_id": "generation_shared",
+            "basis_checkpoint_id": "checkpoint_shared",
+            "basis_checkpoint_sha256": "1" * 64,
+            "definition_content_hash": "2" * 64,
+            "calculation_kernel": "kernel-v1",
+            "numeric_execution_contract": "thesistrace-numeric-v1",
+            "basis_dataset_release_id": "release_shared",
+            "fencing_token": 1,
+        },
+        pending_alpha={},
+        rolling_factor=[],
+    )
+    cache.advance_fence("track_shared", 2, stopped=False)
+
+    directories = [path for path in root.rglob("*") if path.is_dir()]
+    files = [path for path in root.rglob("*") if path.is_file()]
+    assert directories
+    assert files
+    assert all(S_IMODE(path.stat().st_mode) == 0o2770 for path in directories)
+    assert all(S_IMODE(path.stat().st_mode) == 0o660 for path in files)
+
+
+def test_existing_shared_directory_does_not_require_owner_chmod(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = tmp_path / "locks"
+    shared.mkdir(mode=0o2770)
+    shared.chmod(0o2770)
+    original_chmod = Path.chmod
+
+    def reject_non_owner_chmod(path: Path, mode: int) -> None:
+        if path == shared:
+            raise PermissionError(1, "Operation not permitted", str(path))
+        original_chmod(path, mode)
+
+    monkeypatch.setattr(Path, "chmod", reject_non_owner_chmod)
+
+    ensure_shared_directory(shared)
+    assert S_IMODE(shared.stat().st_mode) == 0o2770
 
 
 def test_activation_publishes_compact_checkpoint_and_seeds_bounded_cache(
