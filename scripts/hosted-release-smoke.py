@@ -1711,6 +1711,106 @@ def run_local_compute_recovery() -> dict[str, object]:
     )
 
 
+def run_local_publication_recovery() -> dict[str, object]:
+    origin = _local_origin()
+    token_a, _token_b, credentials, product = _fresh_local_logins()
+    suffix = _required_text(product, "suffix")
+    releases_before = require_status(
+        request(origin, "/api/v1/dataset-releases", token=token_a),
+        200,
+        "local pre-interruption Dataset Releases",
+    )
+    release_ids_before = {
+        str(item["id"])
+        for item in releases_before.get("items", [])
+        if isinstance(item, dict)
+    }
+    stack("acceptance-arm-publication-interruption")
+    publication_key = f"local-publication-recovery-{suffix}"
+    publication = stack(
+        "operator",
+        "dataset-publication",
+        "request",
+        "--actor",
+        "local-acceptance",
+        "--kind",
+        "fixture_increment",
+        "--new-sessions",
+        "20",
+        "--idempotency-key",
+        publication_key,
+    )
+    publication_record = publication.get("publication")
+    if not isinstance(publication_record, dict):
+        raise AcceptanceFailure("local Dataset Publication returned no resource")
+    publication_id = str(publication_record["id"])
+    repeated = stack(
+        "operator",
+        "dataset-publication",
+        "request",
+        "--actor",
+        "local-acceptance",
+        "--kind",
+        "fixture_increment",
+        "--new-sessions",
+        "20",
+        "--idempotency-key",
+        publication_key,
+    )
+    if (
+        repeated.get("created") is not False
+        or repeated.get("publication", {}).get("id") != publication_id
+    ):
+        raise AcceptanceFailure("local publication retry created a duplicate request")
+    try:
+        stack("acceptance-interrupt-publication", publication_id)
+        stack("acceptance-start-service", "data-worker")
+        completed = wait_for_publication_status(
+            publication_id,
+            {"succeeded", "failed", "cancelled"},
+            timeout=600,
+        )
+    finally:
+        stack("acceptance-start-service", "data-worker")
+    if completed.get("status") != "succeeded":
+        raise AcceptanceFailure(f"local Dataset Publication did not recover: {completed}")
+    if int(completed.get("attempt_count", 0)) < 2:
+        raise AcceptanceFailure("local Dataset Publication produced no redelivery")
+    token_a = login_user(
+        _required_text(credentials, "email_a"),
+        _required_text(credentials, "password_a"),
+        origin,
+        label="User A login after Dataset Publication redelivery",
+    )
+    releases_after = poll(
+        lambda: request(origin, "/api/v1/dataset-releases", token=token_a),
+        lambda value: len(value.get("items", [])) == len(release_ids_before) + 1,
+        "single local interrupted Dataset Release",
+        timeout=600,
+    )
+    release_ids_after = {
+        str(item["id"])
+        for item in releases_after.get("items", [])
+        if isinstance(item, dict)
+    }
+    if release_ids_after - release_ids_before != {str(completed["result_release_id"])}:
+        raise AcceptanceFailure("local publication exposed duplicate or partial Releases")
+    assert_storage_invariants()
+    _update_local_product_context(
+        publication_id=publication_id,
+        publication_release_id=str(completed["result_release_id"]),
+    )
+    return _local_gate_evidence(
+        "publication-recovery",
+        queued_while_data_worker_paused=True,
+        heartbeat_timeout=True,
+        redelivery=True,
+        exactly_one_release=True,
+        storage_reconciled=True,
+        partial_authoritative_artifact=False,
+    )
+
+
 def run_public_origin_acceptance(
     profile_name: str = "launch",
 ) -> dict[str, object]:
