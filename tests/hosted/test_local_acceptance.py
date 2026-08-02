@@ -1234,6 +1234,16 @@ def test_local_acceptance_fails_closed_on_unsafe_runtime_observations(
 def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:
     module = local_recovery_module()
     calls: list[str] = []
+    context = {
+        "state_epoch": "epoch-local",
+        "release_bundle_id": "bundle-local",
+        "release_pointer_sha256": "1" * 64,
+        "release_bundle_sha256": "2" * 64,
+        "migration_source_sha256": "3" * 64,
+        "session_manifest_sha256": "4" * 64,
+        "product_context_sha256": "5" * 64,
+        "snapshot_sha256": "6" * 64,
+    }
     snapshot = {
         "latest_dataset_release_id": "release-local",
         "objects": [{"object_key": "content:abc", "sha256": "a" * 64}],
@@ -1245,6 +1255,7 @@ def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:
             return snapshot, {
                 "database_dump_sha256": "b" * 64,
                 "backup_bytes": 1234,
+                **context,
             }
 
         def cold_restart_and_smoke(self):
@@ -1271,21 +1282,25 @@ def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:
         "restore_and_verify",
         "cleanup",
     ]
-    assert evidence == {
-        "status": "passed",
-        "schema_version": "hosted-local-recovery-v1",
-        "cold_restart": True,
-        "database_restore": "disposable-runtime-postgresql",
-        "authoritative_state_survived": True,
-        "object_index_and_payload_verified": True,
-        "latest_dataset_release_id": "release-local",
-        "verified_objects": 1,
-        "database_dump_sha256": "b" * 64,
-        "backup_bytes": 1234,
-        "off_node": False,
-        "production_rpo_rto_claimed": False,
-        "whole_node_resilience_claimed": False,
+    assert evidence["status"] == "passed"
+    assert evidence["schema_version"] == "hosted-local-recovery-v1"
+    assert evidence["cold_restart"] is True
+    assert evidence["database_restore"] == "disposable-runtime-postgresql"
+    assert evidence["authoritative_state_survived"] is True
+    assert evidence["object_index_and_payload_verified"] is True
+    assert evidence["latest_dataset_release_id"] == "release-local"
+    assert evidence["verified_objects"] == 1
+    assert evidence["database_dump_sha256"] == "b" * 64
+    assert evidence["backup_bytes"] == 1234
+    assert evidence["recovery_context"] == context
+    assert set(evidence["durations_seconds"]) == {
+        "backup",
+        "cold_restart_and_product_smoke",
+        "disposable_restore_and_verification",
     }
+    assert evidence["off_node"] is False
+    assert evidence["production_rpo_rto_claimed"] is False
+    assert evidence["whole_node_resilience_claimed"] is False
 
 
 def test_local_recovery_fails_when_authoritative_state_changes_and_cleans_up() -> None:
@@ -1294,7 +1309,21 @@ def test_local_recovery_fails_when_authoritative_state_changes_and_cleans_up() -
 
     class Operations:
         def capture_backup(self):
-            return ({"latest_dataset_release_id": "before", "objects": []}, {})
+            return (
+                {"latest_dataset_release_id": "before", "objects": []},
+                {
+                    "database_dump_sha256": "b" * 64,
+                    "backup_bytes": 1,
+                    "state_epoch": "epoch",
+                    "release_bundle_id": "bundle",
+                    "release_pointer_sha256": "1" * 64,
+                    "release_bundle_sha256": "2" * 64,
+                    "migration_source_sha256": "3" * 64,
+                    "session_manifest_sha256": "4" * 64,
+                    "product_context_sha256": "5" * 64,
+                    "snapshot_sha256": "6" * 64,
+                },
+            )
 
         def cold_restart_and_smoke(self):
             return None

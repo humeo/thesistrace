@@ -721,7 +721,7 @@ case "$action" in
         exec "$root/.venv/bin/python" \
             "$root/scripts/hosted/local_recovery_acceptance.py"
         ;;
-    local-pause)
+    local-cold-stop)
         prepare_local_acceptance
         ensure_release
         local_compose --profile local-ops --profile launch-capacity \
@@ -1153,7 +1153,7 @@ case "$action" in
         exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-pause|local-down|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

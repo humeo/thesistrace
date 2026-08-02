@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Protocol
 
@@ -59,7 +60,35 @@ class RuntimeRecoveryOperations:
         self.backup_root = self.state_dir / "local-recovery-scratch"
         self.dump_path = self.backup_root / "postgres.dump"
         self.object_root = self.backup_root / "objects"
+        self.captured_context: dict[str, object] | None = None
         self.password = self._password()
+
+    def _recovery_context(self) -> dict[str, object]:
+        try:
+            session_path = self.state_dir / "local-acceptance-session.json"
+            session = json.loads(session_path.read_text())
+            pointer_path = self.state_dir / "releases" / "current.json"
+            pointer = json.loads(pointer_path.read_text())
+            bundle_id = str(pointer["bundle_id"])
+            bundle_path = (
+                self.state_dir / "releases" / "bundles" / bundle_id / "bundle.json"
+            )
+            bundle = json.loads(bundle_path.read_text())
+            product_path = self.state_dir / "public-origin-context.json"
+            migration = bundle["components"]["product_migrations"]
+            return {
+                "state_epoch": str(session["state_epoch"]),
+                "release_bundle_id": bundle_id,
+                "release_pointer_sha256": _file_sha256(pointer_path),
+                "release_bundle_sha256": _file_sha256(bundle_path),
+                "migration_source_sha256": str(migration["source_sha256"]),
+                "session_manifest_sha256": _file_sha256(session_path),
+                "product_context_sha256": _file_sha256(product_path),
+            }
+        except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+            raise LocalRecoveryAcceptanceError(
+                "local recovery context is incomplete"
+            ) from error
 
     def _password(self) -> str:
         try:
@@ -184,6 +213,8 @@ class RuntimeRecoveryOperations:
         shutil.rmtree(self.backup_root, ignore_errors=True)
         self.object_root.mkdir(parents=True, mode=0o700)
         snapshot = load_restore_snapshot(self._connection_info(self._database_name()))
+        context = self._recovery_context()
+        self.captured_context = context
         self._run_postgres(
             "compact PostgreSQL backup",
             (
@@ -214,6 +245,7 @@ class RuntimeRecoveryOperations:
         (self.backup_root / "snapshot.json").write_bytes(
             canonical_json_bytes(snapshot)
         )
+        (self.backup_root / "context.json").write_bytes(canonical_json_bytes(context))
         backup_bytes = sum(
             path.stat().st_size
             for path in self.backup_root.rglob("*")
@@ -221,16 +253,31 @@ class RuntimeRecoveryOperations:
         )
         return snapshot, {
             "database_dump_sha256": _file_sha256(self.dump_path),
+            "snapshot_sha256": _file_sha256(self.backup_root / "snapshot.json"),
             "backup_bytes": backup_bytes,
+            **context,
         }
 
     def cold_restart_and_smoke(self) -> None:
-        self._run("local core pause", (str(STACK), "local-pause"))
+        self._run("local core cold stop", (str(STACK), "local-cold-stop"))
         self._run("local core cold start", (str(STACK), "local-up"))
         self._run(
             "local Public-Origin smoke after cold restart",
             (sys.executable, str(ROOT / "scripts" / "hosted-smoke.py")),
         )
+        self._run(
+            "retained product smoke after cold restart",
+            (
+                sys.executable,
+                str(ROOT / "scripts" / "hosted-local-smoke.py"),
+                "--gate",
+                "identity-product",
+            ),
+        )
+        if self.captured_context is None or self._recovery_context() != self.captured_context:
+            raise LocalRecoveryAcceptanceError(
+                "release, migration, epoch, or retained product context changed"
+            )
 
     def live_snapshot(self) -> dict[str, object]:
         return load_restore_snapshot(self._connection_info(self._database_name()))
@@ -239,6 +286,15 @@ class RuntimeRecoveryOperations:
         self,
         expected_snapshot: dict[str, object],
     ) -> dict[str, object]:
+        if self.captured_context is None:
+            raise LocalRecoveryAcceptanceError("local recovery context was not captured")
+        recorded_context = json.loads((self.backup_root / "context.json").read_text())
+        if recorded_context != self.captured_context:
+            raise LocalRecoveryAcceptanceError("local recovery context manifest changed")
+        if canonical_json_bytes(expected_snapshot) != (
+            self.backup_root / "snapshot.json"
+        ).read_bytes():
+            raise LocalRecoveryAcceptanceError("local recovery snapshot manifest changed")
         self._manage_restore_database("recreate")
         self._run_postgres(
             "compact PostgreSQL restore",
@@ -279,18 +335,34 @@ class RuntimeRecoveryOperations:
 
 def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
     try:
+        backup_started = time.monotonic()
         before, backup = operations.capture_backup()
+        backup_seconds = round(time.monotonic() - backup_started, 3)
+        restart_started = time.monotonic()
         operations.cold_restart_and_smoke()
+        cold_restart_seconds = round(time.monotonic() - restart_started, 3)
         after = operations.live_snapshot()
         if canonical_json_bytes(after) != canonical_json_bytes(before):
             raise LocalRecoveryAcceptanceError(
                 "authoritative state changed across the local cold restart"
             )
+        restore_started = time.monotonic()
         restored = operations.restore_and_verify(before)
+        restore_seconds = round(time.monotonic() - restore_started, 3)
         latest_release = restored.get("latest_dataset_release_id")
         verified_objects = restored.get("verified_objects")
         dump_sha256 = backup.get("database_dump_sha256")
         backup_bytes = backup.get("backup_bytes")
+        context_fields = (
+            "state_epoch",
+            "release_bundle_id",
+            "release_pointer_sha256",
+            "release_bundle_sha256",
+            "migration_source_sha256",
+            "session_manifest_sha256",
+            "product_context_sha256",
+            "snapshot_sha256",
+        )
         if (
             not isinstance(latest_release, str)
             or not latest_release
@@ -300,6 +372,10 @@ def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
             or len(dump_sha256) != 64
             or not isinstance(backup_bytes, int)
             or backup_bytes <= 0
+            or any(
+                not isinstance(backup.get(field), str) or not backup[field]
+                for field in context_fields
+            )
         ):
             raise LocalRecoveryAcceptanceError(
                 "local backup/restore evidence is incomplete"
@@ -315,6 +391,12 @@ def run_local_recovery(operations: RecoveryOperations) -> dict[str, object]:
             "verified_objects": verified_objects,
             "database_dump_sha256": dump_sha256,
             "backup_bytes": backup_bytes,
+            "recovery_context": {field: backup[field] for field in context_fields},
+            "durations_seconds": {
+                "backup": backup_seconds,
+                "cold_restart_and_product_smoke": cold_restart_seconds,
+                "disposable_restore_and_verification": restore_seconds,
+            },
             "off_node": False,
             "production_rpo_rto_claimed": False,
             "whole_node_resilience_claimed": False,
