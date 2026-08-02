@@ -28,6 +28,15 @@ def smtp_module() -> ModuleType:
     return module
 
 
+def public_smoke_module() -> ModuleType:
+    path = ROOT / "scripts" / "hosted-release-smoke.py"
+    spec = importlib.util.spec_from_file_location("hosted_release_smoke", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def capacity_evidence(release_bundle_id: str) -> dict[str, object]:
     return {
         "release_bundle_id": release_bundle_id,
@@ -130,6 +139,28 @@ def test_release_acceptance_names_every_exhaustion_and_recovery_boundary() -> No
     ):
         assert boundary in public_smoke
     assert "compose stop --timeout 0" in launcher
+
+
+def test_public_smoke_uses_the_published_anon_key_for_registration(monkeypatch) -> None:
+    module = public_smoke_module()
+    calls: list[tuple[str, str | None]] = []
+
+    def fake_request(origin: str, path: str, *, token: str | None = None, **_kwargs):
+        calls.append((path, token))
+        if path == "/api/auth/anon-key":
+            return 200, {"anonKey": "anon_acceptance"}
+        return 200, {"accessToken": "registered"}
+
+    monkeypatch.setattr(module, "request", fake_request)
+
+    assert module.register_user("user@example.com", "password", "https://localhost") == (
+        "registered",
+        "anon_acceptance",
+    )
+    assert calls == [
+        ("/api/auth/anon-key", None),
+        ("/api/auth/users?client_type=server", "anon_acceptance"),
+    ]
 
 
 def test_private_acceptance_seeding_requires_an_explicit_mode() -> None:

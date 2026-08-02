@@ -400,12 +400,14 @@ def test_capacity_probe_coordinator_runs_in_the_data_worker() -> None:
 
 def test_hosted_operator_uses_the_admin_database_boundary() -> None:
     script = (ROOT / "scripts" / "hosted-stack").read_text()
+    operator_section = script.split("    operator)", 1)[1].split(
+        "    maintenance-enter)", 1
+    )[0]
 
-    assert (
-        'compose run --rm --no-deps -T thesistrace-migrations '
-        'thesistrace-operator "$@"'
-    ) in script
-    assert 'compose exec -T api thesistrace-operator "$@"' not in script
+    assert operator_section.count(
+        'thesistrace-migrations thesistrace-operator "$@"'
+    ) == 2
+    assert 'compose exec -T api thesistrace-operator "$@"' not in operator_section
 
 
 def test_capacity_schema_is_immutable_and_not_granted_to_service_roles() -> None:

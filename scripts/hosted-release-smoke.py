@@ -120,21 +120,36 @@ def poll(
     raise AcceptanceFailure(f"{label} did not converge: {last}")
 
 
-def seed_user(email: str, password: str, origin: str) -> tuple[str, str]:
-    stack("acceptance-seed-invitation", email)
+def register_user(email: str, password: str, origin: str) -> tuple[str, str]:
+    anon_key_payload = require_status(
+        request(origin, "/api/auth/anon-key"),
+        200,
+        "public anon key",
+    )
+    anon_key = anon_key_payload.get("anonKey")
+    if not isinstance(anon_key, str) or not anon_key.startswith("anon_"):
+        raise AcceptanceFailure("public anon key was missing or malformed")
+
     registration = require_status(
         request(
             origin,
             "/api/auth/users?client_type=server",
             method="POST",
             body={"email": email, "password": password, "name": "Acceptance User"},
+            token=anon_key,
         ),
         200,
         "public registration",
     )
-    unverified_token = registration.get("accessToken")
-    if not isinstance(unverified_token, str):
+    access_token = registration.get("accessToken")
+    if not isinstance(access_token, str):
         raise AcceptanceFailure("registration did not return an access token")
+    return access_token, anon_key
+
+
+def seed_user(email: str, password: str, origin: str) -> tuple[str, str]:
+    stack("acceptance-seed-invitation", email)
+    unverified_token, _anon_key = register_user(email, password, origin)
     unverified = require_status(
         request(origin, "/api/v1/session", token=unverified_token),
         403,
