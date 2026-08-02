@@ -161,6 +161,53 @@ def test_capacity_result_wait_retries_when_temporal_reconnect_times_out(
     assert connect_attempts == 2
 
 
+def test_capacity_result_wait_outlives_a_fixed_transient_failure_budget(
+    monkeypatch,
+) -> None:
+    result_attempts = 0
+
+    class Handle:
+        async def result(self) -> dict[str, object]:
+            nonlocal result_attempts
+            result_attempts += 1
+            if result_attempts <= 31:
+                raise RPCError(
+                    "Not enough hosts to serve the request",
+                    RPCStatusCode.UNAVAILABLE,
+                    b"",
+                )
+            return {"status": "succeeded"}
+
+    class Client:
+        def get_workflow_handle(
+            self,
+            workflow_id: str,
+            *,
+            result_type: type,
+        ) -> Handle:
+            assert workflow_id == "capacity-probe"
+            assert result_type is dict
+            return Handle()
+
+    async def connect(*_args: object, **_kwargs: object) -> Client:
+        return Client()
+
+    monkeypatch.setattr(capacity_probe.Client, "connect", connect)
+    monkeypatch.setattr(capacity_probe, "RESULT_RETRY_SECONDS", 0)
+
+    result = asyncio.run(
+        capacity_probe._resilient_workflow_result(
+            Handle(),
+            workflow_id="capacity-probe",
+            temporal_address="temporal:7233",
+            namespace="thesistrace",
+        )
+    )
+
+    assert result == {"status": "succeeded"}
+    assert result_attempts == 32
+
+
 def passing_evidence() -> dict[str, object]:
     return {
         "universe": "top3000",

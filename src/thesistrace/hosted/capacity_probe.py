@@ -36,7 +36,6 @@ from thesistrace.storage import MetadataStore
 from thesistrace.working_cache import WorkingCacheStore
 
 RESULT_RETRY_SECONDS = 2.0
-RESULT_RETRY_ATTEMPTS = 30
 
 
 class WorkflowResultHandle(Protocol):
@@ -205,12 +204,10 @@ async def _resilient_workflow_result(
     temporal_address: str,
     namespace: str,
 ) -> dict[str, object]:
-    for attempt in range(RESULT_RETRY_ATTEMPTS):
+    while True:
         try:
             return await handle.result()
         except RPCError:
-            if attempt == RESULT_RETRY_ATTEMPTS - 1:
-                raise
             await asyncio.sleep(RESULT_RETRY_SECONDS)
             try:
                 client = await Client.connect(
@@ -220,7 +217,6 @@ async def _resilient_workflow_result(
             except (RPCError, RuntimeError):
                 continue
             handle = client.get_workflow_handle(workflow_id, result_type=dict)
-    raise AssertionError("unreachable")
 
 
 def run_worker(
