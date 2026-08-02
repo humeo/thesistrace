@@ -1123,6 +1123,46 @@ def test_local_compute_attempt_evidence_requires_real_redelivery_identities() ->
         module._compute_attempt_evidence(interrupted, recovered)
 
 
+def test_local_publication_evidence_requires_worker_and_storage_identities() -> None:
+    module = public_smoke_module()
+    interruption = {
+        "service": "data-worker",
+        "container_id": "container-data",
+        "container_status": "running",
+    }
+    completed = {
+        "status": "succeeded",
+        "result_release_id": "release-2",
+        "result_manifest_sha256": "a" * 64,
+        "release_manifest_json": "{}",
+        "latest_release_id": "release-2",
+        "outbox_status": "dispatched",
+        "tracking_trigger_status": "dispatched",
+        "attempts": [
+            {
+                "id": "attempt-1",
+                "ordinal": 1,
+                "status": "failed",
+                "diagnostic": {"reason_code": "ACTIVITY_REDELIVERED"},
+            },
+            {"id": "attempt-2", "ordinal": 2, "status": "succeeded"},
+        ],
+        "storage_objects": [
+            {"object_key": "manifest:release-2", "sha256": "b" * 64}
+        ],
+    }
+
+    evidence = module._publication_recovery_evidence(completed, interruption)
+
+    assert evidence["worker_ownership"]["service"] == "data-worker"
+    assert evidence["redelivered_attempt_id"] == "attempt-2"
+    assert evidence["manifest_sha256"] == "a" * 64
+
+    completed["storage_objects"] = []
+    with pytest.raises(module.AcceptanceFailure, match="reconciliation"):
+        module._publication_recovery_evidence(completed, interruption)
+
+
 def test_local_product_context_keeps_credentials_private_and_rejects_tokens(
     tmp_path: Path,
 ) -> None:

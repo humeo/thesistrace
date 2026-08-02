@@ -1000,12 +1000,15 @@ case "$action" in
                 "SELECT status FROM thesistrace_product.dataset_publications WHERE id = '$acceptance_publication_id'")"
             case "$acceptance_publication_status" in
                 running)
+                    acceptance_container_id="$(compose ps --quiet data-worker)"
+                    acceptance_container_status="$(docker inspect --format '{{.State.Status}}' "$acceptance_container_id")"
                     recovery_audit_id="audit_acceptance_publication_kill_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
                     compose kill --signal SIGKILL data-worker
                     stage_recovery_audit \
                         acceptance.service.interrupt succeeded data-worker
                     flush_recovery_audits
-                    printf '{"publication_id":"%s","status":"interrupted"}\n' \
+                    printf '{"container_id":"%s","container_status":"%s","publication_id":"%s","service":"data-worker","status":"interrupted"}\n' \
+                        "$acceptance_container_id" "$acceptance_container_status" \
                         "$acceptance_publication_id"
                     exit 0
                     ;;

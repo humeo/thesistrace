@@ -653,7 +653,7 @@ def wait_for_publication_status(
     )
 
 
-def assert_storage_invariants() -> None:
+def assert_storage_invariants() -> dict[str, object]:
     index = stack("acceptance-storage-status")
     physical = stack("acceptance-object-status")
     if index.get("unreferenced_object_count") != 0:
@@ -664,6 +664,64 @@ def assert_storage_invariants() -> None:
         )
     if physical.get("staged_publications") != []:
         raise AcceptanceFailure(f"partial staged artifacts remain: {physical}")
+    return {"index": index, "physical": physical}
+
+
+def _publication_recovery_evidence(
+    completed: dict[str, object],
+    interruption: dict[str, object],
+) -> dict[str, object]:
+    attempts = completed.get("attempts")
+    objects = completed.get("storage_objects")
+    if not isinstance(attempts, list) or len(attempts) < 2:
+        raise AcceptanceFailure("local Dataset Publication produced no later Attempt")
+    first = attempts[0] if isinstance(attempts[0], dict) else {}
+    later = attempts[-1] if isinstance(attempts[-1], dict) else {}
+    diagnostic = first.get("diagnostic")
+    release_id = completed.get("result_release_id")
+    manifest_sha256 = completed.get("result_manifest_sha256")
+    if (
+        interruption.get("service") != "data-worker"
+        or interruption.get("container_status") != "running"
+        or not interruption.get("container_id")
+        or first.get("status") != "failed"
+        or not isinstance(diagnostic, dict)
+        or diagnostic.get("reason_code") != "ACTIVITY_REDELIVERED"
+        or later.get("status") != "succeeded"
+        or later.get("id") == first.get("id")
+        or completed.get("status") != "succeeded"
+        or completed.get("outbox_status") != "dispatched"
+        or completed.get("latest_release_id") != release_id
+        or not isinstance(manifest_sha256, str)
+        or len(manifest_sha256) != 64
+        or not isinstance(completed.get("release_manifest_json"), str)
+        or completed.get("tracking_trigger_status") not in {"pending", "dispatched"}
+        or not isinstance(objects, list)
+        or not objects
+        or any(
+            not isinstance(item, dict)
+            or not isinstance(item.get("sha256"), str)
+            or len(str(item["sha256"])) != 64
+            for item in objects
+        )
+    ):
+        raise AcceptanceFailure(
+            f"Dataset Publication ownership/reconciliation evidence is incomplete: "
+            f"{interruption} {completed}"
+        )
+    return {
+        "worker_ownership": interruption,
+        "interrupted_attempt_id": str(first["id"]),
+        "interrupted_attempt_ordinal": int(first["ordinal"]),
+        "timeout_reason_code": str(diagnostic["reason_code"]),
+        "redelivered_attempt_id": str(later["id"]),
+        "redelivered_attempt_ordinal": int(later["ordinal"]),
+        "release_id": str(release_id),
+        "manifest_sha256": manifest_sha256,
+        "outbox_status": str(completed["outbox_status"]),
+        "tracking_trigger_status": str(completed["tracking_trigger_status"]),
+        "storage_objects": objects,
+    }
 
 
 def run_whole_node_recovery(
@@ -1915,7 +1973,7 @@ def run_local_publication_recovery() -> dict[str, object]:
     ):
         raise AcceptanceFailure("local publication retry created a duplicate request")
     try:
-        stack("acceptance-interrupt-publication", publication_id)
+        interruption = stack("acceptance-interrupt-publication", publication_id)
         stack("acceptance-start-service", "data-worker")
         completed = wait_for_publication_status(
             publication_id,
@@ -1926,8 +1984,7 @@ def run_local_publication_recovery() -> dict[str, object]:
         stack("acceptance-start-service", "data-worker")
     if completed.get("status") != "succeeded":
         raise AcceptanceFailure(f"local Dataset Publication did not recover: {completed}")
-    if int(completed.get("attempt_count", 0)) < 2:
-        raise AcceptanceFailure("local Dataset Publication produced no redelivery")
+    reconciliation = _publication_recovery_evidence(completed, interruption)
     token_a = login_user(
         _required_text(credentials, "email_a"),
         _required_text(credentials, "password_a"),
@@ -1947,7 +2004,14 @@ def run_local_publication_recovery() -> dict[str, object]:
     }
     if release_ids_after - release_ids_before != {str(completed["result_release_id"])}:
         raise AcceptanceFailure("local publication exposed duplicate or partial Releases")
-    assert_storage_invariants()
+    storage = assert_storage_invariants()
+    state_digest = hashlib.sha256(
+        json.dumps(
+            {"publication": completed, "storage": storage},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     _update_local_product_context(
         publication_id=publication_id,
         publication_release_id=str(completed["result_release_id"]),
@@ -1957,8 +2021,11 @@ def run_local_publication_recovery() -> dict[str, object]:
         queued_while_data_worker_paused=True,
         heartbeat_timeout=True,
         redelivery=True,
+        attempt_transition=reconciliation,
         exactly_one_release=True,
-        storage_reconciled=True,
+        storage_reconciliation=storage,
+        post_gate_state_sha256=state_digest,
+        compute_worker_fault_injected=False,
         partial_authoritative_artifact=False,
     )
 
