@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import urllib.error
 from pathlib import Path
@@ -81,7 +82,21 @@ def arguments(module: ModuleType, tmp_path: Path):
             "--state-dir",
             str(tmp_path / "state"),
             "--project",
-            "thesistrace-local-test",
+            "thesistrace-hosted-local-test",
+        ]
+    )
+
+
+def parse_arguments(module: ModuleType, tmp_path: Path, *extra: str):
+    return module.parser().parse_args(
+        [
+            "--output",
+            str(tmp_path / "local-evidence.json"),
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--project",
+            "thesistrace-hosted-local-test",
+            *extra,
         ]
     )
 
@@ -94,6 +109,547 @@ def runtime_capacity() -> dict[str, object]:
     }
 
 
+def stable_runtime_state(_environment) -> dict[str, object]:
+    return {"runtime": "stable"}
+
+
+def test_local_gate_selection_supports_one_gate_or_one_contiguous_range(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    exact = module.select_phases(
+        parse_arguments(module, tmp_path, "--phase", "identity_product")
+    )
+    ranged = module.select_phases(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--from",
+            "api_relay_recovery",
+            "--until",
+            "publication_recovery",
+        )
+    )
+
+    assert [phase.name for phase in exact] == ["identity_product"]
+    assert [phase.name for phase in ranged] == [
+        "api_relay_recovery",
+        "compute_recovery",
+        "publication_recovery",
+    ]
+
+
+def test_local_gate_selection_rejects_mixed_or_reversed_selectors(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    with pytest.raises(SystemExit):
+        parse_arguments(
+            module,
+            tmp_path,
+            "--phase",
+            "identity_product",
+            "--from",
+            "identity_product",
+        )
+    with pytest.raises(module.LocalAcceptanceError, match="canonical order"):
+        module.select_phases(
+            parse_arguments(
+                module,
+                tmp_path,
+                "--from",
+                "publication_recovery",
+                "--until",
+                "api_relay_recovery",
+            )
+        )
+
+
+def test_local_gate_requires_prerequisites_from_the_same_session(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    calls: list[str] = []
+
+    def executor(phase, environment):
+        calls.append(phase.name)
+        return {"status": "passed"}, {"status": "passed"}
+
+    module.run_acceptance(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--phase",
+            "reset",
+            "--cleanup-policy",
+            "never",
+        ),
+        executor=executor,
+        runtime_reader=runtime_capacity,
+        fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+        state_reader=lambda _environment: {"runtime": "reset"},
+    )
+
+    with pytest.raises(module.LocalAcceptanceError, match="core_session"):
+        module.run_acceptance(
+            parse_arguments(
+                module,
+                tmp_path,
+                "--phase",
+                "identity_product",
+                "--cleanup-policy",
+                "never",
+            ),
+            executor=executor,
+            runtime_reader=runtime_capacity,
+            fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+            state_reader=lambda _environment: {"runtime": "reset"},
+        )
+
+    assert calls == ["reset"]
+
+
+def test_local_gate_failure_preserves_state_unless_cleanup_is_explicit(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    calls: list[str] = []
+
+    def executor(phase, environment):
+        calls.append(phase.name)
+        if phase.name == "core_session":
+            raise module.LocalAcceptanceError("core failed")
+        return {"status": "passed"}, {"status": "passed"}
+
+    common = {
+        "executor": executor,
+        "runtime_reader": runtime_capacity,
+        "fingerprint_reader": lambda: {"source_sha256": "a" * 64},
+        "state_reader": lambda _environment: {"runtime": "stable"},
+    }
+    module.run_acceptance(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--phase",
+            "reset",
+            "--cleanup-policy",
+            "never",
+        ),
+        **common,
+    )
+
+    with pytest.raises(module.LocalAcceptanceError, match="core failed"):
+        module.run_acceptance(
+            parse_arguments(
+                module,
+                tmp_path,
+                "--phase",
+                "core_session",
+                "--cleanup-policy",
+                "never",
+            ),
+            **common,
+        )
+    preserved = json.loads((tmp_path / "local-evidence.json").read_text())
+    assert calls == ["reset", "core_session"]
+    assert preserved["diagnostics"]["preserved"] is True
+    assert "--phase core_session" in preserved["diagnostics"]["retry_command"]
+    assert "--cleanup" in preserved["diagnostics"]["cleanup_command"]
+    manifest = json.loads(
+        module.session_manifest_path(arguments(module, tmp_path)).read_text()
+    )
+    assert manifest["gates"]["core_session"]["status"] == "failed"
+    assert manifest["current_state_digest"] == manifest["gates"]["core_session"][
+        "output_state_digest"
+    ]
+
+    calls.clear()
+    with pytest.raises(module.LocalAcceptanceError, match="core failed"):
+        module.run_acceptance(
+            parse_arguments(
+                module,
+                tmp_path,
+                "--phase",
+                "core_session",
+                "--cleanup-policy",
+                "always",
+            ),
+            **common,
+        )
+    assert calls == ["core_session", "cleanup"]
+
+
+def test_explicit_cleanup_does_not_reclassify_old_runtime_health(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    common = {
+        "runtime_reader": runtime_capacity,
+        "fingerprint_reader": lambda: {"source_sha256": "a" * 64},
+        "state_reader": stable_runtime_state,
+    }
+    module.run_acceptance(
+        parse_arguments(module, tmp_path, "--phase", "reset"),
+        executor=lambda _phase, _environment: (
+            {"status": "passed"},
+            {"status": "passed"},
+        ),
+        **common,
+    )
+
+    evidence = module.run_acceptance(
+        parse_arguments(module, tmp_path, "--cleanup"),
+        executor=lambda _phase, _environment: (
+            {"status": "passed"},
+            {
+                "status": "passed",
+                "resources": {
+                    "sample_count": 1,
+                    "unhealthy_containers": ["old-api"],
+                },
+            },
+        ),
+        **common,
+    )
+
+    assert evidence["status"] == "passed"
+    assert evidence["runtime_observations"]["unhealthy_container"] is True
+
+
+def test_local_gate_command_failure_writes_a_private_diagnostic_log(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = local_acceptance_module()
+
+    class Sampler:
+        def __init__(self, project):
+            assert project == "thesistrace-hosted-local-test"
+
+        def start(self):
+            return None
+
+        def stop(self):
+            return {"sample_count": 1, "sampling_errors": []}
+
+    class Completed:
+        returncode = 7
+        stdout = b"diagnostic stdout\n"
+        stderr = b"diagnostic stderr\n"
+
+    monkeypatch.setattr(module, "DockerPhaseSampler", Sampler)
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Completed())
+    environment = module.local_environment(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--phase",
+            "core_session",
+            "--cleanup-policy",
+            "never",
+        )
+    )
+
+    with pytest.raises(module.PhaseExecutionError) as failed:
+        module.execute_phase(module.Phase("core_session", ("false",), 10), environment)
+
+    log_path = Path(failed.value.record["log_path"])
+    assert log_path.read_bytes() == Completed.stdout + Completed.stderr
+    assert stat.S_IMODE(log_path.stat().st_mode) == 0o600
+    assert failed.value.record["status"] == "failed"
+    assert failed.value.record["returncode"] == 7
+    assert failed.value.record["resources"]["sample_count"] == 1
+
+
+def test_local_resume_runs_only_the_next_canonical_compatible_gate(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    calls: list[str] = []
+
+    def executor(phase, environment):
+        calls.append(phase.name)
+        payload = {"status": "passed"}
+        if phase.name == "core_session":
+            payload["release_bundle_id"] = "release-local"
+        return payload, {"status": "passed"}
+
+    common = {
+        "executor": executor,
+        "runtime_reader": runtime_capacity,
+        "fingerprint_reader": lambda: {"source_sha256": "a" * 64},
+        "state_reader": lambda _environment: {"runtime": "stable"},
+    }
+    first = module.run_acceptance(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--from",
+            "reset",
+            "--until",
+            "core_session",
+            "--cleanup-policy",
+            "never",
+        ),
+        **common,
+    )
+    calls.clear()
+    resumed = module.run_acceptance(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--resume",
+            "--cleanup-policy",
+            "never",
+        ),
+        **common,
+    )
+
+    assert calls == ["identity_product"]
+    assert resumed["selected_gates"] == ["identity_product"]
+    assert resumed["run_id"] == first["run_id"]
+    assert resumed["state_epoch"] == first["state_epoch"]
+    manifest_path = module.session_manifest_path(arguments(module, tmp_path))
+    manifest = json.loads(manifest_path.read_text())
+    assert stat.S_IMODE(manifest_path.stat().st_mode) == 0o600
+    assert manifest["release_bundle_id"] == "release-local"
+    assert len(manifest["gates"]["core_session"]["input_state_digest"]) == 64
+    assert len(manifest["gates"]["core_session"]["output_state_digest"]) == 64
+    assert [record["gate"] for record in manifest["gate_history"]] == [
+        "reset",
+        "core_session",
+        "identity_product",
+    ]
+
+
+def test_local_session_rejects_changed_inputs_or_runtime_state(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    def executor(phase, environment):
+        return {"status": "passed"}, {"status": "passed"}
+
+    module.run_acceptance(
+        parse_arguments(module, tmp_path, "--phase", "reset"),
+        executor=executor,
+        runtime_reader=runtime_capacity,
+        fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+        state_reader=lambda _environment: {"state": "before"},
+    )
+
+    with pytest.raises(module.LocalAcceptanceError, match="inputs changed"):
+        module.run_acceptance(
+            parse_arguments(module, tmp_path, "--phase", "core_session"),
+            executor=executor,
+            runtime_reader=runtime_capacity,
+            fingerprint_reader=lambda: {"source_sha256": "b" * 64},
+            state_reader=lambda _environment: {"state": "before"},
+        )
+    with pytest.raises(module.LocalAcceptanceError, match="input state differs"):
+        module.run_acceptance(
+            parse_arguments(module, tmp_path, "--phase", "core_session"),
+            executor=executor,
+            runtime_reader=runtime_capacity,
+            fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+            state_reader=lambda _environment: {"state": "mutated"},
+        )
+
+
+def test_local_session_refuses_to_persist_authentication_material(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    with pytest.raises(module.LocalAcceptanceError, match="authentication material"):
+        module.run_acceptance(
+            parse_arguments(module, tmp_path, "--phase", "reset"),
+            executor=lambda phase, environment: (
+                {"status": "passed", "access_token": "must-not-persist"},
+                {"status": "passed"},
+            ),
+            runtime_reader=runtime_capacity,
+            fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+            state_reader=lambda _environment: {"state": "reset"},
+        )
+
+    manifest = module.session_manifest_path(arguments(module, tmp_path)).read_text()
+    evidence = (tmp_path / "local-evidence.json").read_text()
+    assert "must-not-persist" not in manifest
+    assert "must-not-persist" not in evidence
+
+
+def test_source_fingerprint_covers_untracked_inputs_but_excludes_runtime_outputs(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / "tracked.py").write_text("value = 1\n")
+    (tmp_path / "untracked.py").write_text("value = 2\n")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "tracked.py"],
+        check=True,
+    )
+
+    before = module.source_fingerprint(tmp_path)
+    (tmp_path / "untracked.py").write_text("value = 3\n")
+    changed = module.source_fingerprint(tmp_path)
+    runtime = tmp_path / ".hosted" / "evidence"
+    runtime.mkdir(parents=True)
+    (runtime / "result.json").write_text('{"status":"passed"}')
+    excluded = module.source_fingerprint(tmp_path)
+
+    assert before["files_sha256"] != changed["files_sha256"]
+    assert changed == excluded
+    assert ".hosted" in changed["excluded_roots"]
+
+
+def test_state_mismatch_invalidates_the_gate_and_every_later_checkpoint(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    def stable(_environment):
+        return {"state": "stable"}
+
+    common = {
+        "executor": lambda phase, environment: (
+            {
+                "status": "passed",
+                **(
+                    {"release_bundle_id": "release-local"}
+                    if phase.name == "core_session"
+                    else {}
+                ),
+            },
+            {"status": "passed"},
+        ),
+        "runtime_reader": runtime_capacity,
+        "fingerprint_reader": lambda: {"source_sha256": "a" * 64},
+    }
+    module.run_acceptance(
+        parse_arguments(
+            module,
+            tmp_path,
+            "--from",
+            "reset",
+            "--until",
+            "identity_product",
+        ),
+        state_reader=stable,
+        **common,
+    )
+
+    with pytest.raises(module.LocalAcceptanceError, match="input state differs"):
+        module.run_acceptance(
+            parse_arguments(module, tmp_path, "--phase", "core_session"),
+            state_reader=lambda _environment: {"state": "externally-mutated"},
+            **common,
+        )
+
+    manifest = json.loads(
+        module.session_manifest_path(arguments(module, tmp_path)).read_text()
+    )
+    assert manifest["gates"]["reset"]["status"] == "passed"
+    assert manifest["gates"]["core_session"]["status"] == "invalidated"
+    assert manifest["gates"]["identity_product"]["status"] == "invalidated"
+
+
+def test_reset_derives_a_unique_guarded_compose_project_when_unspecified(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+    arguments_without_project = module.parser().parse_args(
+        [
+            "--output",
+            str(tmp_path / "local-evidence.json"),
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--phase",
+            "reset",
+        ]
+    )
+    projects: list[str] = []
+
+    module.run_acceptance(
+        arguments_without_project,
+        executor=lambda phase, environment: (
+            projects.append(environment["THESISTRACE_COMPOSE_PROJECT_NAME"])
+            or {"status": "passed"},
+            {"status": "passed"},
+        ),
+        runtime_reader=runtime_capacity,
+        fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+        state_reader=lambda environment: {
+            "project": environment["THESISTRACE_COMPOSE_PROJECT_NAME"]
+        },
+    )
+
+    assert len(projects) == 1
+    assert projects[0].startswith("thesistrace-hosted-local-")
+    assert projects[0] != "thesistrace-hosted-local"
+    manifest = json.loads(module.session_manifest_path(arguments_without_project).read_text())
+    assert manifest["project"] == projects[0]
+
+
+def test_local_project_guard_rejects_a_non_acceptance_compose_project(
+    tmp_path: Path,
+) -> None:
+    module = local_acceptance_module()
+
+    with pytest.raises(module.LocalAcceptanceError, match="project name"):
+        module.run_acceptance(
+            parse_arguments(module, tmp_path, "--phase", "reset").__class__(
+                **{
+                    **vars(parse_arguments(module, tmp_path, "--phase", "reset")),
+                    "project": "thesistrace-production",
+                }
+            ),
+            executor=lambda phase, environment: (
+                {"status": "passed"},
+                {"status": "passed"},
+            ),
+            runtime_reader=runtime_capacity,
+            fingerprint_reader=lambda: {"source_sha256": "a" * 64},
+            state_reader=lambda _environment: {},
+        )
+
+
+def test_core_session_state_rejects_extra_compute_or_observability_services() -> None:
+    module = local_acceptance_module()
+    valid = {
+        "release": {
+            "bundle_id": "release-local",
+            "web_asset_manifest": {"/": "a" * 64},
+        },
+        "authoritative_state": {"latest_dataset_release_id": None, "objects": []},
+        "topology": [
+            {"service": "api"},
+            {"service": "execution-relay"},
+            {"service": "compute-worker-1"},
+            {"service": "data-worker"},
+            {"service": "postgres"},
+            {"service": "temporal"},
+        ],
+    }
+
+    assert module.validate_core_runtime_state(valid, "release-local") == {
+        "bundle_id": "release-local"
+    }
+    with pytest.raises(module.LocalAcceptanceError, match="Web asset"):
+        module.validate_core_runtime_state(
+            {**valid, "release": {"bundle_id": "release-local"}},
+            "release-local",
+        )
+    for forbidden in ("compute-worker-2", "otel-collector", "prometheus", "grafana"):
+        with pytest.raises(module.LocalAcceptanceError, match=forbidden):
+            module.validate_core_runtime_state(
+                {**valid, "topology": [*valid["topology"], {"service": forbidden}]},
+                "release-local",
+            )
 def test_local_acceptance_writes_distinct_non_launch_evidence(
     tmp_path: Path,
 ) -> None:
