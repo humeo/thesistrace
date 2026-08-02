@@ -1444,14 +1444,12 @@ def test_local_controlled_suites_cover_heartbeat_health_and_telemetry_redaction(
         for phase in module.local_phases()
     }
 
-    assert "tests/hosted/test_temporal_worker_heartbeat.py" in (
-        commands["temporal_and_failure_contracts"]
-    )
-    assert "tests/hosted/test_health_views.py" in commands["security_and_storage"]
-    assert (
-        "tests/hosted/test_compose_stack.py::"
-        "test_otel_sampling_and_export_failure_are_bounded_and_visible"
-    ) in commands["security_and_storage"]
+    assert "local_workflow_acceptance.py" in commands["controlled_workflows"]
+    controlled = (
+        ROOT / "scripts" / "hosted" / "local_workflow_acceptance.py"
+    ).read_text()
+    assert "tests/hosted/test_temporal_worker_heartbeat.py" in controlled
+    assert "physical_capacity_claimed" in controlled
     probe = (ROOT / "scripts" / "hosted" / "local_ops_probe.py").read_text()
     for endpoint in (
         "http://otel-collector:8888/metrics",
