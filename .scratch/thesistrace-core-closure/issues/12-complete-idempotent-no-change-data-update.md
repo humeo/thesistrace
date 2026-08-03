@@ -72,5 +72,6 @@ message, retain the same latest Release, and keep Release history unchanged.
   browser acceptance passed in `21.0s` and retained exactly two Releases after
   the third Update reported no change.
 - The final exact command block above passed from a clean runtime: backend `35
-  passed, 1 warning` in `37.98s`, Web `1 passed` in `22.9s`, followed by a
-  successful runtime teardown.
+  passed, 1 warning` in `33.29s`, Web `1 passed` in `21.3s`, followed by a
+  successful runtime teardown. Final independent review concluded Standards
+  PASS and Spec PASS with no findings.
