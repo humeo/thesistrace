@@ -229,6 +229,97 @@ def test_existing_v1_release_remains_readable_after_head_migration() -> None:
         assert {row["latest_release_id"] for row in migrated} == {later_id}
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_existing_v2_release_remains_readable_after_compatibility_migration() -> None:
+    settings = CoreSettings.from_environment()
+    _reset_core_schemas(settings)
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        apply_migrations(database, PUBLICATION_MIGRATIONS)
+        apply_migrations(
+            database,
+            replace(DATA_MIGRATIONS, migrations=DATA_MIGRATIONS.migrations[:3]),
+        )
+        publication = _publication(database, settings)
+        batch = FixtureDataSource().collect(CollectionPlan.bootstrap())
+        provenance = {
+            "canonical_contract": "canonical-eod-v1",
+            "collection_kind": batch.collection_kind,
+            "covered_session_range": {
+                "start": batch.covered_session_range[0],
+                "end": batch.covered_session_range[1],
+            },
+            "appended_session_range": {
+                "start": batch.covered_session_range[0],
+                "end": batch.covered_session_range[1],
+            },
+            "correction_change_set": [],
+            "predecessor_id": None,
+            "source_name": batch.source_name,
+        }
+        prepared = publication.prepare(
+            kind="data.release",
+            payloads={"canonical": JsonPayload(batch.canonical)},
+            provenance=provenance,
+        )
+        release_id = f"dsr_{prepared.manifest_sha256[:24]}"
+        with database.transaction() as transaction:
+            published = publication.record(transaction, prepared)
+            transaction.execute(
+                """
+                INSERT INTO data.releases (
+                    id, predecessor_id, manifest_sha256, source_name,
+                    collection_kind, canonical_schema, session_start,
+                    session_end, session_count, appended_session_start,
+                    appended_session_end
+                ) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    release_id,
+                    published.manifest_sha256,
+                    batch.source_name,
+                    batch.collection_kind,
+                    batch.canonical["schema_version"],
+                    batch.covered_session_range[0],
+                    batch.covered_session_range[1],
+                    len(batch.canonical["research_calendar"]),
+                    batch.covered_session_range[0],
+                    batch.covered_session_range[1],
+                ),
+            )
+            transaction.execute(
+                """
+                INSERT INTO data.update_receipts (
+                    request_id, request_fingerprint, status, release_id,
+                    updated_at
+                ) VALUES ('ticket-11-v2-upgrade', 'v2', 'published', %s,
+                          clock_timestamp())
+                """,
+                (release_id,),
+            )
+
+        apply_migrations(database, DATA_MIGRATIONS)
+        data = DataService(database, publication, FixtureDataSource())
+        assert data.load_canonical(release_id) == batch.canonical
+        with database.transaction() as transaction:
+            migrated = transaction.execute(
+                """
+                SELECT release.provenance_version, state.latest_release_id
+                FROM data.releases AS release
+                JOIN data.state AS state ON state.singleton = 1
+                WHERE release.id = %s
+                """,
+                (release_id,),
+            ).fetchone()
+        assert migrated == {"provenance_version": 2, "latest_release_id": release_id}
+    finally:
+        database.close()
+
+
 def _request_and_process(settings: CoreSettings, request_id: str) -> None:
     with TestClient(create_app(settings)) as client:
         response = client.post(

@@ -68,11 +68,15 @@ policy or provider mode.
   migration derives the authoritative head from the unique predecessor-chain
   leaf rather than timestamps and aborts on an ambiguous graph. Acceptance
   upgrades a two-Release v1 chain whose timestamps deliberately point the wrong
-  way, then reads both immutable manifests successfully.
+  way, then reads both immutable manifests successfully. It also upgrades a v2
+  Release published after migration 0003 but before compatibility migration
+  0004; the Data migration ledger plus its successful publication receipt
+  preserves the correct provenance version without crossing into Publication
+  storage.
 - Real PostgreSQL/RustFS acceptance passed both direct and wider cases (`2
   passed, 1 warning` in `8.60s` after the first review fixes); the expanded
-  direct, catch-up, and v1-upgrade acceptance passed (`3 passed, 1 warning` in
-  `9.43s`). The Data page now refreshes Release history;
+  direct, catch-up, v1-upgrade, and intermediate-v2-upgrade acceptance passed
+  (`4 passed, 1 warning` in `11.22s`). The Data page now refreshes Release history;
   real `/data` Playwright acceptance published two Releases, retained both,
   selected the 757-session Release as latest, and passed in `15.1s`.
 - Focused Ruff, `13` architecture tests, TypeScript, and Web build passed.

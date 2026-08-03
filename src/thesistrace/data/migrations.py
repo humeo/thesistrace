@@ -114,6 +114,15 @@ MIGRATIONS = MigrationPlan(
                     ADD COLUMN provenance_version smallint NOT NULL DEFAULT 1
                     CHECK (provenance_version IN (1, 2));
 
+                UPDATE data.releases AS release
+                SET provenance_version = 2
+                FROM data.update_receipts AS receipt,
+                     data.schema_migrations AS migration
+                WHERE receipt.release_id = release.id
+                  AND receipt.status = 'published'
+                  AND migration.name = '0003_authoritative_release_head'
+                  AND receipt.updated_at > migration.applied_at;
+
                 DO $migration$
                 DECLARE
                     release_count integer;
