@@ -15,9 +15,9 @@ Physical Data Objects under ADR-0088. Changing a field's meaning, unit, grain,
 or availability semantics requires a new `field_id` rather than reinterpreting
 the old field.
 
-Older Dataset Releases retain their original schema and objects. A frozen
-Research Definition references stable fields and validation rejects a selected
-release that does not provide every required field.
+Older Dataset Releases retain their original schema and objects. A
+ResearchRun's immutable input binds stable fields, and Run admission rejects
+the resolved Dataset Release when it does not provide every required field.
 
 ADR-0071 defines the initial `equity.eod_price` field names, types, units, and
 source mappings. Upstream fields added after that contract do not silently

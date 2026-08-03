@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Use one default Quota Profile with Personal Workspace overrides

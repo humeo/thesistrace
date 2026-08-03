@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Run Workers with least privilege and separated egress

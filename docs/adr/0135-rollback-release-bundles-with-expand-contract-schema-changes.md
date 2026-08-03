@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Roll back release bundles with expand-contract schema changes

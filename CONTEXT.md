@@ -5,7 +5,10 @@ strategy backtests, and continuous daily research tracking.
 
 ## Language
 
-### Hosted Platform
+### Deferred Hosted Platform
+
+These terms preserve deferred Hosted V2 vocabulary and are not part of the
+active Core model.
 
 **V1 Workspace**:
 The historical user-visible boundary of one V1 deployment for one operator. It
@@ -46,6 +49,12 @@ User's Personal Workspace during the first hosted release. It grants no access
 to an existing Personal Workspace or research resource.
 _Avoid_: Workspace membership invitation, login token, resource permission
 
+**Auth Session**:
+The revocable authenticated relationship between one browser and one User in
+the Hosted Platform. It begins only after InsForge verifies the User's identity
+and grants no authority beyond that User's product permissions.
+_Avoid_: InsForge token, Registration Invitation, User, Personal Workspace
+
 **Hosted Local Acceptance**:
 Non-attested evidence that the real Hosted product and service boundaries work
 on a constrained development runtime. It cannot qualify a release, open the
@@ -83,7 +92,8 @@ _Avoid_: Investment-performance guarantee, System Health, Data Health
 ### Research and Alpha
 
 **Investment Hypothesis**:
-A human-readable claim about a market relationship that motivates an Alpha.
+A human-readable, optional claim about a market relationship that motivates an
+Alpha. It is not required to Save or Run a Research Definition.
 _Avoid_: Alpha, factor formula, strategy
 
 **Alpha**:
@@ -100,20 +110,18 @@ Evaluation preserves the resulting metric signs.
 _Avoid_: Automatic factor reversal, absolute IC, inferred direction
 
 **Alpha Expression**:
-The bounded numeric formula embedded in a Research Definition, composed only of
-Canonical Market Data Field References, numeric literals, parentheses,
-arithmetic, and the V1 Alpha Function Set. It excludes Python, SQL, arbitrary
-code, and user-defined functions and is evaluated without a separate compiled
-domain artifact.
+The bounded expression tree embedded in a Research Definition, composed only
+of stable Canonical Market Data Field References, numeric literals, and the V1
+Alpha Operator Set. It excludes Python, SQL, arbitrary code, and user-defined
+functions.
 _Avoid_: Research DSL, Python strategy, SQL query, compiled plan
 
-**V1 Alpha Function Set**:
-The closed Alpha Expression operation set: arithmetic; `abs`, `log`, and
-`sign`; `lag`, `delta`, and `pct_change`; and `ts_mean`, `ts_sum`, `ts_std`,
+**V1 Alpha Operator Set**:
+The closed, versioned Alpha Expression operation set: arithmetic; `abs`, `log`,
+and `sign`; `lag`, `delta`, and `pct_change`; and `ts_mean`, `ts_sum`, `ts_std`,
 `ts_min`, and `ts_max`, with every time-series or rolling `n` restricted to an
-integer literal from 1 through 252. It excludes conditional, regression,
-correlation, and cross-sectional functions, and any selected Industry
-Neutralization follows expression evaluation.
+integer literal from 1 through 252. Industry Neutralization follows expression
+evaluation rather than acting as an operator.
 _Avoid_: Extensible function registry, user-defined function, strategy rule
 
 **Alpha Numeric Semantics**:
@@ -126,9 +134,9 @@ _Avoid_: Decimal Alpha arithmetic, sample rolling standard deviation,
 implementation-default rounding
 
 **Numeric Execution Contract**:
-The versioned V1 numeric boundary pinned by a frozen Research Definition and
-DailyTrack. It fixes integer, 34-digit half-even Decimal, binary64, residual,
-and canonical-checksum semantics independently of UI formatting.
+The versioned V1 numeric contract pinned by a ResearchRun's immutable input and
+by a DailyTrack. It fixes integer, 34-digit half-even Decimal, binary64,
+residual, and canonical-checksum semantics independently of UI formatting.
 _Avoid_: Runtime default precision, report formatting, tolerance-based equality
 
 **Effective Alpha Lookback**:
@@ -147,7 +155,7 @@ _Avoid_: Zero Alpha Value, forward-filled score, partial-window result
 
 **Alpha Values**:
 The deterministic instrument-by-session scores calculated inside a
-ResearchRun or Tracking Advance after each Research Session closes. The frozen
+ResearchRun or Tracking Advance after each Research Session closes. The fixed
 neutralization option determines the one transient Final Alpha Cross-Section
 shared by Strategy and Factor Evaluation.
 _Avoid_: Alpha, factor definition, trading signal
@@ -162,9 +170,8 @@ vendor factor table
 ### Daily Tracking
 
 **Active DailyTrack Limit**:
-The deployment-neutral admission boundary for active DailyTracks in either a
-V1 Workspace or a hosted Personal Workspace. Its hard value is recorded by
-ADR-0117; a blocked active Track counts and a stopped Track does not.
+The hard maximum of ten active or blocked DailyTracks in the current product.
+A stopped Track does not count toward it.
 _Avoid_: Quota Profile, total DailyTrack history, Compute concurrency
 
 **Daily Tracking**:
@@ -177,9 +184,10 @@ alerting product
 
 **DailyTrack**:
 The stable identity of one continuous, fixed-inception Daily Tracking stream
-explicitly started from a successful seed ResearchRun. It pins its Definition,
-numeric contract, Tracking Origin, and Activation Dataset Release until it is
-terminally stopped; editing or rerunning research never mutates it.
+explicitly started from a successful seed ResearchRun. It is active while
+following Dataset Releases, blocked when its current target cannot complete,
+and terminally stopped only by an explicit Stop; editing or rerunning research
+never mutates it.
 _Avoid_: ResearchRun, rolling backtest, mutable latest Definition
 
 **Working Cache**:
@@ -190,7 +198,7 @@ _Avoid_: Tracking Checkpoint, Result Bundle, Factor curve, permanent Alpha store
 
 **Tracking Origin**:
 The seed ResearchRun's original `R1` Research Session coordinate, all-cash
-baseline, Research Window schedule anchor, and frozen Definition semantics from
+baseline, Research Window schedule anchor, and immutable research semantics from
 which the DailyTrack reference oracle begins. Its market data follows the
 ordered Dataset Release sequence bound by Checkpoints rather than rolling
 forward with the latest Research Window.
@@ -273,18 +281,18 @@ across Factor quantiles.
 _Avoid_: Database row order, source-response order, Factor average rank
 
 **Holdings Count**:
-The explicit integer `holdings_count` from 1 through 100 in a frozen V1
-Research Definition, bounded by the selected Liquidity Universe size and
-defining the maximum number of Top-N equal-weight targets. Fewer eligible
-candidates produce fewer targets and residual cash.
+The explicit integer `holdings_count` from 1 through 100 in a ResearchRun's
+immutable input, bounded by the selected Liquidity Universe size and defining
+the maximum number of Top-N equal-weight targets. Fewer eligible candidates
+produce fewer targets and residual cash.
 _Avoid_: Runtime default, percentage cutoff, guaranteed filled positions
 
 **Initial Cash**:
 The CNY 10,000,000 recorded as both Gross NAV and Net NAV at the first Research
-Window open, with no Actual Holdings. V1 fixes and explicitly records the
-amount in the frozen Research Definition; first deployment occurs at the next
-Research Session's open, and no later contribution, withdrawal, borrowing,
-leverage, or negative cash is permitted.
+Window open, with no Actual Holdings. V1 fixes and records the amount in the
+ResearchRun's immutable input; first deployment occurs at the next Research
+Session's open, and no later contribution, withdrawal, borrowing, leverage, or
+negative cash is permitted.
 _Avoid_: Runtime default, portfolio NAV, deployable cash after trades
 
 **Rebalance**:
@@ -417,9 +425,9 @@ initial deployment, then reports its event mean and
 _Avoid_: Order count, target-weight change, filled-notional double count
 
 **Rebalance Interval**:
-The explicit `rebalance_every_sessions` integer in a frozen V1 Research
-Definition. It may be any value from 1 through 20 and determines the distance
-between scheduled Strategy signal sessions.
+The explicit `rebalance_every_sessions` integer in a ResearchRun's immutable
+input. It may be any value from 1 through 20 and determines the distance between
+scheduled Strategy signal sessions.
 _Avoid_: Natural-day interval, fixed 1/5/20 enumeration, holding cohort
 
 **Open Execution Model**:
@@ -478,25 +486,30 @@ _Avoid_: New-buy eligibility, immediate forced sale, permanent eligibility
 ### Research Lifecycle and Factor Evaluation
 
 **Research Definition**:
-A versioned structured document that completely describes one research,
-including its Investment Hypothesis, data, universe, period, Alpha, evaluation
-rules, Strategy, execution, and costs. Requesting Run validates the current
-Draft and creates the immutable frozen version consumed by one ResearchRun.
-_Avoid_: ResearchSpec, Research DSL, Compiled Research Plan, mutable run settings
+The mutable, saved authoring record for one research, containing one Alpha and
+its configurable research choices. It may be incomplete between Save actions;
+Run saves its current content and, when valid, embeds an immutable input in a
+new ResearchRun.
+_Avoid_: Draft, frozen Definition resource, ResearchSpec, compiled plan
 
-**Research Definition Draft**:
-The mutable authoring revision in the V1 editor from which a valid Run request
-creates a separate immutable frozen Research Definition version. Failed
-validation leaves it editable, and later edits cannot change a prior Run's
-frozen input.
-_Avoid_: Frozen definition, ResearchRun, compiled plan
+**Run Action**:
+The Research Definition action that saves the submitted current content and
+attempts to create a ResearchRun against the latest Dataset Release. Rejected
+content remains saved but creates no ResearchRun.
+_Avoid_: Save followed by Run, Rerun, execution Attempt
 
 **ResearchRun**:
-One execution of a frozen Research Definition pinned to one Dataset Release
-that produces Factor Evaluation and Strategy Backtest conclusions. It has a
-durable lifecycle, treats retries as Attempts, and may seed a DailyTrack only
-after publishing a complete Result Bundle.
+One execution of immutable Research Definition content pinned to one Dataset
+Release that produces Factor Evaluation and Strategy Backtest conclusions. It
+has a durable lifecycle, treats infrastructure retries as Attempts, and may
+seed a DailyTrack only after publishing a complete Result Bundle.
 _Avoid_: Research Definition, factor evaluation, backtest
+
+**Rerun**:
+The user action that creates a new ResearchRun with the selected Run's same
+immutable input and same Dataset Release. It ignores current Definition edits
+and newer Dataset Releases.
+_Avoid_: ResearchRun Attempt, Run Action, modified research
 
 **ResearchRun Attempt**:
 One infrastructure execution attempt belonging to an existing ResearchRun,
@@ -714,8 +727,8 @@ _Avoid_: Final Rebalance, forced liquidation, post-window valuation
 
 **Strategy Benchmark**:
 The comparison series that starts at NAV 1 and applies equal-weight daily
-returns of the frozen Research Definition's Liquidity Universe over the same
-next-open holding intervals as the Strategy, remaining flat through the
+returns of the ResearchRun's fixed Liquidity Universe over the same next-open
+holding intervals as the Strategy, remaining flat through the
 initial-deployment open. It retains confirmed full-session-suspended members
 with zero return and no weight redistribution, uses observed partial-suspension
 returns, applies `-100%` only for locally evidenced terminal delisting after a
@@ -756,17 +769,23 @@ warm-up sessions followed by the 504-session Research Window.
 _Avoid_: Research Window, complete market history, report period
 
 **Dataset Release**:
-A platform-owned, immutable manifest for one validated market-data snapshot,
-available read-only to every Personal Workspace. It binds one cumulative
-logical snapshot, its predecessor and correction change-set, and the immutable
-data identities used by ResearchRuns and Tracking Advances.
-_Avoid_: Workspace-owned dataset, mutable dataset, latest dataset, runtime cache
+A Data-owned, immutable manifest for one validated market-data snapshot. It
+binds one cumulative logical snapshot, its predecessor and correction
+change-set, and the immutable data identities used by ResearchRuns and Tracking
+Advances.
+_Avoid_: Mutable dataset, latest dataset, runtime cache
+
+**Data Update**:
+The product action that brings Data to the latest completed Research Session.
+It performs the first Bootstrap or a later incremental publication internally,
+and creates no Dataset Release when no new session is available.
+_Avoid_: Publish Fixture, Publish Live, manual Bootstrap mode, DailyTrack Advance
 
 **Dataset Publication**:
-The platform-operated post-close process attempted only when a newly completed
-Research Session extends the latest release. It atomically publishes validated
-incremental or catch-up data and accepted corrections without waiting for
-independent DailyTrack Advances.
+The Data-owned process invoked by Data Update to atomically publish validated
+Bootstrap, incremental, or catch-up data and accepted corrections. It creates
+nothing when no newly completed Research Session extends the latest Release and
+never waits for independent DailyTrack Advances.
 _Avoid_: Data fetch, partial update, in-place dataset mutation,
 correction-only release
 
@@ -836,10 +855,10 @@ publication.
 _Avoid_: Multi-provider abstraction, fallback source, cross-source consensus
 
 **Field Catalog**:
-The user-facing inventory of stable Canonical Market Data fields, including
-their meaning, unit, frequency, availability semantics, coverage, and presence
-in a selected Dataset Release. It is the complete standard field directory;
-only the separately permitted subset supports Alpha completion and validation.
+The Data-owned inventory of stable Canonical Market Data fields and their
+meaning, type, unit, availability semantics, and Release presence. Research
+authoring exposes only its Alpha-authorable subset together with the supported
+Alpha Operator Set.
 _Avoid_: Dataset Schema selector, source documentation, physical table browser
 
 **Field Definition**:
@@ -850,12 +869,10 @@ in a later Dataset Release, and changing meaning requires a new `field_id`.
 _Avoid_: Mutable field meaning, source column name, corrected data value
 
 **Field Reference**:
-A short Alpha-authorable Canonical Market Data name, restricted in V1 to
-`$open_adj`, `$high_adj`, `$low_adj`, `$close_adj`, `$volume_shares`, and
-`$turnover_amount_cny`. Field Catalog exposes this subset and validation records
-the resolved stable `field_id` in the frozen Research Definition without a
-separate compiled artifact.
-_Avoid_: Vendor field name, manually authored long identifier, compiled plan
+One stable `field_id` selected from the Alpha-authorable Canonical Market Data
+subset and displayed through its short Field Catalog name. A Research
+Definition's Alpha Expression stores the stable reference directly.
+_Avoid_: Vendor field name, manually typed identifier, compiled plan
 
 **Dataset Schema**:
 The internal, versioned contract for one Dataset Family's keys and fields. A
@@ -972,13 +989,12 @@ The SW2021 L1, L2, and L3 industries assigned to an instrument for a historical
 market session, retained by Dataset Release as versioned
 `[valid_from, valid_to_exclusive)` intervals with exactly one path per
 instrument-date and no gap backfill. Research never applies current
-classification to history, and Industry Neutralization defaults to L1 unless a
-Research Definition selects L2 or L3.
+classification to history, and V1 Industry Neutralization always uses L1.
 _Avoid_: Current-industry field, Liquidity Universe, industry quota
 
 **Industry Neutralization**:
 The Research Definition option that emits either unchanged scores for `none` or
-one same-Run score set demeaned by each instrument's selected historical
+one same-Run score set demeaned by each instrument's historical SW2021 L1
 industry after point-in-time ST exclusion for `industry`. Missing historical
 classification and groups with fewer than two valid instruments are excluded
 before the Final Alpha Cross-Section rather than assigned `UNKNOWN`, backfilled,

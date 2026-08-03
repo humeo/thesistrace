@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Separate Hosted Local Acceptance from Launch Qualification

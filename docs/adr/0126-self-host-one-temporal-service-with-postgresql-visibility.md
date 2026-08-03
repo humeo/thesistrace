@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Self-host one Temporal Service with PostgreSQL Visibility

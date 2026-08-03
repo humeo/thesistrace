@@ -5,7 +5,7 @@ status: accepted
 # Use the selected Liquidity Universe as the Strategy Benchmark
 
 Every Strategy Backtest compares its return with the daily equal-weight return
-of the Liquidity Universe selected by the same frozen Research Definition. V1
+of the Liquidity Universe selected by the same ResearchRun immutable input. V1
 does not silently use a default CSI 300 benchmark or require a separate
 external-index dataset; aligning the comparison series with the selected Top
 300, 1000, 2000, or 3000 opportunity set makes results comparable without

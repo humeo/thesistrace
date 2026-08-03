@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0150
 ---
 
 # Use InsForge Auth as the only end-user identity source

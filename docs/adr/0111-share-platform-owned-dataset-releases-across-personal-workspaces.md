@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Share platform-owned Dataset Releases across Personal Workspaces

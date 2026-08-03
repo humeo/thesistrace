@@ -8,7 +8,7 @@ ThesisTrace separates three concerns:
 
 - Field Catalog is the user-facing inventory for discovering Canonical Market
   Data fields and their meaning, unit, time semantics, coverage, and
-  availability in a selected Dataset Release.
+  availability by Dataset Release.
 - Dataset Release is an immutable manifest that identifies one validated
   logical snapshot and binds the exact Research Calendar, Universe snapshots,
   Dataset Schema versions, Adjustment Anchors, Adjustment Factors, and physical
@@ -39,6 +39,7 @@ retained. ADR-0073 defines Adjustment Anchors as release-owned manifest inputs
 rather than Research Window data.
 
 Research authors discover and reference stable fields through the Field
-Catalog and select a Dataset Release. Dataset Schema versions remain internal
-compatibility metadata already resolved by that release; they are not an
-additional Research Definition parameter.
+Catalog; they do not select a Dataset Release. Run admission resolves the
+latest successful Release and pins it in the ResearchRun's immutable input.
+Dataset Schema versions remain internal compatibility metadata already
+resolved by that Release; they are not a Research Definition parameter.

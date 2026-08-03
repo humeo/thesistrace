@@ -4,7 +4,9 @@ status: accepted
 
 # Use one explicit all-in V1 Transaction Cost model
 
-Every V1 Research Definition explicitly records the following fixed values:
+Every V1 ResearchRun immutable input explicitly records the following fixed
+values. Run admission injects them; the Research Definition and Web neither
+submit nor edit them:
 
 ```yaml
 costs:
@@ -28,7 +30,8 @@ The 0.0003 broker commission is a V1 all-in product assumption, not a universal
 statutory rate. Regulatory and exchange handling fees are treated as included
 in that all-in commission and are not deducted again. The stamp-duty and
 transfer-fee assumptions are recorded separately. A future cost change requires
-a new versioned definition rather than changing an existing ResearchRun.
+a new calculation-contract version and a new ResearchRun rather than changing
+an existing ResearchRun.
 
 ADR-0094 calculates these formulas with decimal arithmetic without rounding
 each filled order or Child Order's fees to CNY 0.01. Two-decimal report

@@ -15,10 +15,10 @@ $volume_shares
 $turnover_amount_cny
 ```
 
-The editor offers completion only for this allowlist. Research Definition
-validation rejects every other Field Reference even when the selected Dataset
-Release contains that field, and freezing records the resolved stable
-`field_id` for every permitted reference.
+The editor offers fields only from this allowlist. Research Definition Run
+validation rejects every other Field Reference even when the resolved Dataset
+Release contains that field, and Run admission records the stable `field_id`
+binding for every permitted reference in the immutable input.
 
 Raw OHLC, `pre_close_reference_raw`, and `price_change_raw` remain in Field
 Catalog for execution, validation, and provenance. They are not Alpha inputs

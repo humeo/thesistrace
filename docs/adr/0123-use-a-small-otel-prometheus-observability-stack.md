@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Use a small OpenTelemetry and Prometheus observability stack

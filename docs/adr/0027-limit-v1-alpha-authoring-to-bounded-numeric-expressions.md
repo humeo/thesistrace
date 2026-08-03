@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Limit V1 Alpha authoring to bounded numeric expressions

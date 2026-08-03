@@ -17,8 +17,9 @@ example, `ts_mean(pct_change($close_adj, 5), 20)` has an effective lookback of
 `ts_mean($close_adj, 252)` has offset 251, while
 `lag($close_adj, 252)` has offset 252. The composed total must not exceed 252
 market sessions. A Research Definition that exceeds the limit fails validation
-before it can be frozen; the runtime neither expands the requested data range
-nor truncates the calculation.
+when Run is requested. The current Definition is still saved, but no immutable
+input or ResearchRun is created; Save by itself remains allowed. The runtime
+neither expands the requested data range nor truncates the calculation.
 
 Dataset Publication makes the 252 sessions immediately before the 504-session
 Research Window available as calculation-only warm-up data under ADR-0068.

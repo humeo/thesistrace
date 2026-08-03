@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0151
 ---
 
 # Enforce Personal Workspace isolation in the API and PostgreSQL RLS
