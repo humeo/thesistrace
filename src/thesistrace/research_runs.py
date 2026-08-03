@@ -10,16 +10,16 @@ from thesistrace.activity_contract import (
     is_resource_exhaustion,
     should_retry_resource_exhaustion,
 )
-from thesistrace.alpha import evaluate_alpha_matrix
 from thesistrace.bounded_research import (
     calculate_bounded_research,
     load_columnar_research_window,
 )
 from thesistrace.datasets import DatasetPublisher
-from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import ControlMetadataPort, ObjectStorePort, ObjectWriterPort
 from thesistrace.quota import QuotaExceededError
+from thesistrace.research_kernel import RunInput
+from thesistrace.research_kernel import run as run_kernel
 from thesistrace.result_objects import (
     CompactResultError,
     publish_compact_result_objects,
@@ -29,7 +29,6 @@ from thesistrace.storage_admission import (
     StorageAdmissionError,
     publication_storage_objects,
 )
-from thesistrace.strategy import run_strategy
 
 RUNTIME_BUILD = {"package": "thesistrace", "version": "0.1.0"}
 MAX_RESULT_BUNDLE_BYTES = 1_048_576
@@ -117,14 +116,11 @@ class ResearchRunService:
             if not isinstance(content, dict):
                 raise RuntimeError("frozen Research Definition is invalid")
             if self.calculator is not None:
-                canonical = research_input_history(
-                    self.datasets.materialize_canonical(release)
-                )
+                canonical = research_input_history(self.datasets.materialize_canonical(release))
                 self.progress("inputs_loaded")
                 artifacts = self.calculator(canonical, content)
             elif any(
-                isinstance(entry, dict)
-                and entry.get("kind") == "canonical_partition"
+                isinstance(entry, dict) and entry.get("kind") == "canonical_partition"
                 for entry in release.get("objects", [])
             ):
                 window = load_columnar_research_window(
@@ -135,9 +131,7 @@ class ResearchRunService:
                 self.progress("inputs_loaded")
                 artifacts = calculate_bounded_research(window, content)
             else:
-                canonical = research_input_history(
-                    self.datasets.materialize_canonical(release)
-                )
+                canonical = research_input_history(self.datasets.materialize_canonical(release))
                 self.progress("inputs_loaded")
                 artifacts = calculate_research(canonical, content)
             self.progress("calculated")
@@ -159,25 +153,19 @@ class ResearchRunService:
                         staged_objects.put_manifest(str(manifest["id"]), manifest)
                         with self.metadata.storage_mutation_fence():
                             with staged_objects.publication(
-                                manifest_sha256=str(
-                                    manifest_object["sha256"]
-                                )
+                                manifest_sha256=str(manifest_object["sha256"])
                             ):
-                                published = (
-                                    self.metadata.publish_research_run_success(
-                                        run_id=run_id,
-                                        attempt_id=attempt_id,
-                                        result_bundle_id=str(manifest["id"]),
-                                        result_manifest_sha256=str(
-                                            manifest_object["sha256"]
-                                        ),
-                                        storage_objects=(
-                                            publication_storage_objects(
-                                                manifest,
-                                                manifest_object=manifest_object,
-                                            )
-                                        ),
-                                    )
+                                published = self.metadata.publish_research_run_success(
+                                    run_id=run_id,
+                                    attempt_id=attempt_id,
+                                    result_bundle_id=str(manifest["id"]),
+                                    result_manifest_sha256=str(manifest_object["sha256"]),
+                                    storage_objects=(
+                                        publication_storage_objects(
+                                            manifest,
+                                            manifest_object=manifest_object,
+                                        )
+                                    ),
                                 )
                                 if not published:
                                     raise ResearchPublicationFenced
@@ -233,9 +221,7 @@ class ResearchRunService:
             else:
                 reason_code = "CALCULATION_FAILED"
                 message = "research calculation failed"
-            retryable = resource_exhausted and should_retry_resource_exhaustion(
-                ordinal
-            )
+            retryable = resource_exhausted and should_retry_resource_exhaustion(ordinal)
             logger.error(
                 "Research Activity failed run_id=%s attempt_id=%s error_type=%s reason_code=%s",
                 run_id,
@@ -347,9 +333,7 @@ class ResearchRunService:
         if len(canonical_json_bytes(manifest)) != logical_bytes["manifest"]:
             raise RuntimeError("Result Bundle byte accounting did not converge")
         if logical_bytes["total"] > MAX_RESULT_BUNDLE_BYTES:
-            raise RuntimeError(
-                "complete Result Bundle exceeds the 1,048,576 byte limit"
-            )
+            raise RuntimeError("complete Result Bundle exceeds the 1,048,576 byte limit")
         manifest_object = objects.put_json(manifest)
         return manifest, manifest_object
 
@@ -381,41 +365,25 @@ def calculate_research(
     definition: dict[str, object],
 ) -> dict[str, dict[str, object]]:
     alpha = definition["alpha"]
-    if not isinstance(alpha, dict):
+    strategy = definition["strategy"]
+    costs = definition["costs"]
+    if not isinstance(alpha, dict) or not isinstance(strategy, dict) or not isinstance(costs, dict):
         raise RuntimeError("Alpha definition is invalid")
-    matrix = evaluate_alpha_matrix(
-        canonical,
-        expression=str(alpha["expression"]),
-        universe_name=str(definition["universe"]),
-        neutralization=str(definition["neutralization"]),
+    return run_kernel(
+        RunInput(
+            canonical_data=canonical,
+            alpha_expression=alpha["expression"],
+            universe=str(definition["universe"]),
+            neutralization=str(definition["neutralization"]),
+            holdings_count=int(strategy["holdings_count"]),
+            rebalance_interval=int(strategy["rebalance_interval"]),
+            initial_cash_cny=str(strategy["initial_cash_cny"]),
+            commission_rate_all_in=str(costs["commission_rate_all_in"]),
+            commission_min_cny=str(costs["commission_min_cny"]),
+            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        )
     )
-    labels = build_forward_labels(canonical, matrix)
-    factor = evaluate_factor(labels)
-    strategy = run_strategy(canonical, matrix, definition)
-    return {
-        "alpha_matrix": matrix,
-        "forward_labels": labels,
-        "factor_evaluation": factor,
-        "strategy_backtest": strategy,
-        "strategy_time_series": {"daily": strategy["daily"]},
-        "strategy_events": {
-            "orders": strategy["orders"],
-            "child_orders": strategy["child_orders"],
-            "fills": strategy["fills"],
-            "rebalance_events": strategy["rebalance_events"],
-            "rejections": strategy["rejections"],
-        },
-        "diagnostics": {
-            "alpha_coverage": [
-                {
-                    "session": item["session"],
-                    "coverage_loss": item["coverage_loss"],
-                }
-                for item in matrix["sessions"]
-            ],
-            "strategy": strategy["diagnostics"],
-        },
-    }
 
 
 def research_input_history(canonical: dict[str, object]) -> dict[str, object]:

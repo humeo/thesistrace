@@ -1,3 +1,23 @@
-from thesistrace.research_kernel.alpha_expression import operator_catalog
+from typing import TYPE_CHECKING
 
-__all__ = ["operator_catalog"]
+if TYPE_CHECKING:
+    from thesistrace.research_kernel.alpha_expression import operator_catalog
+    from thesistrace.research_kernel.kernel_run import KernelRunError, RunInput, run
+
+__all__ = ["KernelRunError", "RunInput", "operator_catalog", "run"]
+
+
+def __getattr__(name: str) -> object:
+    if name == "operator_catalog":
+        from thesistrace.research_kernel.alpha_expression import operator_catalog
+
+        return operator_catalog
+    if name in {"KernelRunError", "RunInput", "run"}:
+        from thesistrace.research_kernel.kernel_run import KernelRunError, RunInput, run
+
+        return {
+            "KernelRunError": KernelRunError,
+            "RunInput": RunInput,
+            "run": run,
+        }[name]
+    raise AttributeError(name)

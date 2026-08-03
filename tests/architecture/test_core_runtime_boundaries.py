@@ -134,3 +134,26 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
     for product_schema in ("data.", "definitions.", "research_runs.", "daily_tracks."):
         assert product_schema not in service
         assert product_schema not in migrations
+
+
+def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> None:
+    package = ROOT / "src" / "thesistrace" / "research_kernel"
+    source = "\n".join(path.read_text() for path in package.rglob("*.py"))
+
+    for forbidden in (
+        "thesistrace._postgres",
+        "thesistrace.bounded_research",
+        "thesistrace.hosted",
+        "thesistrace.ports",
+        "thesistrace.quota",
+        "thesistrace.research_runs",
+        "thesistrace.storage",
+        "boto3",
+        "fastapi",
+        "httpx",
+        "psycopg",
+        "temporalio",
+    ):
+        assert forbidden not in source
+    assert "mode:" not in source
+    assert "mode =" not in source
