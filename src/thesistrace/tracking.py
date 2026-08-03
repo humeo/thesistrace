@@ -22,7 +22,7 @@ from thesistrace.factor import (
     factor_day,
     mean_or_none,
 )
-from thesistrace.numeric import canonical_binary64_bytes, canonical_decimal
+from thesistrace.numeric import canonical_binary64_bytes
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import (
     ControlMetadataPort,
@@ -31,6 +31,7 @@ from thesistrace.ports import (
     WorkingCachePort,
 )
 from thesistrace.quota import QuotaExceededError
+from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 from thesistrace.research_runs import RUNTIME_BUILD
 from thesistrace.result_objects import (
     EXECUTION_AGGREGATE_CONTRACT,
@@ -4727,51 +4728,6 @@ def incremental_terminal_state(
             for key in ("sha256", "bytes", "writer_contract_id")
         },
     }
-
-
-def first_divergence(actual: object, expected: object, path: str = "$") -> str:
-    if type(actual) is not type(expected):
-        return path
-    if isinstance(actual, dict):
-        keys = sorted(set(actual) | set(expected))
-        for key in keys:
-            if key not in actual or key not in expected:
-                return f"{path}.{key}"
-            divergence = first_divergence(actual[key], expected[key], f"{path}.{key}")
-            if divergence:
-                return divergence
-        return ""
-    if isinstance(actual, list):
-        if len(actual) != len(expected):
-            return f"{path}.length"
-        for index, (left, right) in enumerate(zip(actual, expected, strict=True)):
-            divergence = first_divergence(left, right, f"{path}[{index}]")
-            if divergence:
-                return divergence
-        return ""
-    return (
-        ""
-        if equivalence_bytes(actual) == equivalence_bytes(expected)
-        else path
-    )
-
-
-def equivalence_bytes(value: object) -> bytes:
-    def normalize(item: object) -> object:
-        if isinstance(item, float):
-            return {"$binary64": canonical_binary64_bytes(item).hex()}
-        if isinstance(item, Decimal):
-            return {"$decimal": canonical_decimal(item)}
-        if isinstance(item, dict):
-            return {
-                str(key): normalize(child)
-                for key, child in sorted(item.items(), key=lambda pair: str(pair[0]))
-            }
-        if isinstance(item, list):
-            return [normalize(child) for child in item]
-        return item
-
-    return canonical_json_bytes(normalize(value))
 
 
 def report_progress(

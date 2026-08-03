@@ -7,21 +7,49 @@ chunks produces canonically identical Kernel state at the same boundary.
 
 **Status:** ready-for-agent
 
-- [ ] Run-once and multi-Advance processing produce canonically identical
+**Implementation:** complete
+
+- [x] Run-once and multi-Advance processing produce canonically identical
   calculation state.
-- [ ] The proof covers Label maturation, Factor aggregation, Strategy state,
+- [x] The proof covers Label maturation, Factor aggregation, Strategy state,
   Benchmark state, numeric serialization, and retained windows.
-- [ ] The comparison uses the same immutable origin, contracts, and ordered
+- [x] The comparison uses the same immutable origin, contracts, and ordered
   sessions.
-- [ ] A deliberate semantic mismatch identifies the first divergent boundary.
-- [ ] Equivalence does not rely on a second reference engine maintained beside
+- [x] A deliberate semantic mismatch identifies the first divergent boundary.
+- [x] Equivalence does not rely on a second reference engine maintained beside
   the production Kernel.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/kernel` and confirm once-versus-chunked cases pass
-  by canonical equality rather than tolerance-only comparison.
-- Mutate one controlled fixture expectation and confirm the evidence reports the
-  first divergent calculation boundary.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+uv run pytest -q tests/kernel
+```
+
+The suite must compare one batch with multiple Advance chunks by canonical
+equality rather than tolerance-only comparison. It must also inject one
+controlled semantic mismatch and assert the exact first divergent calculation
+boundary automatically; no manual fixture edit is part of verification.
 
 ## Comments
+
+- TDD red: the new proof failed at collection because the pure Kernel did not
+  yet own an `equivalence` boundary.
+- The fixed 756-session Run is the shared immutable seed. The once path applies
+  all four later sessions in one Advance; the chunked path applies those same
+  ordered sessions as `1 + 2 + 1`. Their complete `KernelState` values and
+  canonical evidence bytes are exactly equal at the same final boundary.
+- Complete state evidence includes the pinned canonical input and contracts,
+  origin, session count, boundary, Alpha, Labels, Factor, Strategy/Benchmark,
+  and the pre-terminal resumable Strategy state. The proof also asserts the
+  504-session Label and Factor retained windows.
+- Exact binary64 and Decimal comparison plus first-divergence traversal now
+  belong to `research_kernel.equivalence`. Product Tracking imports those same
+  callable objects, so no second equality implementation exists.
+- The negative proof mutates one penultimate `benchmark_nav` value in copied
+  evidence and asserts the exact indexed JSON path returned as the first
+  divergence; verification requires no manual file change.
+- The exact `How to verify` command passed `67 passed, 1 warning` in `139.55s`.

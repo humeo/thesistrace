@@ -1,7 +1,7 @@
 import copy
-from datetime import date, timedelta
 
 import pytest
+from fixture_sessions import append_fixture_session
 
 import thesistrace.research_kernel.kernel_advance as advance_module
 from thesistrace.research_kernel import (
@@ -33,7 +33,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
-    complete, appended = _append_fixture_session(canonical)
+    complete, appended = append_fixture_session(canonical)
     prior = run(_run_input(canonical, definition)).track_state
     prior_output = prior.output_snapshot()
     advance_input = AdvanceInput(
@@ -151,7 +151,7 @@ def test_kernel_advance_rejects_static_contract_replacement(
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
-    _complete, appended = _append_fixture_session(canonical)
+    _complete, appended = append_fixture_session(canonical)
     appended["field_catalog"] = [{"field_id": "replacement"}]
     prior = run(_run_input(canonical, definition)).track_state
 
@@ -171,7 +171,7 @@ def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
-    _complete, appended = _append_fixture_session(canonical)
+    _complete, appended = append_fixture_session(canonical)
     prior = run(_run_input(canonical, definition)).track_state
     prior_canonical = prior.canonical_snapshot()
     instruments = copy.deepcopy(canonical["instruments"])
@@ -217,7 +217,7 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
         result.track_state.output_snapshot()["strategy_backtest"] == artifacts["strategy_backtest"]
     )
 
-    complete, appended = _append_fixture_session(canonical)
+    complete, appended = append_fixture_session(canonical)
     advanced = advance(
         AdvanceInput(
             prior_state=result.track_state,
@@ -242,55 +242,6 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
 
     assert advanced_strategy == once_strategy
     assert advanced_strategy["daily"][-2]["rebalance"] is True
-
-
-def _append_fixture_session(
-    canonical: dict[str, object],
-) -> tuple[dict[str, object], dict[str, object]]:
-    complete = copy.deepcopy(canonical)
-    calendar = complete["research_calendar"]
-    assert isinstance(calendar, list)
-    prior_session = str(calendar[-1])
-    candidate = date.fromisoformat(prior_session) + timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate += timedelta(days=1)
-    new_session = candidate.isoformat()
-    calendar.append(new_session)
-
-    appended: dict[str, object] = {
-        "schema_version": complete["schema_version"],
-        "research_calendar": [new_session],
-    }
-    for table, session_field in (
-        ("prices", "session"),
-        ("trading_states", "session"),
-        ("price_limits", "session"),
-        ("base_pool", "session"),
-    ):
-        rows = complete[table]
-        assert isinstance(rows, list)
-        new_rows = [
-            {**row, session_field: new_session}
-            for row in rows
-            if isinstance(row, dict) and str(row[session_field]) == prior_session
-        ]
-        rows.extend(new_rows)
-        appended[table] = copy.deepcopy(new_rows)
-    appended["st_designations"] = []
-
-    universes = complete["liquidity_universes"]
-    assert isinstance(universes, dict)
-    appended_universes: dict[str, object] = {}
-    for name, rows in universes.items():
-        assert isinstance(rows, list)
-        prior = next(
-            row for row in rows if isinstance(row, dict) and str(row["session"]) == prior_session
-        )
-        new_row = {**prior, "session": new_session}
-        rows.append(new_row)
-        appended_universes[str(name)] = [copy.deepcopy(new_row)]
-    appended["liquidity_universes"] = appended_universes
-    return complete, appended
 
 
 def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:

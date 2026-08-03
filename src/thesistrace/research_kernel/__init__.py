@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from thesistrace.research_kernel.alpha_expression import operator_catalog
+    from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
     from thesistrace.research_kernel.kernel_advance import AdvanceInput, advance
     from thesistrace.research_kernel.kernel_run import (
         KernelRunError,
@@ -18,6 +19,8 @@ __all__ = [
     "RunInput",
     "RunOutput",
     "advance",
+    "equivalence_bytes",
+    "first_divergence",
     "operator_catalog",
     "run",
 ]
@@ -32,6 +35,16 @@ def __getattr__(name: str) -> object:
         from thesistrace.research_kernel.kernel_advance import AdvanceInput, advance
 
         return {"AdvanceInput": AdvanceInput, "advance": advance}[name]
+    if name in {"equivalence_bytes", "first_divergence"}:
+        from thesistrace.research_kernel.equivalence import (
+            equivalence_bytes,
+            first_divergence,
+        )
+
+        return {
+            "equivalence_bytes": equivalence_bytes,
+            "first_divergence": first_divergence,
+        }[name]
     if name in {"KernelRunError", "KernelState", "RunInput", "RunOutput", "run"}:
         from thesistrace.research_kernel.kernel_run import (
             KernelRunError,
