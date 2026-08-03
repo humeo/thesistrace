@@ -26,18 +26,59 @@ def validate_bootstrap_batch(batch: CanonicalSourceBatch) -> None:
     if len(instrument_ids) != len(instruments):
         raise ValueError("Bootstrap instrument identities are invalid")
     calendar_set = set(calendar)
-    for table, session_field in (
-        ("prices", "session"),
-        ("trading_states", "session"),
-        ("price_limits", "session"),
-        ("base_pool", "session"),
+    prices = _required_rows(canonical, "prices")
+    states = _required_rows(canonical, "trading_states")
+    limits = _required_rows(canonical, "price_limits")
+    base_pool = _required_rows(canonical, "base_pool")
+    anchors = _required_rows(canonical, "adjustment_anchors")
+
+    expected_positions = {
+        (str(session), instrument_id)
+        for session in calendar
+        for instrument_id in instrument_ids
+    }
+    state_positions = _position_keys(states, calendar_set, instrument_ids, "trading_states")
+    if state_positions != expected_positions:
+        raise ValueError("Bootstrap Trading State coverage is incomplete")
+    suspended = {
+        (str(row["session"]), str(row["instrument_id"]))
+        for row in states
+        if row.get("state") == "full_session_suspension"
+    }
+    price_positions = _position_keys(prices, calendar_set, instrument_ids, "prices")
+    limit_positions = _position_keys(limits, calendar_set, instrument_ids, "price_limits")
+    if price_positions != expected_positions - suspended or limit_positions != price_positions:
+        raise ValueError("Bootstrap Price coverage is incomplete")
+    required_price_fields = {
+        "open_raw",
+        "high_raw",
+        "low_raw",
+        "close_raw",
+        "volume_shares",
+        "turnover_cny",
+        "adjustment_factor",
+        "adjustment_anchor_factor",
+        "open_adj",
+        "high_adj",
+        "low_adj",
+        "close_adj",
+    }
+    if any(not required_price_fields <= set(row) for row in prices):
+        raise ValueError("Bootstrap Price schema is incomplete")
+
+    pool_sessions = [str(row.get("session", "")) for row in base_pool]
+    if pool_sessions != calendar or any(
+        not isinstance(row.get("instrument_ids"), list)
+        or not set(map(str, row["instrument_ids"])) <= instrument_ids
+        for row in base_pool
     ):
-        rows = canonical.get(table)
-        if not isinstance(rows, list) or any(
-            not isinstance(row, dict) or row.get(session_field) not in calendar_set
-            for row in rows
-        ):
-            raise ValueError(f"Bootstrap canonical table is invalid: {table}")
+        raise ValueError("Bootstrap Base Pool coverage is incomplete")
+    anchor_instruments = {str(row.get("instrument_id", "")) for row in anchors}
+    if anchor_instruments != instrument_ids or any(
+        row.get("anchor_session") not in calendar_set or "anchor_factor" not in row
+        for row in anchors
+    ):
+        raise ValueError("Bootstrap Adjustment Anchor coverage is incomplete")
 
     universes = canonical.get("liquidity_universes")
     if not isinstance(universes, dict) or set(universes) != {
@@ -50,6 +91,12 @@ def validate_bootstrap_batch(batch: CanonicalSourceBatch) -> None:
     if any(
         not isinstance(rows, list)
         or [row.get("session") for row in rows if isinstance(row, dict)] != calendar
+        or any(
+            not isinstance(row, dict)
+            or not isinstance(row.get("instrument_ids"), list)
+            or not set(map(str, row["instrument_ids"])) <= instrument_ids
+            for row in rows
+        )
         for rows in universes.values()
     ):
         raise ValueError("Bootstrap Liquidity Universe coverage is incomplete")
@@ -74,3 +121,31 @@ def validate_bootstrap_batch(batch: CanonicalSourceBatch) -> None:
                 raise ValueError(f"Bootstrap point-in-time interval is invalid: {table}")
 
     canonical_json_bytes(canonical)
+
+
+def _required_rows(canonical: dict[str, object], table: str) -> list[dict[str, object]]:
+    value = canonical.get(table)
+    if not isinstance(value, list) or not value or any(not isinstance(row, dict) for row in value):
+        raise ValueError(f"Bootstrap canonical table is missing or empty: {table}")
+    return value
+
+
+def _position_keys(
+    rows: list[dict[str, object]],
+    calendar: set[object],
+    instruments: set[str],
+    table: str,
+) -> set[tuple[str, str]]:
+    keys = {
+        (str(row.get("session", "")), str(row.get("instrument_id", "")))
+        for row in rows
+    }
+    if (
+        len(keys) != len(rows)
+        or any(
+            session not in calendar or instrument not in instruments
+            for session, instrument in keys
+        )
+    ):
+        raise ValueError(f"Bootstrap {table} identities are invalid")
+    return keys

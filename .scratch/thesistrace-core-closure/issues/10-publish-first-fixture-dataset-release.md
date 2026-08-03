@@ -71,3 +71,11 @@ endpoint counts as Ticket 10 verification.
   restart regression passed `13 passed, 1 skipped`; Web shell test and build
   passed. Real Playwright acceptance from `/data` passed in `8.1s` against the
   isolated PostgreSQL/RustFS runtime and an independent API/worker process pair.
+- Independent review passed Standards but rejected the first validation because
+  empty Price tables and a missing Adjustment Anchor table could still pass.
+  Data now requires complete Trading State coverage, Price/Limit coverage for
+  every non-suspended instrument-session, required Price columns, complete Base
+  Pool, Adjustment Anchor, Liquidity Universe and instrument identities, and
+  valid point-in-time intervals. Five adapter/validation tests pass, including
+  explicit empty-table, missing-anchor, and missing-column rejection cases; the
+  real Core acceptance still passes with the complete Fixture batch.
