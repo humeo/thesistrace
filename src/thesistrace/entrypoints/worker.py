@@ -3,10 +3,12 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from datetime import UTC, datetime, timedelta
 
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
 
 logger = logging.getLogger(__name__)
+ABANDONED_UPDATE_AFTER = timedelta(minutes=15)
 
 
 def main() -> None:
@@ -30,6 +32,11 @@ def _observe_data_state(status: str) -> None:
 
 def _process_data(runtime: CoreRuntime) -> None:
     data = runtime.data
+    recovered = data.recover_abandoned_updates(
+        stale_before=datetime.now(UTC) - ABANDONED_UPDATE_AFTER
+    )
+    if recovered:
+        logger.warning("Core worker recovered abandoned Data Update")
     processed = data.process_next_update()
     _observe_data_state(data.overview().status)
     if processed:

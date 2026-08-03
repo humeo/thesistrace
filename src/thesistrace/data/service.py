@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 
 from psycopg.errors import UniqueViolation
 
-from thesistrace._postgres import PostgresDatabase
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.models import (
     DataOverview,
     ReleaseHistory,
@@ -20,6 +21,9 @@ from thesistrace.publication.serialization import canonical_json_bytes
 
 class DataUpdateConflict(RuntimeError):
     pass
+
+
+MAX_UPDATE_ATTEMPTS = 3
 
 
 class DataService:
@@ -184,32 +188,78 @@ class DataService:
         try:
             self._publish_update(request_id, int(attempt["id"]))
         except Exception as error:
-            with self._database.transaction() as transaction:
+            self._record_attempt_failure(
+                request_id,
+                int(attempt["id"]),
+                type(error).__name__,
+            )
+            raise
+        return True
+
+    def recover_abandoned_updates(self, *, stale_before: datetime) -> int:
+        with self._database.transaction() as transaction:
+            state = transaction.execute(
+                "SELECT singleton FROM data.state WHERE singleton = 1 FOR UPDATE"
+            ).fetchone()
+            if state is None:
+                raise RuntimeError("Data state is not initialized")
+            rows = transaction.execute(
+                """
+                SELECT attempt.id, attempt.request_id,
+                       (SELECT count(*)
+                        FROM data.update_attempts AS counted
+                        WHERE counted.request_id = attempt.request_id) AS attempt_count
+                FROM data.update_attempts AS attempt
+                JOIN data.update_receipts AS receipt
+                  ON receipt.request_id = attempt.request_id
+                WHERE attempt.status = 'running'
+                  AND receipt.status = 'running'
+                  AND attempt.started_at < %s
+                FOR UPDATE OF attempt, receipt
+                """,
+                (stale_before,),
+            ).fetchall()
+            for row in rows:
+                retry = int(row["attempt_count"]) < MAX_UPDATE_ATTEMPTS
                 transaction.execute(
                     """
                     UPDATE data.update_attempts
-                    SET status = 'failed', finished_at = now()
+                    SET status = 'failed', failure_reason = 'WorkerLost',
+                        finished_at = now()
                     WHERE id = %s
                     """,
-                    (attempt["id"],),
+                    (row["id"],),
                 )
                 transaction.execute(
                     """
                     UPDATE data.update_receipts
-                    SET status = 'failed', failure_reason = %s, updated_at = now()
+                    SET status = %s, failure_reason = %s, updated_at = now()
                     WHERE request_id = %s
                     """,
-                    (type(error).__name__, request_id),
+                    (
+                        "accepted" if retry else "failed",
+                        None if retry else "WorkerLost",
+                        row["request_id"],
+                    ),
                 )
-                transaction.execute(
-                    """
-                    UPDATE data.state
-                    SET status = 'failed', latest_update_outcome = 'failed', updated_at = now()
-                    WHERE singleton = 1
-                    """
-                )
-            raise
-        return True
+                if retry:
+                    transaction.execute(
+                        """
+                        UPDATE data.state
+                        SET status = 'updating', updated_at = now()
+                        WHERE singleton = 1
+                        """
+                    )
+                else:
+                    transaction.execute(
+                        """
+                        UPDATE data.state
+                        SET status = 'failed', latest_update_outcome = 'failed',
+                            updated_at = now()
+                        WHERE singleton = 1
+                        """
+                    )
+        return len(rows)
 
     def load_canonical(self, release_id: str) -> dict[str, object]:
         with self._database.transaction() as transaction:
@@ -332,6 +382,7 @@ class DataService:
             )
             if current_id != predecessor_id:
                 raise DataUpdateConflict("latest Dataset Release changed during collection")
+            _require_running_attempt(transaction, request_id, attempt_id)
             published = self._publication.record(transaction, prepared)
             transaction.execute(
                 """
@@ -415,6 +466,7 @@ class DataService:
                 raise RuntimeError("Data state is not initialized")
             if current["latest_release_id"] != predecessor_id:
                 raise DataUpdateConflict("latest Dataset Release changed during collection")
+            _require_running_attempt(transaction, request_id, attempt_id)
             transaction.execute(
                 """
                 UPDATE data.update_attempts
@@ -440,6 +492,86 @@ class DataService:
                 WHERE singleton = 1
                 """
             )
+
+    def _record_attempt_failure(
+        self,
+        request_id: str,
+        attempt_id: int,
+        failure_reason: str,
+    ) -> None:
+        with self._database.transaction() as transaction:
+            state = transaction.execute(
+                "SELECT singleton FROM data.state WHERE singleton = 1 FOR UPDATE"
+            ).fetchone()
+            if state is None:
+                raise RuntimeError("Data state is not initialized")
+            attempt = transaction.execute(
+                """
+                SELECT status,
+                       (SELECT count(*)
+                        FROM data.update_attempts AS counted
+                        WHERE counted.request_id = %s) AS attempt_count
+                FROM data.update_attempts
+                WHERE id = %s AND request_id = %s
+                FOR UPDATE
+                """,
+                (request_id, attempt_id, request_id),
+            ).fetchone()
+            if attempt is None:
+                raise RuntimeError("Data Update Attempt is missing")
+            if attempt["status"] != "running":
+                return
+            receipt = transaction.execute(
+                """
+                SELECT status
+                FROM data.update_receipts
+                WHERE request_id = %s
+                FOR UPDATE
+                """,
+                (request_id,),
+            ).fetchone()
+            if receipt is None:
+                raise RuntimeError("Data Update receipt is missing")
+            if receipt["status"] != "running":
+                return
+            retry = int(attempt["attempt_count"]) < MAX_UPDATE_ATTEMPTS
+            transaction.execute(
+                """
+                UPDATE data.update_attempts
+                SET status = 'failed', failure_reason = %s, finished_at = now()
+                WHERE id = %s
+                """,
+                (failure_reason, attempt_id),
+            )
+            transaction.execute(
+                """
+                UPDATE data.update_receipts
+                SET status = %s, failure_reason = %s, updated_at = now()
+                WHERE request_id = %s
+                """,
+                (
+                    "accepted" if retry else "failed",
+                    None if retry else failure_reason,
+                    request_id,
+                ),
+            )
+            if retry:
+                transaction.execute(
+                    """
+                    UPDATE data.state
+                    SET status = 'updating', updated_at = now()
+                    WHERE singleton = 1
+                    """
+                )
+            else:
+                transaction.execute(
+                    """
+                    UPDATE data.state
+                    SET status = 'failed', latest_update_outcome = 'failed',
+                        updated_at = now()
+                    WHERE singleton = 1
+                    """
+                )
 
 
 _RELEASE_SELECT = """
@@ -467,3 +599,27 @@ def _update_outcome(request_id: str, status: str) -> UpdateAcceptance:
     else:
         raise RuntimeError("Data Update receipt status is invalid")
     return UpdateAcceptance(request_id=request_id, outcome=outcome)
+
+
+def _require_running_attempt(
+    transaction: PostgresTransaction,
+    request_id: str,
+    attempt_id: int,
+) -> None:
+    fence = transaction.execute(
+        """
+        SELECT receipt.status AS receipt_status,
+               attempt.status AS attempt_status
+        FROM data.update_receipts AS receipt
+        JOIN data.update_attempts AS attempt
+          ON attempt.request_id = receipt.request_id
+        WHERE receipt.request_id = %s AND attempt.id = %s
+        FOR UPDATE OF receipt, attempt
+        """,
+        (request_id, attempt_id),
+    ).fetchone()
+    if fence is None or fence != {
+        "receipt_status": "running",
+        "attempt_status": "running",
+    }:
+        raise DataUpdateConflict("Data Update Attempt lost its publication fence")

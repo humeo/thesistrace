@@ -159,5 +159,16 @@ MIGRATIONS = MigrationPlan(
                     ALTER COLUMN provenance_version DROP DEFAULT;
             """,
         ),
+        Migration(
+            name="0005_bounded_update_recovery",
+            statement="""
+                ALTER TABLE data.update_attempts
+                    ADD COLUMN failure_reason text NULL;
+
+                CREATE INDEX data_running_update_attempt_started_idx
+                    ON data.update_attempts (started_at)
+                    WHERE status = 'running';
+            """,
+        ),
     ),
 )
