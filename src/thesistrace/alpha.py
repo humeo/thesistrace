@@ -65,7 +65,12 @@ def validate_legacy_alpha(
                 )
             ]
         ) from error
-    normalized = _legacy_node_to_normalized(tree.body, legacy_field_ids)
+    conversion_issues: list[AlphaValidationIssue] = []
+    normalized = _legacy_node_to_normalized(
+        tree.body,
+        legacy_field_ids,
+        conversion_issues,
+    )
     try:
         parsed = validate_normalized_alpha(
             normalized,
@@ -76,16 +81,17 @@ def validate_legacy_alpha(
             "UNKNOWN_OPERATOR": "FUNCTION_NOT_ALLOWED",
             "INVALID_OPERAND": "WINDOW_NOT_INTEGER_LITERAL",
         }
-        raise AlphaValidationError(
-            [
-                AlphaValidationIssue(
-                    reason_code=translated.get(item.reason_code, item.reason_code),
-                    location=item.location,
-                    message=item.message,
-                )
-                for item in error.issues
-            ]
-        ) from error
+        validation_issues = [
+            AlphaValidationIssue(
+                reason_code=translated.get(item.reason_code, item.reason_code),
+                location=item.location,
+                message=item.message,
+            )
+            for item in error.issues
+        ]
+        raise AlphaValidationError([*conversion_issues, *validation_issues]) from error
+    if conversion_issues:
+        raise AlphaValidationError(conversion_issues)
     return ParsedAlpha(
         expression=expression,
         tree=parsed.tree,
@@ -98,6 +104,7 @@ def validate_legacy_alpha(
 def _legacy_node_to_normalized(
     node: ast.AST,
     legacy_field_ids: Mapping[str, str],
+    conversion_issues: list[AlphaValidationIssue],
 ) -> dict[str, object]:
     if isinstance(node, ast.Constant):
         return {"literal": node.value}
@@ -106,15 +113,14 @@ def _legacy_node_to_normalized(
             field_name = node.id[1:]
             field_id = legacy_field_ids.get(field_name)
             if field_id is None:
-                raise AlphaValidationError(
-                    [
-                        issue(
-                            "FIELD_NOT_AUTHORABLE",
-                            node.col_offset,
-                            f"{field_name} is not Alpha-authorable",
-                        )
-                    ]
+                conversion_issues.append(
+                    issue(
+                        "FIELD_NOT_AUTHORABLE",
+                        node.col_offset,
+                        f"{field_name} is not Alpha-authorable",
+                    )
                 )
+                field_id = next(iter(legacy_field_ids.values()), "__invalid_legacy_field__")
             return {"field_id": field_id}
         raise AlphaValidationError(
             [issue("SYNTAX_NOT_ALLOWED", node.col_offset, "bare names are not allowed")]
@@ -129,14 +135,16 @@ def _legacy_node_to_normalized(
         return {
             "operator_id": binary_operators[type(node.op)],
             "operands": [
-                _legacy_node_to_normalized(node.left, legacy_field_ids),
-                _legacy_node_to_normalized(node.right, legacy_field_ids),
+                _legacy_node_to_normalized(node.left, legacy_field_ids, conversion_issues),
+                _legacy_node_to_normalized(node.right, legacy_field_ids, conversion_issues),
             ],
         }
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return {
             "operator_id": "negate",
-            "operands": [_legacy_node_to_normalized(node.operand, legacy_field_ids)],
+            "operands": [
+                _legacy_node_to_normalized(node.operand, legacy_field_ids, conversion_issues)
+            ],
         }
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         if node.keywords:
@@ -152,7 +160,8 @@ def _legacy_node_to_normalized(
         return {
             "operator_id": node.func.id,
             "operands": [
-                _legacy_node_to_normalized(argument, legacy_field_ids) for argument in node.args
+                _legacy_node_to_normalized(argument, legacy_field_ids, conversion_issues)
+                for argument in node.args
             ],
         }
     raise AlphaValidationError(

@@ -31,10 +31,10 @@ set -eu
 uv run pytest -q tests/kernel tests/architecture
 ```
 
-The command must pass `63` tests. The suite compares all 16 normalized
-operators with their legacy-string equivalents, compares complete Fixture
-Alpha Matrix sessions and checksums, exercises every rejection category, and
-proves the catalog is Kernel-owned with no dynamic execution path.
+The command must pass. The suite compares all 16 normalized operators with
+their legacy-string equivalents, compares complete Fixture Alpha Matrix
+sessions and checksums, exercises every rejection category, and proves the
+catalog is Kernel-owned with no dynamic execution path.
 
 ## Comments
 
@@ -69,3 +69,15 @@ proves the catalog is Kernel-owned with no dynamic execution path.
   as input and stays independent of Data.
 - Post-review ticket verification: the exact command above passed `63 passed`
   in `79.13s`.
+- Final independent review: Standards PASS and Spec PASS after three rounds;
+  no actionable finding remained.
+- The first repository-wide regression gate exposed one retained legacy
+  behavior: a string expression containing both a non-authorable field and an
+  invalid window reported only the field error. The compatibility converter
+  now accumulates its short-name error while the normalized validator supplies
+  the independent window error, so no second window rule was introduced.
+  The focused regression plus Definition acceptance passed `5 passed`; the
+  ticket command then passed `65 passed` in `63.35s` on the expanded suite.
+- Final repository gate: `make check` passed with Ruff clean, `466 passed, 28
+  skipped` in Python (`329.17s`), Web typecheck and production build green, and
+  the narrow/desktop browser chains passing in `23.2s` and `29.1s`.

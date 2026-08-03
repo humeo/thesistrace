@@ -31,6 +31,16 @@ def test_alpha_validation_accepts_only_the_closed_bounded_language() -> None:
         assert reason_code in {issue.reason_code for issue in captured.value.issues}
 
 
+def test_legacy_alpha_reports_independent_field_and_window_failures() -> None:
+    with pytest.raises(AlphaValidationError) as captured:
+        validate_alpha("lag($close_raw, 0)")
+
+    assert {item.reason_code for item in captured.value.issues} == {
+        "FIELD_NOT_AUTHORABLE",
+        "WINDOW_OUT_OF_RANGE",
+    }
+
+
 def test_alpha_evaluation_uses_strict_missing_and_fixed_float64_semantics() -> None:
     values = {
         "close_adj": [1.0, 2.0, None, 4.0, 8.0],
