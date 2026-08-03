@@ -1,0 +1,65 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+compose_file="$repo_root/deploy/core/compose.test.yaml"
+project_name=thesistrace-core-test
+data_root=${THESISTRACE_CORE_TEST_DATA_ROOT:-/private/tmp/thesistrace-core-test-data}
+export THESISTRACE_CORE_TEST_DATA_ROOT=$data_root
+
+prepare_data_root() {
+  case "$data_root" in
+    /private/tmp/thesistrace-core-test-data) ;;
+    *)
+      echo "refusing unexpected Core test data root: $data_root" >&2
+      exit 2
+      ;;
+  esac
+  mkdir -p "$data_root/postgres" "$data_root/rustfs"
+  chmod 0777 "$data_root/postgres" "$data_root/rustfs"
+}
+
+clear_data_root() {
+  if [ -d "$data_root" ]; then
+    find "$data_root" -mindepth 1 -delete
+  fi
+}
+
+compose() {
+  docker compose --project-name "$project_name" --file "$compose_file" "$@"
+}
+
+run_with_environment() {
+  THESISTRACE_DATABASE_URL=postgresql://thesistrace:thesistrace-test@127.0.0.1:55432/thesistrace \
+  THESISTRACE_S3_ENDPOINT_URL=http://127.0.0.1:59000 \
+  THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+  THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+  THESISTRACE_S3_REGION=us-east-1 \
+    "$@"
+}
+
+case "${1:-}" in
+  up)
+    prepare_data_root
+    compose up --detach --wait
+    ;;
+  reset)
+    compose down --volumes --remove-orphans
+    clear_data_root
+    prepare_data_root
+    compose up --detach --wait
+    ;;
+  down)
+    compose down --volumes --remove-orphans
+    clear_data_root
+    ;;
+  run)
+    shift
+    test "$#" -gt 0
+    run_with_environment "$@"
+    ;;
+  *)
+    echo "usage: $0 {up|reset|down|run COMMAND...}" >&2
+    exit 2
+    ;;
+esac
