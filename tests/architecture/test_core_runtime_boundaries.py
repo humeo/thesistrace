@@ -1,7 +1,7 @@
 import ast
 from pathlib import Path
 
-from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = ("_postgres", "data", "entrypoints", "publication")
@@ -115,5 +115,22 @@ def test_publication_hides_physical_s3_keys_and_uses_the_standard_client() -> No
     assert "httpx" not in source
     assert "_object_key" in source
     assert "object_key" not in exported
+    assert "s3" not in CoreRuntime.__dataclass_fields__
+    assert "thesistrace.objects" not in source
+    assert (ROOT / "src" / "thesistrace" / "publication" / "serialization.py").is_file()
     for forbidden in ("token", "proxy", "fastapi", "filesystem"):
         assert forbidden not in source.lower()
+
+
+def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> None:
+    service = (ROOT / "src" / "thesistrace" / "publication" / "service.py").read_text()
+    migrations = (ROOT / "src" / "thesistrace" / "publication" / "migrations.py").read_text()
+
+    assert "CREATE TABLE publication.objects" in migrations
+    assert "CREATE TABLE publication.manifests" in migrations
+    assert "CREATE TABLE publication.manifest_objects" in migrations
+    assert "def record(" in service
+    assert ".commit(" not in service
+    for product_schema in ("data.", "definitions.", "research_runs.", "daily_tracks."):
+        assert product_schema not in service
+        assert product_schema not in migrations

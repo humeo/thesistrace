@@ -6,12 +6,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 import boto3
-from botocore.client import BaseClient
 
 from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.data import DataService
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.publication import Publication
+from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -73,7 +73,6 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data: DataService
-    s3: BaseClient
     publication: Publication
 
 
@@ -82,6 +81,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
+        apply_migrations(database, PUBLICATION_MIGRATIONS)
         apply_migrations(database, DATA_MIGRATIONS)
         s3 = boto3.client(
             "s3",
@@ -94,8 +94,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         yield CoreRuntime(
             database=database,
             data=DataService(database),
-            s3=s3,
-            publication=Publication(s3, bucket=settings.s3_bucket),
+            publication=Publication(database, s3, bucket=settings.s3_bucket),
         )
     finally:
         database.close()

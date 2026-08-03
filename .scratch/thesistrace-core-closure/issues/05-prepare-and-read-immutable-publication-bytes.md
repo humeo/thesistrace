@@ -59,3 +59,16 @@ content address is rejected without being overwritten.
   address is read and verified, never overwritten by application code.
 - The exact clean-state command above passed `15 passed` in `0.59s`; cleanup
   stopped both containers and removed only the dedicated test state.
+- Review round 1 fixes: `CoreRuntime` no longer exposes the raw S3 client; only
+  Publication holds it, while damage injection uses a test-infrastructure-only
+  RustFS client. A forced two-writer HEAD-miss race now executes the real
+  `If-None-Match: *` path against pinned RustFS and returns one byte identity to
+  both prepares without overwrite.
+- Publication now serializes and validates the complete payload set before the
+  first upload, so a later invalid Parquet payload creates no avoidable orphan.
+  PyArrow conversion failures are translated to `PublicationPreparationError`.
+- Canonical JSON and Parquet serialization now live inside Publication. The old
+  `objects.py` path only forwards to that single implementation until its
+  scheduled removal; Publication no longer imports the legacy object module.
+- Post-review focused verification passed `16 passed`; the exact command above
+  passed `21 passed` in `2.41s` on the expanded integration suite.

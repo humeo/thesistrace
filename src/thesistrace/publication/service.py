@@ -9,8 +9,10 @@ from typing import Any
 
 from botocore.client import BaseClient
 from botocore.exceptions import ClientError
+from pyarrow import ArrowException
 
-from thesistrace.objects import (
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.publication.serialization import (
     ParquetContractError,
     ParquetWriterContract,
     canonical_json_bytes,
@@ -26,6 +28,10 @@ class PublicationPreparationError(ValueError):
 
 
 class PublicationVerificationError(ValueError):
+    pass
+
+
+class PublicationNotFoundError(LookupError):
     pass
 
 
@@ -81,12 +87,32 @@ class VerifiedBundle:
     payloads: Mapping[str, VerifiedPayload]
 
 
+@dataclass(frozen=True)
+class PublishedRef:
+    manifest_sha256: str
+    kind: str
+    provenance: object
+
+
 class Publication:
-    def __init__(self, s3: BaseClient, *, bucket: str) -> None:
+    def __init__(
+        self,
+        database: PostgresDatabase,
+        s3: BaseClient,
+        *,
+        bucket: str,
+    ) -> None:
         if not bucket:
             raise ValueError("Publication bucket is required")
+        self._database = database
         self._s3 = s3
         self._bucket = bucket
+
+    def storage_is_available(self) -> bool:
+        try:
+            return self._s3.list_buckets()["ResponseMetadata"]["HTTPStatusCode"] == 200
+        except ClientError:
+            return False
 
     def prepare(
         self,
@@ -99,12 +125,15 @@ class Publication:
         if not payloads:
             raise PublicationPreparationError("a publication requires at least one payload")
         canonical_provenance = _canonical_json_value(provenance, subject="provenance")
-        self._ensure_bucket()
-
-        manifest_objects: list[dict[str, object]] = []
+        serialized: list[tuple[str, bytes, str, dict[str, object]]] = []
         for name in sorted(payloads):
             _require_identifier(name, subject="payload name")
             content, media_type, serialization = _serialize_payload(payloads[name])
+            serialized.append((name, content, media_type, serialization))
+
+        self._ensure_bucket()
+        manifest_objects: list[dict[str, object]] = []
+        for name, content, media_type, serialization in serialized:
             digest = hashlib.sha256(content).hexdigest()
             self._put_immutable(digest, content, media_type=media_type)
             manifest_objects.append(
@@ -147,6 +176,165 @@ class Publication:
             provenance=manifest["provenance"],
             payloads=verified_payloads,
         )
+
+    def record(
+        self,
+        transaction: PostgresTransaction,
+        prepared: PreparedPublication,
+    ) -> PublishedRef:
+        self.verify_prepared(prepared)
+        manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
+        objects = _manifest_objects(manifest)
+
+        for item in objects:
+            _name, digest, byte_size, _media_type, _serialization = _object_descriptor(item)
+            transaction.execute(
+                """
+                INSERT INTO publication.objects (sha256, byte_size)
+                VALUES (%s, %s)
+                ON CONFLICT (sha256) DO NOTHING
+                """,
+                (digest, byte_size),
+            )
+            stored = transaction.execute(
+                "SELECT byte_size FROM publication.objects WHERE sha256 = %s",
+                (digest,),
+            ).fetchone()
+            if stored != {"byte_size": byte_size}:
+                raise PublicationVerificationError("Publication object record conflicts")
+
+        transaction.execute(
+            """
+            INSERT INTO publication.manifests (
+                sha256,
+                schema_version,
+                kind,
+                manifest_bytes
+            )
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (sha256) DO NOTHING
+            """,
+            (
+                prepared.manifest_sha256,
+                manifest["schema_version"],
+                manifest["kind"],
+                prepared._manifest_bytes,
+            ),
+        )
+        stored_manifest = transaction.execute(
+            """
+            SELECT schema_version, kind, manifest_bytes
+            FROM publication.manifests
+            WHERE sha256 = %s
+            """,
+            (prepared.manifest_sha256,),
+        ).fetchone()
+        if stored_manifest is None or (
+            stored_manifest["schema_version"] != manifest["schema_version"]
+            or stored_manifest["kind"] != manifest["kind"]
+            or bytes(stored_manifest["manifest_bytes"]) != prepared._manifest_bytes
+        ):
+            raise PublicationVerificationError("Publication manifest record conflicts")
+
+        for ordinal, item in enumerate(objects):
+            name, digest, _byte_size, _media_type, _serialization = _object_descriptor(item)
+            transaction.execute(
+                """
+                INSERT INTO publication.manifest_objects (
+                    manifest_sha256,
+                    ordinal,
+                    logical_name,
+                    object_sha256
+                )
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (prepared.manifest_sha256, ordinal, name, digest),
+            )
+        self._verify_recorded_links(transaction, prepared.manifest_sha256, objects)
+        return PublishedRef(
+            manifest_sha256=prepared.manifest_sha256,
+            kind=str(manifest["kind"]),
+            provenance=manifest["provenance"],
+        )
+
+    def read(self, published_ref: PublishedRef) -> VerifiedBundle:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT kind, manifest_bytes
+                FROM publication.manifests
+                WHERE sha256 = %s
+                """,
+                (published_ref.manifest_sha256,),
+            ).fetchone()
+            if row is None:
+                raise PublicationNotFoundError("Publication is not committed")
+            manifest_bytes = bytes(row["manifest_bytes"])
+            manifest = _load_manifest(manifest_bytes, published_ref.manifest_sha256)
+            objects = _manifest_objects(manifest)
+            self._verify_recorded_links(transaction, published_ref.manifest_sha256, objects)
+        if row["kind"] != published_ref.kind or manifest["kind"] != published_ref.kind:
+            raise PublicationVerificationError("PublishedRef kind does not match manifest")
+        if canonical_json_bytes(manifest["provenance"]) != canonical_json_bytes(
+            published_ref.provenance
+        ):
+            raise PublicationVerificationError("PublishedRef provenance does not match manifest")
+        return self.verify_prepared(
+            PreparedPublication(
+                manifest_sha256=published_ref.manifest_sha256,
+                _manifest_bytes=manifest_bytes,
+            )
+        )
+
+    def find_orphan_sha256s(self) -> tuple[str, ...]:
+        with self._database.transaction() as transaction:
+            recorded = {
+                str(row["sha256"])
+                for row in transaction.execute("SELECT sha256 FROM publication.objects").fetchall()
+            }
+        uploaded: set[str] = set()
+        paginator = self._s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix="publication/v1/sha256/"):
+            for item in page.get("Contents", []):
+                digest = _digest_from_object_key(str(item["Key"]))
+                if digest is not None:
+                    uploaded.add(digest)
+        return tuple(sorted(uploaded - recorded))
+
+    @staticmethod
+    def _verify_recorded_links(
+        transaction: PostgresTransaction,
+        manifest_sha256: str,
+        objects: Sequence[Mapping[str, Any]],
+    ) -> None:
+        rows = transaction.execute(
+            """
+            SELECT
+                mo.ordinal,
+                mo.logical_name,
+                mo.object_sha256,
+                o.byte_size
+            FROM publication.manifest_objects AS mo
+            JOIN publication.objects AS o ON o.sha256 = mo.object_sha256
+            WHERE mo.manifest_sha256 = %s
+            ORDER BY mo.ordinal
+            """,
+            (manifest_sha256,),
+        ).fetchall()
+        expected = []
+        for ordinal, item in enumerate(objects):
+            name, digest, byte_size, _media_type, _serialization = _object_descriptor(item)
+            expected.append(
+                {
+                    "ordinal": ordinal,
+                    "logical_name": name,
+                    "object_sha256": digest,
+                    "byte_size": byte_size,
+                }
+            )
+        if rows != expected:
+            raise PublicationVerificationError("Publication manifest-object records conflict")
 
     def _ensure_bucket(self) -> None:
         try:
@@ -236,7 +424,7 @@ def _serialize_payload(
     if isinstance(payload, ParquetRowsPayload):
         try:
             content = parquet_bytes(payload.rows, payload.contract)
-        except ParquetContractError as error:
+        except (ArrowException, ParquetContractError, TypeError, OverflowError) as error:
             raise PublicationPreparationError("Parquet payload violates its contract") from error
         return (
             content,
@@ -260,6 +448,18 @@ def _require_identifier(value: str, *, subject: str) -> None:
 
 def _object_key(digest: str) -> str:
     return f"publication/v1/sha256/{digest[:2]}/{digest}"
+
+
+def _digest_from_object_key(key: str) -> str | None:
+    parts = key.split("/")
+    if len(parts) != 5 or parts[:3] != ["publication", "v1", "sha256"]:
+        return None
+    digest = parts[4]
+    if parts[3] != digest[:2]:
+        return None
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        return None
+    return digest
 
 
 def _load_manifest(payload: bytes, expected_sha256: str) -> dict[str, Any]:

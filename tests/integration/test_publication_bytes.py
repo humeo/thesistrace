@@ -1,15 +1,22 @@
 import hashlib
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pyarrow as pa
 import pytest
-from thesistrace.publication import (
-    JsonPayload,
-    ParquetRowsPayload,
-    PublicationVerificationError,
-)
+from botocore.client import BaseClient
+from botocore.exceptions import ClientError
 
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.objects import ParquetWriterContract, canonical_json_bytes
+from thesistrace.publication import (
+    JsonPayload,
+    ParquetRowsPayload,
+    Publication,
+    PublicationPreparationError,
+    PublicationVerificationError,
+)
 
 ROWS_CONTRACT = ParquetWriterContract(
     name="ticket-05-rows",
@@ -22,6 +29,16 @@ ROWS_CONTRACT = ParquetWriterContract(
     ),
     sort_keys=("session",),
 )
+
+
+@pytest.fixture(autouse=True)
+def clean_publication_objects(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+) -> Iterator[None]:
+    _clear_bucket(rustfs_admin, core_settings.s3_bucket)
+    yield
+    _clear_bucket(rustfs_admin, core_settings.s3_bucket)
 
 
 def test_prepare_is_canonical_idempotent_and_verified(core_settings: CoreSettings) -> None:
@@ -69,9 +86,34 @@ def test_prepare_is_canonical_idempotent_and_verified(core_settings: CoreSetting
         assert verified.payloads["rows"].media_type == "application/vnd.apache.parquet"
 
 
+def test_all_payloads_are_serialized_before_any_upload(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+) -> None:
+    valid_content = canonical_json_bytes({"must_not_upload": "ticket-05"})
+
+    with open_core_runtime(core_settings) as runtime:
+        with pytest.raises(PublicationPreparationError) as captured:
+            runtime.publication.prepare(
+                kind="serialization.atomicity",
+                payloads={
+                    "a_valid": JsonPayload({"must_not_upload": "ticket-05"}),
+                    "z_invalid": ParquetRowsPayload(
+                        rows=({"session": "2026-01-05", "value": "not-a-float"},),
+                        contract=ROWS_CONTRACT,
+                    ),
+                },
+                provenance={"ticket": 5},
+            )
+
+    assert str(captured.value) == "Parquet payload violates its contract"
+    assert not _bucket_contains_content(rustfs_admin, core_settings.s3_bucket, valid_content)
+
+
 @pytest.mark.parametrize("damage", ["missing", "truncated", "substituted"])
 def test_verification_rejects_damaged_object_without_a_bundle(
     core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
     damage: str,
 ) -> None:
     expected = canonical_json_bytes({"case": damage, "value": "0123456789"})
@@ -82,17 +124,17 @@ def test_verification_rejects_damaged_object_without_a_bundle(
             payloads={"only": JsonPayload({"case": damage, "value": "0123456789"})},
             provenance={"ticket": 5},
         )
-        target_key = _find_key_with_content(runtime.s3, core_settings.s3_bucket, expected)
+        target_key = _find_key_with_content(rustfs_admin, core_settings.s3_bucket, expected)
         if damage == "missing":
-            runtime.s3.delete_object(Bucket=core_settings.s3_bucket, Key=target_key)
+            rustfs_admin.delete_object(Bucket=core_settings.s3_bucket, Key=target_key)
         elif damage == "truncated":
-            runtime.s3.put_object(
+            rustfs_admin.put_object(
                 Bucket=core_settings.s3_bucket,
                 Key=target_key,
                 Body=expected[:-1],
             )
         else:
-            runtime.s3.put_object(
+            rustfs_admin.put_object(
                 Bucket=core_settings.s3_bucket,
                 Key=target_key,
                 Body=b"x" * len(expected),
@@ -104,6 +146,7 @@ def test_verification_rejects_damaged_object_without_a_bundle(
 
 def test_prepare_never_overwrites_a_conflicting_content_address(
     core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
 ) -> None:
     expected = canonical_json_bytes({"immutable": True})
 
@@ -113,9 +156,9 @@ def test_prepare_never_overwrites_a_conflicting_content_address(
             payloads={"only": JsonPayload({"immutable": True})},
             provenance={"ticket": 5},
         )
-        target_key = _find_key_with_content(runtime.s3, core_settings.s3_bucket, expected)
+        target_key = _find_key_with_content(rustfs_admin, core_settings.s3_bucket, expected)
         substitute = b"!" * len(expected)
-        runtime.s3.put_object(
+        rustfs_admin.put_object(
             Bucket=core_settings.s3_bucket,
             Key=target_key,
             Body=substitute,
@@ -127,7 +170,7 @@ def test_prepare_never_overwrites_a_conflicting_content_address(
                 payloads={"only": JsonPayload({"immutable": True})},
                 provenance={"ticket": 5},
             )
-        stored = runtime.s3.get_object(
+        stored = rustfs_admin.get_object(
             Bucket=core_settings.s3_bucket,
             Key=target_key,
         )["Body"].read()
@@ -135,7 +178,50 @@ def test_prepare_never_overwrites_a_conflicting_content_address(
         assert hashlib.sha256(stored).hexdigest() != prepared.payload_sha256s["only"]
 
 
-def _find_key_with_content(s3: object, bucket: str, expected: bytes) -> str:
+def test_concurrent_prepare_uses_conditional_create_without_overwrite(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    expected = canonical_json_bytes({"race": "ticket-05"})
+    digest = hashlib.sha256(expected).hexdigest()
+    barrier = Barrier(2)
+    original_object_exists = Publication._object_exists
+
+    def synchronize_absence(self: Publication, candidate_digest: str) -> bool:
+        if candidate_digest == digest:
+            barrier.wait(timeout=5)
+            return False
+        return original_object_exists(self, candidate_digest)
+
+    with open_core_runtime(core_settings) as runtime:
+        runtime.publication.prepare(
+            kind="race.bucket.warmup",
+            payloads={"warmup": JsonPayload({"warmup": True})},
+            provenance={"ticket": 5},
+        )
+        monkeypatch.setattr(Publication, "_object_exists", synchronize_absence)
+
+        def prepare_once() -> str:
+            return runtime.publication.prepare(
+                kind="race.concurrent",
+                payloads={"only": JsonPayload({"race": "ticket-05"})},
+                provenance={"ticket": 5},
+            ).manifest_sha256
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(executor.map(lambda _index: prepare_once(), range(2)))
+
+    assert results[0] == results[1]
+    target_key = _find_key_with_content(rustfs_admin, core_settings.s3_bucket, expected)
+    stored = rustfs_admin.get_object(
+        Bucket=core_settings.s3_bucket,
+        Key=target_key,
+    )["Body"].read()
+    assert stored == expected
+
+
+def _find_key_with_content(s3: BaseClient, bucket: str, expected: bytes) -> str:
     response = s3.list_objects_v2(Bucket=bucket)
     for item in response.get("Contents", []):
         key = item["Key"]
@@ -143,3 +229,27 @@ def _find_key_with_content(s3: object, bucket: str, expected: bytes) -> str:
         if body == expected:
             return str(key)
     raise AssertionError("test object was not uploaded")
+
+
+def _bucket_contains_content(s3: BaseClient, bucket: str, expected: bytes) -> bool:
+    response = s3.list_objects_v2(Bucket=bucket)
+    return any(
+        s3.get_object(Bucket=bucket, Key=item["Key"])["Body"].read() == expected
+        for item in response.get("Contents", [])
+    )
+
+
+def _clear_bucket(s3: BaseClient, bucket: str) -> None:
+    try:
+        response = s3.list_objects_v2(Bucket=bucket)
+    except ClientError as error:
+        if str(error.response.get("Error", {}).get("Code", "")) in {
+            "404",
+            "NoSuchBucket",
+            "NotFound",
+        }:
+            return
+        raise
+    objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
+    if objects:
+        s3.delete_objects(Bucket=bucket, Delete={"Objects": objects})

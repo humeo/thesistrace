@@ -1,115 +1,23 @@
 import fcntl
 import hashlib
 import json
-import math
 import os
 import shutil
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-PINNED_PYARROW_VERSION = "25.0.0"
-PINNED_ARROW_CPP_VERSION = "25.0.0"
-PINNED_ZSTD_VERSION = "1.5.7"
-PARQUET_FORMAT_VERSION = "2.6"
-PARQUET_DATA_PAGE_VERSION = "2.0"
-
-
-def canonical_json_bytes(value: object) -> bytes:
-    return json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-
-
-class ParquetContractError(ValueError):
-    pass
-
-
-@dataclass(frozen=True)
-class ParquetWriterContract:
-    name: str
-    version: int
-    schema: pa.Schema
-    sort_keys: tuple[str, ...]
-    compression_level: int = 9
-
-    def __post_init__(self) -> None:
-        if not self.name or "/" in self.name:
-            raise ParquetContractError("Parquet contract name must be non-empty and path-safe")
-        if self.version < 1:
-            raise ParquetContractError("Parquet contract version must be positive")
-        if not self.schema.names or len(set(self.schema.names)) != len(self.schema.names):
-            raise ParquetContractError("Parquet schema field names must be non-empty and unique")
-        if self.schema.metadata is not None or any(
-            field.metadata is not None for field in self.schema
-        ):
-            raise ParquetContractError("Parquet schema metadata is not canonical in V1")
-        if not self.sort_keys or len(set(self.sort_keys)) != len(self.sort_keys):
-            raise ParquetContractError("Parquet sort keys must be non-empty and unique")
-        fields = {field.name: field for field in self.schema}
-        for key in self.sort_keys:
-            if key not in fields:
-                raise ParquetContractError(f"Parquet sort key is missing from schema: {key}")
-            if fields[key].nullable:
-                raise ParquetContractError(f"Parquet sort key must be non-nullable: {key}")
-        if not 1 <= self.compression_level <= 22:
-            raise ParquetContractError("ZSTD compression level must be between 1 and 22")
-
-    @property
-    def identifier(self) -> str:
-        digest = hashlib.sha256(canonical_json_bytes(self._descriptor_core())).hexdigest()
-        return f"{self.name}/v{self.version}/{digest[:20]}"
-
-    def descriptor(self) -> dict[str, object]:
-        return {"id": self.identifier, **self._descriptor_core()}
-
-    def _descriptor_core(self) -> dict[str, object]:
-        return {
-            "name": self.name,
-            "version": self.version,
-            "schema": [
-                {
-                    "name": field.name,
-                    "logical_type": str(field.type),
-                    "nullable": field.nullable,
-                }
-                for field in self.schema
-            ],
-            "sort_keys": list(self.sort_keys),
-            "writer": {
-                "implementation": "pyarrow",
-                "implementation_version": PINNED_PYARROW_VERSION,
-                "arrow_cpp_version": PINNED_ARROW_CPP_VERSION,
-            },
-            "parquet": {
-                "format_version": PARQUET_FORMAT_VERSION,
-                "data_page_version": PARQUET_DATA_PAGE_VERSION,
-                "row_groups": 1,
-                "use_dictionary": False,
-                "write_statistics": True,
-                "column_encoding": "PLAIN",
-                "use_byte_stream_split": False,
-                "write_page_index": False,
-                "write_page_checksum": False,
-                "store_schema": True,
-                "store_decimal_as_integer": False,
-                "write_time_adjusted_to_utc": False,
-            },
-            "compression": {
-                "codec": "zstd",
-                "codec_version": PINNED_ZSTD_VERSION,
-                "level": self.compression_level,
-            },
-        }
+from thesistrace.publication.serialization import (
+    ParquetContractError,
+    ParquetWriterContract,
+    canonical_json_bytes,
+    parquet_bytes,
+    require_pinned_writer_runtime,
+)
 
 
 class ImmutableObjectStore:
@@ -153,13 +61,9 @@ class ImmutableObjectStore:
         try:
             value = json.loads(payload)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ParquetContractError(
-                "JSON object payload is invalid"
-            ) from error
+            raise ParquetContractError("JSON object payload is invalid") from error
         if canonical_json_bytes(value) != payload:
-            raise ParquetContractError(
-                "JSON object payload is not canonical"
-            )
+            raise ParquetContractError("JSON object payload is not canonical")
         digest = self._put_payload(payload, suffix=".json")
         return {"sha256": digest, "bytes": len(payload)}
 
@@ -171,13 +75,9 @@ class ImmutableObjectStore:
         try:
             parquet_file = pq.ParquetFile(pa.BufferReader(payload))
         except (pa.ArrowException, OSError) as error:
-            raise ParquetContractError(
-                "Parquet object payload is invalid"
-            ) from error
+            raise ParquetContractError("Parquet object payload is invalid") from error
         if parquet_file.metadata.num_row_groups != 1:
-            raise ParquetContractError(
-                "Parquet object must contain exactly one row group"
-            )
+            raise ParquetContractError("Parquet object must contain exactly one row group")
         digest = self._put_payload(payload, suffix=".parquet")
         return {
             "format": "parquet",
@@ -268,10 +168,7 @@ class ImmutableObjectStore:
                         journal_path = stage_root / ".publication.json"
                         if journal_path.exists():
                             journal = _read_stage_json(journal_path)
-                            if (
-                                journal.get("manifest_sha256")
-                                != committed_manifest_sha256
-                            ):
+                            if journal.get("manifest_sha256") != committed_manifest_sha256:
                                 self._remove_uncommitted_paths(journal)
                         shutil.rmtree(stage_root, ignore_errors=True)
                 if run_root.exists() and not any(run_root.iterdir()):
@@ -307,23 +204,15 @@ class ImmutableObjectStore:
         paths: list[Path]
         if object_key.startswith("sha256:"):
             digest = object_key.removeprefix("sha256:")
-            if (
-                len(digest) != 64
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in digest
-                )
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
             ):
                 raise ParquetContractError("storage object key is invalid")
             bucket = self.root / "sha256" / digest[:2]
             paths = [bucket / f"{digest}.json", bucket / f"{digest}.parquet"]
         elif object_key.startswith("manifest:"):
             resource_id = object_key.removeprefix("manifest:")
-            if (
-                not resource_id
-                or "/" in resource_id
-                or resource_id in {".", ".."}
-            ):
+            if not resource_id or "/" in resource_id or resource_id in {".", ".."}:
                 raise ParquetContractError("storage object key is invalid")
             paths = [self.root / "manifests" / f"{resource_id}.json"]
         else:
@@ -470,9 +359,7 @@ class StagedObjectStore:
         self.stage_lock = None
         self.promotion_started = False
         self.promotion_resolved = False
-        self.writer = ImmutableObjectStore(
-            destination.root / "staging" / run_id / attempt_id
-        )
+        self.writer = ImmutableObjectStore(destination.root / "staging" / run_id / attempt_id)
         self.root = self.writer.root
 
     def __enter__(self) -> "StagedObjectStore":
@@ -550,18 +437,14 @@ class StagedObjectStore:
                     str(source.relative_to(self.root))
                     for source in sources
                     if source.relative_to(self.root).parts[0] == "manifests"
-                    if not (
-                        self.destination.root / source.relative_to(self.root)
-                    ).exists()
+                    if not (self.destination.root / source.relative_to(self.root)).exists()
                 ]
                 candidate_paths = (
                     [
                         str(source.relative_to(self.root))
                         for source in sources
                         if source.relative_to(self.root).parts[0] == "sha256"
-                        if not (
-                            self.destination.root / source.relative_to(self.root)
-                        ).exists()
+                        if not (self.destination.root / source.relative_to(self.root)).exists()
                     ]
                     if self.cleanup_uncommitted_payloads
                     else []
@@ -588,9 +471,7 @@ class StagedObjectStore:
 
     def resolve_publication(self) -> None:
         if not self.promotion_started:
-            raise ParquetContractError(
-                "staged publication was not promoted"
-            )
+            raise ParquetContractError("staged publication was not promoted")
         self.promotion_resolved = True
 
 
@@ -614,98 +495,3 @@ def _write_stage_json(path: Path, value: dict[str, object]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def parquet_bytes(
-    rows: Sequence[Mapping[str, object]],
-    contract: ParquetWriterContract,
-) -> bytes:
-    require_pinned_writer_runtime()
-    canonical_rows = canonicalize_parquet_rows(rows, contract)
-    table = pa.Table.from_pylist(canonical_rows, schema=contract.schema)
-    sorting_columns = pq.SortingColumn.from_ordering(
-        contract.schema,
-        [(key, "ascending") for key in contract.sort_keys],
-    )
-    output = pa.BufferOutputStream()
-    pq.write_table(
-        table,
-        output,
-        row_group_size=max(1, table.num_rows),
-        version=PARQUET_FORMAT_VERSION,
-        use_dictionary=False,
-        compression="zstd",
-        write_statistics=True,
-        use_deprecated_int96_timestamps=False,
-        coerce_timestamps="us",
-        allow_truncated_timestamps=False,
-        data_page_size=1024 * 1024,
-        compression_level=contract.compression_level,
-        use_byte_stream_split=False,
-        column_encoding="PLAIN",
-        data_page_version=PARQUET_DATA_PAGE_VERSION,
-        use_compliant_nested_type=True,
-        write_batch_size=1024,
-        store_schema=True,
-        write_page_index=False,
-        write_page_checksum=False,
-        sorting_columns=sorting_columns,
-        store_decimal_as_integer=False,
-        write_time_adjusted_to_utc=False,
-    )
-    return output.getvalue().to_pybytes()
-
-
-def canonicalize_parquet_rows(
-    rows: Sequence[Mapping[str, object]],
-    contract: ParquetWriterContract,
-) -> list[dict[str, object]]:
-    expected_fields = set(contract.schema.names)
-    validated: list[dict[str, object]] = []
-    identities: set[tuple[object, ...]] = set()
-    for index, source in enumerate(rows):
-        row = dict(source)
-        if set(row) != expected_fields:
-            raise ParquetContractError(
-                f"Parquet row {index} fields do not match the declared schema"
-            )
-        for field in contract.schema:
-            value = row[field.name]
-            if value is None and not field.nullable:
-                raise ParquetContractError(
-                    f"Parquet row {index} has null for required field: {field.name}"
-                )
-            if isinstance(value, float) and not math.isfinite(value):
-                raise ParquetContractError(
-                    f"Parquet row {index} has non-finite value: {field.name}"
-                )
-        identity = tuple(row[key] for key in contract.sort_keys)
-        if any(value is None for value in identity):
-            raise ParquetContractError(f"Parquet row {index} has a null sort key")
-        try:
-            duplicate = identity in identities
-            identities.add(identity)
-        except TypeError as error:
-            raise ParquetContractError("Parquet sort keys must be scalar and hashable") from error
-        if duplicate:
-            raise ParquetContractError("Parquet sort keys must form a unique row identity")
-        validated.append(row)
-    try:
-        return sorted(
-            validated,
-            key=lambda row: tuple(row[key] for key in contract.sort_keys),
-        )
-    except TypeError as error:
-        raise ParquetContractError("Parquet sort keys must have one canonical order") from error
-
-
-def require_pinned_writer_runtime() -> None:
-    if pa.__version__ != PINNED_PYARROW_VERSION:
-        raise ParquetContractError(
-            f"PyArrow {PINNED_PYARROW_VERSION} is required, found {pa.__version__}"
-        )
-    if pa.cpp_build_info.version != PINNED_ARROW_CPP_VERSION:
-        raise ParquetContractError(
-            f"Arrow C++ {PINNED_ARROW_CPP_VERSION} is required, "
-            f"found {pa.cpp_build_info.version}"
-        )

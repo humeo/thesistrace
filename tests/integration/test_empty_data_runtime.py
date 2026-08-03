@@ -14,7 +14,7 @@ def test_empty_data_projection_uses_postgres_and_rustfs(
             "items": [],
             "next_cursor": None,
         }
-        assert runtime.s3.list_buckets()["ResponseMetadata"]["HTTPStatusCode"] == 200
+        assert runtime.publication.storage_is_available()
 
 
 def test_reopening_runtime_preserves_empty_data_state(core_settings: CoreSettings) -> None:
