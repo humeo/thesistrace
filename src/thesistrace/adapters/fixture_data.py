@@ -4,8 +4,8 @@ from thesistrace.fixture import build_fixture
 
 class FixtureDataSource:
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
-        if plan.kind != "bootstrap" or plan.predecessor_id is not None:
-            raise ValueError("Fixture bootstrap requires an empty Release history")
+        if plan.kind != "bootstrap" or plan.after_session is not None:
+            raise ValueError("Fixture bootstrap requires an empty canonical history")
         source, canonical = build_fixture()
         calendar = canonical["research_calendar"]
         if not isinstance(calendar, list) or not calendar:

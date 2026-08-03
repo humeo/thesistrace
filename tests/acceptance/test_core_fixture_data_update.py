@@ -35,6 +35,19 @@ def test_data_update_returns_before_worker_publishes_first_fixture_release(
 
     with open_core_runtime(core_settings) as runtime:
         assert runtime.data.process_next_update()
+        with runtime.database.transaction() as transaction:
+            committed = transaction.execute(
+                """
+                SELECT r.id, r.manifest_sha256, m.kind,
+                       (SELECT count(*) FROM data.release_fields rf WHERE rf.release_id = r.id)
+                           AS field_count
+                FROM data.releases r
+                JOIN publication.manifests m ON m.sha256 = r.manifest_sha256
+                """
+            ).fetchone()
+        assert committed is not None
+        assert committed["kind"] == "data.release"
+        assert committed["field_count"] > 0
 
     with TestClient(create_app(core_settings)) as client:
         overview = client.get("/api/data")

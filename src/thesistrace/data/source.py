@@ -7,7 +7,7 @@ from typing import Protocol
 @dataclass(frozen=True)
 class CollectionPlan:
     kind: str
-    predecessor_id: str | None = None
+    after_session: str | None = None
 
     @classmethod
     def bootstrap(cls) -> CollectionPlan:

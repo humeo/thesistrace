@@ -21,6 +21,7 @@ export function DataPage() {
     const response = await fetch("/api/data");
     if (!response.ok) throw new Error("Data overview unavailable");
     setOverview((await response.json()) as Overview);
+    setError(null);
   }, []);
 
   useEffect(() => {
@@ -48,7 +49,12 @@ export function DataPage() {
     await refresh();
   }
 
-  if (error) return <section aria-label="Data"><p role="alert">{error}</p></section>;
+  if (error) return (
+    <section aria-label="Data">
+      <p role="alert">{error}</p>
+      <button onClick={() => void refresh()}>Retry</button>
+    </section>
+  );
   if (!overview) return <section aria-label="Data"><p>Loading Data…</p></section>;
 
   const release = overview.latest_release;
@@ -58,6 +64,7 @@ export function DataPage() {
       <button disabled={overview.status === "updating"} onClick={() => void updateData()}>
         Update Data
       </button>
+      <button onClick={() => void refresh()}>Refresh</button>
       {overview.status === "updating" && <p role="status">Updating canonical data…</p>}
       {overview.status === "failed" && <p role="alert">Data Update failed</p>}
       {!release && overview.status !== "updating" && <p>No Dataset Releases yet.</p>}
