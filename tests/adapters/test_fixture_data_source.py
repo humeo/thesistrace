@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from thesistrace.adapters.fixture_data import FixtureDataSource
-from thesistrace.data import CollectionPlan
+from thesistrace.data import CollectionPlan, DataSourceError
 
 
 def test_fixture_implements_only_the_canonical_collection_contract() -> None:
@@ -62,6 +62,14 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
     )
     assert len(no_change.canonical["research_calendar"]) == 757
     assert no_change.covered_session_range == direct.covered_session_range
+
+
+def test_fixture_uses_the_provider_independent_error_contract() -> None:
+    with pytest.raises(DataSourceError) as failure:
+        FixtureDataSource().collect(CollectionPlan.incremental("2020-01-01"))
+
+    assert failure.value.category == "invalid_source_data"
+    assert failure.value.detail_code == "FRONTIER_NOT_RESEARCH_SESSION"
 
 
 @pytest.mark.parametrize(

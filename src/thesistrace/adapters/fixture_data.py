@@ -1,7 +1,7 @@
 import copy
 from datetime import date, timedelta
 
-from thesistrace.data.source import CanonicalSourceBatch, CollectionPlan
+from thesistrace.data.source import CanonicalSourceBatch, CollectionPlan, DataSourceError
 from thesistrace.fixture import build_fixture
 
 
@@ -23,10 +23,16 @@ class FixtureDataSource:
             for _ in range(self._sessions_after_bootstrap):
                 _append_session(canonical)
             if plan.after_session not in canonical["research_calendar"]:
-                raise ValueError("Fixture frontier is not a Research Session")
+                raise DataSourceError(
+                    "invalid_source_data",
+                    detail_code="FRONTIER_NOT_RESEARCH_SESSION",
+                )
         calendar = canonical["research_calendar"]
         if not isinstance(calendar, list) or not calendar:
-            raise ValueError("Fixture produced no canonical Research Sessions")
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="MISSING_RESEARCH_CALENDAR",
+            )
         return CanonicalSourceBatch(
             source_name="fixture",
             collection_kind=plan.kind,

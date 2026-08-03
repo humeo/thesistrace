@@ -21,10 +21,18 @@ contract as Fixture without creating a second product or publication path.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/adapters` with offline Fixture and recorded
-  provider-boundary cases; confirm both adapters satisfy one contract.
-- When valid credentials are intentionally available, run
-  `make check-live-tushare`; record that result separately and do not treat its
-  absence as failure of this ticket.
+Required offline gate (uses no credentials or network):
+
+```sh
+set -eu
+uv run pytest -q tests/adapters
+```
+
+Optional live-provider gate (run only when valid credentials are intentionally
+available; not running it is not a ticket failure):
+
+```sh
+make check-live-tushare
+```
 
 ## Comments

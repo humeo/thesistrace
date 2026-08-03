@@ -809,7 +809,7 @@ def normalize_tushare_increment(
             prior_anchors,
         )
     ):
-        raise TushareSourceError("INVALID_PREDECESSOR_RELEASE", source_code=0)
+        raise TushareSourceError("INVALID_PREDECESSOR_CANONICAL", source_code=0)
     last_session_key = str(prior_calendar[-1]).replace("-", "")
     sse_open = {
         str(row["cal_date"]) for row in snapshot["calendar_sse"] if str(row["is_open"]) == "1"
@@ -1001,7 +1001,7 @@ def normalize_tushare_increment(
     current_industries = normalize_industries(snapshot["industry_membership"])
     prior_industries = prior.get("industry_membership")
     if not isinstance(prior_industries, list):
-        raise TushareSourceError("INVALID_PREDECESSOR_RELEASE", source_code=0)
+        raise TushareSourceError("INVALID_PREDECESSOR_CANONICAL", source_code=0)
     industries = merge_incremental_industries(
         prior_industries,
         current_industries,
@@ -1182,7 +1182,7 @@ def validate_incremental_instrument_reference(
         if isinstance(row, dict)
     }
     if len(prior_by_code) != len(prior):
-        raise TushareSourceError("INVALID_PREDECESSOR_RELEASE", source_code=0)
+        raise TushareSourceError("INVALID_PREDECESSOR_CANONICAL", source_code=0)
     for instrument in current:
         code = instrument["ts_code"]
         predecessor = prior_by_code.get(code)

@@ -285,7 +285,10 @@ class DataService:
         plan = (
             CollectionPlan.bootstrap()
             if not has_predecessor
-            else CollectionPlan.incremental(str(predecessor["session_end"]))
+            else CollectionPlan.incremental(
+                str(predecessor["session_end"]),
+                self.load_canonical(str(predecessor["id"])),
+            )
         )
         batch = self._source.collect(plan)
         calendar = batch.canonical.get("research_calendar")
