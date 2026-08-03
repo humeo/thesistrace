@@ -79,3 +79,7 @@ git worktree remove "$restore_dir"
 - Runtime result: the archive was assembled with an isolated temporary Git
   index. No file under `src/`, `tests/`, `web/`, `deploy/`, or `scripts/`, and no
   active build or dependency file, was changed in the current worktree.
+- Final repository gate after archive and characterization review fixes:
+  `make check` passed with Ruff clean, `427 passed, 20 skipped` in Python,
+  Web typecheck/build green, and both narrow and desktop Playwright flows
+  passing.

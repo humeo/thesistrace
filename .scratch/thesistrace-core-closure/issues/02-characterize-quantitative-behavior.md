@@ -76,3 +76,6 @@ change fails verification.
   working tree. The ticket now compares `de7a4e4...HEAD`, so already committed
   `src/` changes cannot escape the guard.
 - Production result: no file under `src/` changed in this ticket.
+- Final repository gate: `make check` passed with Ruff clean, `427 passed,
+  20 skipped` in Python (`358.50s`), Web typecheck/build green, and the narrow
+  and desktop Playwright flows passing in `27.8s` and `27.5s` respectively.
