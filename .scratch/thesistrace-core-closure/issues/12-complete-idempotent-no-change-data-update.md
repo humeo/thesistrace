@@ -75,3 +75,6 @@ message, retain the same latest Release, and keep Release history unchanged.
   passed, 1 warning` in `33.29s`, Web `1 passed` in `21.3s`, followed by a
   successful runtime teardown. Final independent review concluded Standards
   PASS and Spec PASS with no findings.
+- Repository-wide `make check` passed: Ruff; Python `495 passed, 42 skipped, 2
+  warnings` in `522.75s`; TypeScript; production build; narrow E2E `1 passed`
+  in `30.0s`; desktop E2E `1 passed` in `30.3s`.
