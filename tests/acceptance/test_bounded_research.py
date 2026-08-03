@@ -51,17 +51,4 @@ def test_columnar_research_is_exactly_equivalent_to_legacy_calculation(
         definition,
     )
 
-    assert bounded["alpha_matrix"]["checksum"] == legacy["alpha_matrix"]["checksum"]
-    assert bounded["forward_labels"] == {
-        "alpha_checksum": legacy["forward_labels"]["alpha_checksum"],
-        "report_session_count": legacy["forward_labels"]["report_session_count"],
-        "horizons": {
-            horizon: {
-                "horizon": value["horizon"],
-                "checksum": value["checksum"],
-            }
-            for horizon, value in legacy["forward_labels"]["horizons"].items()
-        },
-    }
-    assert bounded["factor_evaluation"] == legacy["factor_evaluation"]
-    assert bounded["strategy_backtest"] == legacy["strategy_backtest"]
+    assert bounded == legacy

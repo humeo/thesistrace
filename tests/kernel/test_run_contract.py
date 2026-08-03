@@ -5,6 +5,15 @@ import pytest
 
 from thesistrace.research_kernel import RunInput, run
 
+FIELD_BINDINGS = {
+    "price.open.adjusted": "open_adj",
+    "price.high.adjusted": "high_adj",
+    "price.low.adjusted": "low_adj",
+    "price.close.adjusted": "close_adj",
+    "market.volume.shares": "volume_shares",
+    "market.turnover.cny": "turnover_amount_cny",
+}
+
 
 def test_kernel_run_matches_the_complete_characterization_baseline(
     accepted_calculation_case: dict[str, object],
@@ -48,6 +57,34 @@ def test_kernel_run_input_snapshots_values_and_has_no_product_context(
     with pytest.raises(FrozenInstanceError):
         run_input.universe = "top1000"
 
+    expression = run_input.alpha_expression_snapshot()
+    assert isinstance(expression, str)
+
+
+def test_kernel_run_input_does_not_expose_mutable_expression_state(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    canonical = accepted_calculation_case["canonical"]
+    definition = copy.deepcopy(accepted_calculation_case["definition"])
+    assert isinstance(definition, dict)
+    definition["alpha"] = {
+        "expression": {
+            "operator_id": "pct_change",
+            "operands": [
+                {"field_id": "price.close.adjusted"},
+                {"literal": 20},
+            ],
+        }
+    }
+    run_input = _run_input(canonical, definition)
+    expected = run(run_input)
+
+    exposed = run_input.alpha_expression_snapshot()
+    assert isinstance(exposed, dict)
+    exposed["operator_id"] = "add"
+
+    assert run(run_input) == expected
+
 
 def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
     alpha = definition["alpha"]
@@ -60,6 +97,7 @@ def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
     return RunInput(
         canonical_data=canonical,
         alpha_expression=alpha["expression"],
+        field_bindings=FIELD_BINDINGS,
         universe=str(definition["universe"]),
         neutralization=str(definition["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),

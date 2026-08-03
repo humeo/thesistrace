@@ -1,4 +1,7 @@
 import ast
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
@@ -78,12 +81,16 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
-    alpha_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
+    facade_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
+    alpha_source = (
+        ROOT / "src" / "thesistrace" / "research_kernel" / "alpha.py"
+    ).read_text()
     normalized_source = (
         ROOT / "src" / "thesistrace" / "research_kernel" / "alpha_expression.py"
     ).read_text()
     assert alpha_source.count("ast.parse(") == 1
     assert "def validate_legacy_alpha(" in alpha_source
+    assert "ast.parse(" not in facade_source
     for forbidden in ("eval(", "exec(", "importlib", "sql"):
         assert forbidden not in normalized_source.lower()
 
@@ -157,3 +164,28 @@ def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> No
         assert forbidden not in source
     assert "mode:" not in source
     assert "mode =" not in source
+
+
+def test_importing_research_kernel_does_not_load_infrastructure() -> None:
+    script = """
+import json
+import sys
+from thesistrace.research_kernel import RunInput
+del RunInput
+forbidden = {
+    name for name in sys.modules
+    if name == "psycopg"
+    or name.startswith("psycopg.")
+    or name in {"boto3", "fastapi", "httpx", "temporalio"}
+    or name.startswith("thesistrace.publication")
+    or name in {"thesistrace.objects", "thesistrace.ports"}
+}
+print(json.dumps(sorted(forbidden)))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(completed.stdout) == []

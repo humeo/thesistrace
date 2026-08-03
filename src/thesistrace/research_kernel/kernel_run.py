@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from thesistrace.alpha import evaluate_alpha_matrix
-from thesistrace.factor import build_forward_labels, evaluate_factor
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
-from thesistrace.strategy import run_strategy
+from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
+from thesistrace.research_kernel.strategy import run_strategy
 
 INPUT_SESSION_COUNT = 756
 
@@ -20,7 +21,8 @@ class KernelRunError(ValueError):
 @dataclass(frozen=True, init=False)
 class RunInput:
     _canonical_data: dict[str, object] = field(repr=False)
-    alpha_expression: AlphaExpression
+    _alpha_expression: AlphaExpression = field(repr=False)
+    _field_bindings: dict[str, str] = field(repr=False)
     universe: str
     neutralization: str
     holdings_count: int
@@ -36,6 +38,7 @@ class RunInput:
         *,
         canonical_data: dict[str, object],
         alpha_expression: AlphaExpression,
+        field_bindings: Mapping[str, str],
         universe: str,
         neutralization: str,
         holdings_count: int,
@@ -47,7 +50,8 @@ class RunInput:
         transfer_fee_rate: str,
     ) -> None:
         object.__setattr__(self, "_canonical_data", copy.deepcopy(canonical_data))
-        object.__setattr__(self, "alpha_expression", copy.deepcopy(alpha_expression))
+        object.__setattr__(self, "_alpha_expression", copy.deepcopy(alpha_expression))
+        object.__setattr__(self, "_field_bindings", copy.deepcopy(dict(field_bindings)))
         object.__setattr__(self, "universe", universe)
         object.__setattr__(self, "neutralization", neutralization)
         object.__setattr__(self, "holdings_count", holdings_count)
@@ -61,14 +65,21 @@ class RunInput:
     def canonical_snapshot(self) -> dict[str, object]:
         return copy.deepcopy(self._canonical_data)
 
+    def alpha_expression_snapshot(self) -> AlphaExpression:
+        return copy.deepcopy(self._alpha_expression)
+
+    def field_bindings_snapshot(self) -> dict[str, str]:
+        return copy.deepcopy(self._field_bindings)
+
 
 def run(run_input: RunInput) -> dict[str, dict[str, object]]:
     canonical = run_input.canonical_snapshot()
+    alpha_expression = run_input.alpha_expression_snapshot()
     calendar = canonical.get("research_calendar")
     if not isinstance(calendar, list) or len(calendar) != INPUT_SESSION_COUNT:
         raise KernelRunError("Kernel Run requires exactly 756 canonical sessions")
     definition = {
-        "alpha": {"expression": copy.deepcopy(run_input.alpha_expression)},
+        "alpha": {"expression": copy.deepcopy(alpha_expression)},
         "universe": run_input.universe,
         "neutralization": run_input.neutralization,
         "strategy": {
@@ -85,7 +96,8 @@ def run(run_input: RunInput) -> dict[str, dict[str, object]]:
     }
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression=run_input.alpha_expression,
+        expression=alpha_expression,
+        field_bindings=run_input.field_bindings_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
     )

@@ -27,7 +27,10 @@ written:
 
 ```sh
 set -eu
-uv run pytest -q tests/kernel tests/architecture
+uv run pytest -q \
+  tests/kernel \
+  tests/architecture \
+  tests/acceptance/test_bounded_research.py
 ```
 
 The suite must compare Kernel Run with the complete characterization corpus,
@@ -49,4 +52,14 @@ verify the Kernel package imports no lifecycle or infrastructure module.
 - The old `calculate_research(canonical, definition)` keeps only its temporary
   input conversion and delegates to Kernel Run; it no longer contains a second
   copy of the calculation pipeline.
-- The exact command above passed `69 passed` in `83.78s`.
+- Review round 1 found that the first seam still imported infrastructure
+  transitively, exposed a mutable expression object, and left the partitioned
+  path on a second calculation engine. Alpha, Factor, Strategy, numeric rules,
+  and checksum serialization now live under `research_kernel`; legacy modules
+  only forward to that implementation.
+- An isolated-process import assertion proves loading Kernel does not load
+  PostgreSQL, Publication, object storage, HTTP, or worker dependencies.
+- The partitioned loader now materializes canonical input and delegates to the
+  same Kernel Run. Its acceptance test compares the complete result by exact
+  equality instead of maintaining a second calculation implementation.
+- The updated exact command above passed `72 passed` in `93.36s`.

@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 
 from thesistrace.activity_contract import (
@@ -14,6 +14,7 @@ from thesistrace.bounded_research import (
     calculate_bounded_research,
     load_columnar_research_window,
 )
+from thesistrace.data.fields import authorable_field_bindings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import ControlMetadataPort, ObjectStorePort, ObjectWriterPort
@@ -373,6 +374,7 @@ def calculate_research(
         RunInput(
             canonical_data=canonical,
             alpha_expression=alpha["expression"],
+            field_bindings=_definition_field_bindings(definition),
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             holdings_count=int(strategy["holdings_count"]),
@@ -384,6 +386,18 @@ def calculate_research(
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
         )
     )
+
+
+def _definition_field_bindings(definition: Mapping[str, object]) -> dict[str, str]:
+    value = definition.get("field_bindings")
+    if not isinstance(value, list):
+        return authorable_field_bindings()
+    bindings = {
+        str(item["field_id"]): str(item["name"])
+        for item in value
+        if isinstance(item, Mapping) and "field_id" in item and "name" in item
+    }
+    return bindings or authorable_field_bindings()
 
 
 def research_input_history(canonical: dict[str, object]) -> dict[str, object]:
