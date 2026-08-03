@@ -1,10 +1,19 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.http import create_app
-from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.entrypoints.runtime import (
+    CoreSettings,
+    core_environment_is_configured,
+    open_core_runtime,
+)
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_data_update_returns_before_worker_publishes_first_fixture_release(
 ) -> None:
     core_settings = CoreSettings.from_environment()
