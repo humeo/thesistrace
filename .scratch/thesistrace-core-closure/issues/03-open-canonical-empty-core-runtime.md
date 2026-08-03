@@ -44,6 +44,8 @@ trap cleanup EXIT
   uv run pytest -q tests/architecture tests/integration tests/acceptance
 bun run --cwd web test:shell
 bun run --cwd web typecheck
+bun run --cwd web build
+bun run --cwd web test:e2e:core-shell
 ```
 
 The acceptance suite starts and stops two independent worker processes and two
@@ -80,3 +82,12 @@ independent HTTP processes. Both HTTP starts must return exactly the typed
   assertions; Ruff, architecture tests, and Web typecheck passed. A safety
   probe set `THESISTRACE_CORE_TEST_DATA_ROOT` to a separate temporary directory,
   ran `down`, and confirmed the sentinel directory remained untouched.
+- Review round 2 fix: `core.html` is a separate runnable Vite entrypoint that
+  mounts the Shell without replacing the legacy `index.html`. The production
+  build includes both entries, and the dedicated Core-Shell Playwright flow
+  opens `core.html`, verifies all four links and the active route, and observes
+  the composed resource outlet.
+- Post-review verification: the clean real-service Python gate again passed
+  `81 passed` (`203.12s`); Shell rendering, Web typecheck, and the two-entry
+  production build passed; the dedicated browser flow passed `1 passed` in
+  `2.4s` against the runnable `core.html` entrypoint.
