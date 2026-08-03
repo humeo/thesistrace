@@ -75,3 +75,9 @@ reach the same infrastructure-free calculation implementation.
   source substrings.
 - The exact `How to verify` command above passed `77 passed, 1 warning` in
   `93.14s` after those final-review fixes.
+- Final independent re-review: `Standards: PASS`, `Spec: PASS`, with no
+  actionable findings. Its two-session probe also proved one batch Advance and
+  successive single-session Advances both equal the one-shot output exactly.
+- Final repository gate: `make check` passed with Ruff clean, `478 passed,
+  34 skipped, 2 warnings` in Python (`495.15s`), Web typecheck/build green, and
+  narrow/desktop Playwright acceptance passing in `27.1s` and `24.4s`.
