@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from botocore.client import BaseClient
@@ -262,7 +263,7 @@ class Publication:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT kind, manifest_bytes
+                SELECT schema_version, kind, manifest_bytes
                 FROM publication.manifests
                 WHERE sha256 = %s
                 """,
@@ -274,6 +275,10 @@ class Publication:
             manifest = _load_manifest(manifest_bytes, published_ref.manifest_sha256)
             objects = _manifest_objects(manifest)
             self._verify_recorded_links(transaction, published_ref.manifest_sha256, objects)
+        if row["schema_version"] != manifest["schema_version"]:
+            raise PublicationVerificationError(
+                "Publication manifest schema record does not match manifest"
+            )
         if row["kind"] != published_ref.kind or manifest["kind"] != published_ref.kind:
             raise PublicationVerificationError("PublishedRef kind does not match manifest")
         if canonical_json_bytes(manifest["provenance"]) != canonical_json_bytes(
@@ -287,19 +292,30 @@ class Publication:
             )
         )
 
-    def find_orphan_sha256s(self) -> tuple[str, ...]:
+    def find_orphan_sha256s(self, *, uploaded_before: datetime) -> tuple[str, ...]:
+        if uploaded_before.tzinfo is None or uploaded_before.utcoffset() is None:
+            raise ValueError("orphan cutoff must be timezone-aware")
+        uploaded: set[str] = set()
+        paginator = self._s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self._bucket, Prefix="publication/v1/sha256/"):
+            for item in page.get("Contents", []):
+                last_modified = item.get("LastModified")
+                if not isinstance(last_modified, datetime):
+                    raise PublicationVerificationError(
+                        "Publication object listing has no modification time"
+                    )
+                if last_modified > uploaded_before:
+                    continue
+                digest = _digest_from_object_key(str(item["Key"]))
+                if digest is not None:
+                    uploaded.add(digest)
+        # Read committed truth after the object snapshot to narrow the race with
+        # a concurrent record. Cleanup must still use an aged cutoff and recheck.
         with self._database.transaction() as transaction:
             recorded = {
                 str(row["sha256"])
                 for row in transaction.execute("SELECT sha256 FROM publication.objects").fetchall()
             }
-        uploaded: set[str] = set()
-        paginator = self._s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self._bucket, Prefix="publication/v1/sha256/"):
-            for item in page.get("Contents", []):
-                digest = _digest_from_object_key(str(item["Key"]))
-                if digest is not None:
-                    uploaded.add(digest)
         return tuple(sorted(uploaded - recorded))
 
     @staticmethod

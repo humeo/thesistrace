@@ -67,3 +67,13 @@ rejected before any payload bundle is returned.
   it exposes no physical bucket, key, browser, or payload access.
 - The exact clean-state command above passed `21 passed` in `2.41s`; cleanup
   stopped both containers and removed only the dedicated test state.
+- Review round 1 fix: orphan discovery now requires an explicit timezone-aware
+  `uploaded_before` cutoff, ignores newer in-flight uploads, and reads committed
+  PostgreSQL truth after the S3 snapshot to narrow the concurrent-record race.
+  The result remains a candidate digest set only; later cleanup must use an aged
+  cutoff and recheck rather than treating a fresh upload as deletable.
+- Committed read now compares PostgreSQL's separately stored manifest schema
+  version with the checksummed canonical manifest. A post-commit corruption
+  probe changes that column to `999` and verifies the whole read is rejected.
+- Post-review focused verification passed `4 passed`; the exact clean-state
+  command above passed `22 passed` in `1.31s`.

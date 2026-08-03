@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from botocore.client import BaseClient
 
@@ -19,6 +21,9 @@ def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
             kind="research.result",
             payloads={"summary": JsonPayload({"annualized_return": 0.12})},
             provenance={"run_id": "run-001", "release_id": "release-001"},
+        )
+        assert prepared.payload_sha256s["summary"] not in runtime.publication.find_orphan_sha256s(
+            uploaded_before=datetime.now(UTC) - timedelta(minutes=5)
         )
 
         with runtime.database.transaction() as transaction:
@@ -109,7 +114,9 @@ def test_rollback_leaves_an_invisible_orphan_and_preserves_previous_reference(
         assert row == {"manifest_sha256": baseline_ref.manifest_sha256}
         with pytest.raises(PublicationNotFoundError):
             runtime.publication.read(candidate_ref)
-        assert candidate.payload_sha256s["canonical"] in runtime.publication.find_orphan_sha256s()
+        assert candidate.payload_sha256s["canonical"] in runtime.publication.find_orphan_sha256s(
+            uploaded_before=datetime.now(UTC) + timedelta(minutes=5)
+        )
         assert runtime.publication.read(baseline_ref).provenance == {"sequence": 1}
 
 
@@ -134,6 +141,31 @@ def test_committed_read_rejects_corrupt_object_before_returning_a_bundle(
             Body=b"!" * len(expected),
         )
         with pytest.raises(PublicationVerificationError):
+            runtime.publication.read(published)
+
+
+def test_committed_read_rejects_corrupt_postgres_manifest_metadata(
+    core_settings: CoreSettings,
+) -> None:
+    with open_core_runtime(core_settings) as runtime:
+        prepared = runtime.publication.prepare(
+            kind="metadata.integrity",
+            payloads={"state": JsonPayload({"metadata_integrity": True})},
+            provenance={"ticket": 6},
+        )
+        with runtime.database.transaction() as transaction:
+            published = runtime.publication.record(transaction, prepared)
+        with runtime.database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE publication.manifests
+                SET schema_version = 999
+                WHERE sha256 = %s
+                """,
+                (published.manifest_sha256,),
+            )
+
+        with pytest.raises(PublicationVerificationError, match="schema record"):
             runtime.publication.read(published)
 
 
