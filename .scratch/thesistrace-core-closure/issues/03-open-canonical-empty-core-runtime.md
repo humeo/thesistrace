@@ -91,3 +91,9 @@ independent HTTP processes. Both HTTP starts must return exactly the typed
   `81 passed` (`203.12s`); Shell rendering, Web typecheck, and the two-entry
   production build passed; the dedicated browser flow passed `1 passed` in
   `2.4s` against the runnable `core.html` entrypoint.
+- Final review: Standards PASS and Spec PASS after three rounds; no actionable
+  finding remains.
+- Final repository gate on commit `0552263`: `make check` passed with Ruff
+  clean, `432 passed, 23 skipped` in Python (`362.18s`), Web typecheck and the
+  dual-entry production build green, and the existing narrow/desktop browser
+  chains passing in `24.2s` and `28.2s`.
