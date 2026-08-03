@@ -55,8 +55,16 @@ policy or provider mode.
   Release as predecessor, and is committed only if that prior latest remains
   current. Earlier Release rows, Publication objects, field links, provenance,
   and readable canonical payloads remain unchanged.
+- Independent review required an explicit `data.state.latest_release_id`
+  authority instead of inferring latest from timestamps. Publication now moves
+  that head in the same PostgreSQL transaction as the immutable Release, and
+  history follows the predecessor chain from that head.
+- Release provenance persists both the cumulative covered-session range and
+  the range appended by this Release, plus an explicit empty correction
+  change-set. `CollectionPlan` rejects states outside bootstrap-without-frontier
+  and incremental-with-frontier.
 - Real PostgreSQL/RustFS acceptance passed both direct and wider cases (`2
-  passed, 1 warning` in `9.18s`). The Data page now refreshes Release history;
+  passed, 1 warning` in `8.60s` after the review fixes). The Data page now refreshes Release history;
   real `/data` Playwright acceptance published two Releases, retained both,
   selected the 757-session Release as latest, and passed in `15.1s`.
 - Focused Ruff, `13` architecture tests, TypeScript, and Web build passed.

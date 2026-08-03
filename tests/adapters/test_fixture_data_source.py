@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.data import CollectionPlan
 
@@ -42,3 +44,19 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
     assert len(direct.canonical["research_calendar"]) == 757
     assert len(catch_up.canonical["research_calendar"]) == 759
     assert direct.collection_kind == catch_up.collection_kind == "incremental"
+
+
+@pytest.mark.parametrize(
+    ("kind", "after_session"),
+    (
+        ("bootstrap", "2026-01-01"),
+        ("incremental", None),
+        ("unknown", None),
+    ),
+)
+def test_collection_plan_rejects_illegal_states(
+    kind: str,
+    after_session: str | None,
+) -> None:
+    with pytest.raises(ValueError, match="CollectionPlan state is invalid"):
+        CollectionPlan(kind=kind, after_session=after_session)

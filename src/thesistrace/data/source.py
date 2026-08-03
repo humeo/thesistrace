@@ -9,6 +9,13 @@ class CollectionPlan:
     kind: str
     after_session: str | None = None
 
+    def __post_init__(self) -> None:
+        if self.kind == "bootstrap" and self.after_session is None:
+            return
+        if self.kind == "incremental" and self.after_session:
+            return
+        raise ValueError("CollectionPlan state is invalid")
+
     @classmethod
     def bootstrap(cls) -> CollectionPlan:
         return cls(kind="bootstrap")

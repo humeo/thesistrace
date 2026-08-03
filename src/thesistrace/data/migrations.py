@@ -79,5 +79,33 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0003_authoritative_release_head",
+            statement="""
+                ALTER TABLE data.releases
+                    ADD COLUMN appended_session_start text NULL,
+                    ADD COLUMN appended_session_end text NULL;
+
+                UPDATE data.releases
+                SET appended_session_start = session_start,
+                    appended_session_end = session_end;
+
+                ALTER TABLE data.releases
+                    ALTER COLUMN appended_session_start SET NOT NULL,
+                    ALTER COLUMN appended_session_end SET NOT NULL;
+
+                ALTER TABLE data.state
+                    ADD COLUMN latest_release_id text NULL REFERENCES data.releases(id);
+
+                UPDATE data.state
+                SET latest_release_id = (
+                    SELECT id
+                    FROM data.releases
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                )
+                WHERE singleton = 1;
+            """,
+        ),
     ),
 )

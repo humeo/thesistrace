@@ -36,13 +36,22 @@ class DataService:
     def overview(self) -> DataOverview:
         with self._database.transaction() as transaction:
             state = transaction.execute(
-                "SELECT status, latest_update_outcome FROM data.state WHERE singleton = 1"
+                """
+                SELECT status, latest_update_outcome, latest_release_id
+                FROM data.state
+                WHERE singleton = 1
+                """
             ).fetchone()
-            latest_release = transaction.execute(
-                f"{_RELEASE_SELECT} ORDER BY created_at DESC, id DESC LIMIT 1"
-            ).fetchone()
+            latest_release = None
+            if state is not None and state["latest_release_id"] is not None:
+                latest_release = transaction.execute(
+                    f"{_RELEASE_SELECT} WHERE id = %s",
+                    (state["latest_release_id"],),
+                ).fetchone()
         if state is None:
             raise RuntimeError("Data state is not initialized")
+        if state["latest_release_id"] is not None and latest_release is None:
+            raise RuntimeError("Latest Dataset Release is missing")
         return DataOverview(
             status=state["status"],
             latest_release=_release_summary(latest_release),
@@ -52,7 +61,31 @@ class DataService:
     def list_releases(self) -> ReleaseHistory:
         with self._database.transaction() as transaction:
             rows = transaction.execute(
-                f"{_RELEASE_SELECT} ORDER BY created_at DESC, id DESC"
+                """
+                WITH RECURSIVE release_chain AS (
+                    SELECT release.id, release.predecessor_id,
+                           release.session_start, release.session_end,
+                           release.session_count, release.created_at, 0 AS depth
+                    FROM data.state AS state
+                    JOIN data.releases AS release
+                      ON release.id = state.latest_release_id
+                    WHERE state.singleton = 1
+
+                    UNION ALL
+
+                    SELECT predecessor.id, predecessor.predecessor_id,
+                           predecessor.session_start, predecessor.session_end,
+                           predecessor.session_count, predecessor.created_at,
+                           release_chain.depth + 1
+                    FROM data.releases AS predecessor
+                    JOIN release_chain
+                      ON predecessor.id = release_chain.predecessor_id
+                )
+                SELECT id, predecessor_id, session_start, session_end,
+                       session_count, created_at
+                FROM release_chain
+                ORDER BY depth
+                """
             ).fetchall()
         return ReleaseHistory(
             items=[_release_summary(row) for row in rows if row is not None],
@@ -172,7 +205,8 @@ class DataService:
             row = transaction.execute(
                 """
                 SELECT manifest_sha256, source_name, collection_kind,
-                       session_start, session_end, predecessor_id
+                       session_start, session_end, appended_session_start,
+                       appended_session_end, predecessor_id
                 FROM data.releases
                 WHERE id = %s
                 """,
@@ -184,6 +218,11 @@ class DataService:
             "canonical_contract": "canonical-eod-v1",
             "collection_kind": row["collection_kind"],
             "covered_session_range": {"start": row["session_start"], "end": row["session_end"]},
+            "appended_session_range": {
+                "start": row["appended_session_start"],
+                "end": row["appended_session_end"],
+            },
+            "correction_change_set": [],
             "predecessor_id": row["predecessor_id"],
             "source_name": row["source_name"],
         }
@@ -203,15 +242,19 @@ class DataService:
         with self._database.transaction() as transaction:
             predecessor = transaction.execute(
                 """
-                SELECT id, session_end
-                FROM data.releases
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
+                SELECT release.id, release.session_end
+                FROM data.state AS state
+                LEFT JOIN data.releases AS release
+                  ON release.id = state.latest_release_id
+                WHERE state.singleton = 1
                 """
             ).fetchone()
+        if predecessor is None:
+            raise RuntimeError("Data state is not initialized")
+        has_predecessor = predecessor["id"] is not None
         plan = (
             CollectionPlan.bootstrap()
-            if predecessor is None
+            if not has_predecessor
             else CollectionPlan.incremental(str(predecessor["session_end"]))
         )
         batch = self._source.collect(plan)
@@ -219,11 +262,19 @@ class DataService:
         validate_release_batch(
             batch,
             predecessor_session=(
-                None if predecessor is None else str(predecessor["session_end"])
+                None if not has_predecessor else str(predecessor["session_end"])
             ),
         )
         assert isinstance(calendar, list)
-        predecessor_id = None if predecessor is None else str(predecessor["id"])
+        predecessor_id = None if not has_predecessor else str(predecessor["id"])
+        appended_sessions = calendar
+        if has_predecessor:
+            predecessor_index = calendar.index(str(predecessor["session_end"]))
+            appended_sessions = calendar[predecessor_index + 1 :]
+        if not appended_sessions:
+            raise RuntimeError("Dataset Release appended no Research Sessions")
+        appended_session_start = str(appended_sessions[0])
+        appended_session_end = str(appended_sessions[-1])
         provenance = {
             "canonical_contract": "canonical-eod-v1",
             "collection_kind": batch.collection_kind,
@@ -231,6 +282,11 @@ class DataService:
                 "start": batch.covered_session_range[0],
                 "end": batch.covered_session_range[1],
             },
+            "appended_session_range": {
+                "start": appended_session_start,
+                "end": appended_session_end,
+            },
+            "correction_change_set": [],
             "predecessor_id": predecessor_id,
             "source_name": batch.source_name,
         }
@@ -244,18 +300,21 @@ class DataService:
         )
         release_id = f"dsr_{prepared.manifest_sha256[:24]}"
         with self._database.transaction() as transaction:
-            transaction.execute(
-                "SELECT singleton FROM data.state WHERE singleton = 1 FOR UPDATE"
-            )
             current = transaction.execute(
                 """
-                SELECT id
-                FROM data.releases
-                ORDER BY created_at DESC, id DESC
-                LIMIT 1
+                SELECT latest_release_id
+                FROM data.state
+                WHERE singleton = 1
+                FOR UPDATE
                 """
             ).fetchone()
-            current_id = None if current is None else str(current["id"])
+            if current is None:
+                raise RuntimeError("Data state is not initialized")
+            current_id = (
+                None
+                if current["latest_release_id"] is None
+                else str(current["latest_release_id"])
+            )
             if current_id != predecessor_id:
                 raise DataUpdateConflict("latest Dataset Release changed during collection")
             published = self._publication.record(transaction, prepared)
@@ -264,8 +323,9 @@ class DataService:
                 INSERT INTO data.releases (
                     id, predecessor_id, manifest_sha256, source_name,
                     collection_kind, canonical_schema, session_start,
-                    session_end, session_count
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    session_end, session_count, appended_session_start,
+                    appended_session_end
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     release_id,
@@ -277,6 +337,8 @@ class DataService:
                     batch.covered_session_range[0],
                     batch.covered_session_range[1],
                     len(calendar),
+                    appended_session_start,
+                    appended_session_end,
                 ),
             )
             for field in batch.canonical["field_catalog"]:
@@ -312,9 +374,11 @@ class DataService:
             transaction.execute(
                 """
                 UPDATE data.state
-                SET status = 'idle', latest_update_outcome = 'published', updated_at = now()
+                SET status = 'idle', latest_update_outcome = 'published',
+                    latest_release_id = %s, updated_at = now()
                 WHERE singleton = 1
-                """
+                """,
+                (release_id,),
             )
 
 
