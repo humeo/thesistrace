@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
+from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import run_strategy
@@ -107,6 +108,7 @@ class RunInput:
 class KernelState:
     _run_input: RunInput = field(repr=False)
     _output_json: bytes = field(repr=False)
+    _strategy_resume_json: bytes = field(repr=False)
     origin_session: str
     session_count: int
     boundary_session: str
@@ -116,6 +118,7 @@ class KernelState:
         *,
         run_input: RunInput,
         output: dict[str, dict[str, object]],
+        strategy_resume: dict[str, object],
         origin_session: str,
     ) -> None:
         calendar = run_input.canonical_snapshot().get("research_calendar")
@@ -123,6 +126,11 @@ class KernelState:
             raise KernelRunError("Kernel state requires canonical sessions")
         object.__setattr__(self, "_run_input", run_input)
         object.__setattr__(self, "_output_json", canonical_json_bytes(output))
+        object.__setattr__(
+            self,
+            "_strategy_resume_json",
+            canonical_json_bytes(strategy_resume),
+        )
         object.__setattr__(self, "origin_session", origin_session)
         object.__setattr__(self, "session_count", len(calendar))
         object.__setattr__(self, "boundary_session", str(calendar[-1]))
@@ -140,21 +148,32 @@ class KernelState:
         return self._run_input.with_canonical_data(canonical_data)
 
 
-class RunOutput(dict[str, dict[str, object]]):
-    """Dictionary-compatible ResearchRun artifacts with its internal Track seed."""
+    def strategy_resume_snapshot(self) -> dict[str, object]:
+        value = json.loads(self._strategy_resume_json)
+        if not isinstance(value, dict):
+            raise KernelRunError("Kernel Strategy resume snapshot is invalid")
+        return value
+
+
+@dataclass(frozen=True, init=False)
+class RunOutput:
+    _artifacts_json: bytes = field(repr=False)
+    track_state: KernelState
 
     def __init__(
         self,
-        artifacts: dict[str, dict[str, object]],
         *,
+        artifacts: dict[str, dict[str, object]],
         track_state: KernelState,
     ) -> None:
-        super().__init__(artifacts)
-        self._track_state = track_state
+        object.__setattr__(self, "_artifacts_json", canonical_json_bytes(artifacts))
+        object.__setattr__(self, "track_state", track_state)
 
-    @property
-    def track_state(self) -> KernelState:
-        return self._track_state
+    def artifacts_snapshot(self) -> dict[str, dict[str, object]]:
+        value = json.loads(self._artifacts_json)
+        if not isinstance(value, dict):
+            raise KernelRunError("Kernel Run artifacts snapshot is invalid")
+        return value
 
 
 def run(run_input: RunInput) -> RunOutput:
@@ -180,13 +199,23 @@ def run(run_input: RunInput) -> RunOutput:
         definition,
         origin_session=origin_session,
     )
+    resume_canonical = slice_canonical_sessions(canonical, calendar[:-1])
+    strategy_resume = run_strategy(
+        resume_canonical,
+        matrix,
+        definition,
+        origin_session=origin_session,
+        terminal_cutoff=False,
+    )
+    artifacts = compose_output(matrix, labels, factor, result_strategy)
     track_state = KernelState(
         run_input=run_input,
-        output=compose_output(matrix, labels, factor, result_strategy),
+        output=artifacts,
+        strategy_resume=strategy_resume,
         origin_session=origin_session,
     )
     return RunOutput(
-        compose_output(matrix, labels, factor, result_strategy),
+        artifacts=artifacts,
         track_state=track_state,
     )
 

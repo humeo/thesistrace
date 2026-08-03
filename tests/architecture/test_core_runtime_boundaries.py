@@ -219,6 +219,8 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
     assert "build_forward_labels(" in run_source
     assert "evaluate_factor(" in run_source
     assert "run_strategy(" in run_source
+    assert "class RunOutput(dict" not in run_source
+    assert "def artifacts_snapshot(" in run_source
     assert "evaluate_alpha_matrix(" in advance_source
     assert "build_forward_labels(" in advance_source
     assert "evaluate_factor(" in advance_source

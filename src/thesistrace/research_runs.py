@@ -387,7 +387,7 @@ def calculate_research(
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
         )
-    )
+    ).artifacts_snapshot()
 
 
 def calculate_bounded_research(

@@ -22,13 +22,19 @@ def test_kernel_run_matches_the_complete_characterization_baseline(
     assert isinstance(definition, dict)
     run_input = _run_input(accepted_calculation_case["canonical"], definition)
 
-    output = run(run_input)
+    run_output = run(run_input)
+    output = run_output.artifacts_snapshot()
 
     assert output["alpha_matrix"] == accepted_calculation_case["alpha_matrix"]
     assert output["forward_labels"] == accepted_calculation_case["forward_labels"]
     assert output["factor_evaluation"] == accepted_calculation_case["factor_evaluation"]
     assert output["strategy_backtest"] == accepted_calculation_case["strategy_backtest"]
     assert output["diagnostics"] == accepted_calculation_case["diagnostics"]
+    assert not isinstance(run_output, dict)
+    output["diagnostics"] = {}
+    assert run_output.artifacts_snapshot()["diagnostics"] == accepted_calculation_case[
+        "diagnostics"
+    ]
 
 
 def test_kernel_run_input_snapshots_values_and_has_no_product_context(
@@ -39,12 +45,12 @@ def test_kernel_run_input_snapshots_values_and_has_no_product_context(
     assert isinstance(canonical, dict)
     assert isinstance(definition, dict)
     run_input = _run_input(canonical, definition)
-    expected = run(run_input)
+    expected = run(run_input).artifacts_snapshot()
 
     canonical["research_calendar"] = []
     definition["universe"] = "top3000"
 
-    assert run(run_input) == expected
+    assert run(run_input).artifacts_snapshot() == expected
     assert not {
         "run_id",
         "release_id",
@@ -79,13 +85,13 @@ def test_kernel_run_input_does_not_expose_mutable_expression_state(
         }
     }
     run_input = _run_input(canonical, definition)
-    expected = run(run_input)
+    expected = run(run_input).artifacts_snapshot()
 
     exposed = run_input.alpha_expression_snapshot()
     assert isinstance(exposed, dict)
     exposed["operator_id"] = "add"
 
-    assert run(run_input) == expected
+    assert run(run_input).artifacts_snapshot() == expected
 
 
 def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:

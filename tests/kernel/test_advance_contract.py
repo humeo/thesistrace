@@ -41,7 +41,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
         new_canonical_sessions=appended,
     )
 
-    calls: dict[str, object] = {"label_sessions": []}
+    calls: dict[str, object] = {"label_sessions": [], "strategy_calls": []}
     original_alpha = advance_module.evaluate_alpha_matrix
     original_labels = advance_module.build_forward_labels
     original_strategy = advance_module.run_strategy
@@ -71,14 +71,14 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     ) -> dict[str, object]:
         continuation = kwargs.get("continuation")
         assert isinstance(continuation, dict)
-        calls["strategy_prior_daily_count"] = len(continuation["daily"])
+        prior_daily_count = len(continuation["daily"])
         result = original_strategy(
             calculation_canonical,
             matrix,
             calculation_definition,
             **kwargs,
         )
-        calls["strategy_result_daily_count"] = len(result["daily"])
+        calls["strategy_calls"].append((prior_daily_count, len(result["daily"])))
         return result
 
     monkeypatch.setattr(advance_module, "evaluate_alpha_matrix", observed_alpha)
@@ -102,8 +102,6 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
         expected_matrix,
         calculation_definition(expected_input),
         origin_session=prior.origin_session,
-        terminal_cutoff=False,
-        continuation=prior_output["strategy_backtest"],
     )
     expected = compose_output(
         expected_matrix,
@@ -132,8 +130,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     assert calls == {
         "alpha_session_count": 21,
         "label_sessions": [2, 2, 2],
-        "strategy_prior_daily_count": 504,
-        "strategy_result_daily_count": 505,
+        "strategy_calls": [(503, 505), (503, 504)],
     }
 
 
@@ -205,7 +202,36 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
 
     result = run(_run_input(canonical, definition))
 
-    assert result.track_state.output_snapshot()["strategy_backtest"] == result["strategy_backtest"]
+    artifacts = result.artifacts_snapshot()
+    assert result.track_state.output_snapshot()["strategy_backtest"] == artifacts[
+        "strategy_backtest"
+    ]
+
+    complete, appended = _append_fixture_session(canonical)
+    advanced = advance(
+        AdvanceInput(
+            prior_state=result.track_state,
+            new_canonical_sessions=appended,
+        )
+    )
+    complete_input = _run_input(complete, definition)
+    complete_matrix = evaluate_alpha_matrix(
+        complete,
+        expression=complete_input.alpha_expression_snapshot(),
+        field_bindings=complete_input.field_bindings_snapshot(),
+        universe_name=complete_input.universe,
+        neutralization=complete_input.neutralization,
+    )
+    once_strategy = run_strategy(
+        complete,
+        complete_matrix,
+        calculation_definition(complete_input),
+        origin_session=result.track_state.origin_session,
+    )
+    advanced_strategy = advanced.output_snapshot()["strategy_backtest"]
+
+    assert advanced_strategy == once_strategy
+    assert advanced_strategy["daily"][-2]["rebalance"] is True
 
 
 def _append_fixture_session(

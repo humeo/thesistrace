@@ -127,8 +127,8 @@ def run_strategy(
         origin_index = (
             len(calendar) - 504 if origin_session is None else calendar.index(origin_session)
         )
-        if origin_index < 0 or len(calendar) - origin_index < 504:
-            raise StrategyCalculationError("Strategy requires 504 report sessions")
+        if origin_index < 0 or len(calendar) - origin_index < 1:
+            raise StrategyCalculationError("Strategy requires at least one report session")
         processing_start = origin_index
     else:
         prior_daily = continuation.get("daily")

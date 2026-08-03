@@ -11,6 +11,11 @@ from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
     evaluate_alpha_matrix,
 )
+from thesistrace.research_kernel.canonical_state import (
+    SESSION_TABLES,
+    canonical_sessions,
+    slice_canonical_sessions,
+)
 from thesistrace.research_kernel.factor import (
     HORIZONS,
     affected_label_sessions,
@@ -27,13 +32,6 @@ from thesistrace.research_kernel.kernel_run import (
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import run_strategy
 
-SESSION_TABLES = (
-    ("prices", "session"),
-    ("trading_states", "session"),
-    ("price_limits", "session"),
-    ("base_pool", "session"),
-    ("st_designations", "trade_date"),
-)
 EVOLVING_REFERENCE_TABLES = (
     "instruments",
     "adjustment_anchors",
@@ -74,14 +72,13 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     prior_output = prior.output_snapshot()
     prior_matrix = _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix")
     prior_labels = _mapping(prior_output.get("forward_labels"), "prior Labels")
-    prior_strategy = _mapping(prior_output.get("strategy_backtest"), "prior Strategy")
     appended = advance_input.new_canonical_snapshot()
     canonical = _append_canonical_sessions(
         prior.canonical_snapshot(),
         appended,
     )
     run_input = prior.run_input_with_canonical(canonical)
-    new_sessions = _sessions(appended, "Advance")
+    new_sessions = canonical_sessions(appended, "Advance")
     matrix = _advance_alpha(
         run_input,
         canonical,
@@ -91,17 +88,28 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     )
     labels = _advance_labels(canonical, matrix, prior_labels, new_sessions)
     factor = evaluate_factor(labels)
+    strategy_resume = prior.strategy_resume_snapshot()
+    definition = calculation_definition(run_input)
     strategy = run_strategy(
         canonical,
         matrix,
-        calculation_definition(run_input),
+        definition,
+        origin_session=prior.origin_session,
+        continuation=strategy_resume,
+    )
+    calendar = canonical_sessions(canonical, "Canonical")
+    next_resume = run_strategy(
+        slice_canonical_sessions(canonical, calendar[:-1]),
+        matrix,
+        definition,
         origin_session=prior.origin_session,
         terminal_cutoff=False,
-        continuation=dict(prior_strategy),
+        continuation=strategy_resume,
     )
     return KernelState(
         run_input=run_input,
         output=compose_output(matrix, labels, factor, strategy),
+        strategy_resume=next_resume,
         origin_session=prior.origin_session,
     )
 
@@ -114,9 +122,9 @@ def _advance_alpha(
     prior_session_count: int,
 ) -> dict[str, object]:
     lookback = int(prior_matrix["effective_lookback"])
-    calendar = _sessions(canonical, "Canonical")
+    calendar = canonical_sessions(canonical, "Canonical")
     window_start = max(0, prior_session_count - lookback)
-    window = _slice_canonical(canonical, calendar[window_start:])
+    window = slice_canonical_sessions(canonical, calendar[window_start:])
     evaluated = evaluate_alpha_matrix(
         window,
         expression=run_input.alpha_expression_snapshot(),
@@ -153,7 +161,7 @@ def _advance_labels(
     prior_labels: Mapping[str, object],
     new_sessions: list[str],
 ) -> dict[str, object]:
-    calendar = _sessions(canonical, "Canonical")
+    calendar = canonical_sessions(canonical, "Canonical")
     selected_sessions = calendar[-504:]
     selected_set = set(selected_sessions)
     prior_horizons = _mapping(prior_labels.get("horizons"), "prior Label horizons")
@@ -264,41 +272,6 @@ def _append_canonical_sessions(
             raise KernelRunError(f"Advance reference table is invalid: {table}")
         merged[table] = supplied
     return merged
-
-
-def _slice_canonical(
-    canonical: dict[str, object],
-    sessions: list[str],
-) -> dict[str, object]:
-    selected = set(sessions)
-    sliced = json.loads(canonical_json_bytes(canonical))
-    sliced["research_calendar"] = sessions
-    for table, session_field in SESSION_TABLES:
-        rows = sliced.get(table, [])
-        if isinstance(rows, list):
-            sliced[table] = [
-                row
-                for row in rows
-                if isinstance(row, dict) and str(row.get(session_field, "")) in selected
-            ]
-    universes = sliced.get("liquidity_universes")
-    if not isinstance(universes, dict):
-        raise KernelRunError("Canonical Liquidity Universes are invalid")
-    sliced["liquidity_universes"] = {
-        name: [
-            row for row in rows if isinstance(row, dict) and str(row.get("session", "")) in selected
-        ]
-        for name, rows in universes.items()
-        if isinstance(rows, list)
-    }
-    return sliced
-
-
-def _sessions(value: Mapping[str, object], name: str) -> list[str]:
-    calendar = value.get("research_calendar")
-    if not isinstance(calendar, list):
-        raise KernelRunError(f"{name} Research Sessions are invalid")
-    return [str(session) for session in calendar]
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:
