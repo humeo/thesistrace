@@ -103,6 +103,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
         calculation_definition(expected_input),
         origin_session=prior.origin_session,
         terminal_cutoff=False,
+        continuation=prior_output["strategy_backtest"],
     )
     expected = compose_output(
         expected_matrix,
@@ -154,6 +155,57 @@ def test_kernel_advance_rejects_static_contract_replacement(
                 new_canonical_sessions=appended,
             )
         )
+
+
+def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    assert isinstance(canonical, dict)
+    _complete, appended = _append_fixture_session(canonical)
+    prior = run(_run_input(canonical, definition)).track_state
+    prior_canonical = prior.canonical_snapshot()
+    instruments = copy.deepcopy(canonical["instruments"])
+    assert isinstance(instruments, list)
+    instruments.append(
+        {
+            "instrument_id": "equity:688999.SH",
+            "ts_code": "688999.SH",
+            "asset_type": "ordinary_a_share",
+            "exchange": "SSE",
+            "board": "star",
+            "listed_from": appended["research_calendar"][0],
+            "listed_to": "",
+        }
+    )
+    appended["instruments"] = instruments
+
+    result = advance(
+        AdvanceInput(
+            prior_state=prior,
+            new_canonical_sessions=appended,
+        )
+    )
+
+    assert result.canonical_snapshot()["instruments"] == instruments
+    assert prior.canonical_snapshot() == prior_canonical
+
+
+def test_track_seed_is_the_seed_run_terminal_strategy_state(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = copy.deepcopy(accepted_calculation_case["definition"])
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    strategy = definition["strategy"]
+    assert isinstance(strategy, dict)
+    strategy["rebalance_interval"] = 1
+
+    result = run(_run_input(canonical, definition))
+
+    assert result.track_state.output_snapshot()["strategy_backtest"] == result["strategy_backtest"]
 
 
 def _append_fixture_session(

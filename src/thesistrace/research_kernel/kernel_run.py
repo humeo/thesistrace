@@ -180,16 +180,9 @@ def run(run_input: RunInput) -> RunOutput:
         definition,
         origin_session=origin_session,
     )
-    continuous_strategy = run_strategy(
-        canonical,
-        matrix,
-        definition,
-        origin_session=origin_session,
-        terminal_cutoff=False,
-    )
     track_state = KernelState(
         run_input=run_input,
-        output=compose_output(matrix, labels, factor, continuous_strategy),
+        output=compose_output(matrix, labels, factor, result_strategy),
         origin_session=origin_session,
     )
     return RunOutput(

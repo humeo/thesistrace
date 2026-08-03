@@ -224,5 +224,7 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
     assert "evaluate_factor(" in advance_source
     assert "run_strategy(" in advance_source
     assert "initial_state(" not in advance_source
+    assert "affected_label_sessions(" in advance_source
+    assert "- horizon - 1" not in advance_source
     for forbidden in ("mode:", "mode =", "thesistrace.tracking", "thesistrace.research_runs"):
         assert forbidden not in advance_source

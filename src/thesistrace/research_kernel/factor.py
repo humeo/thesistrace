@@ -13,6 +13,20 @@ class FactorDataError(RuntimeError):
     pass
 
 
+def affected_label_sessions(
+    calendar: Sequence[str],
+    new_sessions: Sequence[str],
+    horizon: int,
+) -> list[str]:
+    """Select new signals and prior signals whose exit matures in this delta."""
+    affected = {str(session) for session in new_sessions}
+    for session in new_sessions:
+        signal_index = calendar.index(str(session)) - horizon - 1
+        if signal_index >= 0:
+            affected.add(str(calendar[signal_index]))
+    return [str(session) for session in calendar if str(session) in affected]
+
+
 def build_forward_labels(
     canonical: dict[str, object],
     alpha_matrix: dict[str, object],

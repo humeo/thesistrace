@@ -13,6 +13,7 @@ from thesistrace.research_kernel.alpha import (
 )
 from thesistrace.research_kernel.factor import (
     HORIZONS,
+    affected_label_sessions,
     build_forward_labels,
     evaluate_factor,
 )
@@ -33,11 +34,10 @@ SESSION_TABLES = (
     ("base_pool", "session"),
     ("st_designations", "trade_date"),
 )
-STATIC_TABLES = (
+EVOLVING_REFERENCE_TABLES = (
     "instruments",
     "adjustment_anchors",
     "industry_membership",
-    "field_catalog",
 )
 
 
@@ -166,12 +166,7 @@ def _advance_labels(
         prior_rows = prior_horizon.get("sessions")
         if not isinstance(prior_rows, list):
             raise KernelRunError("prior Label sessions are invalid")
-        affected = set(new_sessions)
-        for session in new_sessions:
-            signal_index = calendar.index(session) - horizon - 1
-            if signal_index >= 0:
-                affected.add(calendar[signal_index])
-        affected_sessions = [session for session in calendar if session in affected]
+        affected_sessions = affected_label_sessions(calendar, new_sessions, horizon)
         partial = build_forward_labels(
             canonical,
             matrix,
@@ -256,10 +251,18 @@ def _append_canonical_sessions(
             raise KernelRunError(f"Advance has no pinned Liquidity Universe: {name}")
         prior_universes[name] = [*prior_rows, *rows]
 
-    for table in STATIC_TABLES:
+    supplied_field_catalog = appended.get("field_catalog")
+    if supplied_field_catalog not in (None, []) and supplied_field_catalog != prior.get(
+        "field_catalog"
+    ):
+        raise KernelRunError("Advance cannot replace pinned static table: field_catalog")
+    for table in EVOLVING_REFERENCE_TABLES:
         supplied = appended.get(table)
-        if supplied not in (None, []) and supplied != prior.get(table):
-            raise KernelRunError(f"Advance cannot replace pinned static table: {table}")
+        if supplied in (None, []):
+            continue
+        if not isinstance(supplied, list):
+            raise KernelRunError(f"Advance reference table is invalid: {table}")
+        merged[table] = supplied
     return merged
 
 

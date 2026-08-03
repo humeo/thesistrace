@@ -47,10 +47,16 @@ reach the same infrastructure-free calculation implementation.
   from retained Label state, and invokes Strategy with the prior complete
   continuation state. All steps use the same Kernel functions as Run.
 - The characterized 757-session case compares the complete incremental output
-  against an explicit full-boundary test oracle, proves Alpha saw 21 sessions
+  against an explicit seed-Result-plus-delta oracle, proves Alpha saw 21 sessions
   for a 20-session lookback, proves each Label horizon recalculated only two
   affected signals, and proves Strategy continued `504 -> 505` daily states.
   The 756-session prior state remains unchanged.
-- Advance rejects replacement of pinned static contracts instead of
-  retroactively changing prior calculation history.
-- The updated exact command above passed `75 passed` in `81.21s`.
+- Review round 2 found that the first incremental version used a second
+  continuous Strategy seed instead of the seed Run terminal state. Run now
+  creates Track state directly from its Result Strategy; a rebalance-interval-1
+  case proves both are exactly equal before Advance.
+- Field catalog and calculation semantics remain pinned. Later instruments,
+  adjustment anchors, and time-point industry reference snapshots may evolve
+  for new calculation without mutating the prior state. Label maturation offset
+  selection is owned by Factor rather than repeated in Advance.
+- The updated exact command above passed `77 passed` in `90.64s`.
