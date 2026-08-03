@@ -7,10 +7,18 @@ export default defineConfig({
   testDir: "./e2e-core",
   workers: 1,
   use: { baseURL },
-  webServer: {
-    command: `concurrently -k -n api,worker,web "../.venv/bin/thesistrace-core-api --port 8101" "../.venv/bin/thesistrace-core-worker" "THESISTRACE_API_PORT=8101 vite --host 127.0.0.1 --port ${webPort}"`,
-    url: `${baseURL}/core.html`,
-    reuseExistingServer: false,
-    timeout: 30_000,
-  },
+  webServer: [
+    {
+      command: `concurrently -k -n api,worker "../.venv/bin/thesistrace-core-api --port 8101" "../.venv/bin/thesistrace-core-worker"`,
+      url: "http://127.0.0.1:8101/api/data",
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+    {
+      command: `THESISTRACE_API_PORT=8101 vite --host 127.0.0.1 --port ${webPort}`,
+      url: `${baseURL}/data`,
+      reuseExistingServer: false,
+      timeout: 30_000,
+    },
+  ],
 });

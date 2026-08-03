@@ -86,3 +86,9 @@ endpoint counts as Ticket 10 verification.
   null/non-numeric Price or Anchor values, missing Price/Limit fields, invalid
   PIT dates, and unknown Industry instruments; the valid real publication path
   continues to pass.
+- Final independent re-review: `Standards: PASS`, `Spec: PASS`. The exact
+  backend command passed `24 passed, 1 warning` in `12.39s`.
+- The final browser pass exposed and closed an acceptance-startup race:
+  Playwright now waits independently for Core API readiness and Vite readiness
+  before opening `/data`. The final real browser run passed in `7.8s`, and the
+  ticket command then shut down and removed the isolated runtime.
