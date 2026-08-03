@@ -36,13 +36,23 @@ ordering, Benchmark, and retained-result behavior before calculation code moves.
   `tests/kernel/conftest.py`. It generates deterministic canonical market input
   independently of the calculation assertions and exposes each named boundary
   needed by later `ResearchKernel.run` and `ResearchKernel.advance` work.
-- The session-by-session proof recalculates every Factor day and advances
-  Strategy metric state one Research Session at a time, then compares the named
-  results canonically with the run-once result.
-- TDD red: `uv run pytest -q tests/kernel/test_characterization.py` produced one
-  passing independent edge case and two expected fixture-not-found errors.
-- TDD green: the same command passed `3` tests after the fixture was added.
+- The session-by-session proof starts from an independently generated 600-session
+  seed, then executes `156` one-session transitions. Every transition calculates
+  Alpha, matures Labels, records Factor observations, advances Strategy and its
+  Benchmark, and compares those named boundaries exactly with the run-once path.
+  The complete final boundary state also has a fixed canonical SHA-256.
+- The compact retained Result is frozen by its complete canonical SHA-256 plus
+  exact first/last Strategy observations, first Rebalance, terminal-position
+  ordering, and retained row counts. Equal-length content or ordering drift now
+  fails the test.
+- TDD red: the retained-result behavior assertion deliberately expected the
+  placeholder digest `pending`; pytest failed at that assertion and reported
+  the accepted canonical digest
+  `cebf53e0c134ab0cdc6762e3f1af3e0cb9ce304d4ddf0ff8c8ae4a6fec6ded39`.
+- TDD green: after recording the reviewed digest and full one-session boundary
+  proof, `uv run pytest -q tests/kernel/test_characterization.py` passed all `3`
+  tests.
 - Determinism verification: `uv run pytest -q tests/kernel` was run twice in
-  separate pytest processes after final formatting; both runs passed all `26`
-  tests (`11.26s` and `9.37s`).
+  separate pytest processes after the review fixes; both runs passed all `26`
+  tests (`12.20s` and `12.63s`).
 - Production result: no file under `src/` changed in this ticket.

@@ -1,12 +1,25 @@
 import copy
+import hashlib
 from decimal import Decimal
 
-from thesistrace.factor import factor_day
+from thesistrace.alpha import evaluate_alpha_matrix
+from thesistrace.factor import build_forward_labels, evaluate_factor, factor_day
 from thesistrace.numeric import canonical_binary64_bytes, canonical_decimal
+from thesistrace.objects import canonical_json_bytes
+from thesistrace.result_objects import (
+    execution_aggregate_rows,
+    rebalance_aggregate_rows,
+    strategy_daily_rows,
+)
 from thesistrace.strategy import (
-    advance_strategy_metric_state,
     equal_weight_benchmark_return,
-    strategy_metrics_from_state,
+    run_strategy,
+)
+from thesistrace.tracking import (
+    DailyTrackingService,
+    factor_artifact_to_rolling_rows,
+    rolling_factor_row,
+    slice_canonical_through,
 )
 
 EXPECTED_CHECKSUMS = {
@@ -143,6 +156,10 @@ def test_accepted_quantitative_boundaries_are_frozen(
         "terminal_positions",
         "terminal_strategy_state",
     ]
+    assert (
+        hashlib.sha256(canonical_json_bytes(retained)).hexdigest()
+        == "cebf53e0c134ab0cdc6762e3f1af3e0cb9ce304d4ddf0ff8c8ae4a6fec6ded39"
+    )
     assert {
         key: len(retained[key])
         for key in (
@@ -157,6 +174,54 @@ def test_accepted_quantitative_boundaries_are_frozen(
         "execution_aggregates": 57,
         "terminal_positions": 10,
     }
+    assert retained["strategy_daily_observations"][0] == {
+        "session": "2024-08-23",
+        "gross_nav": "1e+7",
+        "net_nav": "1e+7",
+        "benchmark_nav": "1e+0",
+        "net_cash": "1e+7",
+        "transaction_cost_cny": "0",
+        "holdings_count": 0,
+        "maximum_single_name_weight": 0.0,
+        "upper_limit_buy_rejections": 0,
+        "lower_limit_sell_rejections": 0,
+        "suspension_rejections": 0,
+    }
+    assert retained["strategy_daily_observations"][-1] == {
+        "session": "2026-07-29",
+        "gross_nav": "96879440930735930735930736e-19",
+        "net_nav": "9336960784113593073593073596e-21",
+        "benchmark_nav": "1101382289594383888352628991e-27",
+        "net_cash": "695784113593073593073596e-21",
+        "transaction_cost_cny": "0",
+        "holdings_count": 10,
+        "maximum_single_name_weight": 0.10012808467511992,
+        "upper_limit_buy_rejections": 0,
+        "lower_limit_sell_rejections": 0,
+        "suspension_rejections": 0,
+    }
+    assert retained["rebalance_aggregates"][0] == {
+        "session": "2024-08-26",
+        "signal_session": "2024-08-23",
+        "turnover": 0.999661694313196,
+        "fill_count": 10,
+        "buy_order_count": 10,
+        "sell_order_count": 0,
+    }
+    assert retained["terminal_positions"][:2] == [
+        {
+            "instrument_id": "equity:000025.SZ",
+            "execution_shares": 70800,
+            "adjusted_units": "6156521739130434782608695652173913e-29",
+            "last_adjusted_price": "150765e-4",
+        },
+        {
+            "instrument_id": "equity:000027.SZ",
+            "execution_shares": 69200,
+            "adjusted_units": "6017391304347826086956521739130435e-29",
+            "last_adjusted_price": "155365e-4",
+        },
+    ]
 
 
 def test_independent_edge_fixture_freezes_numeric_missing_order_and_benchmark() -> None:
@@ -209,38 +274,178 @@ def test_independent_edge_fixture_freezes_numeric_missing_order_and_benchmark() 
 def test_session_by_session_reaches_the_same_named_boundaries(
     accepted_calculation_case: dict[str, object],
 ) -> None:
-    labels = accepted_calculation_case["forward_labels"]
-    factor = accepted_calculation_case["factor_evaluation"]
-    strategy = accepted_calculation_case["strategy_backtest"]
+    canonical = accepted_calculation_case["canonical"]
+    definition = accepted_calculation_case["definition"]
+    full_alpha = accepted_calculation_case["alpha_matrix"]
+    calendar = [str(session) for session in canonical["research_calendar"]]
 
-    for horizon in ("1", "5", "20"):
-        daily = [
-            {
-                "session": item["session"],
-                "sample_count": len(item["samples"]),
-                **factor_day(item["samples"]),
-            }
-            for item in labels["horizons"][horizon]["sessions"]
-        ]
-        assert daily == factor["horizons"][horizon]["daily"]
-
-    metric_state = None
-    turnover = strategy["metrics"]["turnover"]["events"]
-    for observation in strategy["daily"]:
-        session = observation["session"]
-        metric_state = advance_strategy_metric_state(
-            metric_state,
-            daily=[observation],
-            turnover_events=[event for event in turnover if event["session"] == session],
-            cumulative_cost=Decimal(str(observation["cumulative_transaction_cost"])),
-            rejections=[
-                rejection for rejection in strategy["rejections"] if rejection["session"] == session
-            ],
-        )
-    assert metric_state is not None
-    assert _compact_metrics(strategy_metrics_from_state(metric_state)) == _compact_metrics(
-        strategy["metrics"]
+    seed_end_index = 599
+    seed = slice_canonical_through(canonical, calendar[seed_end_index])
+    seed_alpha = evaluate_alpha_matrix(
+        seed,
+        expression=definition["alpha"]["expression"],
+        universe_name=definition["universe"],
+        neutralization=definition["neutralization"],
     )
+    seed_labels = build_forward_labels(seed, seed_alpha)
+    seed_factor = evaluate_factor(seed_labels)
+    seed_strategy = run_strategy(seed, seed_alpha, definition)
+    origin_session = str(seed_strategy["daily"][0]["session"])
+    report_session_count = len(calendar) - calendar.index(origin_session)
+
+    full_labels = build_forward_labels(
+        canonical,
+        full_alpha,
+        report_sessions=report_session_count,
+    )
+    full_factor = evaluate_factor(full_labels)
+    full_strategy = run_strategy(
+        canonical,
+        full_alpha,
+        definition,
+        origin_session=origin_session,
+        terminal_cutoff=False,
+        continuation=seed_strategy,
+    )
+
+    service = DailyTrackingService(None, None, None, None)
+    projection = service._projection_from_batch(
+        {
+            "factor_evaluation": seed_factor,
+            "strategy_backtest": seed_strategy,
+        },
+        definition,
+    )
+    pending = {
+        str(item["session"]): [dict(row) for row in item["values"]]
+        for item in seed_alpha["sessions"][-21:]
+    }
+    rolling = factor_artifact_to_rolling_rows(seed_factor)
+
+    alpha_by_session = {str(item["session"]): item for item in full_alpha["sessions"]}
+    labels_by_horizon_session = {
+        (horizon, str(item["session"])): item
+        for horizon in ("1", "5", "20")
+        for item in full_labels["horizons"][horizon]["sessions"]
+    }
+    factor_by_horizon_session = {
+        (horizon, str(item["session"])): item
+        for horizon in ("1", "5", "20")
+        for item in full_factor["horizons"][horizon]["daily"]
+    }
+    batch_daily = {str(item["session"]): item for item in strategy_daily_rows(full_strategy)}
+    batch_rebalances = _rows_by_session(rebalance_aggregate_rows(full_strategy))
+    batch_executions = _rows_by_session(execution_aggregate_rows(full_strategy))
+    batch_projection = service._projection_from_batch(
+        {
+            "factor_evaluation": full_factor,
+            "strategy_backtest": full_strategy,
+        },
+        definition,
+    )
+
+    prior_session = calendar[seed_end_index]
+    last_transition = None
+    for current_index in range(seed_end_index + 1, len(calendar)):
+        current_session = calendar[current_index]
+        window = _canonical_session_window(
+            canonical,
+            calendar[current_index - 21],
+            current_session,
+        )
+        transition = service._tracking_transition(
+            canonical=window,
+            definition=definition,
+            kernel="kernel-v1",
+            origin_session=origin_session,
+            prior_session=prior_session,
+            pending_alpha=pending,
+            rolling_factor=rolling,
+            prior_projection=projection,
+        )
+
+        assert transition["processed_sessions"] == [current_session]
+        assert transition["trace"]["alpha"] == [alpha_by_session[current_session]]
+        for label_artifact in transition["trace"]["labels"]:
+            horizon = next(iter(label_artifact["horizons"]))
+            observed = label_artifact["horizons"][horizon]["sessions"][0]
+            assert observed == labels_by_horizon_session[(horizon, str(observed["session"]))]
+        for observed in transition["trace"]["factor"]:
+            horizon = str(observed["horizon"])
+            expected = factor_by_horizon_session[(horizon, str(observed["session"]))]
+            assert observed == rolling_factor_row(
+                str(expected["session"]),
+                int(horizon),
+                expected,
+                sample_count=int(expected["sample_count"]),
+            )
+        assert transition["projected_daily"] == [batch_daily[current_session]]
+        assert transition["projected_rebalances"] == batch_rebalances.get(current_session, [])
+        assert transition["projected_executions"] == batch_executions.get(current_session, [])
+
+        pending = transition["pending_alpha"]
+        rolling = transition["rolling_factor"]
+        projection = transition["projection"]
+        prior_session = current_session
+        last_transition = transition
+
+    assert last_transition is not None
+    incremental_strategy = copy.deepcopy(projection["strategy"])
+    batch_strategy = copy.deepcopy(batch_projection["strategy"])
+    incremental_strategy.pop("alpha_checksum")
+    batch_strategy.pop("alpha_checksum")
+    assert incremental_strategy == batch_strategy
+    assert projection["terminal_strategy_state"] == batch_projection["terminal_strategy_state"]
+    assert (
+        hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "factor_summary": projection["factor_summary"],
+                    "strategy": incremental_strategy,
+                    "terminal_strategy_state": projection["terminal_strategy_state"],
+                    "last_trace": last_transition["trace"],
+                }
+            )
+        ).hexdigest()
+        == "d9ea87b8f8a6f9ea13d064d80fa225688a218ed6da96097dde0e31ad4ff24361"
+    )
+
+
+def _rows_by_session(rows: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["session"]), []).append(row)
+    return grouped
+
+
+def _canonical_session_window(
+    canonical: dict[str, object],
+    first_session: str,
+    final_session: str,
+) -> dict[str, object]:
+    calendar = [str(session) for session in canonical["research_calendar"]]
+    selected = calendar[calendar.index(first_session) : calendar.index(final_session) + 1]
+    selected_set = set(selected)
+    window = {**canonical, "research_calendar": selected}
+    for key in (
+        "prices",
+        "trading_states",
+        "price_limits",
+        "base_pool",
+        "st_designations",
+    ):
+        rows = canonical.get(key)
+        if isinstance(rows, list):
+            window[key] = [
+                row
+                for row in rows
+                if str(row.get("session") or row.get("trade_date")) in selected_set
+            ]
+    window["liquidity_universes"] = {
+        name: [row for row in rows if str(row.get("session")) in selected_set]
+        for name, rows in canonical["liquidity_universes"].items()
+    }
+    return window
 
 
 def _daily_boundary(observation: dict[str, object]) -> dict[str, object]:
@@ -257,13 +462,3 @@ def _daily_boundary(observation: dict[str, object]) -> dict[str, object]:
             "cycle_type",
         )
     }
-
-
-def _compact_metrics(metrics: dict[str, object]) -> dict[str, object]:
-    compact = copy.deepcopy(metrics)
-    compact["maximum_drawdown"].pop("series")
-    compact["turnover"].pop("events")
-    compact["holdings_count"].pop("daily")
-    compact["maximum_single_name_weight"].pop("daily")
-    compact["cash_ratio"].pop("daily")
-    return compact

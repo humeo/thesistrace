@@ -12,6 +12,8 @@ def accepted_calculation_case() -> dict[str, object]:
     """Build inputs independently, then expose every accepted calculation seam."""
     _, canonical = build_fixture()
     definition = {
+        "alpha": {"expression": "pct_change($close_adj, 20)"},
+        "neutralization": "none",
         "universe": "top300",
         "strategy": {
             "holdings_count": 10,
@@ -52,6 +54,7 @@ def accepted_calculation_case() -> dict[str, object]:
     }
     return {
         **artifacts,
+        "canonical": canonical,
         "definition": definition,
         "compact_projection": compact_projection(artifacts, definition),
     }
