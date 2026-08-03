@@ -7,6 +7,10 @@ from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
 from statistics import stdev
 
+from thesistrace.research_kernel.canonical_state import (
+    canonical_sessions,
+    slice_canonical_sessions,
+)
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
     canonical_decimal,
@@ -26,6 +30,40 @@ class Position:
     execution_shares: int
     adjusted_units: Decimal
     last_adjusted_price: Decimal
+
+
+@dataclass(frozen=True)
+class StrategyTransition:
+    finalized: dict[str, object]
+    resumable: dict[str, object]
+
+
+def transition_strategy(
+    canonical: dict[str, object],
+    alpha_matrix: dict[str, object],
+    definition: dict[str, object],
+    *,
+    origin_session: str,
+    continuation: dict[str, object] | None = None,
+) -> StrategyTransition:
+    """Calculate a boundary and retain the state immediately before its terminal."""
+    finalized = run_strategy(
+        canonical,
+        alpha_matrix,
+        definition,
+        origin_session=origin_session,
+        continuation=continuation,
+    )
+    calendar = canonical_sessions(canonical, "Canonical")
+    resumable = run_strategy(
+        slice_canonical_sessions(canonical, calendar[:-1]),
+        alpha_matrix,
+        definition,
+        origin_session=origin_session,
+        terminal_cutoff=False,
+        continuation=continuation,
+    )
+    return StrategyTransition(finalized=finalized, resumable=resumable)
 
 
 def legal_order_quantity(

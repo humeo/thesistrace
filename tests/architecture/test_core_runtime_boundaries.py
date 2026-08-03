@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
+from thesistrace.research_kernel import kernel_advance, kernel_run, strategy
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = ("_postgres", "data", "entrypoints", "publication")
@@ -218,13 +219,17 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
     assert "evaluate_alpha_matrix(" in run_source
     assert "build_forward_labels(" in run_source
     assert "evaluate_factor(" in run_source
-    assert "run_strategy(" in run_source
+    assert kernel_run.transition_strategy is strategy.transition_strategy
+    assert "transition_strategy(" in run_source
+    assert "run_strategy(" not in run_source
     assert "class RunOutput(dict" not in run_source
     assert "def artifacts_snapshot(" in run_source
     assert "evaluate_alpha_matrix(" in advance_source
     assert "build_forward_labels(" in advance_source
     assert "evaluate_factor(" in advance_source
-    assert "run_strategy(" in advance_source
+    assert kernel_advance.transition_strategy is strategy.transition_strategy
+    assert "transition_strategy(" in advance_source
+    assert "run_strategy(" not in advance_source
     assert "initial_state(" not in advance_source
     assert "affected_label_sessions(" in advance_source
     assert "- horizon - 1" not in advance_source

@@ -42,9 +42,7 @@ def slice_canonical_sessions(
         raise ValueError("Canonical Liquidity Universes are invalid")
     sliced["liquidity_universes"] = {
         name: [
-            row
-            for row in rows
-            if isinstance(row, dict) and str(row.get("session", "")) in selected
+            row for row in rows if isinstance(row, dict) and str(row.get("session", "")) in selected
         ]
         for name, rows in universes.items()
         if isinstance(rows, list)

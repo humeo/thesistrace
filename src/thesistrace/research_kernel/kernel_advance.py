@@ -30,7 +30,7 @@ from thesistrace.research_kernel.kernel_run import (
     compose_output,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
-from thesistrace.research_kernel.strategy import run_strategy
+from thesistrace.research_kernel.strategy import transition_strategy
 
 EVOLVING_REFERENCE_TABLES = (
     "instruments",
@@ -90,26 +90,17 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     factor = evaluate_factor(labels)
     strategy_resume = prior.strategy_resume_snapshot()
     definition = calculation_definition(run_input)
-    strategy = run_strategy(
+    strategy = transition_strategy(
         canonical,
         matrix,
         definition,
         origin_session=prior.origin_session,
         continuation=strategy_resume,
     )
-    calendar = canonical_sessions(canonical, "Canonical")
-    next_resume = run_strategy(
-        slice_canonical_sessions(canonical, calendar[:-1]),
-        matrix,
-        definition,
-        origin_session=prior.origin_session,
-        terminal_cutoff=False,
-        continuation=strategy_resume,
-    )
     return KernelState(
         run_input=run_input,
-        output=compose_output(matrix, labels, factor, strategy),
-        strategy_resume=next_resume,
+        output=compose_output(matrix, labels, factor, strategy.finalized),
+        strategy_resume=strategy.resumable,
         origin_session=prior.origin_session,
     )
 

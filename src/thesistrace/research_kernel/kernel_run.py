@@ -8,10 +8,9 @@ from dataclasses import dataclass, field
 
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
-from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
-from thesistrace.research_kernel.strategy import run_strategy
+from thesistrace.research_kernel.strategy import transition_strategy
 
 INPUT_SESSION_COUNT = 756
 
@@ -147,7 +146,6 @@ class KernelState:
     def run_input_with_canonical(self, canonical_data: dict[str, object]) -> RunInput:
         return self._run_input.with_canonical_data(canonical_data)
 
-
     def strategy_resume_snapshot(self) -> dict[str, object]:
         value = json.loads(self._strategy_resume_json)
         if not isinstance(value, dict):
@@ -193,25 +191,17 @@ def run(run_input: RunInput) -> RunOutput:
     )
     labels = build_forward_labels(canonical, matrix)
     factor = evaluate_factor(labels)
-    result_strategy = run_strategy(
+    strategy = transition_strategy(
         canonical,
         matrix,
         definition,
         origin_session=origin_session,
     )
-    resume_canonical = slice_canonical_sessions(canonical, calendar[:-1])
-    strategy_resume = run_strategy(
-        resume_canonical,
-        matrix,
-        definition,
-        origin_session=origin_session,
-        terminal_cutoff=False,
-    )
-    artifacts = compose_output(matrix, labels, factor, result_strategy)
+    artifacts = compose_output(matrix, labels, factor, strategy.finalized)
     track_state = KernelState(
         run_input=run_input,
         output=artifacts,
-        strategy_resume=strategy_resume,
+        strategy_resume=strategy.resumable,
         origin_session=origin_session,
     )
     return RunOutput(

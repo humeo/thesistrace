@@ -67,5 +67,11 @@ reach the same infrastructure-free calculation implementation.
   reopens exactly that boundary and still matches a one-shot 757-session Run.
   `RunOutput` is now an explicit immutable value with separate artifact and
   Track-state accessors; the product adapter extracts only the artifacts.
+- The independent final review passed the behavioral Spec but found three
+  module-standard gaps. `KernelState` and `RunOutput` are now exported by the
+  Kernel facade, Strategy owns one `transition_strategy` seam that produces
+  both finalized and resumable boundary state, and the architecture test proves
+  Run and Advance reference that exact shared callable instead of only matching
+  source substrings.
 - The exact `How to verify` command above passed `77 passed, 1 warning` in
-  `100.12s`.
+  `93.14s` after those final-review fixes.

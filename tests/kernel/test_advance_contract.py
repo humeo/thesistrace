@@ -13,7 +13,7 @@ from thesistrace.research_kernel import (
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.kernel_run import calculation_definition, compose_output
-from thesistrace.research_kernel.strategy import run_strategy
+from thesistrace.research_kernel.strategy import StrategyTransition, run_strategy
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -44,7 +44,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     calls: dict[str, object] = {"label_sessions": [], "strategy_calls": []}
     original_alpha = advance_module.evaluate_alpha_matrix
     original_labels = advance_module.build_forward_labels
-    original_strategy = advance_module.run_strategy
+    original_strategy_transition = advance_module.transition_strategy
 
     def observed_alpha(
         calculation_window: dict[str, object],
@@ -63,27 +63,37 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
         calls["label_sessions"].append(len(signal_sessions))
         return original_labels(calculation_canonical, matrix, **kwargs)
 
-    def observed_strategy(
+    def observed_strategy_transition(
         calculation_canonical: dict[str, object],
         matrix: dict[str, object],
         calculation_definition: dict[str, object],
         **kwargs: object,
-    ) -> dict[str, object]:
+    ) -> StrategyTransition:
         continuation = kwargs.get("continuation")
         assert isinstance(continuation, dict)
         prior_daily_count = len(continuation["daily"])
-        result = original_strategy(
+        transition = original_strategy_transition(
             calculation_canonical,
             matrix,
             calculation_definition,
             **kwargs,
         )
-        calls["strategy_calls"].append((prior_daily_count, len(result["daily"])))
-        return result
+        calls["strategy_calls"].append(
+            (
+                prior_daily_count,
+                len(transition.finalized["daily"]),
+                len(transition.resumable["daily"]),
+            )
+        )
+        return transition
 
     monkeypatch.setattr(advance_module, "evaluate_alpha_matrix", observed_alpha)
     monkeypatch.setattr(advance_module, "build_forward_labels", observed_labels)
-    monkeypatch.setattr(advance_module, "run_strategy", observed_strategy)
+    monkeypatch.setattr(
+        advance_module,
+        "transition_strategy",
+        observed_strategy_transition,
+    )
 
     appended["research_calendar"] = []
     result = advance(advance_input)
@@ -130,7 +140,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     assert calls == {
         "alpha_session_count": 21,
         "label_sessions": [2, 2, 2],
-        "strategy_calls": [(503, 505), (503, 504)],
+        "strategy_calls": [(503, 505, 504)],
     }
 
 
@@ -203,9 +213,9 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
     result = run(_run_input(canonical, definition))
 
     artifacts = result.artifacts_snapshot()
-    assert result.track_state.output_snapshot()["strategy_backtest"] == artifacts[
-        "strategy_backtest"
-    ]
+    assert (
+        result.track_state.output_snapshot()["strategy_backtest"] == artifacts["strategy_backtest"]
+    )
 
     complete, appended = _append_fixture_session(canonical)
     advanced = advance(

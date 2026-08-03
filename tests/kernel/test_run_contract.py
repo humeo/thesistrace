@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from thesistrace.research_kernel import RunInput, run
+from thesistrace.research_kernel import KernelState, RunInput, RunOutput, run
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -25,6 +25,8 @@ def test_kernel_run_matches_the_complete_characterization_baseline(
     run_output = run(run_input)
     output = run_output.artifacts_snapshot()
 
+    assert isinstance(run_output, RunOutput)
+    assert isinstance(run_output.track_state, KernelState)
     assert output["alpha_matrix"] == accepted_calculation_case["alpha_matrix"]
     assert output["forward_labels"] == accepted_calculation_case["forward_labels"]
     assert output["factor_evaluation"] == accepted_calculation_case["factor_evaluation"]
@@ -32,9 +34,9 @@ def test_kernel_run_matches_the_complete_characterization_baseline(
     assert output["diagnostics"] == accepted_calculation_case["diagnostics"]
     assert not isinstance(run_output, dict)
     output["diagnostics"] = {}
-    assert run_output.artifacts_snapshot()["diagnostics"] == accepted_calculation_case[
-        "diagnostics"
-    ]
+    assert (
+        run_output.artifacts_snapshot()["diagnostics"] == accepted_calculation_case["diagnostics"]
+    )
 
 
 def test_kernel_run_input_snapshots_values_and_has_no_product_context(
