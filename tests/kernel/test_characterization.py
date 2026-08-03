@@ -19,6 +19,7 @@ from thesistrace.tracking import (
     DailyTrackingService,
     factor_artifact_to_rolling_rows,
     rolling_factor_row,
+    slice_canonical_range,
     slice_canonical_through,
 )
 
@@ -423,29 +424,10 @@ def _canonical_session_window(
     first_session: str,
     final_session: str,
 ) -> dict[str, object]:
-    calendar = [str(session) for session in canonical["research_calendar"]]
-    selected = calendar[calendar.index(first_session) : calendar.index(final_session) + 1]
-    selected_set = set(selected)
-    window = {**canonical, "research_calendar": selected}
-    for key in (
-        "prices",
-        "trading_states",
-        "price_limits",
-        "base_pool",
-        "st_designations",
-    ):
-        rows = canonical.get(key)
-        if isinstance(rows, list):
-            window[key] = [
-                row
-                for row in rows
-                if str(row.get("session") or row.get("trade_date")) in selected_set
-            ]
-    window["liquidity_universes"] = {
-        name: [row for row in rows if str(row.get("session")) in selected_set]
-        for name, rows in canonical["liquidity_universes"].items()
-    }
-    return window
+    return slice_canonical_range(
+        slice_canonical_through(canonical, final_session),
+        first_session,
+    )
 
 
 def _daily_boundary(observation: dict[str, object]) -> dict[str, object]:

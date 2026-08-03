@@ -20,10 +20,22 @@ ordering, Benchmark, and retained-result behavior before calculation code moves.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/kernel` twice from a clean process and confirm the
-  characterization results are deterministic.
-- Review any updated expected values against the accepted domain contracts;
-  unexplained quantitative changes fail the ticket.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+
+uv run pytest -q tests/kernel
+uv run pytest -q tests/kernel
+git diff --exit-code -- src/
+```
+
+Both pytest processes must pass with the same `26 passed` result. The final
+command proves that this characterization ticket did not change production
+calculation code. Any future expected-value update must be justified against
+the accepted domain contracts in this ticket; an unexplained quantitative
+change fails verification.
 
 ## Comments
 
@@ -53,6 +65,10 @@ ordering, Benchmark, and retained-result behavior before calculation code moves.
   proof, `uv run pytest -q tests/kernel/test_characterization.py` passed all `3`
   tests.
 - Determinism verification: `uv run pytest -q tests/kernel` was run twice in
-  separate pytest processes after the review fixes; both runs passed all `26`
-  tests (`12.20s` and `12.63s`).
+  separate pytest processes after the final review fix; both runs passed all
+  `26` tests (`68.47s` and `66.91s`).
+- Review round 2 found one low-priority duplicate canonical-window helper in the
+  characterization test. It now composes the production-owned
+  `slice_canonical_through` and `slice_canonical_range` boundaries instead of
+  maintaining a third table list in test code.
 - Production result: no file under `src/` changed in this ticket.
