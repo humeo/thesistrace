@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import copy
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
+from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import run_strategy
 
 INPUT_SESSION_COUNT = 756
@@ -20,9 +21,9 @@ class KernelRunError(ValueError):
 
 @dataclass(frozen=True, init=False)
 class RunInput:
-    _canonical_data: dict[str, object] = field(repr=False)
-    _alpha_expression: AlphaExpression = field(repr=False)
-    _field_bindings: dict[str, str] = field(repr=False)
+    _canonical_data_json: bytes = field(repr=False)
+    _alpha_expression_json: bytes = field(repr=False)
+    _field_bindings: tuple[tuple[str, str], ...] = field(repr=False)
     universe: str
     neutralization: str
     holdings_count: int
@@ -49,9 +50,17 @@ class RunInput:
         stamp_duty_sell_rate: str,
         transfer_fee_rate: str,
     ) -> None:
-        object.__setattr__(self, "_canonical_data", copy.deepcopy(canonical_data))
-        object.__setattr__(self, "_alpha_expression", copy.deepcopy(alpha_expression))
-        object.__setattr__(self, "_field_bindings", copy.deepcopy(dict(field_bindings)))
+        object.__setattr__(self, "_canonical_data_json", canonical_json_bytes(canonical_data))
+        object.__setattr__(
+            self,
+            "_alpha_expression_json",
+            canonical_json_bytes(alpha_expression),
+        )
+        object.__setattr__(
+            self,
+            "_field_bindings",
+            tuple(sorted((str(key), str(value)) for key, value in field_bindings.items())),
+        )
         object.__setattr__(self, "universe", universe)
         object.__setattr__(self, "neutralization", neutralization)
         object.__setattr__(self, "holdings_count", holdings_count)
@@ -63,13 +72,19 @@ class RunInput:
         object.__setattr__(self, "transfer_fee_rate", transfer_fee_rate)
 
     def canonical_snapshot(self) -> dict[str, object]:
-        return copy.deepcopy(self._canonical_data)
+        value = json.loads(self._canonical_data_json)
+        if not isinstance(value, dict):
+            raise KernelRunError("canonical data snapshot is invalid")
+        return value
 
     def alpha_expression_snapshot(self) -> AlphaExpression:
-        return copy.deepcopy(self._alpha_expression)
+        value = json.loads(self._alpha_expression_json)
+        if not isinstance(value, (str, Mapping)):
+            raise KernelRunError("Alpha expression snapshot is invalid")
+        return value
 
     def field_bindings_snapshot(self) -> dict[str, str]:
-        return copy.deepcopy(self._field_bindings)
+        return dict(self._field_bindings)
 
 
 def run(run_input: RunInput) -> dict[str, dict[str, object]]:
@@ -79,7 +94,7 @@ def run(run_input: RunInput) -> dict[str, dict[str, object]]:
     if not isinstance(calendar, list) or len(calendar) != INPUT_SESSION_COUNT:
         raise KernelRunError("Kernel Run requires exactly 756 canonical sessions")
     definition = {
-        "alpha": {"expression": copy.deepcopy(alpha_expression)},
+        "alpha": {"expression": alpha_expression},
         "universe": run_input.universe,
         "neutralization": run_input.neutralization,
         "strategy": {
