@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from thesistrace.adapters.tushare_data import TushareDataSource
+from thesistrace.adapters.tushare_data import TushareDataSource, _materialize_increment
 from thesistrace.data import CollectionPlan, DataSourceError
 from thesistrace.fixture import build_fixture
 from thesistrace.tushare_source import TushareAdapter, TushareSourceError
@@ -227,6 +227,42 @@ def test_tushare_materializes_price_corrections_by_field(
     assert corrected["close_raw"] == "99.0000"
     assert "field" not in corrected
     assert "value" not in corrected
+
+
+@pytest.mark.parametrize(
+    "field",
+    ("provider_private_field", "close_adj", "session"),
+)
+def test_tushare_rejects_non_source_price_correction_fields(field: str) -> None:
+    _source, previous = build_fixture()
+    target = previous["prices"][0]
+    delta = {
+        "research_calendar_append": [],
+        "instruments_replace": previous["instruments"],
+        "prices_append": [],
+        "trading_states_append": [],
+        "price_limits_append": [],
+        "base_pool_append": [],
+        "adjustment_anchors_append": [],
+        "st_designations_append": [],
+        "liquidity_universes_append": {},
+        "liquidity_universes_replace": {},
+        "industry_membership_replace": previous["industry_membership"],
+        "price_corrections": [
+            {
+                "session": target["session"],
+                "instrument_id": target["instrument_id"],
+                "field": field,
+                "value": "123",
+            }
+        ],
+    }
+
+    with pytest.raises(DataSourceError) as failure:
+        _materialize_increment(previous, delta)
+
+    assert failure.value.category == "invalid_source_data"
+    assert failure.value.detail_code == "INVALID_CANONICAL_INCREMENT"
 
 
 def test_tushare_adapter_has_no_product_or_infrastructure_knowledge() -> None:

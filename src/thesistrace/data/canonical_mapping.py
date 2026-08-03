@@ -6,6 +6,17 @@ from decimal import ROUND_HALF_EVEN, Decimal
 from thesistrace.data.fields import AUTHORABLE_FIELDS
 
 BOOTSTRAP_RESEARCH_SESSION_COUNT = 756
+SOURCE_CORRECTABLE_PRICE_FIELDS = frozenset(
+    {
+        "open_raw",
+        "high_raw",
+        "low_raw",
+        "close_raw",
+        "pre_close_raw",
+        "volume_shares",
+        "turnover_cny",
+    }
+)
 
 DAILY_FIELDS = (
     ("ts_code", "source.ts_code", "Tushare instrument code", "text", "instrument"),

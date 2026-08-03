@@ -18,6 +18,7 @@ from thesistrace.canonical_objects import (
     update_canonical_partitions,
     write_full_canonical,
 )
+from thesistrace.data.canonical_mapping import SOURCE_CORRECTABLE_PRICE_FIELDS
 from thesistrace.fixture import (
     adjustment_factor,
     build_fixture,
@@ -235,21 +236,15 @@ class DatasetPublisher:
         price_by_position = {
             (str(row["session"]), str(row["instrument_id"])): row for row in corrected_prices
         }
-        allowed_correction_fields = {
-            "open_raw",
-            "high_raw",
-            "low_raw",
-            "close_raw",
-            "pre_close_raw",
-            "volume_shares",
-            "turnover_cny",
-        }
         canonical_corrections: list[dict[str, str]] = []
         corrected_positions: set[tuple[str, str]] = set()
         for correction in corrections:
             position = (correction["session"], correction["instrument_id"])
             target = price_by_position.get(position)
-            if target is None or correction["field"] not in allowed_correction_fields:
+            if (
+                target is None
+                or correction["field"] not in SOURCE_CORRECTABLE_PRICE_FIELDS
+            ):
                 raise InvalidFixtureError("correction target is not a source canonical field")
             value = Decimal(correction["value"])
             if not value.is_finite():

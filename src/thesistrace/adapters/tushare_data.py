@@ -6,6 +6,7 @@ from datetime import date
 from typing import Protocol
 
 from thesistrace.data import CanonicalSourceBatch, CollectionPlan, DataSourceError
+from thesistrace.data.canonical_mapping import SOURCE_CORRECTABLE_PRICE_FIELDS
 from thesistrace.tushare_source import (
     SOURCE_CONTRACT_VERSION,
     TushareSourceError,
@@ -224,6 +225,12 @@ def _materialize_increment(
                 "invalid_source_data",
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
+        field = str(correction["field"])
+        if field not in SOURCE_CORRECTABLE_PRICE_FIELDS:
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INVALID_CANONICAL_INCREMENT",
+            )
         position = (
             str(correction["session"]),
             str(correction["instrument_id"]),
@@ -234,5 +241,5 @@ def _materialize_increment(
                 "invalid_source_data",
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
-        target[str(correction["field"])] = str(correction["value"])
+        target[field] = str(correction["value"])
     return canonical
