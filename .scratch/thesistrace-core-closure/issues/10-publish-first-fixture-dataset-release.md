@@ -92,3 +92,9 @@ endpoint counts as Ticket 10 verification.
   Playwright now waits independently for Core API readiness and Vite readiness
   before opening `/data`. The final real browser run passed in `7.8s`, and the
   ticket command then shut down and removed the isolated runtime.
+- The first default gate also exposed that the isolated acceptance lacked the
+  repository's standard environment skip. It now skips only when Core
+  PostgreSQL/RustFS variables are absent and still executes under the ticket
+  command. Final `make check` passed with Ruff clean, `491 passed, 35 skipped,
+  2 warnings` in Python (`500.43s`), Web typecheck/build green, and the existing
+  narrow/desktop Playwright flows passing in `30.8s` and `30.0s`.
