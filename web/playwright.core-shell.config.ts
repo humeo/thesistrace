@@ -8,7 +8,7 @@ export default defineConfig({
   workers: 1,
   use: { baseURL },
   webServer: {
-    command: `vite --host 127.0.0.1 --port ${webPort}`,
+    command: `concurrently -k -n api,worker,web "../.venv/bin/thesistrace-core-api --port 8101" "../.venv/bin/thesistrace-core-worker" "THESISTRACE_API_PORT=8101 vite --host 127.0.0.1 --port ${webPort}"`,
     url: `${baseURL}/core.html`,
     reuseExistingServer: false,
     timeout: 30_000,

@@ -5,9 +5,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Header, HTTPException, Request, status
 
-from thesistrace.data import DataOverview, ReleaseHistory
+from thesistrace.data import (
+    DataOverview,
+    ReleaseHistory,
+    ReleaseSummary,
+    UpdateAcceptance,
+)
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
 
 
@@ -28,6 +33,24 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     @app.get("/api/data/releases", response_model=ReleaseHistory)
     def data_releases(request: Request) -> ReleaseHistory:
         return _runtime(request).data.list_releases()
+
+    @app.get("/api/data/releases/{release_id}", response_model=ReleaseSummary)
+    def data_release(request: Request, release_id: str) -> ReleaseSummary:
+        release = _runtime(request).data.get_release(release_id)
+        if release is None:
+            raise HTTPException(status_code=404, detail="Dataset Release not found")
+        return release
+
+    @app.post(
+        "/api/data/update",
+        response_model=UpdateAcceptance,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def update_data(
+        request: Request,
+        idempotency_key: str = Header(alias="Idempotency-Key"),
+    ) -> UpdateAcceptance:
+        return _runtime(request).data.update(idempotency_key)
 
     return app
 

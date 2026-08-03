@@ -8,30 +8,66 @@ PostgreSQL, Publication, and RustFS path.
 
 **Status:** ready-for-agent
 
-- [ ] Data Update durably returns `accepted` without waiting for collection or
+**Implementation:** complete
+
+- [x] Data Update durably returns `accepted` without waiting for collection or
   publication.
-- [ ] A Data-owned worker claims the request and performs the first three-year
+- [x] A Data-owned worker claims the request and performs the first three-year
   Bootstrap from the canonical Fixture adapter.
-- [ ] Fixture implements only the DataSource collection and canonical mapping
+- [x] Fixture implements only the DataSource collection and canonical mapping
   contract; it knows no Release ID, PostgreSQL, S3, ResearchRun, or DailyTrack.
-- [ ] Data validates coverage, schema, point-in-time, calendar, and publication
+- [x] Data validates coverage, schema, point-in-time, calendar, and publication
   rules before creating an immutable Dataset Release.
-- [ ] Data supplies canonical contract, collection lineage, covered session
+- [x] Data supplies canonical contract, collection lineage, covered session
   range, and predecessor provenance through the shared Publication contract.
-- [ ] The Release and Publication manifest become visible in one PostgreSQL
+- [x] The Release and Publication manifest become visible in one PostgreSQL
   commit, after all immutable objects exist.
-- [ ] The canonical Web Shell exposes navigation for the four resources and the
+- [x] The canonical Web Shell exposes navigation for the four resources and the
   Data page owns its loading, empty, refresh, updating, published, and error
   states through the real Core HTTP interface.
-- [ ] The Data page moves from updating to published and shows the first Release
+- [x] The Data page moves from updating to published and shows the first Release
   without provider mode, object key, manifest internals, or raw JSON.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/adapters tests/integration tests/acceptance`
-  against clean PostgreSQL and an empty RustFS bucket.
-- Run `bun run --cwd web test:e2e` and confirm one visible Data Update reaches a
-  published first Release through the real worker and the reusable isolated
-  PostgreSQL/RustFS runtime from ticket 03.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/adapters \
+  tests/integration \
+  tests/acceptance/test_core_fixture_data_update.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The tests must drive Data Update through the canonical Core HTTP and worker
+entrypoints, PostgreSQL, Publication, and RustFS. They must also drive the Data
+page through updating and published states. No legacy `/api/v1` Fixture publish
+endpoint counts as Ticket 10 verification.
 
 ## Comments
+
+- TDD red: the adapter contract test failed at collection because the canonical
+  Core had no `thesistrace.adapters.fixture_data` implementation.
+- `POST /api/data/update` writes only the accepted receipt and `updating` state.
+  The separately wired Core worker claims that receipt, records its Attempt,
+  collects the Fixture batch, validates it, prepares immutable S3 objects, then
+  commits the Publication records and Data Release in one PostgreSQL transaction.
+- Fixture implements only `DataSource.collect(CollectionPlan)`. It returns
+  canonical records and source lineage without any Release, database,
+  Publication, ResearchRun, or DailyTrack concept.
+- Data validates the 756 ordered Research Sessions, three-calendar-year span,
+  canonical schema/tables, Liquidity Universe coverage, Field Catalog identity,
+  and point-in-time reference intervals before publication.
+- The stable `/data` route renders the canonical four-resource shell. Its Data
+  page owns loading, empty, updating, published, failed, refresh, and action
+  behavior through `/api/data`; it never calls the legacy `/api/v1` endpoint.
+- Backend verification passed `15 passed, 1 warning`; focused architecture and
+  restart regression passed `13 passed, 1 skipped`; Web shell test and build
+  passed. Real Playwright acceptance from `/data` passed in `8.1s` against the
+  isolated PostgreSQL/RustFS runtime and an independent API/worker process pair.

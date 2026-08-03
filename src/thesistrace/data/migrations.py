@@ -28,5 +28,56 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0002_dataset_update_and_publication",
+            statement="""
+                ALTER TABLE data.releases
+                    ADD COLUMN manifest_sha256 text NOT NULL,
+                    ADD COLUMN source_name text NOT NULL,
+                    ADD COLUMN collection_kind text NOT NULL,
+                    ADD COLUMN canonical_schema text NOT NULL,
+                    ADD COLUMN session_start text NOT NULL,
+                    ADD COLUMN session_end text NOT NULL,
+                    ADD COLUMN session_count integer NOT NULL CHECK (session_count > 0);
+
+                CREATE UNIQUE INDEX data_releases_manifest_sha256_idx
+                    ON data.releases (manifest_sha256);
+
+                CREATE TABLE data.update_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    status text NOT NULL CHECK (
+                        status IN ('accepted', 'running', 'published', 'no_change', 'failed')
+                    ),
+                    release_id text NULL REFERENCES data.releases(id),
+                    failure_reason text NULL,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now()
+                );
+
+                CREATE UNIQUE INDEX data_one_active_update_idx
+                    ON data.update_receipts ((true))
+                    WHERE status IN ('accepted', 'running');
+
+                CREATE TABLE data.update_attempts (
+                    id bigserial PRIMARY KEY,
+                    request_id text NOT NULL REFERENCES data.update_receipts(request_id),
+                    status text NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                    started_at timestamptz NOT NULL DEFAULT now(),
+                    finished_at timestamptz NULL
+                );
+
+                CREATE TABLE data.fields (
+                    field_id text PRIMARY KEY,
+                    definition jsonb NOT NULL
+                );
+
+                CREATE TABLE data.release_fields (
+                    release_id text NOT NULL REFERENCES data.releases(id),
+                    field_id text NOT NULL REFERENCES data.fields(field_id),
+                    PRIMARY KEY (release_id, field_id)
+                );
+            """,
+        ),
     ),
 )

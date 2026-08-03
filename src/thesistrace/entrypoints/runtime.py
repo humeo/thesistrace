@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import boto3
 
 from thesistrace._postgres import PostgresDatabase, apply_migrations
+from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.data import DataService
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.publication import Publication
@@ -91,10 +92,11 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             region_name=settings.s3_region,
         )
         s3.list_buckets()
+        publication = Publication(database, s3, bucket=settings.s3_bucket)
         yield CoreRuntime(
             database=database,
-            data=DataService(database),
-            publication=Publication(database, s3, bucket=settings.s3_bucket),
+            data=DataService(database, publication, FixtureDataSource()),
+            publication=publication,
         )
     finally:
         database.close()

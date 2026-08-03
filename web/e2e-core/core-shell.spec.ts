@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
-test("opens the runnable four-resource Core shell", async ({ page }) => {
-  await page.goto("/core.html");
+test("publishes the first Dataset Release through the real Core", async ({ page }) => {
+  await page.goto("/data");
 
   const navigation = page.getByRole("navigation", { name: "Product resources" });
   await expect(navigation.getByRole("link")).toHaveCount(4);
@@ -21,5 +21,14 @@ test("opens the runnable four-resource Core shell", async ({ page }) => {
     "href",
     "/daily-tracks",
   );
-  await expect(page.getByRole("main").getByLabel("Resource outlet")).toBeAttached();
+  await expect(page.getByText("No Dataset Releases yet.")).toBeVisible();
+  await page.getByRole("button", { name: "Update Data" }).click();
+  await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
+  await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByText("756 Research Sessions")).toBeVisible();
+  await expect(page.getByText("First Release")).toBeVisible();
+  await expect(page.getByText("manifest_sha256")).toHaveCount(0);
+  await expect(page.getByText("object_key")).toHaveCount(0);
 });

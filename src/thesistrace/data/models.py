@@ -8,6 +8,8 @@ class ReleaseSummary(BaseModel):
 
     id: str
     predecessor_id: str | None
+    session_count: int
+    covered_session_range: dict[str, str]
 
 
 class DataOverview(BaseModel):
@@ -23,3 +25,10 @@ class ReleaseHistory(BaseModel):
 
     items: list[ReleaseSummary]
     next_cursor: str | None
+
+
+class UpdateAcceptance(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    request_id: str
+    outcome: Literal["accepted"]
