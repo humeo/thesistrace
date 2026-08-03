@@ -1,9 +1,18 @@
 from dataclasses import fields
+from datetime import date, timedelta
+
+import pytest
 
 from thesistrace.data import (
     DATA_SOURCE_ERROR_CATEGORIES,
     CanonicalSourceBatch,
     DataSourceError,
+)
+from thesistrace.data.canonical_mapping import (
+    BOOTSTRAP_RESEARCH_SESSION_COUNT,
+    CanonicalMappingError,
+    bootstrap_research_calendar,
+    research_sessions_after,
 )
 from thesistrace.data.models import (
     DataOverview,
@@ -41,6 +50,25 @@ def test_data_source_contract_rejects_provider_specific_error_categories() -> No
         raise AssertionError("provider-specific category was accepted")
 
 
+def test_data_owns_exchange_calendar_intersection_and_bootstrap_coverage() -> None:
+    start = date(2022, 1, 1)
+    sse = [(start + timedelta(days=offset)).isoformat() for offset in range(800)]
+    szse = sse[20:]
+
+    bootstrap = bootstrap_research_calendar((sse, szse))
+
+    assert len(bootstrap) == BOOTSTRAP_RESEARCH_SESSION_COUNT
+    assert bootstrap == szse[-BOOTSTRAP_RESEARCH_SESSION_COUNT:]
+    assert research_sessions_after((sse, szse), bootstrap[-2]) == bootstrap[-1:]
+
+
+def test_data_rejects_insufficient_exchange_calendar_coverage() -> None:
+    with pytest.raises(CanonicalMappingError) as failure:
+        bootstrap_research_calendar((("2026-08-03",), ("2026-08-03",)))
+
+    assert failure.value.detail_code == "INSUFFICIENT_CALENDAR_COVERAGE"
+
+
 def test_product_data_contract_has_no_provider_or_collection_modes() -> None:
     forbidden = {"live", "fixture", "bootstrap", "increment"}
     schemas = (
@@ -65,3 +93,11 @@ def test_live_tushare_gate_is_separate_from_the_default_gate() -> None:
 
     assert "scripts/check_live_tushare.py" not in default_gate
     assert "uv run python scripts/check_live_tushare.py" in live_gate
+
+    script = (
+        __import__("pathlib").Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "check_live_tushare.py"
+    ).read_text()
+    assert '"preflight":' not in script
+    assert '"source":' not in script

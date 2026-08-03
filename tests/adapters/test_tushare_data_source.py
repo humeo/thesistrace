@@ -6,7 +6,7 @@ import pytest
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.data import CollectionPlan, DataSourceError
 from thesistrace.fixture import build_fixture
-from thesistrace.tushare_source import TushareSourceError
+from thesistrace.tushare_source import TushareAdapter, TushareSourceError
 
 
 class RecordedProvider:
@@ -149,6 +149,86 @@ def test_tushare_increment_requires_previous_canonical() -> None:
     assert failure.value.detail_code == "PREVIOUS_CANONICAL_REQUIRED"
 
 
+def test_tushare_rejects_malformed_provider_snapshots_as_source_data() -> None:
+    with pytest.raises(DataSourceError) as failure:
+        TushareDataSource(provider=RecordedProvider()).collect(
+            CollectionPlan.bootstrap()
+        )
+
+    assert failure.value.category == "invalid_source_data"
+    assert failure.value.detail_code == "MALFORMED_PROVIDER_PAYLOAD"
+
+
+def test_tushare_rejects_responses_missing_requested_fields() -> None:
+    class MissingFieldTransport:
+        def post(self, payload: dict[str, object]) -> dict[str, object]:
+            return {
+                "code": 0,
+                "msg": "",
+                "data": {"fields": ["ts_code"], "items": [["600000.SH"]]},
+            }
+
+    provider = TushareAdapter(
+        token="recorded-token",
+        transport=MissingFieldTransport(),
+        throttle_seconds=0,
+    )
+
+    with pytest.raises(TushareSourceError) as failure:
+        provider.query(
+            "daily",
+            params={},
+            fields=("ts_code", "trade_date"),
+        )
+
+    assert failure.value.reason_code == "INVALID_RESPONSE"
+
+
+def test_tushare_materializes_price_corrections_by_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = RecordedProvider()
+    _source, previous = build_fixture()
+    frontier = str(previous["research_calendar"][-1])
+    target = previous["prices"][0]
+    monkeypatch.setattr(
+        "thesistrace.adapters.tushare_data.normalize_tushare_increment",
+        lambda _snapshot, _previous: (
+            {"source": "tushare"},
+            {
+                "research_calendar_append": [],
+                "instruments_replace": previous["instruments"],
+                "prices_append": [],
+                "trading_states_append": [],
+                "price_limits_append": [],
+                "base_pool_append": [],
+                "adjustment_anchors_append": [],
+                "st_designations_append": [],
+                "liquidity_universes_append": {},
+                "liquidity_universes_replace": {},
+                "industry_membership_replace": previous["industry_membership"],
+                "price_corrections": [
+                    {
+                        "session": target["session"],
+                        "instrument_id": target["instrument_id"],
+                        "field": "close_raw",
+                        "value": "99.0000",
+                    }
+                ],
+            },
+        ),
+    )
+
+    batch = TushareDataSource(provider=provider).collect(
+        CollectionPlan.incremental(frontier, previous)
+    )
+    corrected = batch.canonical["prices"][0]
+
+    assert corrected["close_raw"] == "99.0000"
+    assert "field" not in corrected
+    assert "value" not in corrected
+
+
 def test_tushare_adapter_has_no_product_or_infrastructure_knowledge() -> None:
     source = (
         Path(__file__).resolve().parents[2]
@@ -168,3 +248,19 @@ def test_tushare_adapter_has_no_product_or_infrastructure_knowledge() -> None:
         "daily_track",
     ):
         assert forbidden not in source.lower()
+
+
+def test_tushare_provider_does_not_own_canonical_calendar_or_fixture_rules() -> None:
+    source = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "thesistrace"
+        / "tushare_source.py"
+    ).read_text()
+    collector = source.split("def collect_bootstrap_snapshot", maxsplit=1)[1].split(
+        "def collect_incremental_snapshot", maxsplit=1
+    )[0]
+
+    assert "from thesistrace.fixture" not in source
+    assert "len(common)" not in collector
+    assert "common[-756:]" not in collector

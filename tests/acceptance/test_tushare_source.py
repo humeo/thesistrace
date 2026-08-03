@@ -31,12 +31,13 @@ class RecordingTransport:
         self.payloads.append(copied)
         if payload["api_name"] == self.denied_api:
             return {"code": 2002, "msg": "permission denied", "data": None}
+        fields = str(payload["fields"]).split(",")
         return {
             "code": 0,
             "msg": "",
             "data": {
-                "fields": ["ts_code", "trade_date"],
-                "items": [["600000.SH", "20260729"]],
+                "fields": fields,
+                "items": [[field for field in fields]],
             },
         }
 

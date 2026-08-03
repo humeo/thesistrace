@@ -15,7 +15,7 @@ def main() -> None:
     transport = HttpTushareTransport()
     try:
         provider = TushareAdapter(token=token, transport=transport)
-        preflight = provider.preflight()
+        provider.preflight()
         batch = TushareDataSource(provider=provider).collect(
             CollectionPlan.bootstrap()
         )
@@ -26,11 +26,9 @@ def main() -> None:
             {
                 "canonical_schema": batch.canonical["schema_version"],
                 "covered_session_range": batch.covered_session_range,
-                "preflight": preflight,
                 "research_session_count": len(
                     batch.canonical["research_calendar"]
                 ),
-                "source": batch.source_name,
             },
             ensure_ascii=False,
             sort_keys=True,

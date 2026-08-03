@@ -1,26 +1,9 @@
 from datetime import date, timedelta
-from decimal import ROUND_HALF_EVEN, Decimal
+from decimal import Decimal
 
-from thesistrace.data.fields import AUTHORABLE_FIELDS
-
-DAILY_FIELDS = (
-    ("ts_code", "source.ts_code", "Tushare instrument code", "text", "instrument"),
-    ("trade_date", "source.trade_date", "market session", "date", "session"),
-    ("open", "price.open.raw", "first traded price", "CNY/share", "post-close"),
-    ("high", "price.high.raw", "highest traded price", "CNY/share", "post-close"),
-    ("low", "price.low.raw", "lowest traded price", "CNY/share", "post-close"),
-    ("close", "price.close.raw", "last traded price", "CNY/share", "post-close"),
-    ("pre_close", "price.pre_close.raw", "previous close", "CNY/share", "post-close"),
-    ("change", "price.change.raw", "close change", "CNY/share", "post-close"),
-    ("pct_chg", "price.pct_change.raw", "close change rate", "percent", "post-close"),
-    ("vol", "market.volume.source", "source volume", "100 shares", "post-close"),
-    ("amount", "market.turnover.source", "source turnover", "thousand CNY", "post-close"),
-)
-
-ALPHA_FIELDS = tuple(
-    (field.evaluation_name, field.field_id, field.definition, field.unit)
-    for field in AUTHORABLE_FIELDS
-)
+from thesistrace.data.canonical_mapping import ALPHA_FIELDS as ALPHA_FIELDS
+from thesistrace.data.canonical_mapping import DAILY_FIELDS as DAILY_FIELDS
+from thesistrace.data.canonical_mapping import decimal_string, field_catalog, liquidity_universes
 
 
 def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
@@ -242,88 +225,3 @@ def industry_membership(
         }
         for index, instrument in enumerate(instruments)
     ]
-
-
-def liquidity_universes(
-    sessions: list[str],
-    instruments: list[dict[str, str]],
-    prices: list[dict[str, str]],
-    states: list[dict[str, str]],
-) -> dict[str, list[dict[str, object]]]:
-    turnover = {
-        (row["session"], row["instrument_id"]): Decimal(row["turnover_cny"]) for row in prices
-    }
-    trading_state_by_position = {
-        (row["session"], row["instrument_id"]): row["state"] for row in states
-    }
-    ranked_by_session: list[list[str]] = []
-    for session_index, _session in enumerate(sessions):
-        if session_index < 19:
-            ranked_by_session.append([])
-            continue
-        window = sessions[session_index - 19 : session_index + 1]
-        scored: list[tuple[Decimal, str]] = []
-        for instrument in instruments:
-            instrument_id = instrument["instrument_id"]
-            values: list[Decimal] = []
-            for window_session in window:
-                value = turnover.get((window_session, instrument_id))
-                if value is not None:
-                    values.append(value)
-                elif (
-                    trading_state_by_position.get((window_session, instrument_id))
-                    == "full_session_suspension"
-                ):
-                    values.append(Decimal(0))
-            if len(values) == 20:
-                scored.append((sum(values, Decimal(0)) / 20, instrument_id))
-        scored.sort(key=lambda item: item[1])
-        scored.sort(key=lambda item: item[0], reverse=True)
-        ranked_by_session.append([instrument_id for _, instrument_id in scored])
-
-    universes: dict[str, list[dict[str, object]]] = {}
-    for size in (300, 1000, 2000, 3000):
-        universes[f"top{size}"] = [
-            {
-                "session": session,
-                "instrument_ids": ranked_by_session[index][:size],
-                "status": "available" if index >= 19 else "insufficient_history",
-            }
-            for index, session in enumerate(sessions)
-        ]
-    return universes
-
-
-def field_catalog(release_available_from: str) -> list[dict[str, object]]:
-    catalog = [
-        {
-            "name": source_name,
-            "field_id": field_id,
-            "definition": definition,
-            "unit": unit,
-            "time_semantics": semantics,
-            "alpha_authorable": False,
-            "release_available_from": release_available_from,
-            "coverage": "canonical EOD price rows",
-        }
-        for source_name, field_id, definition, unit, semantics in DAILY_FIELDS
-    ]
-    catalog.extend(
-        {
-            "name": name,
-            "field_id": field_id,
-            "definition": definition,
-            "unit": unit,
-            "time_semantics": "post-close",
-            "alpha_authorable": True,
-            "release_available_from": release_available_from,
-            "coverage": "canonical EOD price rows",
-        }
-        for name, field_id, definition, unit in ALPHA_FIELDS
-    )
-    return catalog
-
-
-def decimal_string(value: Decimal, places: int) -> str:
-    quantum = Decimal(1).scaleb(-places)
-    return format(value.quantize(quantum, rounding=ROUND_HALF_EVEN), "f")

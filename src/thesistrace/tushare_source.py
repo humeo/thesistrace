@@ -7,7 +7,14 @@ from typing import Protocol
 
 import httpx
 
-from thesistrace.fixture import decimal_string, field_catalog, liquidity_universes
+from thesistrace.data.canonical_mapping import (
+    CanonicalMappingError,
+    bootstrap_research_calendar,
+    decimal_string,
+    field_catalog,
+    liquidity_universes,
+    research_sessions_after,
+)
 
 SOURCE_CONTRACT_VERSION = "tushare-v1"
 
@@ -200,14 +207,7 @@ class TushareAdapter:
             fields=("exchange", "cal_date", "is_open", "pretrade_date"),
             primary_key=("exchange", "cal_date"),
         )
-        common = sorted(
-            {str(row["cal_date"]) for row in sse_calendar if str(row["is_open"]) == "1"}
-            & {str(row["cal_date"]) for row in szse_calendar if str(row["is_open"]) == "1"}
-        )
-        if len(common) < 756:
-            raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
-        sessions = common[-756:]
-        start_date = sessions[0]
+        start_date = calendar_start
 
         stock_basic: list[dict[str, object]] = []
         for list_status in ("L", "D", "P"):
@@ -532,6 +532,10 @@ class TushareAdapter:
         items = data.get("items")
         if not isinstance(response_fields, list) or not isinstance(items, list):
             raise TushareSourceError("INVALID_RESPONSE", source_code=0)
+        if any(not isinstance(field, str) for field in response_fields):
+            raise TushareSourceError("INVALID_RESPONSE", source_code=0)
+        if not set(fields) <= set(response_fields):
+            raise TushareSourceError("INVALID_RESPONSE", source_code=0)
         if any(not isinstance(row, list) or len(row) != len(response_fields) for row in items):
             raise TushareSourceError("INVALID_RESPONSE", source_code=0)
         return [dict(zip(response_fields, row, strict=True)) for row in items]
@@ -605,16 +609,15 @@ def normalize_tushare_snapshot(
     szse_open = {
         str(row["cal_date"]) for row in snapshot["calendar_szse"] if str(row["is_open"]) == "1"
     }
-    session_keys = sorted(sse_open & szse_open)[-756:]
-    if len(session_keys) != 756:
-        raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
+    try:
+        session_keys = bootstrap_research_calendar((sse_open, szse_open))
+    except CanonicalMappingError as error:
+        raise TushareSourceError(error.detail_code, source_code=0) from error
     sessions = [iso_date(value) for value in session_keys]
     session_set = set(session_keys)
 
     instruments = normalize_instruments(snapshot["stock_basic"])
     instrument_by_code = {str(row["ts_code"]): row for row in instruments}
-    if len(instruments) < 30:
-        raise TushareSourceError("INSUFFICIENT_INSTRUMENT_COVERAGE", source_code=0)
 
     daily_by_position = {
         (str(row["trade_date"]), str(row["ts_code"])): row
@@ -817,11 +820,13 @@ def normalize_tushare_increment(
     szse_open = {
         str(row["cal_date"]) for row in snapshot["calendar_szse"] if str(row["is_open"]) == "1"
     }
-    session_keys = sorted(
-        session
-        for session in sse_open & szse_open
-        if session > last_session_key
-    )
+    try:
+        session_keys = research_sessions_after(
+            (sse_open, szse_open),
+            last_session_key,
+        )
+    except CanonicalMappingError as error:
+        raise TushareSourceError(error.detail_code, source_code=0) from error
     if not session_keys:
         raise TushareSourceError("NO_NEW_RESEARCH_SESSION", source_code=0)
     sessions = [iso_date(value) for value in session_keys]

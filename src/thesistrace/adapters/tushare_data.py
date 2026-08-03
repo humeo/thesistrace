@@ -88,6 +88,11 @@ class TushareDataSource:
                 _error_category(error.reason_code),
                 detail_code=error.reason_code,
             ) from error
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="MALFORMED_PROVIDER_PAYLOAD",
+            ) from error
 
         calendar = canonical.get("research_calendar")
         if not isinstance(calendar, list) or not calendar:
@@ -213,14 +218,21 @@ def _materialize_increment(
                 "invalid_source_data",
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
-        position = (
-            str(correction.get("session")),
-            str(correction.get("instrument_id")),
-        )
-        if position not in price_by_position:
+        required = {"session", "instrument_id", "field", "value"}
+        if not required <= correction.keys():
             raise DataSourceError(
                 "invalid_source_data",
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
-        price_by_position[position].update(copy.deepcopy(correction))
+        position = (
+            str(correction["session"]),
+            str(correction["instrument_id"]),
+        )
+        target = price_by_position.get(position)
+        if target is None:
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INVALID_CANONICAL_INCREMENT",
+            )
+        target[str(correction["field"])] = str(correction["value"])
     return canonical
