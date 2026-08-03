@@ -62,4 +62,5 @@ verify the Kernel package imports no lifecycle or infrastructure module.
 - The partitioned loader now materializes canonical input and delegates to the
   same Kernel Run. Its acceptance test compares the complete result by exact
   equality instead of maintaining a second calculation implementation.
-- The updated exact command above passed `72 passed` in `93.36s`.
+- After sealing every `RunInput` collection as canonical bytes or tuples, the
+  updated exact command above passed `72 passed` in `100.64s`.
