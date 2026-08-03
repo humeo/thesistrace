@@ -118,7 +118,7 @@ class DataService:
                 if existing is not None:
                     if existing["request_fingerprint"] != fingerprint:
                         raise DataUpdateConflict("Data Update request_id conflicts")
-                    return UpdateAcceptance(request_id=normalized, outcome="accepted")
+                    return _update_outcome(normalized, str(existing["status"]))
                 transaction.execute(
                     """
                     INSERT INTO data.update_receipts (
@@ -135,6 +135,17 @@ class DataService:
                     """
                 )
         except UniqueViolation as error:
+            with self._database.transaction() as transaction:
+                existing = transaction.execute(
+                    """
+                    SELECT request_fingerprint, status
+                    FROM data.update_receipts
+                    WHERE request_id = %s
+                    """,
+                    (normalized,),
+                ).fetchone()
+            if existing is not None and existing["request_fingerprint"] == fingerprint:
+                return _update_outcome(normalized, str(existing["status"]))
             raise DataUpdateConflict("another Data Update is active") from error
         return UpdateAcceptance(request_id=normalized, outcome="accepted")
 
@@ -268,6 +279,9 @@ class DataService:
         )
         assert isinstance(calendar, list)
         predecessor_id = None if not has_predecessor else str(predecessor["id"])
+        if has_predecessor and str(calendar[-1]) == str(predecessor["session_end"]):
+            self._complete_no_change(request_id, attempt_id, predecessor_id)
+            return
         appended_sessions = calendar
         if has_predecessor:
             predecessor_index = calendar.index(str(predecessor["session_end"]))
@@ -382,6 +396,51 @@ class DataService:
                 (release_id,),
             )
 
+    def _complete_no_change(
+        self,
+        request_id: str,
+        attempt_id: int,
+        predecessor_id: str,
+    ) -> None:
+        with self._database.transaction() as transaction:
+            current = transaction.execute(
+                """
+                SELECT latest_release_id
+                FROM data.state
+                WHERE singleton = 1
+                FOR UPDATE
+                """
+            ).fetchone()
+            if current is None:
+                raise RuntimeError("Data state is not initialized")
+            if current["latest_release_id"] != predecessor_id:
+                raise DataUpdateConflict("latest Dataset Release changed during collection")
+            transaction.execute(
+                """
+                UPDATE data.update_attempts
+                SET status = 'succeeded', finished_at = now()
+                WHERE id = %s
+                """,
+                (attempt_id,),
+            )
+            transaction.execute(
+                """
+                UPDATE data.update_receipts
+                SET status = 'no_change', release_id = NULL,
+                    failure_reason = NULL, updated_at = now()
+                WHERE request_id = %s
+                """,
+                (request_id,),
+            )
+            transaction.execute(
+                """
+                UPDATE data.state
+                SET status = 'idle', latest_update_outcome = 'no_change',
+                    updated_at = now()
+                WHERE singleton = 1
+                """
+            )
+
 
 _RELEASE_SELECT = """
     SELECT id, predecessor_id, session_start, session_end, session_count, created_at
@@ -398,3 +457,13 @@ def _release_summary(row: dict[str, object] | None) -> ReleaseSummary | None:
         session_count=int(row["session_count"]),
         covered_session_range={"start": str(row["session_start"]), "end": str(row["session_end"])},
     )
+
+
+def _update_outcome(request_id: str, status: str) -> UpdateAcceptance:
+    if status in {"accepted", "running"}:
+        outcome = "accepted"
+    elif status in {"published", "no_change", "failed"}:
+        outcome = status
+    else:
+        raise RuntimeError("Data Update receipt status is invalid")
+    return UpdateAcceptance(request_id=request_id, outcome=outcome)

@@ -3,9 +3,11 @@ from __future__ import annotations
 import argparse
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi import Body, FastAPI, Header, HTTPException, Request, status
+from pydantic import BaseModel, ConfigDict
 
 from thesistrace.data import (
     DataOverview,
@@ -13,7 +15,12 @@ from thesistrace.data import (
     ReleaseSummary,
     UpdateAcceptance,
 )
+from thesistrace.data.service import DataUpdateConflict
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
+
+
+class DataUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 def create_app(settings: CoreSettings | None = None) -> FastAPI:
@@ -49,8 +56,14 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     def update_data(
         request: Request,
         idempotency_key: str = Header(alias="Idempotency-Key"),
+        _command: Annotated[DataUpdateRequest | None, Body()] = None,
     ) -> UpdateAcceptance:
-        return _runtime(request).data.update(idempotency_key)
+        try:
+            return _runtime(request).data.update(idempotency_key)
+        except DataUpdateConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
 
     return app
 

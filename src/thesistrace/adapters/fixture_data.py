@@ -20,12 +20,10 @@ class FixtureDataSource:
         if plan.kind == "incremental":
             if plan.after_session is None:
                 raise ValueError("Fixture incremental collection requires a frontier")
-            while str(canonical["research_calendar"][-1]) < plan.after_session:
-                _append_session(canonical)
-            if str(canonical["research_calendar"][-1]) != plan.after_session:
-                raise ValueError("Fixture frontier is not a Research Session")
             for _ in range(self._available_new_sessions):
                 _append_session(canonical)
+            if plan.after_session not in canonical["research_calendar"]:
+                raise ValueError("Fixture frontier is not a Research Session")
         calendar = canonical["research_calendar"]
         if not isinstance(calendar, list) or not calendar:
             raise ValueError("Fixture produced no canonical Research Sessions")

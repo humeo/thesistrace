@@ -31,4 +31,4 @@ class UpdateAcceptance(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     request_id: str
-    outcome: Literal["accepted"]
+    outcome: Literal["accepted", "published", "no_change", "failed"]

@@ -33,9 +33,9 @@ def validate_release_batch(
     elif (
         batch.collection_kind != "incremental"
         or predecessor_session not in calendar
-        or str(calendar[-1]) <= predecessor_session
+        or str(calendar[-1]) < predecessor_session
     ):
-        raise ValueError("Incremental canonical frontier did not advance")
+        raise ValueError("Incremental canonical frontier regressed")
     parsed_calendar = [_date(value, "Research Calendar") for value in calendar]
     if any(value.weekday() >= 5 for value in parsed_calendar):
         raise ValueError("Bootstrap Research Calendar contains a non-trading weekday")

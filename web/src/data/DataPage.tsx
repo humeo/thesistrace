@@ -76,6 +76,9 @@ export function DataPage() {
       <button onClick={() => void refresh()}>Refresh</button>
       {overview.status === "updating" && <p role="status">Updating canonical data…</p>}
       {overview.status === "failed" && <p role="alert">Data Update failed</p>}
+      {overview.status === "idle" && overview.latest_update_outcome === "no_change" && (
+        <p role="status">No new completed Research Session. Latest Release unchanged.</p>
+      )}
       {!release && overview.status !== "updating" && <p>No Dataset Releases yet.</p>}
       {release && (
         <article>

@@ -45,6 +45,12 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
     assert len(catch_up.canonical["research_calendar"]) == 759
     assert direct.collection_kind == catch_up.collection_kind == "incremental"
 
+    no_change = FixtureDataSource().collect(
+        CollectionPlan.incremental(direct.covered_session_range[1])
+    )
+    assert len(no_change.canonical["research_calendar"]) == 757
+    assert no_change.covered_session_range == direct.covered_session_range
+
 
 @pytest.mark.parametrize(
     ("kind", "after_session"),
