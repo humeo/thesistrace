@@ -13,12 +13,29 @@ PRICE_VALUE_FIELDS = (
 
 
 def validate_bootstrap_batch(batch: CanonicalSourceBatch) -> None:
+    validate_release_batch(batch, predecessor_session=None)
+
+
+def validate_release_batch(
+    batch: CanonicalSourceBatch,
+    *,
+    predecessor_session: str | None,
+) -> None:
     canonical = batch.canonical
     calendar = canonical.get("research_calendar")
     if canonical.get("schema_version") != "canonical-eod-v1":
         raise ValueError("Bootstrap canonical schema is invalid")
-    if not isinstance(calendar, list) or len(calendar) != 756 or calendar != sorted(set(calendar)):
+    if not isinstance(calendar, list) or len(calendar) < 756 or calendar != sorted(set(calendar)):
         raise ValueError("Bootstrap calendar or three-year coverage is invalid")
+    if predecessor_session is None:
+        if batch.collection_kind != "bootstrap" or len(calendar) != 756:
+            raise ValueError("Bootstrap must contain exactly the fixed Research Window")
+    elif (
+        batch.collection_kind != "incremental"
+        or predecessor_session not in calendar
+        or str(calendar[-1]) <= predecessor_session
+    ):
+        raise ValueError("Incremental canonical frontier did not advance")
     parsed_calendar = [_date(value, "Research Calendar") for value in calendar]
     if any(value.weekday() >= 5 for value in parsed_calendar):
         raise ValueError("Bootstrap Research Calendar contains a non-trading weekday")

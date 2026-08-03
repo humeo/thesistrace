@@ -29,6 +29,18 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   });
   await expect(page.getByText("756 Research Sessions")).toBeVisible();
   await expect(page.getByText("First Release")).toBeVisible();
+  const firstRelease = await page
+    .getByRole("list", { name: "Dataset Release history" })
+    .getByRole("listitem")
+    .first()
+    .textContent();
+  await page.getByRole("button", { name: "Update Data" }).click();
+  await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
+  await expect(page.getByText("757 Research Sessions")).toBeVisible({ timeout: 30_000 });
+  const releaseHistory = page.getByRole("list", { name: "Dataset Release history" });
+  await expect(releaseHistory.getByRole("listitem")).toHaveCount(2);
+  await expect(releaseHistory).toContainText(firstRelease ?? "missing-root-release");
+  await expect(page.getByText("Later Release")).toBeVisible();
   await expect(page.getByText("manifest_sha256")).toHaveCount(0);
   await expect(page.getByText("object_key")).toHaveCount(0);
 });

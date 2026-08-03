@@ -13,6 +13,10 @@ class CollectionPlan:
     def bootstrap(cls) -> CollectionPlan:
         return cls(kind="bootstrap")
 
+    @classmethod
+    def incremental(cls, after_session: str) -> CollectionPlan:
+        return cls(kind="incremental", after_session=after_session)
+
 
 @dataclass(frozen=True)
 class CanonicalSourceBatch:

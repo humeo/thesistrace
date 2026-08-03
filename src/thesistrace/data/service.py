@@ -13,7 +13,7 @@ from thesistrace.data.models import (
     UpdateAcceptance,
 )
 from thesistrace.data.source import CollectionPlan, DataSource
-from thesistrace.data.validation import validate_bootstrap_batch
+from thesistrace.data.validation import validate_release_batch
 from thesistrace.publication import JsonPayload, Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 
@@ -138,7 +138,7 @@ class DataService:
             ).fetchone()
         assert attempt is not None
         try:
-            self._publish_bootstrap(request_id, int(attempt["id"]))
+            self._publish_update(request_id, int(attempt["id"]))
         except Exception as error:
             with self._database.transaction() as transaction:
                 transaction.execute(
@@ -172,7 +172,7 @@ class DataService:
             row = transaction.execute(
                 """
                 SELECT manifest_sha256, source_name, collection_kind,
-                       session_start, session_end
+                       session_start, session_end, predecessor_id
                 FROM data.releases
                 WHERE id = %s
                 """,
@@ -184,7 +184,7 @@ class DataService:
             "canonical_contract": "canonical-eod-v1",
             "collection_kind": row["collection_kind"],
             "covered_session_range": {"start": row["session_start"], "end": row["session_end"]},
-            "predecessor_id": None,
+            "predecessor_id": row["predecessor_id"],
             "source_name": row["source_name"],
         }
         bundle = self._publication.read(
@@ -199,11 +199,31 @@ class DataService:
             raise RuntimeError("Dataset Release canonical payload is invalid")
         return value
 
-    def _publish_bootstrap(self, request_id: str, attempt_id: int) -> None:
-        batch = self._source.collect(CollectionPlan.bootstrap())
+    def _publish_update(self, request_id: str, attempt_id: int) -> None:
+        with self._database.transaction() as transaction:
+            predecessor = transaction.execute(
+                """
+                SELECT id, session_end
+                FROM data.releases
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+        plan = (
+            CollectionPlan.bootstrap()
+            if predecessor is None
+            else CollectionPlan.incremental(str(predecessor["session_end"]))
+        )
+        batch = self._source.collect(plan)
         calendar = batch.canonical.get("research_calendar")
-        validate_bootstrap_batch(batch)
+        validate_release_batch(
+            batch,
+            predecessor_session=(
+                None if predecessor is None else str(predecessor["session_end"])
+            ),
+        )
         assert isinstance(calendar, list)
+        predecessor_id = None if predecessor is None else str(predecessor["id"])
         provenance = {
             "canonical_contract": "canonical-eod-v1",
             "collection_kind": batch.collection_kind,
@@ -211,7 +231,7 @@ class DataService:
                 "start": batch.covered_session_range[0],
                 "end": batch.covered_session_range[1],
             },
-            "predecessor_id": None,
+            "predecessor_id": predecessor_id,
             "source_name": batch.source_name,
         }
         prepared = self._publication.prepare(
@@ -224,9 +244,20 @@ class DataService:
         )
         release_id = f"dsr_{prepared.manifest_sha256[:24]}"
         with self._database.transaction() as transaction:
-            existing = transaction.execute("SELECT id FROM data.releases LIMIT 1").fetchone()
-            if existing is not None:
-                raise DataUpdateConflict("Bootstrap requires no prior Dataset Release")
+            transaction.execute(
+                "SELECT singleton FROM data.state WHERE singleton = 1 FOR UPDATE"
+            )
+            current = transaction.execute(
+                """
+                SELECT id
+                FROM data.releases
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            current_id = None if current is None else str(current["id"])
+            if current_id != predecessor_id:
+                raise DataUpdateConflict("latest Dataset Release changed during collection")
             published = self._publication.record(transaction, prepared)
             transaction.execute(
                 """
@@ -234,10 +265,11 @@ class DataService:
                     id, predecessor_id, manifest_sha256, source_name,
                     collection_kind, canonical_schema, session_start,
                     session_end, session_count
-                ) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     release_id,
+                    predecessor_id,
                     published.manifest_sha256,
                     batch.source_name,
                     batch.collection_kind,

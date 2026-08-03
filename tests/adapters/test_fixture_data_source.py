@@ -28,3 +28,17 @@ def test_fixture_implements_only_the_canonical_collection_contract() -> None:
     ).read_text()
     for forbidden in ("release", "postgres", "publication", "s3", "research_run", "daily_track"):
         assert forbidden not in source.lower()
+
+
+def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
+    root = FixtureDataSource().collect(CollectionPlan.bootstrap())
+    frontier = root.covered_session_range[1]
+
+    direct = FixtureDataSource().collect(CollectionPlan.incremental(frontier))
+    catch_up = FixtureDataSource(available_new_sessions=3).collect(
+        CollectionPlan.incremental(frontier)
+    )
+
+    assert len(direct.canonical["research_calendar"]) == 757
+    assert len(catch_up.canonical["research_calendar"]) == 759
+    assert direct.collection_kind == catch_up.collection_kind == "incremental"
