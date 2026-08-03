@@ -78,5 +78,10 @@ policy or provider mode.
   direct, catch-up, v1-upgrade, and intermediate-v2-upgrade acceptance passed
   (`4 passed, 1 warning` in `11.22s`). The Data page now refreshes Release history;
   real `/data` Playwright acceptance published two Releases, retained both,
-  selected the 757-session Release as latest, and passed in `15.1s`.
+  selected the 757-session Release as latest, and passed in `14.5s` in the
+  final exact ticket run.
+- The final command block above passed from a clean runtime: backend `32 passed,
+  1 warning` in `28.75s`, Web `1 passed` in `14.5s`, followed by a successful
+  runtime teardown. Independent review concluded Standards PASS and Spec PASS
+  with no findings.
 - Focused Ruff, `13` architecture tests, TypeScript, and Web build passed.
