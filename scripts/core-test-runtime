@@ -40,6 +40,7 @@ run_with_environment() {
   THESISTRACE_S3_ENDPOINT_URL=http://127.0.0.1:59000 \
   THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
   THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+  THESISTRACE_S3_BUCKET=thesistrace-core-test \
   THESISTRACE_S3_REGION=us-east-1 \
     "$@"
 }

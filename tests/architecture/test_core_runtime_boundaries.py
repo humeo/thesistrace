@@ -4,7 +4,7 @@ from pathlib import Path
 from thesistrace.entrypoints.runtime import CoreSettings
 
 ROOT = Path(__file__).resolve().parents[2]
-CORE_PACKAGES = ("_postgres", "data", "entrypoints")
+CORE_PACKAGES = ("_postgres", "data", "entrypoints", "publication")
 FORBIDDEN_IMPORTS = (
     "thesistrace.hosted",
     "thesistrace.auth",
@@ -104,3 +104,16 @@ def test_data_owns_the_single_authorable_field_binding_catalog() -> None:
         assert data_fields.count(field_id) == 1
         assert field_id not in alpha_source
         assert field_id not in fixture_source
+
+
+def test_publication_hides_physical_s3_keys_and_uses_the_standard_client() -> None:
+    source = (ROOT / "src" / "thesistrace" / "publication" / "service.py").read_text()
+    exported = (ROOT / "src" / "thesistrace" / "publication" / "__init__.py").read_text()
+
+    assert "put_object(" in source
+    assert "get_object(" in source
+    assert "httpx" not in source
+    assert "_object_key" in source
+    assert "object_key" not in exported
+    for forbidden in ("token", "proxy", "fastapi", "filesystem"):
+        assert forbidden not in source.lower()

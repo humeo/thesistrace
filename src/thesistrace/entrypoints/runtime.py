@@ -11,12 +11,14 @@ from botocore.client import BaseClient
 from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.data import DataService
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
+from thesistrace.publication import Publication
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
     "THESISTRACE_S3_ENDPOINT_URL",
     "THESISTRACE_S3_ACCESS_KEY_ID",
     "THESISTRACE_S3_SECRET_ACCESS_KEY",
+    "THESISTRACE_S3_BUCKET",
 )
 
 
@@ -26,6 +28,7 @@ class CoreSettings:
     s3_endpoint_url: str
     s3_access_key_id: str
     s3_secret_access_key: str
+    s3_bucket: str
     s3_region: str = "us-east-1"
 
     @classmethod
@@ -37,6 +40,7 @@ class CoreSettings:
                     "s3_endpoint_url",
                     "s3_access_key_id",
                     "s3_secret_access_key",
+                    "s3_bucket",
                 ),
                 CORE_ENVIRONMENT_NAMES,
                 strict=True,
@@ -70,6 +74,7 @@ class CoreRuntime:
     database: PostgresDatabase
     data: DataService
     s3: BaseClient
+    publication: Publication
 
 
 @contextmanager
@@ -90,6 +95,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             database=database,
             data=DataService(database),
             s3=s3,
+            publication=Publication(s3, bucket=settings.s3_bucket),
         )
     finally:
         database.close()
