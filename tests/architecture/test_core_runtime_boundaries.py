@@ -215,7 +215,14 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
         ROOT / "src" / "thesistrace" / "research_kernel" / "kernel_advance.py"
     ).read_text()
 
-    assert "return initial_state(run_input).output_snapshot()" in run_source
-    assert "return initial_state(" in advance_source
+    assert "evaluate_alpha_matrix(" in run_source
+    assert "build_forward_labels(" in run_source
+    assert "evaluate_factor(" in run_source
+    assert "run_strategy(" in run_source
+    assert "evaluate_alpha_matrix(" in advance_source
+    assert "build_forward_labels(" in advance_source
+    assert "evaluate_factor(" in advance_source
+    assert "run_strategy(" in advance_source
+    assert "initial_state(" not in advance_source
     for forbidden in ("mode:", "mode =", "thesistrace.tracking", "thesistrace.research_runs"):
         assert forbidden not in advance_source

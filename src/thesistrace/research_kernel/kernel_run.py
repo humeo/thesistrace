@@ -140,29 +140,76 @@ class KernelState:
         return self._run_input.with_canonical_data(canonical_data)
 
 
-def run(run_input: RunInput) -> dict[str, dict[str, object]]:
+class RunOutput(dict[str, dict[str, object]]):
+    """Dictionary-compatible ResearchRun artifacts with its internal Track seed."""
+
+    def __init__(
+        self,
+        artifacts: dict[str, dict[str, object]],
+        *,
+        track_state: KernelState,
+    ) -> None:
+        super().__init__(artifacts)
+        self._track_state = track_state
+
+    @property
+    def track_state(self) -> KernelState:
+        return self._track_state
+
+
+def run(run_input: RunInput) -> RunOutput:
     canonical = run_input.canonical_snapshot()
     calendar = canonical.get("research_calendar")
     if not isinstance(calendar, list) or len(calendar) != INPUT_SESSION_COUNT:
         raise KernelRunError("Kernel Run requires exactly 756 canonical sessions")
-    return initial_state(run_input).output_snapshot()
-
-
-def initial_state(
-    run_input: RunInput,
-    *,
-    origin_session: str | None = None,
-) -> KernelState:
-    canonical = run_input.canonical_snapshot()
+    origin_session = str(calendar[-504])
     alpha_expression = run_input.alpha_expression_snapshot()
-    calendar = canonical.get("research_calendar")
-    if not isinstance(calendar, list) or len(calendar) < INPUT_SESSION_COUNT:
-        raise KernelRunError("Kernel state requires at least 756 canonical sessions")
-    selected_origin = str(calendar[-504]) if origin_session is None else str(origin_session)
-    if selected_origin not in calendar:
-        raise KernelRunError("Kernel state origin is outside canonical sessions")
-    definition = {
-        "alpha": {"expression": alpha_expression},
+    definition = calculation_definition(run_input, alpha_expression)
+    matrix = evaluate_alpha_matrix(
+        canonical,
+        expression=alpha_expression,
+        field_bindings=run_input.field_bindings_snapshot(),
+        universe_name=run_input.universe,
+        neutralization=run_input.neutralization,
+    )
+    labels = build_forward_labels(canonical, matrix)
+    factor = evaluate_factor(labels)
+    result_strategy = run_strategy(
+        canonical,
+        matrix,
+        definition,
+        origin_session=origin_session,
+    )
+    continuous_strategy = run_strategy(
+        canonical,
+        matrix,
+        definition,
+        origin_session=origin_session,
+        terminal_cutoff=False,
+    )
+    track_state = KernelState(
+        run_input=run_input,
+        output=compose_output(matrix, labels, factor, continuous_strategy),
+        origin_session=origin_session,
+    )
+    return RunOutput(
+        compose_output(matrix, labels, factor, result_strategy),
+        track_state=track_state,
+    )
+
+
+def calculation_definition(
+    run_input: RunInput,
+    alpha_expression: AlphaExpression | None = None,
+) -> dict[str, object]:
+    return {
+        "alpha": {
+            "expression": (
+                run_input.alpha_expression_snapshot()
+                if alpha_expression is None
+                else alpha_expression
+            )
+        },
         "universe": run_input.universe,
         "neutralization": run_input.neutralization,
         "strategy": {
@@ -177,22 +224,15 @@ def initial_state(
             "transfer_fee_rate": run_input.transfer_fee_rate,
         },
     }
-    matrix = evaluate_alpha_matrix(
-        canonical,
-        expression=alpha_expression,
-        field_bindings=run_input.field_bindings_snapshot(),
-        universe_name=run_input.universe,
-        neutralization=run_input.neutralization,
-    )
-    labels = build_forward_labels(canonical, matrix)
-    factor = evaluate_factor(labels)
-    strategy = run_strategy(
-        canonical,
-        matrix,
-        definition,
-        origin_session=selected_origin,
-    )
-    output = {
+
+
+def compose_output(
+    matrix: dict[str, object],
+    labels: dict[str, object],
+    factor: dict[str, object],
+    strategy: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    return {
         "alpha_matrix": matrix,
         "forward_labels": labels,
         "factor_evaluation": factor,
@@ -216,8 +256,3 @@ def initial_state(
             "strategy": strategy["diagnostics"],
         },
     }
-    return KernelState(
-        run_input=run_input,
-        output=output,
-        origin_session=selected_origin,
-    )

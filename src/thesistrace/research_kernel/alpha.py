@@ -337,7 +337,6 @@ def evaluate_alpha_matrix(
         for item in canonical.get("st_designations", [])
     }
     industries = canonical["industry_membership"]
-    checksum = hashlib.sha256()
     session_results: list[dict[str, object]] = []
     for session_index, session in enumerate(calendar):
         coverage = Counter()
@@ -372,12 +371,6 @@ def evaluate_alpha_matrix(
             {"instrument_id": instrument_id, "value": final_values[instrument_id]}
             for instrument_id in sorted(final_values)
         ]
-        checksum.update(session.encode())
-        checksum.update(b"\0")
-        for row in rows:
-            checksum.update(str(row["instrument_id"]).encode())
-            checksum.update(b"\0")
-            checksum.update(canonical_binary64_bytes(float(row["value"])))
         session_results.append(
             {"session": session, "values": rows, "coverage_loss": dict(sorted(coverage.items()))}
         )
@@ -386,8 +379,25 @@ def evaluate_alpha_matrix(
         "effective_lookback": parsed.effective_lookback,
         "neutralization": neutralization,
         "sessions": session_results,
-        "checksum": checksum.hexdigest(),
+        "checksum": alpha_matrix_checksum(session_results),
     }
+
+
+def alpha_matrix_checksum(sessions: list[dict[str, object]]) -> str:
+    checksum = hashlib.sha256()
+    for session in sessions:
+        checksum.update(str(session["session"]).encode())
+        checksum.update(b"\0")
+        rows = session.get("values")
+        if not isinstance(rows, list):
+            raise ValueError("Alpha Matrix session values are invalid")
+        for row in rows:
+            if not isinstance(row, Mapping):
+                raise ValueError("Alpha Matrix value is invalid")
+            checksum.update(str(row["instrument_id"]).encode())
+            checksum.update(b"\0")
+            checksum.update(canonical_binary64_bytes(float(row["value"])))
+    return checksum.hexdigest()
 
 
 def resolve_industry(

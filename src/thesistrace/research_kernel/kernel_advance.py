@@ -3,14 +3,28 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from hashlib import sha256
 
+from thesistrace.research_kernel.alpha import (
+    alpha_matrix_checksum,
+    evaluate_alpha_matrix,
+)
+from thesistrace.research_kernel.factor import (
+    HORIZONS,
+    build_forward_labels,
+    evaluate_factor,
+)
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
     KernelState,
-    initial_state,
+    RunInput,
+    calculation_definition,
+    compose_output,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.strategy import run_strategy
 
 SESSION_TABLES = (
     ("prices", "session"),
@@ -57,14 +71,141 @@ class AdvanceInput:
 
 def advance(advance_input: AdvanceInput) -> KernelState:
     prior = advance_input.prior_state()
+    prior_output = prior.output_snapshot()
+    prior_matrix = _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix")
+    prior_labels = _mapping(prior_output.get("forward_labels"), "prior Labels")
+    prior_strategy = _mapping(prior_output.get("strategy_backtest"), "prior Strategy")
+    appended = advance_input.new_canonical_snapshot()
     canonical = _append_canonical_sessions(
         prior.canonical_snapshot(),
-        advance_input.new_canonical_snapshot(),
+        appended,
     )
-    return initial_state(
-        prior.run_input_with_canonical(canonical),
+    run_input = prior.run_input_with_canonical(canonical)
+    new_sessions = _sessions(appended, "Advance")
+    matrix = _advance_alpha(
+        run_input,
+        canonical,
+        prior_matrix,
+        new_sessions,
+        prior.session_count,
+    )
+    labels = _advance_labels(canonical, matrix, prior_labels, new_sessions)
+    factor = evaluate_factor(labels)
+    strategy = run_strategy(
+        canonical,
+        matrix,
+        calculation_definition(run_input),
+        origin_session=prior.origin_session,
+        terminal_cutoff=False,
+        continuation=dict(prior_strategy),
+    )
+    return KernelState(
+        run_input=run_input,
+        output=compose_output(matrix, labels, factor, strategy),
         origin_session=prior.origin_session,
     )
+
+
+def _advance_alpha(
+    run_input: RunInput,
+    canonical: dict[str, object],
+    prior_matrix: Mapping[str, object],
+    new_sessions: list[str],
+    prior_session_count: int,
+) -> dict[str, object]:
+    lookback = int(prior_matrix["effective_lookback"])
+    calendar = _sessions(canonical, "Canonical")
+    window_start = max(0, prior_session_count - lookback)
+    window = _slice_canonical(canonical, calendar[window_start:])
+    evaluated = evaluate_alpha_matrix(
+        window,
+        expression=run_input.alpha_expression_snapshot(),
+        field_bindings=run_input.field_bindings_snapshot(),
+        universe_name=run_input.universe,
+        neutralization=run_input.neutralization,
+    )
+    new_set = set(new_sessions)
+    evaluated_sessions = evaluated.get("sessions")
+    prior_sessions = prior_matrix.get("sessions")
+    if not isinstance(evaluated_sessions, list) or not isinstance(prior_sessions, list):
+        raise KernelRunError("Advance Alpha state is invalid")
+    appended_sessions = [
+        dict(item)
+        for item in evaluated_sessions
+        if isinstance(item, Mapping) and str(item.get("session")) in new_set
+    ]
+    if [str(item["session"]) for item in appended_sessions] != new_sessions:
+        raise KernelRunError("Advance Alpha calculation did not cover every new session")
+    sessions = [dict(item) for item in prior_sessions]
+    sessions.extend(appended_sessions)
+    return {
+        "expression": run_input.alpha_expression_snapshot(),
+        "effective_lookback": lookback,
+        "neutralization": run_input.neutralization,
+        "sessions": sessions,
+        "checksum": alpha_matrix_checksum(sessions),
+    }
+
+
+def _advance_labels(
+    canonical: dict[str, object],
+    matrix: dict[str, object],
+    prior_labels: Mapping[str, object],
+    new_sessions: list[str],
+) -> dict[str, object]:
+    calendar = _sessions(canonical, "Canonical")
+    selected_sessions = calendar[-504:]
+    selected_set = set(selected_sessions)
+    prior_horizons = _mapping(prior_labels.get("horizons"), "prior Label horizons")
+    horizons: dict[str, object] = {}
+    for horizon in HORIZONS:
+        prior_horizon = _mapping(
+            prior_horizons.get(str(horizon)),
+            f"prior Label horizon {horizon}",
+        )
+        prior_rows = prior_horizon.get("sessions")
+        if not isinstance(prior_rows, list):
+            raise KernelRunError("prior Label sessions are invalid")
+        affected = set(new_sessions)
+        for session in new_sessions:
+            signal_index = calendar.index(session) - horizon - 1
+            if signal_index >= 0:
+                affected.add(calendar[signal_index])
+        affected_sessions = [session for session in calendar if session in affected]
+        partial = build_forward_labels(
+            canonical,
+            matrix,
+            signal_sessions=affected_sessions,
+            horizons=(horizon,),
+        )
+        partial_horizon = _mapping(
+            _mapping(partial.get("horizons"), "partial Label horizons").get(str(horizon)),
+            "partial Label horizon",
+        )
+        partial_rows = partial_horizon.get("sessions")
+        if not isinstance(partial_rows, list):
+            raise KernelRunError("partial Label sessions are invalid")
+        by_session = {
+            str(item["session"]): dict(item)
+            for item in prior_rows
+            if isinstance(item, Mapping) and str(item.get("session")) in selected_set
+        }
+        by_session.update(
+            {str(item["session"]): dict(item) for item in partial_rows if isinstance(item, Mapping)}
+        )
+        if set(by_session) != selected_set:
+            raise KernelRunError("Advance Label state is incomplete")
+        sessions = [by_session[session] for session in selected_sessions]
+        payload = {"horizon": horizon, "sessions": sessions}
+        horizons[str(horizon)] = {
+            **payload,
+            "checksum": sha256(canonical_json_bytes(payload)).hexdigest(),
+        }
+    return {
+        "alpha_checksum": matrix["checksum"],
+        "report_session_count": len(selected_sessions),
+        "horizons": horizons,
+    }
 
 
 def _append_canonical_sessions(
@@ -116,9 +257,48 @@ def _append_canonical_sessions(
         prior_universes[name] = [*prior_rows, *rows]
 
     for table in STATIC_TABLES:
-        replacement = appended.get(table)
-        if replacement not in (None, []):
-            if not isinstance(replacement, list):
-                raise KernelRunError(f"Advance static table is invalid: {table}")
-            merged[table] = replacement
+        supplied = appended.get(table)
+        if supplied not in (None, []) and supplied != prior.get(table):
+            raise KernelRunError(f"Advance cannot replace pinned static table: {table}")
     return merged
+
+
+def _slice_canonical(
+    canonical: dict[str, object],
+    sessions: list[str],
+) -> dict[str, object]:
+    selected = set(sessions)
+    sliced = json.loads(canonical_json_bytes(canonical))
+    sliced["research_calendar"] = sessions
+    for table, session_field in SESSION_TABLES:
+        rows = sliced.get(table, [])
+        if isinstance(rows, list):
+            sliced[table] = [
+                row
+                for row in rows
+                if isinstance(row, dict) and str(row.get(session_field, "")) in selected
+            ]
+    universes = sliced.get("liquidity_universes")
+    if not isinstance(universes, dict):
+        raise KernelRunError("Canonical Liquidity Universes are invalid")
+    sliced["liquidity_universes"] = {
+        name: [
+            row for row in rows if isinstance(row, dict) and str(row.get("session", "")) in selected
+        ]
+        for name, rows in universes.items()
+        if isinstance(rows, list)
+    }
+    return sliced
+
+
+def _sessions(value: Mapping[str, object], name: str) -> list[str]:
+    calendar = value.get("research_calendar")
+    if not isinstance(calendar, list):
+        raise KernelRunError(f"{name} Research Sessions are invalid")
+    return [str(session) for session in calendar]
+
+
+def _mapping(value: object, name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise KernelRunError(f"{name} is invalid")
+    return value

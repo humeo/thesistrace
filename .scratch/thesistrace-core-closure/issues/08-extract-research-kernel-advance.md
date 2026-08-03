@@ -38,10 +38,19 @@ reach the same infrastructure-free calculation implementation.
 - `KernelState` seals the pinned Run input and complete calculation output as
   immutable values. `AdvanceInput` seals the supplied new-session delta as
   canonical bytes, so later caller mutation cannot change the transition.
-- Run and Advance both enter `initial_state`; Alpha, Labels, Factor, Strategy,
-  numeric rules, Result composition, and fixed Tracking origin therefore have
-  one implementation and no mode branch.
-- The characterized 757-session case compares the complete Advance output with
-  the state produced at the same boundary and verifies the 756-session prior
-  state remains unchanged.
-- The exact command above passed `74 passed` in `82.63s`.
+- Review round 1 rejected the first implementation because it appended the
+  delta and replayed all prior history through `initial_state`. That path and
+  the extra public state-builder entry point were removed.
+- Run now returns its internal continuous Tracking seed with the ordinary Run
+  artifacts. Advance evaluates Alpha only over the required lookback plus new
+  sessions, recalculates only new or newly matured Labels, aggregates Factor
+  from retained Label state, and invokes Strategy with the prior complete
+  continuation state. All steps use the same Kernel functions as Run.
+- The characterized 757-session case compares the complete incremental output
+  against an explicit full-boundary test oracle, proves Alpha saw 21 sessions
+  for a 20-session lookback, proves each Label horizon recalculated only two
+  affected signals, and proves Strategy continued `504 -> 505` daily states.
+  The 756-session prior state remains unchanged.
+- Advance rejects replacement of pinned static contracts instead of
+  retroactively changing prior calculation history.
+- The updated exact command above passed `75 passed` in `81.21s`.

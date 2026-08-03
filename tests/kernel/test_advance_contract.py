@@ -1,12 +1,19 @@
 import copy
 from datetime import date, timedelta
 
+import pytest
+
+import thesistrace.research_kernel.kernel_advance as advance_module
 from thesistrace.research_kernel import (
     AdvanceInput,
     RunInput,
     advance,
-    initial_state,
+    run,
 )
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
+from thesistrace.research_kernel.kernel_run import calculation_definition, compose_output
+from thesistrace.research_kernel.strategy import run_strategy
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -20,27 +27,91 @@ FIELD_BINDINGS = {
 
 def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     accepted_calculation_case: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
     complete, appended = _append_fixture_session(canonical)
-    prior = initial_state(_run_input(canonical, definition))
+    prior = run(_run_input(canonical, definition)).track_state
     prior_output = prior.output_snapshot()
     advance_input = AdvanceInput(
         prior_state=prior,
         new_canonical_sessions=appended,
     )
 
+    calls: dict[str, object] = {"label_sessions": []}
+    original_alpha = advance_module.evaluate_alpha_matrix
+    original_labels = advance_module.build_forward_labels
+    original_strategy = advance_module.run_strategy
+
+    def observed_alpha(
+        calculation_window: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        calls["alpha_session_count"] = len(calculation_window["research_calendar"])
+        return original_alpha(calculation_window, **kwargs)
+
+    def observed_labels(
+        calculation_canonical: dict[str, object],
+        matrix: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        signal_sessions = kwargs.get("signal_sessions")
+        assert isinstance(signal_sessions, list)
+        calls["label_sessions"].append(len(signal_sessions))
+        return original_labels(calculation_canonical, matrix, **kwargs)
+
+    def observed_strategy(
+        calculation_canonical: dict[str, object],
+        matrix: dict[str, object],
+        calculation_definition: dict[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
+        continuation = kwargs.get("continuation")
+        assert isinstance(continuation, dict)
+        calls["strategy_prior_daily_count"] = len(continuation["daily"])
+        result = original_strategy(
+            calculation_canonical,
+            matrix,
+            calculation_definition,
+            **kwargs,
+        )
+        calls["strategy_result_daily_count"] = len(result["daily"])
+        return result
+
+    monkeypatch.setattr(advance_module, "evaluate_alpha_matrix", observed_alpha)
+    monkeypatch.setattr(advance_module, "build_forward_labels", observed_labels)
+    monkeypatch.setattr(advance_module, "run_strategy", observed_strategy)
+
     appended["research_calendar"] = []
     result = advance(advance_input)
-    expected = initial_state(
-        _run_input(complete, definition),
+    expected_input = _run_input(complete, definition)
+    expected_matrix = evaluate_alpha_matrix(
+        complete,
+        expression=expected_input.alpha_expression_snapshot(),
+        field_bindings=expected_input.field_bindings_snapshot(),
+        universe_name=expected_input.universe,
+        neutralization=expected_input.neutralization,
+    )
+    expected_labels = build_forward_labels(complete, expected_matrix)
+    expected_factor = evaluate_factor(expected_labels)
+    expected_strategy = run_strategy(
+        complete,
+        expected_matrix,
+        calculation_definition(expected_input),
         origin_session=prior.origin_session,
+        terminal_cutoff=False,
+    )
+    expected = compose_output(
+        expected_matrix,
+        expected_labels,
+        expected_factor,
+        expected_strategy,
     )
 
-    assert result.output_snapshot() == expected.output_snapshot()
+    assert result.output_snapshot() == expected
     assert result.origin_session == prior.origin_session
     assert result.session_count == prior.session_count + 1
     assert result.boundary_session == complete["research_calendar"][-1]
@@ -57,6 +128,32 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     } & set(AdvanceInput.__dataclass_fields__)
     for field_name in AdvanceInput.__dataclass_fields__:
         assert not isinstance(getattr(advance_input, field_name), (dict, list, set))
+    assert calls == {
+        "alpha_session_count": 21,
+        "label_sessions": [2, 2, 2],
+        "strategy_prior_daily_count": 504,
+        "strategy_result_daily_count": 505,
+    }
+
+
+def test_kernel_advance_rejects_static_contract_replacement(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    assert isinstance(canonical, dict)
+    _complete, appended = _append_fixture_session(canonical)
+    appended["field_catalog"] = [{"field_id": "replacement"}]
+    prior = run(_run_input(canonical, definition)).track_state
+
+    with pytest.raises(ValueError, match="cannot replace pinned static table"):
+        advance(
+            AdvanceInput(
+                prior_state=prior,
+                new_canonical_sessions=appended,
+            )
+        )
 
 
 def _append_fixture_session(
