@@ -50,6 +50,10 @@ message, retain the same latest Release, and keep Release history unchanged.
   the fixed 756-session window, the first default incremental collection sees
   session 757, and a later collection against that same horizon returns the
   complete unchanged canonical batch instead of inventing session 758.
+- Review renamed the Fixture setting and lineage to
+  `sessions_after_bootstrap`: a horizon of three means session 759 whether the
+  predecessor is 756 or 757, so the latter collection correctly appends two
+  sessions rather than claiming another three.
 - Data validates that unchanged batch, then fences `latest_release_id` and
   atomically completes the Attempt, receipt, and overview as `no_change`.
   Publication preparation is never entered, so Release, manifest, and object

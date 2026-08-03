@@ -37,13 +37,25 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
     frontier = root.covered_session_range[1]
 
     direct = FixtureDataSource().collect(CollectionPlan.incremental(frontier))
-    catch_up = FixtureDataSource(available_new_sessions=3).collect(
+    wider_source = FixtureDataSource(sessions_after_bootstrap=3)
+    catch_up = wider_source.collect(
         CollectionPlan.incremental(frontier)
     )
 
     assert len(direct.canonical["research_calendar"]) == 757
     assert len(catch_up.canonical["research_calendar"]) == 759
     assert direct.collection_kind == catch_up.collection_kind == "incremental"
+    assert catch_up.source_lineage["source_horizon_sessions_after_bootstrap"] == 3
+
+    intermediate_catch_up = wider_source.collect(
+        CollectionPlan.incremental(direct.covered_session_range[1])
+    )
+    assert len(intermediate_catch_up.canonical["research_calendar"]) == 759
+    assert (
+        len(intermediate_catch_up.canonical["research_calendar"])
+        - len(direct.canonical["research_calendar"])
+        == 2
+    )
 
     no_change = FixtureDataSource().collect(
         CollectionPlan.incremental(direct.covered_session_range[1])

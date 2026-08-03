@@ -6,10 +6,10 @@ from thesistrace.fixture import build_fixture
 
 
 class FixtureDataSource:
-    def __init__(self, *, available_new_sessions: int = 1) -> None:
-        if not 1 <= available_new_sessions <= 20:
+    def __init__(self, *, sessions_after_bootstrap: int = 1) -> None:
+        if not 1 <= sessions_after_bootstrap <= 20:
             raise ValueError("Fixture availability must be between 1 and 20 sessions")
-        self._available_new_sessions = available_new_sessions
+        self._sessions_after_bootstrap = sessions_after_bootstrap
 
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
         if plan.kind not in {"bootstrap", "incremental"}:
@@ -20,7 +20,7 @@ class FixtureDataSource:
         if plan.kind == "incremental":
             if plan.after_session is None:
                 raise ValueError("Fixture incremental collection requires a frontier")
-            for _ in range(self._available_new_sessions):
+            for _ in range(self._sessions_after_bootstrap):
                 _append_session(canonical)
             if plan.after_session not in canonical["research_calendar"]:
                 raise ValueError("Fixture frontier is not a Research Session")
@@ -33,9 +33,7 @@ class FixtureDataSource:
             source_lineage={
                 "adapter": "fixture-v1",
                 "after_session": plan.after_session,
-                "available_new_sessions": (
-                    0 if plan.kind == "bootstrap" else self._available_new_sessions
-                ),
+                "source_horizon_sessions_after_bootstrap": self._sessions_after_bootstrap,
                 "source": source["source"],
                 "source_units": source["source_units"],
             },

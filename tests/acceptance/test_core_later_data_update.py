@@ -90,7 +90,7 @@ def test_wider_source_gap_is_one_internal_catch_up_release() -> None:
         data = DataService(
             runtime.database,
             runtime.publication,
-            FixtureDataSource(available_new_sessions=3),
+            FixtureDataSource(sessions_after_bootstrap=3),
         )
         assert data.process_next_update()
         releases = data.list_releases().items
