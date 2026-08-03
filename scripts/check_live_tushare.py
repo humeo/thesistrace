@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 
+from thesistrace.adapters.tushare_data import TushareDataSource
+from thesistrace.data import CollectionPlan
 from thesistrace.tushare_source import HttpTushareTransport, TushareAdapter
 
 
@@ -12,10 +14,28 @@ def main() -> None:
         raise SystemExit("TUSHARE_TOKEN is required for the live Tushare gate")
     transport = HttpTushareTransport()
     try:
-        result = TushareAdapter(token=token, transport=transport).preflight()
+        provider = TushareAdapter(token=token, transport=transport)
+        preflight = provider.preflight()
+        batch = TushareDataSource(provider=provider).collect(
+            CollectionPlan.bootstrap()
+        )
     finally:
         transport.close()
-    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    print(
+        json.dumps(
+            {
+                "canonical_schema": batch.canonical["schema_version"],
+                "covered_session_range": batch.covered_session_range,
+                "preflight": preflight,
+                "research_session_count": len(
+                    batch.canonical["research_calendar"]
+                ),
+                "source": batch.source_name,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":
