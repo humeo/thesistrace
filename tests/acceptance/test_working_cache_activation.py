@@ -38,6 +38,7 @@ class RejectingCheckpointStorageStore(MetadataStore):
 
 
 def test_shared_working_cache_artifacts_are_group_writable(tmp_path: Path) -> None:
+    require_setgid_directory_support(tmp_path)
     root = tmp_path / "working-cache"
     cache = WorkingCacheStore(root)
     cache.commit_seed(
@@ -69,6 +70,7 @@ def test_existing_shared_directory_does_not_require_owner_chmod(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    require_setgid_directory_support(tmp_path)
     shared = tmp_path / "locks"
     shared.mkdir(mode=0o2770)
     shared.chmod(0o2770)
@@ -83,6 +85,14 @@ def test_existing_shared_directory_does_not_require_owner_chmod(
 
     ensure_shared_directory(shared)
     assert S_IMODE(shared.stat().st_mode) == 0o2770
+
+
+def require_setgid_directory_support(tmp_path: Path) -> None:
+    probe = tmp_path / "setgid-probe"
+    probe.mkdir()
+    probe.chmod(0o2770)
+    if S_IMODE(probe.stat().st_mode) != 0o2770:
+        pytest.skip("temporary filesystem does not preserve the directory setgid bit")
 
 
 def test_activation_publishes_compact_checkpoint_and_seeds_bounded_cache(
