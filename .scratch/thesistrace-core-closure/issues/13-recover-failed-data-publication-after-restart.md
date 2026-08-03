@@ -77,3 +77,6 @@ partial Release or visible Publication appears.
 - The final exact command block above passed from a clean runtime: `29 passed,
   1 warning` in `53.14s`, followed by successful runtime teardown. Final
   independent review concluded Standards PASS and Spec PASS with no findings.
+- Repository-wide `make check` passed: Ruff; Python `495 passed, 50 skipped, 2
+  warnings` in `560.17s`; TypeScript; production build; narrow E2E `1 passed`
+  in `32.6s`; desktop E2E `1 passed` in `33.4s`.
