@@ -28,11 +28,12 @@ set -eu
 
 uv run pytest -q tests/kernel
 uv run pytest -q tests/kernel
-git diff --exit-code -- src/
+git diff --exit-code de7a4e4...HEAD -- src/
 ```
 
 Both pytest processes must pass with the same `26 passed` result. The final
-command proves that this characterization ticket did not change production
+command compares the complete Ticket 02 range with its fixed pre-ticket base
+and proves that this characterization ticket did not change production
 calculation code. Any future expected-value update must be justified against
 the accepted domain contracts in this ticket; an unexplained quantitative
 change fails verification.
@@ -71,4 +72,7 @@ change fails verification.
   characterization test. It now composes the production-owned
   `slice_canonical_through` and `slice_canonical_range` boundaries instead of
   maintaining a third table list in test code.
+- Final review found that the first production-code proof checked only the
+  working tree. The ticket now compares `de7a4e4...HEAD`, so already committed
+  `src/` changes cannot escape the guard.
 - Production result: no file under `src/` changed in this ticket.
