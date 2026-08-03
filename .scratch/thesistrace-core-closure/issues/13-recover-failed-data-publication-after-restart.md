@@ -62,6 +62,15 @@ partial Release or visible Publication appears.
   missing-object verification, manifest record, and rollback after Publication
   rows were written. All leave Release and visible Publication counts unchanged;
   uploaded content without a committed reference remains an invisible orphan.
+- Review tightened those seams: upload uses a nonce-bearing canonical payload,
+  records the exact successfully uploaded S3 key, and proves that digest has
+  zero PostgreSQL references. Manifest failure is injected on the actual
+  `INSERT INTO publication.manifests`, after object rows are staged, so the
+  transaction proves all Publication and Data rows roll back together.
+- Normal exception cleanup and stale recovery now call one transaction-local
+  retry/terminal transition helper. A separate acceptance starts a fresh
+  `thesistrace-core-worker --once` process over a stale persisted claim, then
+  opens a fresh HTTP lifespan and observes the recovered published Release.
 - TDD red proved that the first provider exception previously terminalized the
   receipt. The bounded retry test turned green, and the full real
-  PostgreSQL/RustFS recovery suite passed `7 passed, 1 warning` in `30.39s`.
+  PostgreSQL/RustFS recovery suite passed `8 passed, 1 warning` in `30.66s`.

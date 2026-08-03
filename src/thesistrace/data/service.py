@@ -220,45 +220,13 @@ class DataService:
                 (stale_before,),
             ).fetchall()
             for row in rows:
-                retry = int(row["attempt_count"]) < MAX_UPDATE_ATTEMPTS
-                transaction.execute(
-                    """
-                    UPDATE data.update_attempts
-                    SET status = 'failed', failure_reason = 'WorkerLost',
-                        finished_at = now()
-                    WHERE id = %s
-                    """,
-                    (row["id"],),
+                _transition_failed_attempt(
+                    transaction,
+                    request_id=str(row["request_id"]),
+                    attempt_id=int(row["id"]),
+                    attempt_count=int(row["attempt_count"]),
+                    failure_reason="WorkerLost",
                 )
-                transaction.execute(
-                    """
-                    UPDATE data.update_receipts
-                    SET status = %s, failure_reason = %s, updated_at = now()
-                    WHERE request_id = %s
-                    """,
-                    (
-                        "accepted" if retry else "failed",
-                        None if retry else "WorkerLost",
-                        row["request_id"],
-                    ),
-                )
-                if retry:
-                    transaction.execute(
-                        """
-                        UPDATE data.state
-                        SET status = 'updating', updated_at = now()
-                        WHERE singleton = 1
-                        """
-                    )
-                else:
-                    transaction.execute(
-                        """
-                        UPDATE data.state
-                        SET status = 'failed', latest_update_outcome = 'failed',
-                            updated_at = now()
-                        WHERE singleton = 1
-                        """
-                    )
         return len(rows)
 
     def load_canonical(self, release_id: str) -> dict[str, object]:
@@ -534,44 +502,13 @@ class DataService:
                 raise RuntimeError("Data Update receipt is missing")
             if receipt["status"] != "running":
                 return
-            retry = int(attempt["attempt_count"]) < MAX_UPDATE_ATTEMPTS
-            transaction.execute(
-                """
-                UPDATE data.update_attempts
-                SET status = 'failed', failure_reason = %s, finished_at = now()
-                WHERE id = %s
-                """,
-                (failure_reason, attempt_id),
+            _transition_failed_attempt(
+                transaction,
+                request_id=request_id,
+                attempt_id=attempt_id,
+                attempt_count=int(attempt["attempt_count"]),
+                failure_reason=failure_reason,
             )
-            transaction.execute(
-                """
-                UPDATE data.update_receipts
-                SET status = %s, failure_reason = %s, updated_at = now()
-                WHERE request_id = %s
-                """,
-                (
-                    "accepted" if retry else "failed",
-                    None if retry else failure_reason,
-                    request_id,
-                ),
-            )
-            if retry:
-                transaction.execute(
-                    """
-                    UPDATE data.state
-                    SET status = 'updating', updated_at = now()
-                    WHERE singleton = 1
-                    """
-                )
-            else:
-                transaction.execute(
-                    """
-                    UPDATE data.state
-                    SET status = 'failed', latest_update_outcome = 'failed',
-                        updated_at = now()
-                    WHERE singleton = 1
-                    """
-                )
 
 
 _RELEASE_SELECT = """
@@ -623,3 +560,51 @@ def _require_running_attempt(
         "attempt_status": "running",
     }:
         raise DataUpdateConflict("Data Update Attempt lost its publication fence")
+
+
+def _transition_failed_attempt(
+    transaction: PostgresTransaction,
+    *,
+    request_id: str,
+    attempt_id: int,
+    attempt_count: int,
+    failure_reason: str,
+) -> None:
+    retry = attempt_count < MAX_UPDATE_ATTEMPTS
+    transaction.execute(
+        """
+        UPDATE data.update_attempts
+        SET status = 'failed', failure_reason = %s, finished_at = now()
+        WHERE id = %s
+        """,
+        (failure_reason, attempt_id),
+    )
+    transaction.execute(
+        """
+        UPDATE data.update_receipts
+        SET status = %s, failure_reason = %s, updated_at = now()
+        WHERE request_id = %s
+        """,
+        (
+            "accepted" if retry else "failed",
+            None if retry else failure_reason,
+            request_id,
+        ),
+    )
+    if retry:
+        transaction.execute(
+            """
+            UPDATE data.state
+            SET status = 'updating', updated_at = now()
+            WHERE singleton = 1
+            """
+        )
+    else:
+        transaction.execute(
+            """
+            UPDATE data.state
+            SET status = 'failed', latest_update_outcome = 'failed',
+                updated_at = now()
+            WHERE singleton = 1
+            """
+        )

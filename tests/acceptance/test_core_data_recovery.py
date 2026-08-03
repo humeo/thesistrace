@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from shutil import which
+from subprocess import run
 from threading import Event
+from uuid import uuid4
 
 import boto3
 import pytest
@@ -42,8 +46,8 @@ def test_failed_publication_keeps_previous_release_and_retries_after_restart(
         root = runtime.data.overview().latest_release
         assert root is not None
         durable_before = _durable_counts(runtime.database)
-        objects_before = _bucket_object_count(settings)
-        data = _failing_data_service(runtime, settings, failure_seam)
+        failure = _failing_data_service(runtime, settings, failure_seam)
+        data = failure.data
         assert data.update(f"ticket-13-{failure_seam}").outcome == "accepted"
         with pytest.raises(RuntimeError, match="injected-data-failure"):
             data.process_next_update()
@@ -56,8 +60,12 @@ def test_failed_publication_keeps_previous_release_and_retries_after_restart(
         assert durable_after["publication_objects"] == durable_before["publication_objects"]
         assert durable_after["attempts"] == durable_before["attempts"] + 1
         assert _receipt(runtime.database, f"ticket-13-{failure_seam}")["status"] == "accepted"
-        if failure_seam in {"upload", "manifest", "transaction"}:
-            assert _bucket_object_count(settings) >= objects_before
+        if failure_seam == "upload":
+            assert len(failure.uploaded_keys) == 1
+            orphan_key = failure.uploaded_keys[0]
+            orphan_digest = orphan_key.rsplit("/", maxsplit=1)[-1]
+            assert _s3_object_exists(settings, orphan_key)
+            assert _publication_digest_references(runtime.database, orphan_digest) == 0
 
     with open_core_runtime(settings) as restarted_runtime:
         assert restarted_runtime.data.process_next_update()
@@ -188,6 +196,63 @@ def test_stale_worker_is_fenced_after_recovery_and_cannot_duplicate_release() ->
         assert stale_data.overview().latest_release == winner
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_fresh_worker_process_recovers_stale_claim_after_restart() -> None:
+    settings = CoreSettings.from_environment()
+    _reset_core_schemas(settings)
+    _bootstrap(settings, "ticket-13-process-root")
+    request_id = "ticket-13-process-restart"
+    with open_core_runtime(settings) as runtime:
+        root = runtime.data.overview().latest_release
+        assert root is not None
+        assert runtime.data.update(request_id).outcome == "accepted"
+        with runtime.database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.update_receipts
+                SET status = 'running', updated_at = '2000-01-01'
+                WHERE request_id = %s
+                """,
+                (request_id,),
+            )
+            transaction.execute(
+                """
+                INSERT INTO data.update_attempts (request_id, status, started_at)
+                VALUES (%s, 'running', '2000-01-01')
+                """,
+                (request_id,),
+            )
+
+    worker = which("thesistrace-core-worker")
+    assert worker is not None
+    completed = run(
+        [worker, "--once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    with TestClient(create_app(settings)) as restarted_http:
+        overview = restarted_http.get("/api/data")
+        assert overview.status_code == 200
+        payload = overview.json()
+        assert payload["status"] == "idle"
+        assert payload["latest_update_outcome"] == "published"
+        assert payload["latest_release"]["predecessor_id"] == root.id
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        assert _attempt_count(database, request_id) == 2
+        assert _receipt(database, request_id)["status"] == "published"
+    finally:
+        database.close()
+
+
 class _AlwaysFailingSource:
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
         raise RuntimeError("secret-provider-detail")
@@ -229,7 +294,13 @@ class _FailingPublication:
         prepared: PreparedPublication,
     ) -> PublishedRef:
         if self._failure_seam == "manifest":
-            raise RuntimeError("injected-data-failure")
+            try:
+                return self._delegate.record(
+                    _ManifestFailingTransaction(transaction),  # type: ignore[arg-type]
+                    prepared,
+                )
+            except RuntimeError:
+                raise
         try:
             published = self._delegate.record(transaction, prepared)
         except Exception as error:
@@ -241,26 +312,46 @@ class _FailingPublication:
         return published
 
 
+@dataclass(frozen=True)
+class _FailureSetup:
+    data: DataService
+    uploaded_keys: list[str]
+
+
 def _failing_data_service(
     runtime: CoreRuntime,
     settings: CoreSettings,
     failure_seam: str,
-) -> DataService:
+) -> _FailureSetup:
     if failure_seam == "collection":
-        return DataService(runtime.database, runtime.publication, _InjectedFailingSource())
+        return _FailureSetup(
+            DataService(runtime.database, runtime.publication, _InjectedFailingSource()),
+            [],
+        )
     if failure_seam == "upload":
+        failing_s3 = _FailingUploadS3(_s3(settings))
         upload_failure = Publication(
             runtime.database,
-            _FailingUploadS3(_s3(settings)),  # type: ignore[arg-type]
+            failing_s3,  # type: ignore[arg-type]
             bucket=settings.s3_bucket,
         )
-        return DataService(runtime.database, upload_failure, FixtureDataSource())
+        return _FailureSetup(
+            DataService(runtime.database, upload_failure, _UniqueCanonicalSource()),
+            failing_s3.uploaded_keys,
+        )
     publication = _FailingPublication(
         runtime.publication,
         failure_seam,
         lambda digest: _delete_object(settings, digest),
     )
-    return DataService(runtime.database, publication, FixtureDataSource())  # type: ignore[arg-type]
+    return _FailureSetup(
+        DataService(  # type: ignore[arg-type]
+            runtime.database,
+            publication,
+            FixtureDataSource(),
+        ),
+        [],
+    )
 
 
 class _InjectedFailingSource:
@@ -268,10 +359,23 @@ class _InjectedFailingSource:
         raise RuntimeError("injected-data-failure")
 
 
+class _UniqueCanonicalSource:
+    def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
+        batch = FixtureDataSource().collect(plan)
+        return CanonicalSourceBatch(
+            source_name=batch.source_name,
+            collection_kind=batch.collection_kind,
+            source_lineage=batch.source_lineage,
+            canonical={**batch.canonical, "failure_nonce": uuid4().hex},
+            covered_session_range=batch.covered_session_range,
+        )
+
+
 class _FailingUploadS3:
     def __init__(self, delegate: object) -> None:
         self._delegate = delegate
         self._put_count = 0
+        self.uploaded_keys: list[str] = []
 
     def __getattr__(self, name: str):
         return getattr(self._delegate, name)
@@ -286,7 +390,19 @@ class _FailingUploadS3:
         self._put_count += 1
         if self._put_count == 2:
             raise RuntimeError("injected-data-failure")
-        return self._delegate.put_object(**kwargs)  # type: ignore[attr-defined]
+        result = self._delegate.put_object(**kwargs)  # type: ignore[attr-defined]
+        self.uploaded_keys.append(str(kwargs["Key"]))
+        return result
+
+
+class _ManifestFailingTransaction:
+    def __init__(self, delegate: PostgresTransaction) -> None:
+        self._delegate = delegate
+
+    def execute(self, query: object, params: object = None):
+        if "INSERT INTO publication.manifests" in str(query):
+            raise RuntimeError("injected-data-failure")
+        return self._delegate.execute(query, params)  # type: ignore[arg-type]
 
 
 def _bootstrap(settings: CoreSettings, request_id: str) -> None:
@@ -339,9 +455,24 @@ def _attempt_count(database: PostgresDatabase, request_id: str) -> int:
     return int(row["count"])
 
 
-def _bucket_object_count(settings: CoreSettings) -> int:
-    response = _s3(settings).list_objects_v2(Bucket=settings.s3_bucket)
-    return int(response.get("KeyCount", 0))
+def _s3_object_exists(settings: CoreSettings, key: str) -> bool:
+    response = _s3(settings).head_object(Bucket=settings.s3_bucket, Key=key)
+    return int(response["ResponseMetadata"]["HTTPStatusCode"]) == 200
+
+
+def _publication_digest_references(database: PostgresDatabase, digest: str) -> int:
+    with database.transaction() as transaction:
+        row = transaction.execute(
+            """
+            SELECT
+              (SELECT count(*) FROM publication.objects WHERE sha256 = %s) +
+              (SELECT count(*) FROM publication.manifest_objects WHERE object_sha256 = %s) +
+              (SELECT count(*) FROM data.releases WHERE manifest_sha256 = %s) AS count
+            """,
+            (digest, digest, digest),
+        ).fetchone()
+    assert row is not None
+    return int(row["count"])
 
 
 def _delete_object(settings: CoreSettings, digest: str) -> None:
