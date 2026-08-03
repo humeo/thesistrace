@@ -85,3 +85,10 @@ policy or provider mode.
   runtime teardown. Independent review concluded Standards PASS and Spec PASS
   with no findings.
 - Focused Ruff, `13` architecture tests, TypeScript, and Web build passed.
+- Repository-wide `make check` passed after running with local E2E port
+  permission: Ruff; Python `495 passed, 39 skipped, 2 warnings` in `536.14s`;
+  TypeScript; production build; narrow E2E `1 passed` in `31.7s`; desktop E2E
+  `1 passed` in `31.0s`. The preceding sandbox-only run failed solely because
+  Vite could not bind `127.0.0.1:5273` (`EPERM`); direct startup under the
+  correct permission proved all three local services healthy before the clean
+  full rerun.
