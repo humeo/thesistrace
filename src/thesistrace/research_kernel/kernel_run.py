@@ -86,13 +86,81 @@ class RunInput:
     def field_bindings_snapshot(self) -> dict[str, str]:
         return dict(self._field_bindings)
 
+    def with_canonical_data(self, canonical_data: dict[str, object]) -> RunInput:
+        return RunInput(
+            canonical_data=canonical_data,
+            alpha_expression=self.alpha_expression_snapshot(),
+            field_bindings=self.field_bindings_snapshot(),
+            universe=self.universe,
+            neutralization=self.neutralization,
+            holdings_count=self.holdings_count,
+            rebalance_interval=self.rebalance_interval,
+            initial_cash_cny=self.initial_cash_cny,
+            commission_rate_all_in=self.commission_rate_all_in,
+            commission_min_cny=self.commission_min_cny,
+            stamp_duty_sell_rate=self.stamp_duty_sell_rate,
+            transfer_fee_rate=self.transfer_fee_rate,
+        )
+
+
+@dataclass(frozen=True, init=False)
+class KernelState:
+    _run_input: RunInput = field(repr=False)
+    _output_json: bytes = field(repr=False)
+    origin_session: str
+    session_count: int
+    boundary_session: str
+
+    def __init__(
+        self,
+        *,
+        run_input: RunInput,
+        output: dict[str, dict[str, object]],
+        origin_session: str,
+    ) -> None:
+        calendar = run_input.canonical_snapshot().get("research_calendar")
+        if not isinstance(calendar, list) or not calendar:
+            raise KernelRunError("Kernel state requires canonical sessions")
+        object.__setattr__(self, "_run_input", run_input)
+        object.__setattr__(self, "_output_json", canonical_json_bytes(output))
+        object.__setattr__(self, "origin_session", origin_session)
+        object.__setattr__(self, "session_count", len(calendar))
+        object.__setattr__(self, "boundary_session", str(calendar[-1]))
+
+    def canonical_snapshot(self) -> dict[str, object]:
+        return self._run_input.canonical_snapshot()
+
+    def output_snapshot(self) -> dict[str, dict[str, object]]:
+        value = json.loads(self._output_json)
+        if not isinstance(value, dict):
+            raise KernelRunError("Kernel output snapshot is invalid")
+        return value
+
+    def run_input_with_canonical(self, canonical_data: dict[str, object]) -> RunInput:
+        return self._run_input.with_canonical_data(canonical_data)
+
 
 def run(run_input: RunInput) -> dict[str, dict[str, object]]:
     canonical = run_input.canonical_snapshot()
-    alpha_expression = run_input.alpha_expression_snapshot()
     calendar = canonical.get("research_calendar")
     if not isinstance(calendar, list) or len(calendar) != INPUT_SESSION_COUNT:
         raise KernelRunError("Kernel Run requires exactly 756 canonical sessions")
+    return initial_state(run_input).output_snapshot()
+
+
+def initial_state(
+    run_input: RunInput,
+    *,
+    origin_session: str | None = None,
+) -> KernelState:
+    canonical = run_input.canonical_snapshot()
+    alpha_expression = run_input.alpha_expression_snapshot()
+    calendar = canonical.get("research_calendar")
+    if not isinstance(calendar, list) or len(calendar) < INPUT_SESSION_COUNT:
+        raise KernelRunError("Kernel state requires at least 756 canonical sessions")
+    selected_origin = str(calendar[-504]) if origin_session is None else str(origin_session)
+    if selected_origin not in calendar:
+        raise KernelRunError("Kernel state origin is outside canonical sessions")
     definition = {
         "alpha": {"expression": alpha_expression},
         "universe": run_input.universe,
@@ -118,8 +186,13 @@ def run(run_input: RunInput) -> dict[str, dict[str, object]]:
     )
     labels = build_forward_labels(canonical, matrix)
     factor = evaluate_factor(labels)
-    strategy = run_strategy(canonical, matrix, definition)
-    return {
+    strategy = run_strategy(
+        canonical,
+        matrix,
+        definition,
+        origin_session=selected_origin,
+    )
+    output = {
         "alpha_matrix": matrix,
         "forward_labels": labels,
         "factor_evaluation": factor,
@@ -143,3 +216,8 @@ def run(run_input: RunInput) -> dict[str, dict[str, object]]:
             "strategy": strategy["diagnostics"],
         },
     }
+    return KernelState(
+        run_input=run_input,
+        output=output,
+        origin_session=selected_origin,
+    )

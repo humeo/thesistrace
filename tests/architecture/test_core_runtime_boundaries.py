@@ -207,3 +207,15 @@ def test_partition_loader_has_no_second_calculation_engine() -> None:
         assert removed not in loader
     assert "RunInput(" not in loader
     assert adapter.count("RunInput(") == 1
+
+
+def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
+    run_source = (ROOT / "src" / "thesistrace" / "research_kernel" / "kernel_run.py").read_text()
+    advance_source = (
+        ROOT / "src" / "thesistrace" / "research_kernel" / "kernel_advance.py"
+    ).read_text()
+
+    assert "return initial_state(run_input).output_snapshot()" in run_source
+    assert "return initial_state(" in advance_source
+    for forbidden in ("mode:", "mode =", "thesistrace.tracking", "thesistrace.research_runs"):
+        assert forbidden not in advance_source
