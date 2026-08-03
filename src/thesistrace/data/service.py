@@ -206,7 +206,7 @@ class DataService:
                 """
                 SELECT manifest_sha256, source_name, collection_kind,
                        session_start, session_end, appended_session_start,
-                       appended_session_end, predecessor_id
+                       appended_session_end, predecessor_id, provenance_version
                 FROM data.releases
                 WHERE id = %s
                 """,
@@ -214,18 +214,19 @@ class DataService:
             ).fetchone()
         if row is None:
             raise LookupError("Dataset Release not found")
-        provenance = {
+        provenance: dict[str, object] = {
             "canonical_contract": "canonical-eod-v1",
             "collection_kind": row["collection_kind"],
             "covered_session_range": {"start": row["session_start"], "end": row["session_end"]},
-            "appended_session_range": {
-                "start": row["appended_session_start"],
-                "end": row["appended_session_end"],
-            },
-            "correction_change_set": [],
             "predecessor_id": row["predecessor_id"],
             "source_name": row["source_name"],
         }
+        if int(row["provenance_version"]) == 2:
+            provenance["appended_session_range"] = {
+                "start": row["appended_session_start"],
+                "end": row["appended_session_end"],
+            }
+            provenance["correction_change_set"] = []
         bundle = self._publication.read(
             PublishedRef(
                 manifest_sha256=row["manifest_sha256"],
@@ -324,8 +325,8 @@ class DataService:
                     id, predecessor_id, manifest_sha256, source_name,
                     collection_kind, canonical_schema, session_start,
                     session_end, session_count, appended_session_start,
-                    appended_session_end
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    appended_session_end, provenance_version
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 2)
                 """,
                 (
                     release_id,

@@ -63,8 +63,16 @@ policy or provider mode.
   the range appended by this Release, plus an explicit empty correction
   change-set. `CollectionPlan` rejects states outside bootstrap-without-frontier
   and incremental-with-frontier.
+- A follow-up review caught migration compatibility: pre-existing provenance is
+  retained as v1 and remains exactly readable, while new Releases use v2. The
+  migration derives the authoritative head from the unique predecessor-chain
+  leaf rather than timestamps and aborts on an ambiguous graph. Acceptance
+  upgrades a two-Release v1 chain whose timestamps deliberately point the wrong
+  way, then reads both immutable manifests successfully.
 - Real PostgreSQL/RustFS acceptance passed both direct and wider cases (`2
-  passed, 1 warning` in `8.60s` after the review fixes). The Data page now refreshes Release history;
+  passed, 1 warning` in `8.60s` after the first review fixes); the expanded
+  direct, catch-up, and v1-upgrade acceptance passed (`3 passed, 1 warning` in
+  `9.43s`). The Data page now refreshes Release history;
   real `/data` Playwright acceptance published two Releases, retained both,
   selected the 757-session Release as latest, and passed in `15.1s`.
 - Focused Ruff, `13` architecture tests, TypeScript, and Web build passed.

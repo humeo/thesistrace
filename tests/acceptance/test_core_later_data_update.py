@@ -1,17 +1,22 @@
 import json
+from dataclasses import replace
 
+import boto3
 import pytest
 from fastapi.testclient import TestClient
 
-from thesistrace._postgres import PostgresDatabase
+from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.adapters.fixture_data import FixtureDataSource
-from thesistrace.data import DataService
+from thesistrace.data import CollectionPlan, DataService
+from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
     open_core_runtime,
 )
+from thesistrace.publication import JsonPayload, Publication
+from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 
 
 @pytest.mark.skipif(
@@ -103,6 +108,127 @@ def test_wider_source_gap_is_one_internal_catch_up_release() -> None:
         assert metadata["provenance"]["correction_change_set"] == []
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_existing_v1_release_remains_readable_after_head_migration() -> None:
+    settings = CoreSettings.from_environment()
+    _reset_core_schemas(settings)
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        apply_migrations(database, PUBLICATION_MIGRATIONS)
+        apply_migrations(
+            database,
+            replace(DATA_MIGRATIONS, migrations=DATA_MIGRATIONS.migrations[:2]),
+        )
+        publication = _publication(database, settings)
+        root_batch = FixtureDataSource().collect(CollectionPlan.bootstrap())
+        root_provenance = {
+            "canonical_contract": "canonical-eod-v1",
+            "collection_kind": root_batch.collection_kind,
+            "covered_session_range": {
+                "start": root_batch.covered_session_range[0],
+                "end": root_batch.covered_session_range[1],
+            },
+            "predecessor_id": None,
+            "source_name": root_batch.source_name,
+        }
+        root_prepared = publication.prepare(
+            kind="data.release",
+            payloads={"canonical": JsonPayload(root_batch.canonical)},
+            provenance=root_provenance,
+        )
+        root_id = f"dsr_{root_prepared.manifest_sha256[:24]}"
+        with database.transaction() as transaction:
+            root_published = publication.record(transaction, root_prepared)
+            transaction.execute(
+                """
+                INSERT INTO data.releases (
+                    id, predecessor_id, manifest_sha256, source_name,
+                    collection_kind, canonical_schema, session_start,
+                    session_end, session_count, created_at
+                ) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s, '2099-01-01')
+                """,
+                (
+                    root_id,
+                    root_published.manifest_sha256,
+                    root_batch.source_name,
+                    root_batch.collection_kind,
+                    root_batch.canonical["schema_version"],
+                    root_batch.covered_session_range[0],
+                    root_batch.covered_session_range[1],
+                    len(root_batch.canonical["research_calendar"]),
+                ),
+            )
+        later_batch = FixtureDataSource().collect(
+            CollectionPlan.incremental(root_batch.covered_session_range[1])
+        )
+        later_prepared = publication.prepare(
+            kind="data.release",
+            payloads={"canonical": JsonPayload(later_batch.canonical)},
+            provenance={
+                "canonical_contract": "canonical-eod-v1",
+                "collection_kind": later_batch.collection_kind,
+                "covered_session_range": {
+                    "start": later_batch.covered_session_range[0],
+                    "end": later_batch.covered_session_range[1],
+                },
+                "predecessor_id": root_id,
+                "source_name": later_batch.source_name,
+            },
+        )
+        later_id = f"dsr_{later_prepared.manifest_sha256[:24]}"
+        with database.transaction() as transaction:
+            later_published = publication.record(transaction, later_prepared)
+            transaction.execute(
+                """
+                INSERT INTO data.releases (
+                    id, predecessor_id, manifest_sha256, source_name,
+                    collection_kind, canonical_schema, session_start,
+                    session_end, session_count, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, '2000-01-01')
+                """,
+                (
+                    later_id,
+                    root_id,
+                    later_published.manifest_sha256,
+                    later_batch.source_name,
+                    later_batch.collection_kind,
+                    later_batch.canonical["schema_version"],
+                    later_batch.covered_session_range[0],
+                    later_batch.covered_session_range[1],
+                    len(later_batch.canonical["research_calendar"]),
+                ),
+            )
+    finally:
+        database.close()
+
+    with open_core_runtime(settings) as runtime:
+        assert [release.id for release in runtime.data.list_releases().items] == [
+            later_id,
+            root_id,
+        ]
+        assert runtime.data.load_canonical(root_id) == root_batch.canonical
+        assert runtime.data.load_canonical(later_id) == later_batch.canonical
+        with runtime.database.transaction() as transaction:
+            migrated = transaction.execute(
+                """
+                SELECT release.id, release.provenance_version,
+                       state.latest_release_id
+                FROM data.releases AS release
+                JOIN data.state AS state ON state.singleton = 1
+                ORDER BY release.id
+                """,
+            ).fetchall()
+        assert {row["id"]: row["provenance_version"] for row in migrated} == {
+            root_id: 1,
+            later_id: 1,
+        }
+        assert {row["latest_release_id"] for row in migrated} == {later_id}
+
+
 def _request_and_process(settings: CoreSettings, request_id: str) -> None:
     with TestClient(create_app(settings)) as client:
         response = client.post(
@@ -144,3 +270,14 @@ def _release_metadata(database: PostgresDatabase, release_id: str) -> dict[str, 
         "latest_release_id": row["latest_release_id"],
         "provenance": manifest["provenance"],
     }
+
+
+def _publication(database: PostgresDatabase, settings: CoreSettings) -> Publication:
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint_url,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        region_name=settings.s3_region,
+    )
+    return Publication(database, s3, bucket=settings.s3_bucket)

@@ -107,5 +107,48 @@ MIGRATIONS = MigrationPlan(
                 WHERE singleton = 1;
             """,
         ),
+        Migration(
+            name="0004_release_provenance_compatibility",
+            statement="""
+                ALTER TABLE data.releases
+                    ADD COLUMN provenance_version smallint NOT NULL DEFAULT 1
+                    CHECK (provenance_version IN (1, 2));
+
+                DO $migration$
+                DECLARE
+                    release_count integer;
+                    head_count integer;
+                BEGIN
+                    SELECT count(*) INTO release_count FROM data.releases;
+                    SELECT count(*) INTO head_count
+                    FROM data.releases AS candidate
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM data.releases AS child
+                        WHERE child.predecessor_id = candidate.id
+                    );
+                    IF release_count > 0 AND head_count <> 1 THEN
+                        RAISE EXCEPTION
+                            'Dataset Release graph has no unique authoritative head';
+                    END IF;
+                END
+                $migration$;
+
+                UPDATE data.state
+                SET latest_release_id = (
+                    SELECT candidate.id
+                    FROM data.releases AS candidate
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM data.releases AS child
+                        WHERE child.predecessor_id = candidate.id
+                    )
+                )
+                WHERE singleton = 1;
+
+                ALTER TABLE data.releases
+                    ALTER COLUMN provenance_version DROP DEFAULT;
+            """,
+        ),
     ),
 )
