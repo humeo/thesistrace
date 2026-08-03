@@ -1,6 +1,8 @@
 from datetime import date, timedelta
 from decimal import ROUND_HALF_EVEN, Decimal
 
+from thesistrace.data.fields import AUTHORABLE_FIELDS
+
 DAILY_FIELDS = (
     ("ts_code", "source.ts_code", "Tushare instrument code", "text", "instrument"),
     ("trade_date", "source.trade_date", "market session", "date", "session"),
@@ -15,13 +17,9 @@ DAILY_FIELDS = (
     ("amount", "market.turnover.source", "source turnover", "thousand CNY", "post-close"),
 )
 
-ALPHA_FIELDS = (
-    ("open_adj", "price.open.adjusted", "fixed-anchor adjusted open", "CNY/share"),
-    ("high_adj", "price.high.adjusted", "fixed-anchor adjusted high", "CNY/share"),
-    ("low_adj", "price.low.adjusted", "fixed-anchor adjusted low", "CNY/share"),
-    ("close_adj", "price.close.adjusted", "fixed-anchor adjusted close", "CNY/share"),
-    ("volume_shares", "market.volume.shares", "traded share volume", "shares"),
-    ("turnover_amount_cny", "market.turnover.cny", "turnover amount", "CNY"),
+ALPHA_FIELDS = tuple(
+    (field.evaluation_name, field.field_id, field.definition, field.unit)
+    for field in AUTHORABLE_FIELDS
 )
 
 
@@ -29,8 +27,7 @@ def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
     sessions = research_sessions()
     instruments = instrument_reference(sessions[0])
     anchor_factors = {
-        instrument["instrument_id"]: adjustment_factor(0)
-        for instrument in instruments
+        instrument["instrument_id"]: adjustment_factor(0) for instrument in instruments
     }
     source_daily: list[dict[str, str]] = []
     source_adjustments: list[dict[str, str]] = []

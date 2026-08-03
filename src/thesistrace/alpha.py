@@ -6,6 +6,7 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
+from thesistrace.data import authorable_field_bindings
 from thesistrace.numeric import canonical_binary64_bytes
 from thesistrace.research_kernel.alpha_expression import (
     SCALAR_OPERATOR_IDS,
@@ -16,25 +17,17 @@ from thesistrace.research_kernel.alpha_expression import (
     validate_normalized_alpha,
 )
 
-ALPHA_FIELD_BINDINGS = {
-    "price.open.adjusted": "open_adj",
-    "price.high.adjusted": "high_adj",
-    "price.low.adjusted": "low_adj",
-    "price.close.adjusted": "close_adj",
-    "market.volume.shares": "volume_shares",
-    "market.turnover.cny": "turnover_amount_cny",
-}
-LEGACY_FIELD_IDS = {name: field_id for field_id, name in ALPHA_FIELD_BINDINGS.items()}
 FIELD_PATTERN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def validate_alpha(expression: AlphaExpression) -> ParsedAlpha:
+    field_bindings = authorable_field_bindings()
     if isinstance(expression, str):
-        return validate_legacy_alpha(expression)
+        return validate_legacy_alpha(expression, field_bindings=field_bindings)
     if isinstance(expression, Mapping):
         return validate_normalized_alpha(
             expression,
-            field_bindings=ALPHA_FIELD_BINDINGS,
+            field_bindings=field_bindings,
         )
     raise AlphaValidationError(
         [
@@ -47,8 +40,16 @@ def validate_alpha(expression: AlphaExpression) -> ParsedAlpha:
     )
 
 
-def validate_legacy_alpha(expression: str) -> ParsedAlpha:
+def validate_legacy_alpha(
+    expression: str,
+    *,
+    field_bindings: Mapping[str, str] | None = None,
+) -> ParsedAlpha:
     """Temporary compatibility boundary for pre-normalized string expressions."""
+    selected_bindings = authorable_field_bindings() if field_bindings is None else field_bindings
+    legacy_field_ids = {
+        evaluation_name: field_id for field_id, evaluation_name in selected_bindings.items()
+    }
     rewritten = FIELD_PATTERN.sub(lambda match: f"f{match.group(1)}", expression)
     if "$" in rewritten:
         raise AlphaValidationError([issue("INVALID_FIELD_REFERENCE", 0, "invalid field reference")])
@@ -64,11 +65,11 @@ def validate_legacy_alpha(expression: str) -> ParsedAlpha:
                 )
             ]
         ) from error
-    normalized = _legacy_node_to_normalized(tree.body)
+    normalized = _legacy_node_to_normalized(tree.body, legacy_field_ids)
     try:
         parsed = validate_normalized_alpha(
             normalized,
-            field_bindings=ALPHA_FIELD_BINDINGS,
+            field_bindings=selected_bindings,
         )
     except AlphaValidationError as error:
         translated = {
@@ -94,13 +95,16 @@ def validate_legacy_alpha(expression: str) -> ParsedAlpha:
     )
 
 
-def _legacy_node_to_normalized(node: ast.AST) -> dict[str, object]:
+def _legacy_node_to_normalized(
+    node: ast.AST,
+    legacy_field_ids: Mapping[str, str],
+) -> dict[str, object]:
     if isinstance(node, ast.Constant):
         return {"literal": node.value}
     if isinstance(node, ast.Name):
         if node.id.startswith("f"):
             field_name = node.id[1:]
-            field_id = LEGACY_FIELD_IDS.get(field_name)
+            field_id = legacy_field_ids.get(field_name)
             if field_id is None:
                 raise AlphaValidationError(
                     [
@@ -125,14 +129,14 @@ def _legacy_node_to_normalized(node: ast.AST) -> dict[str, object]:
         return {
             "operator_id": binary_operators[type(node.op)],
             "operands": [
-                _legacy_node_to_normalized(node.left),
-                _legacy_node_to_normalized(node.right),
+                _legacy_node_to_normalized(node.left, legacy_field_ids),
+                _legacy_node_to_normalized(node.right, legacy_field_ids),
             ],
         }
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
         return {
             "operator_id": "negate",
-            "operands": [_legacy_node_to_normalized(node.operand)],
+            "operands": [_legacy_node_to_normalized(node.operand, legacy_field_ids)],
         }
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
         if node.keywords:
@@ -147,7 +151,9 @@ def _legacy_node_to_normalized(node: ast.AST) -> dict[str, object]:
             )
         return {
             "operator_id": node.func.id,
-            "operands": [_legacy_node_to_normalized(argument) for argument in node.args],
+            "operands": [
+                _legacy_node_to_normalized(argument, legacy_field_ids) for argument in node.args
+            ],
         }
     raise AlphaValidationError(
         [

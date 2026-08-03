@@ -31,7 +31,7 @@ set -eu
 uv run pytest -q tests/kernel tests/architecture
 ```
 
-The command must pass `62` tests. The suite compares all 16 normalized
+The command must pass `63` tests. The suite compares all 16 normalized
 operators with their legacy-string equivalents, compares complete Fixture
 Alpha Matrix sessions and checksums, exercises every rejection category, and
 proves the catalog is Kernel-owned with no dynamic execution path.
@@ -63,5 +63,9 @@ proves the catalog is Kernel-owned with no dynamic execution path.
 - The normalized validator rejects both non-finite floats and integers too
   large to convert to binary64 with the deterministic
   `NON_FINITE_LITERAL` reason code.
-- Post-review ticket verification: the exact command above passed `62 passed`
-  in `57.84s`.
+- Review round 2 fix: Data now owns the single stable-ID-to-evaluation-name
+  catalog. Both the Fixture adapter and the temporary Alpha compatibility
+  boundary consume that source, while the Research Kernel receives bindings
+  as input and stays independent of Data.
+- Post-review ticket verification: the exact command above passed `63 passed`
+  in `79.13s`.

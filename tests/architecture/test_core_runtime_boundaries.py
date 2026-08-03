@@ -18,9 +18,7 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
         for path in (ROOT / "src" / "thesistrace" / package).rglob("*.py"):
             tree = ast.parse(path.read_text())
             imports = [
-                node.module or ""
-                for node in ast.walk(tree)
-                if isinstance(node, ast.ImportFrom)
+                node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
             ]
             imports.extend(
                 alias.name
@@ -41,8 +39,7 @@ def test_runtime_configuration_has_no_deployment_mode() -> None:
 
 def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
     postgres_source = "\n".join(
-        path.read_text()
-        for path in (ROOT / "src" / "thesistrace" / "_postgres").rglob("*.py")
+        path.read_text() for path in (ROOT / "src" / "thesistrace" / "_postgres").rglob("*.py")
     )
     assert "ConnectionPool" in postgres_source
     assert "MigrationPlan" in postgres_source
@@ -55,9 +52,7 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
     ):
         assert product_schema not in postgres_source
 
-    data_migrations = (
-        ROOT / "src" / "thesistrace" / "data" / "migrations.py"
-    ).read_text()
+    data_migrations = (ROOT / "src" / "thesistrace" / "data" / "migrations.py").read_text()
     assert "CREATE TABLE data.state" in data_migrations
     assert "CREATE TABLE data.releases" in data_migrations
 
@@ -91,3 +86,21 @@ def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
     assert "def validate_legacy_alpha(" in alpha_source
     for forbidden in ("eval(", "exec(", "importlib", "sql"):
         assert forbidden not in normalized_source.lower()
+
+
+def test_data_owns_the_single_authorable_field_binding_catalog() -> None:
+    data_fields = (ROOT / "src" / "thesistrace" / "data" / "fields.py").read_text()
+    alpha_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
+    fixture_source = (ROOT / "src" / "thesistrace" / "fixture.py").read_text()
+
+    for field_id in (
+        "price.open.adjusted",
+        "price.high.adjusted",
+        "price.low.adjusted",
+        "price.close.adjusted",
+        "market.volume.shares",
+        "market.turnover.cny",
+    ):
+        assert data_fields.count(field_id) == 1
+        assert field_id not in alpha_source
+        assert field_id not in fixture_source
