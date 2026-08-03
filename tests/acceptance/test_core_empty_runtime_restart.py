@@ -11,13 +11,9 @@ from urllib.request import urlopen
 
 import pytest
 
+from thesistrace.entrypoints.runtime import core_environment_is_configured
+
 ROOT = Path(__file__).resolve().parents[2]
-REQUIRED_ENV = (
-    "THESISTRACE_DATABASE_URL",
-    "THESISTRACE_S3_ENDPOINT_URL",
-    "THESISTRACE_S3_ACCESS_KEY_ID",
-    "THESISTRACE_S3_SECRET_ACCESS_KEY",
-)
 
 
 def _free_port() -> int:
@@ -40,7 +36,7 @@ def _request_json(url: str) -> object:
 
 
 @pytest.mark.skipif(
-    any(not os.environ.get(name) for name in REQUIRED_ENV),
+    not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
 def test_http_and_worker_process_restarts_preserve_empty_data() -> None:

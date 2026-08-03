@@ -4,10 +4,10 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compose_file="$repo_root/deploy/core/compose.test.yaml"
 project_name=thesistrace-core-test
-data_root=${THESISTRACE_CORE_TEST_DATA_ROOT:-/private/tmp/thesistrace-core-test-data}
+data_root=/private/tmp/thesistrace-core-test-data
 export THESISTRACE_CORE_TEST_DATA_ROOT=$data_root
 
-prepare_data_root() {
+validate_data_root() {
   case "$data_root" in
     /private/tmp/thesistrace-core-test-data) ;;
     *)
@@ -15,17 +15,23 @@ prepare_data_root() {
       exit 2
       ;;
   esac
+}
+
+prepare_data_root() {
+  validate_data_root
   mkdir -p "$data_root/postgres" "$data_root/rustfs"
   chmod 0777 "$data_root/postgres" "$data_root/rustfs"
 }
 
 clear_data_root() {
+  validate_data_root
   if [ -d "$data_root" ]; then
     find "$data_root" -mindepth 1 -delete
   fi
 }
 
 compose() {
+  validate_data_root
   docker compose --project-name "$project_name" --file "$compose_file" "$@"
 }
 

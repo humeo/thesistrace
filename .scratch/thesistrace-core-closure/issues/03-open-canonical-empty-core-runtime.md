@@ -42,6 +42,7 @@ trap cleanup EXIT
 ./scripts/core-test-runtime reset
 ./scripts/core-test-runtime run \
   uv run pytest -q tests/architecture tests/integration tests/acceptance
+bun run --cwd web test:shell
 bun run --cwd web typecheck
 ```
 
@@ -69,3 +70,13 @@ independent HTTP processes. Both HTTP starts must return exactly the typed
 - Final in-ticket Python command passed `81 passed` in `175.21s` from clean
   PostgreSQL schemas and RustFS data. Web typecheck passed. Cleanup stopped both
   containers and left no file below the dedicated test-data root.
+- Review fix: the data root is no longer configurable, and the guard now runs
+  inside every Compose, prepare, and cleanup operation before `find -delete`.
+  Required Core environment detection is shared from the runtime rather than
+  copied by test skip conditions. `bun run --cwd web test:shell` renders the
+  real Shell component and asserts its four links, active route, and composed
+  child content without switching the legacy Web entrypoint.
+- Review-fix evidence: Shell rendering passed `1 passed` with six DOM-markup
+  assertions; Ruff, architecture tests, and Web typecheck passed. A safety
+  probe set `THESISTRACE_CORE_TEST_DATA_ROOT` to a separate temporary directory,
+  ran `down`, and confirmed the sentinel directory remained untouched.

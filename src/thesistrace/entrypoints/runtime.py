@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -11,6 +11,13 @@ from botocore.client import BaseClient
 from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.data import DataService
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
+
+CORE_ENVIRONMENT_NAMES = (
+    "THESISTRACE_DATABASE_URL",
+    "THESISTRACE_S3_ENDPOINT_URL",
+    "THESISTRACE_S3_ACCESS_KEY_ID",
+    "THESISTRACE_S3_SECRET_ACCESS_KEY",
+)
 
 
 @dataclass(frozen=True)
@@ -23,12 +30,18 @@ class CoreSettings:
 
     @classmethod
     def from_environment(cls) -> CoreSettings:
-        names = {
-            "database_url": "THESISTRACE_DATABASE_URL",
-            "s3_endpoint_url": "THESISTRACE_S3_ENDPOINT_URL",
-            "s3_access_key_id": "THESISTRACE_S3_ACCESS_KEY_ID",
-            "s3_secret_access_key": "THESISTRACE_S3_SECRET_ACCESS_KEY",
-        }
+        names = dict(
+            zip(
+                (
+                    "database_url",
+                    "s3_endpoint_url",
+                    "s3_access_key_id",
+                    "s3_secret_access_key",
+                ),
+                CORE_ENVIRONMENT_NAMES,
+                strict=True,
+            )
+        )
         values: dict[str, str] = {}
         missing: list[str] = []
         for field, name in names.items():
@@ -43,6 +56,13 @@ class CoreSettings:
             **values,
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
         )
+
+
+def core_environment_is_configured(
+    environment: Mapping[str, str] | None = None,
+) -> bool:
+    selected = os.environ if environment is None else environment
+    return all(selected.get(name, "").strip() for name in CORE_ENVIRONMENT_NAMES)
 
 
 @dataclass(frozen=True)

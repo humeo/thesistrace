@@ -9,6 +9,7 @@
     "reset:test": "bun e2e/reset-workspace.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
+    "test:shell": "bun test src/shell/AppShell.test.tsx",
     "test:e2e": "THESISTRACE_E2E_VIEWPORT=narrow playwright test --reporter=line && THESISTRACE_E2E_VIEWPORT=desktop playwright test --reporter=line",
     "test:e2e:hosted": "playwright test --config=playwright.hosted.config.ts --reporter=line"
   },
@@ -21,6 +22,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2",
+    "@types/bun": "^1.3.14",
     "@types/node": "^24.1.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
