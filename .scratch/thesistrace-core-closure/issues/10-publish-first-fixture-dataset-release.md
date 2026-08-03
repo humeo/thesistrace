@@ -79,3 +79,10 @@ endpoint counts as Ticket 10 verification.
   valid point-in-time intervals. Five adapter/validation tests pass, including
   explicit empty-table, missing-anchor, and missing-column rejection cases; the
   real Core acceptance still passes with the complete Fixture batch.
+- Re-review found that Cartesian key sets would consume GB-scale extra memory
+  for the real A-share universe and that several value contracts were still
+  permissive. Validation now streams the canonical Trading State order and
+  aligns Price/Limit rows without full key sets. Ten adapter tests now reject
+  null/non-numeric Price or Anchor values, missing Price/Limit fields, invalid
+  PIT dates, and unknown Industry instruments; the valid real publication path
+  continues to pass.
