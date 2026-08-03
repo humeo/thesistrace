@@ -80,3 +80,14 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     assert 'path: "/daily-tracks"' in source
     for forbidden in ("hosted", "login", "workspace", "manifest", "download"):
         assert forbidden not in source.lower()
+
+
+def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
+    alpha_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
+    normalized_source = (
+        ROOT / "src" / "thesistrace" / "research_kernel" / "alpha_expression.py"
+    ).read_text()
+    assert alpha_source.count("ast.parse(") == 1
+    assert "def validate_legacy_alpha(" in alpha_source
+    for forbidden in ("eval(", "exec(", "importlib", "sql"):
+        assert forbidden not in normalized_source.lower()

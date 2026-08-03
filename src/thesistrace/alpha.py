@@ -3,10 +3,20 @@ import hashlib
 import math
 import re
 from collections import Counter
-from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 from thesistrace.numeric import canonical_binary64_bytes
+from thesistrace.research_kernel.alpha_expression import (
+    HISTORICAL_OPERATOR_IDS,
+    SCALAR_OPERATOR_IDS,
+    WINDOW_OPERATOR_IDS,
+    AlphaExpression,
+    AlphaValidationError,
+    AlphaValidationIssue,
+    ParsedAlpha,
+    validate_normalized_alpha,
+)
 
 AUTHORABLE_FIELDS = (
     "open_adj",
@@ -16,35 +26,30 @@ AUTHORABLE_FIELDS = (
     "volume_shares",
     "turnover_amount_cny",
 )
-SCALAR_FUNCTIONS = {"abs", "log", "sign"}
-HISTORICAL_FUNCTIONS = {"lag", "delta", "pct_change"}
-ROLLING_FUNCTIONS = {"ts_mean", "ts_sum", "ts_std", "ts_min", "ts_max"}
-WINDOW_FUNCTIONS = HISTORICAL_FUNCTIONS | ROLLING_FUNCTIONS
 FIELD_PATTERN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
-@dataclass(frozen=True)
-class AlphaValidationIssue:
-    reason_code: str
-    location: str
-    message: str
+def validate_alpha(expression: AlphaExpression) -> ParsedAlpha:
+    if isinstance(expression, str):
+        return validate_legacy_alpha(expression)
+    if isinstance(expression, Mapping):
+        return validate_normalized_alpha(
+            expression,
+            authorable_field_ids=AUTHORABLE_FIELDS,
+        )
+    raise AlphaValidationError(
+        [
+            AlphaValidationIssue(
+                reason_code="MALFORMED_NODE",
+                location="alpha.expression",
+                message="expression must be a normalized tree or legacy string",
+            )
+        ]
+    )
 
 
-class AlphaValidationError(ValueError):
-    def __init__(self, issues: list[AlphaValidationIssue]) -> None:
-        super().__init__("alpha expression is invalid")
-        self.issues = issues
-
-
-@dataclass(frozen=True)
-class ParsedAlpha:
-    expression: str
-    tree: ast.Expression
-    field_names: tuple[str, ...]
-    effective_lookback: int
-
-
-def validate_alpha(expression: str) -> ParsedAlpha:
+def validate_legacy_alpha(expression: str) -> ParsedAlpha:
+    """Temporary compatibility boundary for pre-normalized string expressions."""
     rewritten = FIELD_PATTERN.sub(lambda match: f"f{match.group(1)}", expression)
     issues: list[AlphaValidationIssue] = []
     if "$" in rewritten:
@@ -108,7 +113,7 @@ def validate_alpha(expression: str) -> ParsedAlpha:
                         "KEYWORDS_NOT_ALLOWED", node.col_offset, "keyword arguments are not allowed"
                     )
                 )
-            if function_name in SCALAR_FUNCTIONS:
+            if function_name in SCALAR_OPERATOR_IDS:
                 if len(node.args) != 1:
                     issues.append(
                         issue(
@@ -119,7 +124,7 @@ def validate_alpha(expression: str) -> ParsedAlpha:
                     )
                     return 0
                 return analyze(node.args[0])
-            if function_name in WINDOW_FUNCTIONS:
+            if function_name in WINDOW_OPERATOR_IDS:
                 if len(node.args) != 2:
                     issues.append(
                         issue(
@@ -154,7 +159,7 @@ def validate_alpha(expression: str) -> ParsedAlpha:
                         )
                     )
                     return child_lookback
-                offset = window if function_name in HISTORICAL_FUNCTIONS else window - 1
+                offset = window if function_name in HISTORICAL_OPERATOR_IDS else window - 1
                 return child_lookback + offset
             issues.append(
                 issue(
@@ -193,7 +198,7 @@ def validate_alpha(expression: str) -> ParsedAlpha:
 
 
 def evaluate_series(
-    expression: str,
+    expression: AlphaExpression,
     values_by_field: dict[str, list[float | None]],
 ) -> list[float | None]:
     parsed = validate_alpha(expression)
@@ -248,7 +253,7 @@ def evaluate_node(
             return None if right == 0.0 else finite_or_missing(left / right)
     if isinstance(node, ast.Call):
         function_name = node.func.id
-        if function_name in SCALAR_FUNCTIONS:
+        if function_name in SCALAR_OPERATOR_IDS:
             value = evaluate_node(node.args[0], index, values_by_field)
             if value is None:
                 return None
@@ -303,7 +308,7 @@ def evaluate_node(
 def evaluate_alpha_matrix(
     canonical: dict[str, object],
     *,
-    expression: str,
+    expression: AlphaExpression,
     universe_name: str,
     neutralization: str,
 ) -> dict[str, object]:
