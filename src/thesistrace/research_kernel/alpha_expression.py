@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import math
-from collections.abc import Collection, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -28,6 +28,7 @@ class ParsedAlpha:
     expression: AlphaExpression
     tree: ast.Expression
     field_names: tuple[str, ...]
+    field_ids: tuple[str, ...]
     effective_lookback: int
 
 
@@ -95,14 +96,13 @@ def operator_catalog() -> dict[str, object]:
 def validate_normalized_alpha(
     expression: Mapping[str, object],
     *,
-    authorable_field_ids: Collection[str],
+    field_bindings: Mapping[str, str],
 ) -> ParsedAlpha:
-    allowed_fields = frozenset(authorable_field_ids)
-    body, effective_lookback, fields = _build_node(
+    body, effective_lookback, fields, field_ids = _build_node(
         expression,
         location="alpha.expression",
         expected_rule="numeric",
-        allowed_fields=allowed_fields,
+        field_bindings=field_bindings,
     )
     if effective_lookback > 252:
         _reject(
@@ -114,6 +114,7 @@ def validate_normalized_alpha(
         expression=dict(expression),
         tree=ast.fix_missing_locations(ast.Expression(body=body)),
         field_names=tuple(sorted(fields)),
+        field_ids=tuple(sorted(field_ids)),
         effective_lookback=effective_lookback,
     )
 
@@ -123,10 +124,11 @@ def _build_node(
     *,
     location: str,
     expected_rule: OperandRule,
-    allowed_fields: frozenset[str],
-) -> tuple[ast.expr, int, set[str]]:
+    field_bindings: Mapping[str, str],
+) -> tuple[ast.expr, int, set[str], set[str]]:
     if expected_rule == "window":
-        return _build_window(node, location)
+        expression, lookback, fields = _build_window(node, location)
+        return expression, lookback, fields, set()
     if not isinstance(node, Mapping):
         _reject("MALFORMED_NODE", location, "expression node must be an object")
 
@@ -135,17 +137,22 @@ def _build_node(
         field_id = node["field_id"]
         if not isinstance(field_id, str):
             _reject("MALFORMED_NODE", location, "field_id must be a string")
-        if field_id not in allowed_fields:
+        evaluation_name = field_bindings.get(field_id)
+        if evaluation_name is None:
             _reject("UNKNOWN_FIELD", location, f"unknown field_id: {field_id}")
-        return ast.Name(id=f"f{field_id}", ctx=ast.Load()), 0, {field_id}
+        return ast.Name(id=f"f{evaluation_name}", ctx=ast.Load()), 0, {evaluation_name}, {field_id}
 
     if keys == {"literal"}:
         value = node["literal"]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             _reject("MALFORMED_NODE", location, "literal must be numeric")
-        if not math.isfinite(float(value)):
+        try:
+            finite_value = math.isfinite(float(value))
+        except OverflowError:
+            finite_value = False
+        if not finite_value:
             _reject("NON_FINITE_LITERAL", location, "literal must be finite")
-        return ast.Constant(value=value), 0, set()
+        return ast.Constant(value=value), 0, set(), set()
 
     if keys != {"operator_id", "operands"}:
         _reject("MALFORMED_NODE", location, "node has unknown or missing properties")
@@ -170,19 +177,25 @@ def _build_node(
             operand,
             location=f"{location}.operands[{index}]",
             expected_rule=rule,
-            allowed_fields=allowed_fields,
+            field_bindings=field_bindings,
         )
         for index, (operand, rule) in enumerate(zip(operands, operator.operand_rules, strict=True))
     ]
     child_lookback = max((item[1] for item in built), default=0)
     fields = set().union(*(item[2] for item in built))
+    field_ids = set().union(*(item[3] for item in built))
     if operator.kind == "historical":
         effective_lookback = child_lookback + int(operands[1]["literal"])
     elif operator.kind == "rolling":
         effective_lookback = child_lookback + int(operands[1]["literal"]) - 1
     else:
         effective_lookback = child_lookback
-    return _operator_ast(operator_id, [item[0] for item in built]), effective_lookback, fields
+    return (
+        _operator_ast(operator_id, [item[0] for item in built]),
+        effective_lookback,
+        fields,
+        field_ids,
+    )
 
 
 def _build_window(node: object, location: str) -> tuple[ast.expr, int, set[str]]:

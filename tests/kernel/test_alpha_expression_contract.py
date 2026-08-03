@@ -81,8 +81,12 @@ def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
 def test_normalized_and_legacy_inputs_share_one_accepted_semantics() -> None:
     normalized = operation(
         "add",
-        operation("ts_mean", operation("pct_change", field("close_adj"), literal(5)), literal(20)),
-        operation("abs", field("volume_shares")),
+        operation(
+            "ts_mean",
+            operation("pct_change", field("price.close.adjusted"), literal(5)),
+            literal(20),
+        ),
+        operation("abs", field("market.volume.shares")),
     )
     legacy = "ts_mean(pct_change($close_adj, 5), 20) + abs($volume_shares)"
     values = {
@@ -92,9 +96,21 @@ def test_normalized_and_legacy_inputs_share_one_accepted_semantics() -> None:
 
     normalized_parsed = validate_alpha(normalized)
     legacy_parsed = validate_alpha(legacy)
-    assert normalized_parsed.field_names == legacy_parsed.field_names == (
-        "close_adj",
-        "volume_shares",
+    assert (
+        normalized_parsed.field_names
+        == legacy_parsed.field_names
+        == (
+            "close_adj",
+            "volume_shares",
+        )
+    )
+    assert (
+        normalized_parsed.field_ids
+        == legacy_parsed.field_ids
+        == (
+            "market.volume.shares",
+            "price.close.adjusted",
+        )
     )
     assert normalized_parsed.effective_lookback == legacy_parsed.effective_lookback == 24
     assert evaluate_series(normalized, values) == evaluate_series(legacy, values)
@@ -103,25 +119,46 @@ def test_normalized_and_legacy_inputs_share_one_accepted_semantics() -> None:
 @pytest.mark.parametrize(
     ("normalized", "legacy"),
     [
-        (operation("add", field("close_adj"), literal(2)), "$close_adj + 2"),
-        (operation("subtract", field("close_adj"), literal(2)), "$close_adj - 2"),
-        (operation("multiply", field("close_adj"), literal(2)), "$close_adj * 2"),
-        (operation("divide", field("close_adj"), literal(2)), "$close_adj / 2"),
-        (operation("negate", field("close_adj")), "-$close_adj"),
-        (operation("abs", operation("negate", field("close_adj"))), "abs(-$close_adj)"),
-        (operation("log", field("close_adj")), "log($close_adj)"),
-        (operation("sign", field("close_adj")), "sign($close_adj)"),
-        (operation("lag", field("close_adj"), literal(2)), "lag($close_adj, 2)"),
-        (operation("delta", field("close_adj"), literal(2)), "delta($close_adj, 2)"),
+        (operation("add", field("price.close.adjusted"), literal(2)), "$close_adj + 2"),
+        (operation("subtract", field("price.close.adjusted"), literal(2)), "$close_adj - 2"),
+        (operation("multiply", field("price.close.adjusted"), literal(2)), "$close_adj * 2"),
+        (operation("divide", field("price.close.adjusted"), literal(2)), "$close_adj / 2"),
+        (operation("negate", field("price.close.adjusted")), "-$close_adj"),
         (
-            operation("pct_change", field("close_adj"), literal(2)),
+            operation("abs", operation("negate", field("price.close.adjusted"))),
+            "abs(-$close_adj)",
+        ),
+        (operation("log", field("price.close.adjusted")), "log($close_adj)"),
+        (operation("sign", field("price.close.adjusted")), "sign($close_adj)"),
+        (operation("lag", field("price.close.adjusted"), literal(2)), "lag($close_adj, 2)"),
+        (
+            operation("delta", field("price.close.adjusted"), literal(2)),
+            "delta($close_adj, 2)",
+        ),
+        (
+            operation("pct_change", field("price.close.adjusted"), literal(2)),
             "pct_change($close_adj, 2)",
         ),
-        (operation("ts_mean", field("close_adj"), literal(2)), "ts_mean($close_adj, 2)"),
-        (operation("ts_sum", field("close_adj"), literal(2)), "ts_sum($close_adj, 2)"),
-        (operation("ts_std", field("close_adj"), literal(2)), "ts_std($close_adj, 2)"),
-        (operation("ts_min", field("close_adj"), literal(2)), "ts_min($close_adj, 2)"),
-        (operation("ts_max", field("close_adj"), literal(2)), "ts_max($close_adj, 2)"),
+        (
+            operation("ts_mean", field("price.close.adjusted"), literal(2)),
+            "ts_mean($close_adj, 2)",
+        ),
+        (
+            operation("ts_sum", field("price.close.adjusted"), literal(2)),
+            "ts_sum($close_adj, 2)",
+        ),
+        (
+            operation("ts_std", field("price.close.adjusted"), literal(2)),
+            "ts_std($close_adj, 2)",
+        ),
+        (
+            operation("ts_min", field("price.close.adjusted"), literal(2)),
+            "ts_min($close_adj, 2)",
+        ),
+        (
+            operation("ts_max", field("price.close.adjusted"), literal(2)),
+            "ts_max($close_adj, 2)",
+        ),
     ],
 )
 def test_every_normalized_operator_matches_legacy_behavior(
@@ -134,7 +171,7 @@ def test_every_normalized_operator_matches_legacy_behavior(
 
 def test_normalized_matrix_matches_characterized_legacy_matrix() -> None:
     _, canonical = build_fixture()
-    normalized = operation("pct_change", field("close_adj"), literal(20))
+    normalized = operation("pct_change", field("price.close.adjusted"), literal(20))
     legacy = "pct_change($close_adj, 20)"
 
     normalized_matrix = evaluate_alpha_matrix(
@@ -157,22 +194,37 @@ def test_normalized_matrix_matches_characterized_legacy_matrix() -> None:
 @pytest.mark.parametrize(
     ("expression", "reason_code"),
     [
-        (field("close_raw"), "UNKNOWN_FIELD"),
+        (field("price.close.raw"), "UNKNOWN_FIELD"),
+        (field("close_adj"), "UNKNOWN_FIELD"),
         (operation("python_eval", literal(1)), "UNKNOWN_OPERATOR"),
         (operation("add", literal(1)), "INVALID_ARITY"),
-        (operation("lag", field("close_adj"), field("volume_shares")), "INVALID_OPERAND"),
-        (operation("lag", field("close_adj"), literal(0)), "WINDOW_OUT_OF_RANGE"),
-        (operation("lag", field("close_adj"), literal(253)), "WINDOW_OUT_OF_RANGE"),
+        (
+            operation(
+                "lag",
+                field("price.close.adjusted"),
+                field("market.volume.shares"),
+            ),
+            "INVALID_OPERAND",
+        ),
+        (
+            operation("lag", field("price.close.adjusted"), literal(0)),
+            "WINDOW_OUT_OF_RANGE",
+        ),
+        (
+            operation("lag", field("price.close.adjusted"), literal(253)),
+            "WINDOW_OUT_OF_RANGE",
+        ),
         (
             operation(
                 "ts_mean",
-                operation("pct_change", field("close_adj"), literal(5)),
+                operation("pct_change", field("price.close.adjusted"), literal(5)),
                 literal(250),
             ),
             "LOOKBACK_EXCEEDS_LIMIT",
         ),
         ({"literal": math.inf}, "NON_FINITE_LITERAL"),
-        ({"field_id": "close_adj", "unexpected": True}, "MALFORMED_NODE"),
+        ({"literal": 10**400}, "NON_FINITE_LITERAL"),
+        ({"field_id": "price.close.adjusted", "unexpected": True}, "MALFORMED_NODE"),
     ],
 )
 def test_normalized_tree_rejects_invalid_nodes_deterministically(

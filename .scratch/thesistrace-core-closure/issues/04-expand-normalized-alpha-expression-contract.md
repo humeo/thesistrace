@@ -31,7 +31,7 @@ set -eu
 uv run pytest -q tests/kernel tests/architecture
 ```
 
-The command must pass `60` tests. The suite compares all 16 normalized
+The command must pass `62` tests. The suite compares all 16 normalized
 operators with their legacy-string equivalents, compares complete Fixture
 Alpha Matrix sessions and checksums, exercises every rejection category, and
 proves the catalog is Kernel-owned with no dynamic execution path.
@@ -55,3 +55,13 @@ proves the catalog is Kernel-owned with no dynamic execution path.
   normalized and legacy Fixture matrices have identical sessions, effective
   lookback, and checksum; the final Kernel plus architecture command passed
   `60 passed` in `68.00s` through the exact `uv run` command above.
+- Review fix: normalized Field References now accept only stable IDs such as
+  `price.close.adjusted`; the runtime binding to `close_adj` stays outside the
+  Kernel expression contract. Legacy strings are parsed into that normalized
+  tree and then use the same field, literal, arity, window, and lookback
+  validator instead of maintaining a second semantic implementation.
+- The normalized validator rejects both non-finite floats and integers too
+  large to convert to binary64 with the deterministic
+  `NON_FINITE_LITERAL` reason code.
+- Post-review ticket verification: the exact command above passed `62 passed`
+  in `57.84s`.

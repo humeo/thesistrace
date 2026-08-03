@@ -8,9 +8,7 @@ from typing import Any
 
 from thesistrace.numeric import canonical_binary64_bytes
 from thesistrace.research_kernel.alpha_expression import (
-    HISTORICAL_OPERATOR_IDS,
     SCALAR_OPERATOR_IDS,
-    WINDOW_OPERATOR_IDS,
     AlphaExpression,
     AlphaValidationError,
     AlphaValidationIssue,
@@ -18,14 +16,15 @@ from thesistrace.research_kernel.alpha_expression import (
     validate_normalized_alpha,
 )
 
-AUTHORABLE_FIELDS = (
-    "open_adj",
-    "high_adj",
-    "low_adj",
-    "close_adj",
-    "volume_shares",
-    "turnover_amount_cny",
-)
+ALPHA_FIELD_BINDINGS = {
+    "price.open.adjusted": "open_adj",
+    "price.high.adjusted": "high_adj",
+    "price.low.adjusted": "low_adj",
+    "price.close.adjusted": "close_adj",
+    "market.volume.shares": "volume_shares",
+    "market.turnover.cny": "turnover_amount_cny",
+}
+LEGACY_FIELD_IDS = {name: field_id for field_id, name in ALPHA_FIELD_BINDINGS.items()}
 FIELD_PATTERN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
@@ -35,7 +34,7 @@ def validate_alpha(expression: AlphaExpression) -> ParsedAlpha:
     if isinstance(expression, Mapping):
         return validate_normalized_alpha(
             expression,
-            authorable_field_ids=AUTHORABLE_FIELDS,
+            field_bindings=ALPHA_FIELD_BINDINGS,
         )
     raise AlphaValidationError(
         [
@@ -51,149 +50,113 @@ def validate_alpha(expression: AlphaExpression) -> ParsedAlpha:
 def validate_legacy_alpha(expression: str) -> ParsedAlpha:
     """Temporary compatibility boundary for pre-normalized string expressions."""
     rewritten = FIELD_PATTERN.sub(lambda match: f"f{match.group(1)}", expression)
-    issues: list[AlphaValidationIssue] = []
     if "$" in rewritten:
-        issues.append(issue("INVALID_FIELD_REFERENCE", 0, "invalid field reference"))
+        raise AlphaValidationError([issue("INVALID_FIELD_REFERENCE", 0, "invalid field reference")])
     try:
         tree = ast.parse(rewritten, mode="eval")
     except SyntaxError as error:
-        issues.append(
-            AlphaValidationIssue(
-                reason_code="INVALID_SYNTAX",
-                location=f"alpha.expression:{error.offset or 0}",
-                message="expression is not valid syntax",
-            )
+        raise AlphaValidationError(
+            [
+                AlphaValidationIssue(
+                    reason_code="INVALID_SYNTAX",
+                    location=f"alpha.expression:{error.offset or 0}",
+                    message="expression is not valid syntax",
+                )
+            ]
+        ) from error
+    normalized = _legacy_node_to_normalized(tree.body)
+    try:
+        parsed = validate_normalized_alpha(
+            normalized,
+            field_bindings=ALPHA_FIELD_BINDINGS,
         )
-        raise AlphaValidationError(issues) from error
-
-    fields: set[str] = set()
-
-    def analyze(node: ast.AST) -> int:
-        if isinstance(node, ast.Expression):
-            return analyze(node.body)
-        if isinstance(node, ast.Constant):
-            if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
-                issues.append(
-                    issue("SYNTAX_NOT_ALLOWED", node.col_offset, "numeric literal required")
+    except AlphaValidationError as error:
+        translated = {
+            "UNKNOWN_OPERATOR": "FUNCTION_NOT_ALLOWED",
+            "INVALID_OPERAND": "WINDOW_NOT_INTEGER_LITERAL",
+        }
+        raise AlphaValidationError(
+            [
+                AlphaValidationIssue(
+                    reason_code=translated.get(item.reason_code, item.reason_code),
+                    location=item.location,
+                    message=item.message,
                 )
-            elif not math.isfinite(float(node.value)):
-                issues.append(
-                    issue("NON_FINITE_LITERAL", node.col_offset, "literal must be finite")
-                )
-            return 0
-        if isinstance(node, ast.Name):
-            if node.id.startswith("f"):
-                field_name = node.id[1:]
-                if field_name not in AUTHORABLE_FIELDS:
-                    issues.append(
+                for item in error.issues
+            ]
+        ) from error
+    return ParsedAlpha(
+        expression=expression,
+        tree=parsed.tree,
+        field_names=parsed.field_names,
+        field_ids=parsed.field_ids,
+        effective_lookback=parsed.effective_lookback,
+    )
+
+
+def _legacy_node_to_normalized(node: ast.AST) -> dict[str, object]:
+    if isinstance(node, ast.Constant):
+        return {"literal": node.value}
+    if isinstance(node, ast.Name):
+        if node.id.startswith("f"):
+            field_name = node.id[1:]
+            field_id = LEGACY_FIELD_IDS.get(field_name)
+            if field_id is None:
+                raise AlphaValidationError(
+                    [
                         issue(
                             "FIELD_NOT_AUTHORABLE",
                             node.col_offset,
                             f"{field_name} is not Alpha-authorable",
                         )
-                    )
-                else:
-                    fields.add(field_name)
-                return 0
-            issues.append(
-                issue("SYNTAX_NOT_ALLOWED", node.col_offset, "bare names are not allowed")
-            )
-            return 0
-        if isinstance(node, ast.BinOp) and isinstance(
-            node.op, (ast.Add, ast.Sub, ast.Mult, ast.Div)
-        ):
-            return max(analyze(node.left), analyze(node.right))
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            return analyze(node.operand)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-            function_name = node.func.id
-            if node.keywords:
-                issues.append(
+                    ]
+                )
+            return {"field_id": field_id}
+        raise AlphaValidationError(
+            [issue("SYNTAX_NOT_ALLOWED", node.col_offset, "bare names are not allowed")]
+        )
+    binary_operators = {
+        ast.Add: "add",
+        ast.Sub: "subtract",
+        ast.Mult: "multiply",
+        ast.Div: "divide",
+    }
+    if isinstance(node, ast.BinOp) and type(node.op) in binary_operators:
+        return {
+            "operator_id": binary_operators[type(node.op)],
+            "operands": [
+                _legacy_node_to_normalized(node.left),
+                _legacy_node_to_normalized(node.right),
+            ],
+        }
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        return {
+            "operator_id": "negate",
+            "operands": [_legacy_node_to_normalized(node.operand)],
+        }
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.keywords:
+            raise AlphaValidationError(
+                [
                     issue(
-                        "KEYWORDS_NOT_ALLOWED", node.col_offset, "keyword arguments are not allowed"
+                        "KEYWORDS_NOT_ALLOWED",
+                        node.col_offset,
+                        "keyword arguments are not allowed",
                     )
-                )
-            if function_name in SCALAR_OPERATOR_IDS:
-                if len(node.args) != 1:
-                    issues.append(
-                        issue(
-                            "INVALID_ARITY",
-                            node.col_offset,
-                            "scalar function requires one argument",
-                        )
-                    )
-                    return 0
-                return analyze(node.args[0])
-            if function_name in WINDOW_OPERATOR_IDS:
-                if len(node.args) != 2:
-                    issues.append(
-                        issue(
-                            "INVALID_ARITY",
-                            node.col_offset,
-                            "window function requires two arguments",
-                        )
-                    )
-                    return 0
-                child_lookback = analyze(node.args[0])
-                window_node = node.args[1]
-                if (
-                    not isinstance(window_node, ast.Constant)
-                    or isinstance(window_node.value, bool)
-                    or not isinstance(window_node.value, int)
-                ):
-                    issues.append(
-                        issue(
-                            "WINDOW_NOT_INTEGER_LITERAL",
-                            window_node.col_offset,
-                            "window must be an integer literal",
-                        )
-                    )
-                    return child_lookback
-                window = int(window_node.value)
-                if window < 1 or window > 252:
-                    issues.append(
-                        issue(
-                            "WINDOW_OUT_OF_RANGE",
-                            window_node.col_offset,
-                            "window must be between 1 and 252",
-                        )
-                    )
-                    return child_lookback
-                offset = window if function_name in HISTORICAL_OPERATOR_IDS else window - 1
-                return child_lookback + offset
-            issues.append(
-                issue(
-                    "FUNCTION_NOT_ALLOWED",
-                    node.col_offset,
-                    f"{function_name} is not an allowed Alpha function",
-                )
+                ]
             )
-            return 0
-        issues.append(
+        return {
+            "operator_id": node.func.id,
+            "operands": [_legacy_node_to_normalized(argument) for argument in node.args],
+        }
+    raise AlphaValidationError(
+        [
             issue(
                 "SYNTAX_NOT_ALLOWED",
                 getattr(node, "col_offset", 0),
                 f"{type(node).__name__} is not allowed",
             )
-        )
-        return 0
-
-    effective_lookback = analyze(tree)
-    if effective_lookback > 252:
-        issues.append(
-            issue(
-                "LOOKBACK_EXCEEDS_LIMIT",
-                0,
-                f"effective lookback {effective_lookback} exceeds 252",
-            )
-        )
-    if issues:
-        raise AlphaValidationError(issues)
-    return ParsedAlpha(
-        expression=expression,
-        tree=tree,
-        field_names=tuple(sorted(fields)),
-        effective_lookback=effective_lookback,
+        ]
     )
 
 
@@ -221,8 +184,7 @@ def evaluate_parsed_series(
         length if length is not None else (1 if inferred_length is None else inferred_length)
     )
     return [
-        evaluate_node(parsed.tree.body, index, values_by_field)
-        for index in range(result_length)
+        evaluate_node(parsed.tree.body, index, values_by_field) for index in range(result_length)
     ]
 
 
