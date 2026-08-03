@@ -82,9 +82,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
     facade_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
-    alpha_source = (
-        ROOT / "src" / "thesistrace" / "research_kernel" / "alpha.py"
-    ).read_text()
+    alpha_source = (ROOT / "src" / "thesistrace" / "research_kernel" / "alpha.py").read_text()
     normalized_source = (
         ROOT / "src" / "thesistrace" / "research_kernel" / "alpha_expression.py"
     ).read_text()
@@ -189,3 +187,23 @@ print(json.dumps(sorted(forbidden)))
         text=True,
     )
     assert json.loads(completed.stdout) == []
+
+
+def test_partition_loader_has_no_second_calculation_engine() -> None:
+    loader = (ROOT / "src" / "thesistrace" / "bounded_research.py").read_text()
+    adapter = (ROOT / "src" / "thesistrace" / "research_runs.py").read_text()
+
+    for removed in (
+        "AlphaValueStore",
+        "PriceLookup",
+        "StateLookup",
+        "LimitLookup",
+        "UniverseLookup",
+        "_calculate_alpha",
+        "_calculate_labels_and_factor",
+        "strategy_canonical",
+        "discard_alpha_only_fields",
+    ):
+        assert removed not in loader
+    assert "RunInput(" not in loader
+    assert adapter.count("RunInput(") == 1

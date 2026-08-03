@@ -62,5 +62,10 @@ verify the Kernel package imports no lifecycle or infrastructure module.
 - The partitioned loader now materializes canonical input and delegates to the
   same Kernel Run. Its acceptance test compares the complete result by exact
   equality instead of maintaining a second calculation implementation.
-- After sealing every `RunInput` collection as canonical bytes or tuples, the
-  updated exact command above passed `72 passed` in `100.64s`.
+- Review round 2 removed the dead bounded-engine lookup/store abstractions and
+  collapsed legacy Definition-to-`RunInput` conversion into one adapter.
+  Partition column selection now validates normalized trees with the frozen
+  field bindings; its acceptance case deliberately uses a field ID absent from
+  the current Data catalog to prove replay does not drift.
+- After these fixes, the updated exact command above passed `73 passed` in
+  `88.05s`.

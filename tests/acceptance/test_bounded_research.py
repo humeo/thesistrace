@@ -1,13 +1,14 @@
 from pathlib import Path
 
-from thesistrace.bounded_research import (
-    calculate_bounded_research,
-    load_columnar_research_window,
-)
+from thesistrace.bounded_research import load_columnar_research_window
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.fixture import build_fixture
 from thesistrace.objects import ImmutableObjectStore
-from thesistrace.research_runs import calculate_research, research_input_history
+from thesistrace.research_runs import (
+    calculate_bounded_research,
+    calculate_research,
+    research_input_history,
+)
 from thesistrace.storage import MetadataStore
 
 
@@ -52,3 +53,28 @@ def test_columnar_research_is_exactly_equivalent_to_legacy_calculation(
     )
 
     assert bounded == legacy
+
+    normalized_definition = {
+        **definition,
+        "alpha": {
+            "expression": {
+                "operator_id": "pct_change",
+                "operands": [
+                    {"field_id": "snapshot.price.close"},
+                    {"literal": 20},
+                ],
+            }
+        },
+        "field_bindings": [{"field_id": "snapshot.price.close", "name": "close_adj"}],
+    }
+    normalized_legacy = calculate_research(
+        research_input_history(canonical),
+        normalized_definition,
+    )
+    normalized_bounded = calculate_bounded_research(
+        load_columnar_research_window(objects, release, normalized_definition),
+        normalized_definition,
+    )
+
+    assert normalized_bounded == normalized_legacy
+    assert normalized_bounded["alpha_matrix"]["checksum"] == legacy["alpha_matrix"]["checksum"]

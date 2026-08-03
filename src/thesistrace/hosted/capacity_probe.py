@@ -13,10 +13,7 @@ from uuid import uuid4
 from temporalio.client import Client
 from temporalio.service import RPCError
 
-from thesistrace.bounded_research import (
-    calculate_bounded_research,
-    load_columnar_research_window,
-)
+from thesistrace.bounded_research import load_columnar_research_window
 from thesistrace.config import settings_from_environment
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.capacity_corpus import (
@@ -30,6 +27,7 @@ from thesistrace.hosted.dataset_publication_workflow import (
 )
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.ports import LocalWorkerDispatch
+from thesistrace.research_runs import calculate_bounded_research
 from thesistrace.result_objects import publish_compact_result_objects
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import MetadataStore

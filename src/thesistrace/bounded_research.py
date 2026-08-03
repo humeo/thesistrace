@@ -7,7 +7,6 @@ from typing import Any
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from thesistrace.alpha import validate_alpha
 from thesistrace.canonical_objects import (
     FAMILY_BY_TABLE,
     CanonicalFamily,
@@ -16,10 +15,9 @@ from thesistrace.canonical_objects import (
     sort_partition_entries,
     validate_partition_entry,
 )
-from thesistrace.data.fields import authorable_field_bindings
+from thesistrace.data.fields import authorable_field_bindings_from_snapshot
 from thesistrace.ports import ObjectStorePort
-from thesistrace.research_kernel import RunInput
-from thesistrace.research_kernel import run as run_kernel
+from thesistrace.research_kernel.alpha import validate_alpha
 
 INPUT_SESSIONS = 756
 MISSING = math.nan
@@ -35,136 +33,6 @@ PRICE_FIELD_BY_ALPHA_FIELD = {
 
 class BoundedResearchError(RuntimeError):
     pass
-
-
-class _FlatLookup(Mapping[tuple[str, str], object]):
-    def __init__(self, window: "ColumnarResearchWindow") -> None:
-        self.window = window
-
-    def _position(self, key: tuple[str, str]) -> int | None:
-        session, instrument_id = key
-        session_index = self.window.session_index.get(session)
-        instrument_index = self.window.instrument_index.get(instrument_id)
-        if session_index is None or instrument_index is None:
-            return None
-        return session_index * self.window.instrument_count + instrument_index
-
-    def __iter__(self) -> Iterator[tuple[str, str]]:
-        for session_index, session in enumerate(self.window.sessions):
-            offset = session_index * self.window.instrument_count
-            for instrument_index, instrument_id in enumerate(self.window.instrument_ids):
-                if not math.isnan(self.window.price_fields["open_adj"][offset + instrument_index]):
-                    yield session, instrument_id
-
-    def __len__(self) -> int:
-        return len(self.window.sessions) * self.window.instrument_count
-
-
-class PriceLookup(_FlatLookup):
-    def __getitem__(self, key: tuple[str, str]) -> dict[str, object]:
-        position = self._position(key)
-        if position is None:
-            raise KeyError(key)
-        adjusted_open = self.window.price_fields["open_adj"][position]
-        if math.isnan(adjusted_open):
-            raise KeyError(key)
-        return {
-            "open_adj": adjusted_open,
-            "open_raw": self.window.price_fields["open_raw"][position],
-        }
-
-    def latest_adjusted_open_before(
-        self,
-        session: str,
-        instrument_id: str,
-    ) -> float | None:
-        session_index = self.window.session_index.get(session)
-        instrument_index = self.window.instrument_index.get(instrument_id)
-        if session_index is None or instrument_index is None:
-            return None
-        for index in range(session_index - 1, -1, -1):
-            value = self.window.price_fields["open_adj"][
-                index * self.window.instrument_count + instrument_index
-            ]
-            if not math.isnan(value):
-                return value
-        return None
-
-
-class StateLookup(_FlatLookup):
-    def __getitem__(self, key: tuple[str, str]) -> str:
-        position = self._position(key)
-        if position is None:
-            raise KeyError(key)
-        state = self.window.trading_states[position]
-        if state == 1:
-            return "normal"
-        if state == 2:
-            return "full_session_suspension"
-        raise KeyError(key)
-
-
-class LimitLookup(_FlatLookup):
-    def __getitem__(self, key: tuple[str, str]) -> dict[str, object]:
-        position = self._position(key)
-        if position is None:
-            raise KeyError(key)
-        upper = self.window.upper_limits[position]
-        lower = self.window.lower_limits[position]
-        if math.isnan(upper) or math.isnan(lower):
-            raise KeyError(key)
-        return {"upper": upper, "lower": lower}
-
-
-class UniverseLookup(Mapping[str, list[str]]):
-    def __init__(self, window: "ColumnarResearchWindow") -> None:
-        self.window = window
-
-    def __getitem__(self, session: str) -> list[str]:
-        membership = self.window.universe_membership.get(session)
-        if membership is None:
-            raise KeyError(session)
-        return [self.window.instrument_ids[index] for index in membership]
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.window.sessions)
-
-    def __len__(self) -> int:
-        return len(self.window.sessions)
-
-
-class AlphaValueStore(Mapping[str, list[dict[str, object]]]):
-    def __init__(
-        self,
-        window: "ColumnarResearchWindow",
-        values: array,
-    ) -> None:
-        self.window = window
-        self.values = values
-
-    def __getitem__(self, session: str) -> list[dict[str, object]]:
-        session_index = self.window.session_index.get(session)
-        if session_index is None:
-            raise KeyError(session)
-        offset = session_index * self.window.instrument_count
-        rows: list[dict[str, object]] = []
-        for instrument_index in self.window.universe_membership.get(session, ()):
-            value = self.values[offset + instrument_index]
-            if not math.isnan(value):
-                rows.append(
-                    {
-                        "instrument_id": self.window.instrument_ids[instrument_index],
-                        "value": value,
-                    }
-                )
-        rows.sort(key=lambda row: str(row["instrument_id"]))
-        return rows
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self.window.sessions)
-
-    def __len__(self) -> int:
-        return len(self.window.sessions)
 
 
 @dataclass
@@ -187,25 +55,6 @@ class ColumnarResearchWindow:
             instrument_id: index for index, instrument_id in enumerate(self.instrument_ids)
         }
         self.instrument_count = len(self.instrument_ids)
-
-    def strategy_canonical(self) -> dict[str, object]:
-        return {
-            "research_calendar": list(self.sessions),
-            "instruments": [self.instruments[value] for value in self.instrument_ids],
-            "prices": PriceLookup(self),
-            "trading_states": StateLookup(self),
-            "price_limits": LimitLookup(self),
-            "liquidity_universes": {
-                self.universe_name: UniverseLookup(self),
-            },
-        }
-
-    def discard_alpha_only_fields(self) -> None:
-        self.price_fields = {
-            field: values
-            for field, values in self.price_fields.items()
-            if field in {"open_adj", "open_raw"}
-        }
 
     def canonical_data(self) -> dict[str, object]:
         prices: list[dict[str, object]] = []
@@ -362,7 +211,10 @@ def load_columnar_research_window(
     cell_count = len(sessions) * len(selected_ids)
 
     alpha = _mapping(definition.get("alpha"), "Alpha definition")
-    parsed = validate_alpha(str(alpha["expression"]))
+    parsed = validate_alpha(
+        alpha["expression"],
+        field_bindings=authorable_field_bindings_from_snapshot(definition.get("field_bindings")),
+    )
     price_columns = {PRICE_FIELD_BY_ALPHA_FIELD[field] for field in parsed.field_names} | {
         "open_adj",
         "open_raw",
@@ -460,44 +312,6 @@ def load_columnar_research_window(
         st_designations=st_designations,
         industry_membership=industry_membership,
     )
-
-
-def calculate_bounded_research(
-    window: ColumnarResearchWindow,
-    definition: dict[str, object],
-) -> dict[str, dict[str, object]]:
-    """Compatibility adapter from columnar loading into the single Kernel Run."""
-    alpha = _mapping(definition.get("alpha"), "Alpha definition")
-    strategy = _mapping(definition.get("strategy"), "Strategy definition")
-    costs = _mapping(definition.get("costs"), "Cost definition")
-    return run_kernel(
-        RunInput(
-            canonical_data=window.canonical_data(),
-            alpha_expression=alpha["expression"],
-            field_bindings=_definition_field_bindings(definition),
-            universe=str(definition["universe"]),
-            neutralization=str(definition["neutralization"]),
-            holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_interval"]),
-            initial_cash_cny=str(strategy["initial_cash_cny"]),
-            commission_rate_all_in=str(costs["commission_rate_all_in"]),
-            commission_min_cny=str(costs["commission_min_cny"]),
-            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-            transfer_fee_rate=str(costs["transfer_fee_rate"]),
-        )
-    )
-
-
-def _definition_field_bindings(definition: Mapping[str, object]) -> dict[str, str]:
-    value = definition.get("field_bindings")
-    if not isinstance(value, list):
-        return authorable_field_bindings()
-    bindings = {
-        str(item["field_id"]): str(item["name"])
-        for item in value
-        if isinstance(item, Mapping) and "field_id" in item and "name" in item
-    }
-    return bindings or authorable_field_bindings()
 
 
 def _flat_position(

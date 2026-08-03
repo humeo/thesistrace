@@ -1,7 +1,7 @@
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from thesistrace.activity_contract import (
@@ -11,10 +11,10 @@ from thesistrace.activity_contract import (
     should_retry_resource_exhaustion,
 )
 from thesistrace.bounded_research import (
-    calculate_bounded_research,
+    ColumnarResearchWindow,
     load_columnar_research_window,
 )
-from thesistrace.data.fields import authorable_field_bindings
+from thesistrace.data.fields import authorable_field_bindings_from_snapshot
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import ControlMetadataPort, ObjectStorePort, ObjectWriterPort
@@ -374,7 +374,9 @@ def calculate_research(
         RunInput(
             canonical_data=canonical,
             alpha_expression=alpha["expression"],
-            field_bindings=_definition_field_bindings(definition),
+            field_bindings=authorable_field_bindings_from_snapshot(
+                definition.get("field_bindings")
+            ),
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             holdings_count=int(strategy["holdings_count"]),
@@ -388,16 +390,12 @@ def calculate_research(
     )
 
 
-def _definition_field_bindings(definition: Mapping[str, object]) -> dict[str, str]:
-    value = definition.get("field_bindings")
-    if not isinstance(value, list):
-        return authorable_field_bindings()
-    bindings = {
-        str(item["field_id"]): str(item["name"])
-        for item in value
-        if isinstance(item, Mapping) and "field_id" in item and "name" in item
-    }
-    return bindings or authorable_field_bindings()
+def calculate_bounded_research(
+    window: ColumnarResearchWindow,
+    definition: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Compatibility adapter from columnar loading into the single Kernel Run."""
+    return calculate_research(window.canonical_data(), definition)
 
 
 def research_input_history(canonical: dict[str, object]) -> dict[str, object]:
