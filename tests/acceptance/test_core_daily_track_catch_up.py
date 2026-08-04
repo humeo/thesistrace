@@ -65,10 +65,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
                 )
             )
             payload = json.loads(bundle.payloads["checkpoint"].content)
-            assert (
-                payload["canonical"]["research_calendar"][-1]
-                == releases[index]["covered_session_range"]["end"]
-            )
+            assert payload["boundary_session"] == releases[index]["covered_session_range"]["end"]
             predecessor = row["provenance"]["predecessor"]
             if index == 0:
                 assert predecessor["kind"] == "tracking.origin"

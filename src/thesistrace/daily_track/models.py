@@ -93,13 +93,18 @@ class KernelRunInputSnapshot(BaseModel):
 
 
 class KernelStateCheckpoint(BaseModel):
-    """Complete private immutable state required by the next Kernel Advance."""
+    """Compact immutable product truth; transient continuation stays in cache."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    schema_version: Literal["daily-track-kernel-state-v1"]
+    schema_version: Literal["daily-track-checkpoint-v1"]
     origin_session: str
-    canonical: dict[str, object]
-    output: dict[str, dict[str, object]]
-    strategy_resume: dict[str, object]
+    session_count: int
+    boundary_session: str
     run_input: KernelRunInputSnapshot
+    alpha_state: dict[str, object]
+    factor_summary: dict[str, object]
+    strategy_state: dict[str, object]
+    continuation_sha256: str
+    pending_alpha_sessions: int
+    rolling_factor_rows: int

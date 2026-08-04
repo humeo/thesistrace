@@ -50,7 +50,9 @@ class _DailyTrackWorkingCache:
         release_id: str,
         head_manifest_sha256: str,
         fence: int,
-        verified_continuation: Mapping[str, object],
+        continuation_sha256: str,
+        pending_alpha_sessions: int,
+        rolling_factor_rows: int,
     ) -> Mapping[str, object] | None:
         path = self.path(track_id)
         try:
@@ -61,32 +63,40 @@ class _DailyTrackWorkingCache:
             entry = json.loads(raw)
             if not isinstance(entry, dict) or set(entry) != _CACHE_KEYS:
                 raise ValueError("Working Cache entry shape is invalid")
-            continuation = canonical_json_bytes(verified_continuation)
-            pending_count, factor_count = _continuation_counts(verified_continuation)
             expected = {
                 "schema_version": _CACHE_SCHEMA_VERSION,
                 "track_id": track_id,
                 "release_id": release_id,
                 "head_manifest_sha256": head_manifest_sha256,
                 "fence": fence,
-                "continuation_bytes": len(continuation),
-                "continuation_sha256": hashlib.sha256(continuation).hexdigest(),
-                "pending_alpha_sessions": pending_count,
-                "rolling_factor_rows": factor_count,
+                "continuation_sha256": continuation_sha256,
+                "pending_alpha_sessions": pending_alpha_sessions,
+                "rolling_factor_rows": rolling_factor_rows,
             }
             if any(entry.get(key) != value for key, value in expected.items()):
                 raise ValueError("Working Cache basis is stale")
+            continuation_bytes = entry.get("continuation_bytes")
+            if (
+                not isinstance(continuation_bytes, int)
+                or continuation_bytes <= 0
+                or continuation_bytes > self.max_bytes
+            ):
+                raise ValueError("Working Cache payload length is invalid")
             encoded = entry["continuation_zlib_base64"]
             if not isinstance(encoded, str):
                 raise ValueError("Working Cache payload is invalid")
             compressed = base64.b64decode(encoded, validate=True)
-            payload = _bounded_decompress(compressed, len(continuation))
-            if payload != continuation:
+            payload = _bounded_decompress(compressed, continuation_bytes)
+            if hashlib.sha256(payload).hexdigest() != continuation_sha256:
                 raise ValueError("Working Cache payload does not match verified truth")
             value = json.loads(payload)
             if not isinstance(value, Mapping):
                 raise ValueError("Working Cache continuation state is invalid")
-            _continuation_counts(value)
+            if _continuation_counts(value) != (
+                pending_alpha_sessions,
+                rolling_factor_rows,
+            ):
+                raise ValueError("Working Cache continuation counts are invalid")
             return value
         except FileNotFoundError:
             return None

@@ -44,18 +44,25 @@ EVOLVING_REFERENCE_TABLES = (
 class AdvanceInput:
     _prior_state: KernelState = field(repr=False)
     _new_canonical_json: bytes = field(repr=False)
+    _continuation_json: bytes | None = field(repr=False)
 
     def __init__(
         self,
         *,
         prior_state: KernelState,
         new_canonical_sessions: dict[str, object],
+        continuation: Mapping[str, object] | None = None,
     ) -> None:
         object.__setattr__(self, "_prior_state", prior_state)
         object.__setattr__(
             self,
             "_new_canonical_json",
             canonical_json_bytes(new_canonical_sessions),
+        )
+        object.__setattr__(
+            self,
+            "_continuation_json",
+            None if continuation is None else canonical_json_bytes(continuation),
         )
 
     def prior_state(self) -> KernelState:
@@ -67,10 +74,21 @@ class AdvanceInput:
             raise KernelRunError("Advance canonical snapshot is invalid")
         return value
 
+    def continuation_snapshot(self) -> dict[str, object] | None:
+        if self._continuation_json is None:
+            return None
+        value = json.loads(self._continuation_json)
+        if not isinstance(value, dict):
+            raise KernelRunError("Advance continuation snapshot is invalid")
+        return value
+
 
 def advance(advance_input: AdvanceInput) -> KernelState:
     prior = advance_input.prior_state()
     prior_output = prior.output_snapshot()
+    continuation = advance_input.continuation_snapshot()
+    if continuation is not None:
+        prior_output = _with_continuation(prior_output, continuation)
     prior_matrix = _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix")
     prior_labels = _mapping(prior_output.get("forward_labels"), "prior Labels")
     prior_factor = _mapping(prior_output.get("factor_evaluation"), "prior Factor")
@@ -88,8 +106,17 @@ def advance(advance_input: AdvanceInput) -> KernelState:
         new_sessions,
         prior.session_count,
     )
-    labels = _advance_labels(canonical, matrix, prior_labels, new_sessions)
-    factor = _advance_factor(canonical, labels, prior_factor, new_sessions)
+    if continuation is None:
+        labels = _advance_labels(canonical, matrix, prior_labels, new_sessions)
+    else:
+        labels = _advance_labels_from_continuation(canonical, matrix, new_sessions)
+    factor = _advance_factor(
+        canonical,
+        labels,
+        prior_factor,
+        new_sessions,
+        compact_continuation=continuation is not None,
+    )
     strategy_resume = prior.strategy_resume_snapshot()
     definition = calculation_definition(run_input)
     strategy = transition_strategy(
@@ -105,6 +132,79 @@ def advance(advance_input: AdvanceInput) -> KernelState:
         strategy_resume=strategy.resumable,
         origin_session=prior.origin_session,
     )
+
+
+def continuation_snapshot(state: KernelState) -> dict[str, object]:
+    output = state.output_snapshot()
+    alpha = _mapping(output.get("alpha_matrix"), "Alpha Matrix")
+    factor = _mapping(output.get("factor_evaluation"), "Factor")
+    alpha_sessions = alpha.get("sessions")
+    horizons = _mapping(factor.get("horizons"), "Factor horizons")
+    if not isinstance(alpha_sessions, list):
+        raise KernelRunError("Pending Alpha continuation is invalid")
+    selected_alpha = alpha_sessions[-21:]
+    if any(not isinstance(item, Mapping) for item in selected_alpha):
+        raise KernelRunError("Pending Alpha continuation is invalid")
+    rolling_factor: list[dict[str, object]] = []
+    for horizon in HORIZONS:
+        horizon_value = _mapping(
+            horizons.get(str(horizon)),
+            f"Factor horizon {horizon}",
+        )
+        daily = horizon_value.get("daily")
+        if not isinstance(daily, list):
+            raise KernelRunError("rolling Factor continuation is invalid")
+        selected_daily = daily[-504:]
+        if any(not isinstance(item, Mapping) for item in selected_daily):
+            raise KernelRunError("rolling Factor continuation is invalid")
+        rolling_factor.extend(
+            {"horizon": horizon, **dict(item)}
+            for item in selected_daily
+            if isinstance(item, Mapping)
+        )
+    return {
+        "schema_version": "daily-track-working-state-v1",
+        "pending_alpha": [dict(item) for item in selected_alpha if isinstance(item, Mapping)],
+        "rolling_factor": rolling_factor,
+    }
+
+
+def _with_continuation(
+    prior_output: dict[str, dict[str, object]],
+    continuation: Mapping[str, object],
+) -> dict[str, dict[str, object]]:
+    if set(continuation) != {"schema_version", "pending_alpha", "rolling_factor"} or (
+        continuation.get("schema_version") != "daily-track-working-state-v1"
+    ):
+        raise KernelRunError("Advance continuation contract is invalid")
+    pending = continuation.get("pending_alpha")
+    rolling = continuation.get("rolling_factor")
+    if (
+        not isinstance(pending, list)
+        or len(pending) > 21
+        or not isinstance(rolling, list)
+        or len(rolling) > 1_512
+    ):
+        raise KernelRunError("Advance continuation bound is invalid")
+    restored = json.loads(canonical_json_bytes(prior_output))
+    alpha = _mapping(restored.get("alpha_matrix"), "prior Alpha Matrix")
+    factor = _mapping(restored.get("factor_evaluation"), "prior Factor")
+    alpha["sessions"] = [dict(item) for item in pending if isinstance(item, Mapping)]
+    horizons = _mapping(factor.get("horizons"), "prior Factor horizons")
+    by_horizon: dict[int, list[dict[str, object]]] = {}
+    for item in rolling:
+        if not isinstance(item, Mapping):
+            raise KernelRunError("rolling Factor continuation row is invalid")
+        row = dict(item)
+        horizon = int(row.pop("horizon"))
+        by_horizon.setdefault(horizon, []).append(row)
+    for horizon in HORIZONS:
+        horizon_value = _mapping(
+            horizons.get(str(horizon)),
+            f"prior Factor horizon {horizon}",
+        )
+        horizon_value["daily"] = by_horizon.get(horizon, [])
+    return restored
 
 
 def _advance_alpha(
@@ -204,11 +304,41 @@ def _advance_labels(
     }
 
 
+def _advance_labels_from_continuation(
+    canonical: dict[str, object],
+    matrix: dict[str, object],
+    new_sessions: list[str],
+) -> dict[str, object]:
+    """Recompute only labels whose value can change at this Release boundary."""
+    calendar = canonical_sessions(canonical, "Canonical")
+    horizons: dict[str, object] = {}
+    for horizon in HORIZONS:
+        affected_sessions = affected_label_sessions(calendar, new_sessions, horizon)
+        partial = build_forward_labels(
+            canonical,
+            matrix,
+            signal_sessions=affected_sessions,
+            horizons=(horizon,),
+        )
+        partial_horizon = _mapping(
+            _mapping(partial.get("horizons"), "partial Label horizons").get(str(horizon)),
+            f"partial Label horizon {horizon}",
+        )
+        horizons[str(horizon)] = dict(partial_horizon)
+    return {
+        "alpha_checksum": matrix["checksum"],
+        "report_session_count": min(504, len(calendar)),
+        "horizons": horizons,
+    }
+
+
 def _advance_factor(
     canonical: dict[str, object],
     labels: dict[str, object],
     prior_factor: Mapping[str, object],
     new_sessions: list[str],
+    *,
+    compact_continuation: bool = False,
 ) -> dict[str, object]:
     calendar = canonical_sessions(canonical, "Canonical")
     label_horizons = _mapping(labels.get("horizons"), "Label horizons")
@@ -223,9 +353,12 @@ def _advance_factor(
         label_sessions = label_horizon.get("sessions")
         if not isinstance(label_sessions, list):
             raise KernelRunError("Factor Label sessions are invalid")
-        selected = [str(item["session"]) for item in label_sessions if isinstance(item, Mapping)]
-        if len(selected) != len(label_sessions):
+        label_selected = [
+            str(item["session"]) for item in label_sessions if isinstance(item, Mapping)
+        ]
+        if len(label_selected) != len(label_sessions):
             raise KernelRunError("Factor Label session is invalid")
+        selected = calendar[-504:] if compact_continuation else label_selected
         selected_by_horizon[horizon] = selected
         affected = set(affected_label_sessions(calendar, new_sessions, horizon))
         partial_horizons[str(horizon)] = {

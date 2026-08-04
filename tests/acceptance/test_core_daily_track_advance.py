@@ -120,8 +120,18 @@ def test_active_track_advances_only_to_one_direct_successor(
             )
         )
         state = json.loads(published.payloads["checkpoint"].content)
-        assert state["schema_version"] == "daily-track-kernel-state-v1"
-        assert state["canonical"]["research_calendar"][-1] == successor.appended_session_end
+        assert state["schema_version"] == "daily-track-checkpoint-v1"
+        assert state["boundary_session"] == successor.appended_session_end
+        serialized_state = json.dumps(state, sort_keys=True)
+        for forbidden in (
+            "alpha_matrix",
+            "forward_labels",
+            '"daily"',
+            '"orders"',
+            '"fills"',
+            '"rejections"',
+        ):
+            assert forbidden not in serialized_state
 
         rerun = client.post(
             f"/api/research-runs/{run['id']}/rerun",

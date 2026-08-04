@@ -1,4 +1,5 @@
 import copy
+from decimal import Decimal
 
 import pytest
 from fixture_sessions import append_fixture_session
@@ -6,14 +7,20 @@ from fixture_sessions import append_fixture_session
 import thesistrace.research_kernel.kernel_advance as advance_module
 from thesistrace.research_kernel import (
     AdvanceInput,
+    KernelState,
     RunInput,
     advance,
+    continuation_snapshot,
     run,
 )
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.kernel_run import calculation_definition, compose_output
-from thesistrace.research_kernel.strategy import StrategyTransition, run_strategy
+from thesistrace.research_kernel.strategy import (
+    StrategyTransition,
+    advance_strategy_metric_state,
+    run_strategy,
+)
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -175,6 +182,76 @@ def test_kernel_advance_rejects_static_contract_replacement(
         )
 
 
+def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    assert isinstance(canonical, dict)
+    _complete, appended = append_fixture_session(canonical)
+    prior = run(_run_input(canonical, definition)).track_state
+    expected = advance(AdvanceInput(prior_state=prior, new_canonical_sessions=appended))
+    continuation = continuation_snapshot(prior)
+
+    compact_output = prior.output_snapshot()
+    compact_output["alpha_matrix"]["sessions"] = []
+    compact_output["forward_labels"] = {"horizons": {}}
+    for horizon in compact_output["factor_evaluation"]["horizons"].values():
+        horizon["daily"] = []
+    resume = prior.strategy_resume_snapshot()
+    resume_daily = resume["daily"]
+    terminal = resume_daily[-1]
+    metric_state = advance_strategy_metric_state(
+        None,
+        daily=resume_daily,
+        turnover_events=resume["metrics"]["turnover"]["events"],
+        cumulative_cost=Decimal(str(terminal["cumulative_transaction_cost"])),
+        rejections=resume["rejections"],
+    )
+    compact_prior = KernelState(
+        run_input=prior.run_input_with_canonical(prior.canonical_snapshot()),
+        output=compact_output,
+        strategy_resume={
+            "daily": resume_daily[-504:],
+            "positions": resume["positions"],
+            "report_session_count": metric_state["session_count"],
+            "metric_state": metric_state,
+        },
+        origin_session=prior.origin_session,
+    )
+
+    actual = advance(
+        AdvanceInput(
+            prior_state=compact_prior,
+            new_canonical_sessions=appended,
+            continuation=continuation,
+        )
+    )
+
+    assert continuation_snapshot(actual) == continuation_snapshot(expected)
+    actual_output = actual.output_snapshot()
+    expected_output = expected.output_snapshot()
+    for horizon in ("1", "5", "20"):
+        assert (
+            actual_output["factor_evaluation"]["horizons"][horizon]["summary"]
+            == expected_output["factor_evaluation"]["horizons"][horizon]["summary"]
+        )
+    for key in ("daily", "positions"):
+        assert actual_output["strategy_backtest"][key] == expected_output["strategy_backtest"][key]
+    assert _compact_metrics(actual_output["strategy_backtest"]["metrics"]) == (
+        _compact_metrics(expected_output["strategy_backtest"]["metrics"])
+    )
+
+    with pytest.raises(ValueError, match="prior Label horizon"):
+        advance(
+            AdvanceInput(
+                prior_state=compact_prior,
+                new_canonical_sessions=appended,
+            )
+        )
+
+
 def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state(
     accepted_calculation_case: dict[str, object],
 ) -> None:
@@ -277,3 +354,16 @@ def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
         stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
     )
+
+
+def _compact_metrics(value: object) -> object:
+    metrics = copy.deepcopy(value)
+    for parent, child in (
+        ("maximum_drawdown", "series"),
+        ("turnover", "events"),
+        ("holdings_count", "daily"),
+        ("maximum_single_name_weight", "daily"),
+        ("cash_ratio", "daily"),
+    ):
+        metrics[parent].pop(child, None)
+    return metrics

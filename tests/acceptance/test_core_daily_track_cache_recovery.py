@@ -127,42 +127,41 @@ def test_fresh_worker_uses_empty_local_cache_and_rebuilds_from_publication() -> 
 
     with TestClient(create_app(settings)) as first_process:
         runtime = first_process.app.state.core_runtime
-        track = _seed_track(first_process, "ticket-30-restart")
+        control, rebuilt = _seed_two_tracks(first_process, "ticket-30-restart")
         first = _publish_successor(first_process, 1)
+        assert runtime.daily_tracks.process_next() is True
         assert runtime.daily_tracks.process_next() is True
         cache = runtime.daily_tracks._working_cache
         assert cache is not None
         old_root = cache.root
-        assert cache.path(track["id"]).is_file()
+        assert cache.path(control["id"]).is_file()
+        assert cache.path(rebuilt["id"]).is_file()
+        second = _publish_successor(first_process, 2)
+        assert runtime.daily_tracks.process_next() is True
 
-    assert not old_root.exists()
-    with TestClient(create_app(settings)) as publisher_process:
-        runtime = publisher_process.app.state.core_runtime
-        cache = runtime.daily_tracks._working_cache
-        assert cache is not None
-        assert cache.root != old_root
-        assert list(cache.root.iterdir()) == []
-        second = _publish_successor(publisher_process, 2)
+        completed = subprocess.run(
+            [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        assert completed.returncode == 0, completed.stderr
 
-    completed = subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=180,
-    )
-    assert completed.returncode == 0, completed.stderr
-
-    with TestClient(create_app(settings)) as observer_process:
-        runtime = observer_process.app.state.core_runtime
-        cache = runtime.daily_tracks._working_cache
-        assert cache is not None
-        assert list(cache.root.iterdir()) == []
         assert (
-            observer_process.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
+            first_process.get(f"/api/daily-tracks/{control['id']}").json()["current_release_id"]
             == second["id"]
         )
+        assert (
+            first_process.get(f"/api/daily-tracks/{rebuilt['id']}").json()["current_release_id"]
+            == second["id"]
+        )
+        assert _checkpoint_payload(runtime, control["id"], second["id"]) == (
+            _checkpoint_payload(runtime, rebuilt["id"], second["id"])
+        )
         assert second["predecessor_id"] == first["id"]
+
+    assert not old_root.exists()
 
 
 @pytest.mark.skipif(

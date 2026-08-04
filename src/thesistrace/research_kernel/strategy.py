@@ -241,6 +241,8 @@ def run_strategy(
         diagnostics: list[dict[str, object]] = []
         rebalance_events: list[dict[str, object]] = []
         turnover_events: list[dict[str, object]] = []
+        prior_metric_state: dict[str, object] | None = None
+        prior_daily_count = 0
     else:
         position_rows = continuation.get("positions")
         if not isinstance(position_rows, list):
@@ -254,6 +256,7 @@ def run_strategy(
             for item in position_rows
         }
         daily = [dict(item) for item in continuation["daily"]]
+        prior_daily_count = len(daily)
         last_daily = daily[-1]
         gross_cash = Decimal(str(last_daily["gross_cash"]))
         net_cash = Decimal(str(last_daily["net_cash"]))
@@ -265,8 +268,13 @@ def run_strategy(
         rejections = [dict(item) for item in continuation.get("rejections", [])]
         diagnostics = [dict(item) for item in continuation.get("diagnostics", [])]
         rebalance_events = [dict(item) for item in continuation.get("rebalance_events", [])]
-        prior_turnover = continuation.get("metrics", {}).get("turnover", {}).get("events", [])
-        turnover_events = [dict(item) for item in prior_turnover]
+        metric_state = continuation.get("metric_state")
+        prior_metric_state = dict(metric_state) if isinstance(metric_state, Mapping) else None
+        if prior_metric_state is None:
+            prior_turnover = continuation.get("metrics", {}).get("turnover", {}).get("events", [])
+            turnover_events = [dict(item) for item in prior_turnover]
+        else:
+            turnover_events = []
 
     for session in report_calendar:
         global_index = calendar.index(session)
@@ -570,12 +578,23 @@ def run_strategy(
             }
         )
 
-    metrics = strategy_metrics(
-        daily=daily,
-        turnover_events=turnover_events,
-        cumulative_cost=cumulative_cost,
-        rejections=rejections,
-    )
+    if prior_metric_state is None:
+        metrics = strategy_metrics(
+            daily=daily,
+            turnover_events=turnover_events,
+            cumulative_cost=cumulative_cost,
+            rejections=rejections,
+        )
+        metric_state = None
+    else:
+        metric_state = advance_strategy_metric_state(
+            prior_metric_state,
+            daily=daily[prior_daily_count:],
+            turnover_events=turnover_events,
+            cumulative_cost=cumulative_cost,
+            rejections=rejections,
+        )
+        metrics = strategy_metrics_from_state(metric_state)
     positions_payload = [
         {
             "instrument_id": instrument_id,
@@ -598,6 +617,8 @@ def run_strategy(
         "diagnostics": diagnostics,
         "metrics": metrics,
     }
+    if metric_state is not None:
+        payload["metric_state"] = metric_state
     return {
         **payload,
         "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
