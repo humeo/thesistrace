@@ -11,23 +11,26 @@ from uuid import uuid4
 
 from thesistrace.publication.serialization import canonical_json_bytes
 
-MAX_WORKING_CACHE_BYTES = 8 * 1024 * 1024
+MAX_WORKING_CACHE_BYTES = 2_097_152
+MAX_PENDING_ALPHA_SESSIONS = 21
+MAX_ROLLING_FACTOR_ROWS = 3 * 504
 _CACHE_SCHEMA_VERSION = 1
 _CACHE_KEYS = {
-    "checkpoint_bytes",
-    "checkpoint_sha256",
-    "checkpoint_zlib_base64",
-    "compression",
+    "continuation_bytes",
+    "continuation_sha256",
+    "continuation_zlib_base64",
     "fence",
     "head_manifest_sha256",
+    "pending_alpha_sessions",
     "release_id",
+    "rolling_factor_rows",
     "schema_version",
     "track_id",
 }
 
 
 class _DailyTrackWorkingCache:
-    """Latest verified continuation copy; never a source of product truth."""
+    """Latest bounded continuation slices; never a source of product truth."""
 
     def __init__(self, root: Path, *, max_bytes: int = MAX_WORKING_CACHE_BYTES) -> None:
         if max_bytes <= 0:
@@ -47,38 +50,43 @@ class _DailyTrackWorkingCache:
         release_id: str,
         head_manifest_sha256: str,
         fence: int,
-        verified_checkpoint: bytes,
+        verified_continuation: Mapping[str, object],
     ) -> Mapping[str, object] | None:
         path = self.path(track_id)
         try:
-            raw = path.read_bytes()
+            with path.open("rb") as stream:
+                raw = stream.read(self.max_bytes + 1)
             if len(raw) > self.max_bytes:
                 raise ValueError("Working Cache entry exceeds its byte limit")
             entry = json.loads(raw)
             if not isinstance(entry, dict) or set(entry) != _CACHE_KEYS:
                 raise ValueError("Working Cache entry shape is invalid")
+            continuation = canonical_json_bytes(verified_continuation)
+            pending_count, factor_count = _continuation_counts(verified_continuation)
             expected = {
                 "schema_version": _CACHE_SCHEMA_VERSION,
                 "track_id": track_id,
                 "release_id": release_id,
                 "head_manifest_sha256": head_manifest_sha256,
                 "fence": fence,
-                "compression": "zlib",
-                "checkpoint_bytes": len(verified_checkpoint),
-                "checkpoint_sha256": hashlib.sha256(verified_checkpoint).hexdigest(),
+                "continuation_bytes": len(continuation),
+                "continuation_sha256": hashlib.sha256(continuation).hexdigest(),
+                "pending_alpha_sessions": pending_count,
+                "rolling_factor_rows": factor_count,
             }
             if any(entry.get(key) != value for key, value in expected.items()):
                 raise ValueError("Working Cache basis is stale")
-            encoded = entry["checkpoint_zlib_base64"]
+            encoded = entry["continuation_zlib_base64"]
             if not isinstance(encoded, str):
                 raise ValueError("Working Cache payload is invalid")
             compressed = base64.b64decode(encoded, validate=True)
-            payload = _bounded_decompress(compressed, len(verified_checkpoint))
-            if payload != verified_checkpoint:
+            payload = _bounded_decompress(compressed, len(continuation))
+            if payload != continuation:
                 raise ValueError("Working Cache payload does not match verified truth")
             value = json.loads(payload)
             if not isinstance(value, Mapping):
                 raise ValueError("Working Cache continuation state is invalid")
+            _continuation_counts(value)
             return value
         except FileNotFoundError:
             return None
@@ -93,20 +101,23 @@ class _DailyTrackWorkingCache:
         release_id: str,
         head_manifest_sha256: str,
         fence: int,
-        verified_checkpoint: bytes,
+        verified_continuation: Mapping[str, object],
     ) -> bool:
         path = self.path(track_id)
+        continuation = canonical_json_bytes(verified_continuation)
+        pending_count, factor_count = _continuation_counts(verified_continuation)
         entry = {
             "schema_version": _CACHE_SCHEMA_VERSION,
             "track_id": track_id,
             "release_id": release_id,
             "head_manifest_sha256": head_manifest_sha256,
             "fence": fence,
-            "compression": "zlib",
-            "checkpoint_bytes": len(verified_checkpoint),
-            "checkpoint_sha256": hashlib.sha256(verified_checkpoint).hexdigest(),
-            "checkpoint_zlib_base64": base64.b64encode(
-                zlib.compress(verified_checkpoint, level=9)
+            "continuation_bytes": len(continuation),
+            "continuation_sha256": hashlib.sha256(continuation).hexdigest(),
+            "pending_alpha_sessions": pending_count,
+            "rolling_factor_rows": factor_count,
+            "continuation_zlib_base64": base64.b64encode(
+                zlib.compress(continuation, level=9)
             ).decode("ascii"),
         }
         serialized = canonical_json_bytes(entry)
@@ -124,6 +135,20 @@ class _DailyTrackWorkingCache:
             _discard(temporary)
             return False
         return True
+
+
+def _continuation_counts(value: Mapping[str, object]) -> tuple[int, int]:
+    if set(value) != {"schema_version", "pending_alpha", "rolling_factor"}:
+        raise ValueError("Working Cache continuation shape is invalid")
+    if value.get("schema_version") != "daily-track-working-state-v1":
+        raise ValueError("Working Cache continuation version is invalid")
+    pending = value.get("pending_alpha")
+    rolling = value.get("rolling_factor")
+    if not isinstance(pending, list) or len(pending) > MAX_PENDING_ALPHA_SESSIONS:
+        raise ValueError("Working Cache Pending Alpha bound is invalid")
+    if not isinstance(rolling, list) or len(rolling) > MAX_ROLLING_FACTOR_ROWS:
+        raise ValueError("Working Cache rolling Factor bound is invalid")
+    return len(pending), len(rolling)
 
 
 def _bounded_decompress(compressed: bytes, expected_bytes: int) -> bytes:

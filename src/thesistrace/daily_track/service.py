@@ -13,7 +13,11 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.daily_track.cache import _DailyTrackWorkingCache
+from thesistrace.daily_track.cache import (
+    MAX_PENDING_ALPHA_SESSIONS,
+    MAX_ROLLING_FACTOR_ROWS,
+    _DailyTrackWorkingCache,
+)
 from thesistrace.daily_track.models import (
     DailyTrackList,
     DailyTrackSummary,
@@ -545,21 +549,22 @@ class DailyTrackService:
             raise RuntimeError("DailyTrack Checkpoint payload is invalid")
         if self._working_cache is None:
             return _state_from_payload(value)
+        verified_continuation = _working_continuation(value)
         cached = self._working_cache.load(
             track_id=claim.track_id,
             release_id=claim.current_release_id,
             head_manifest_sha256=claim.head_manifest_sha256,
             fence=claim.fence - 1,
-            verified_checkpoint=payload.content,
+            verified_continuation=verified_continuation,
         )
         if cached is not None:
-            return _state_from_payload(cached)
+            return _state_from_payload(_with_working_continuation(value, cached))
         self._working_cache.store(
             track_id=claim.track_id,
             release_id=claim.current_release_id,
             head_manifest_sha256=claim.head_manifest_sha256,
             fence=claim.fence - 1,
-            verified_checkpoint=payload.content,
+            verified_continuation=verified_continuation,
         )
         return _state_from_payload(value)
 
@@ -703,7 +708,7 @@ class DailyTrackService:
                 release_id=claim.target.id,
                 head_manifest_sha256=published.manifest_sha256,
                 fence=claim.fence,
-                verified_checkpoint=canonical_json_bytes(_state_payload(state)),
+                verified_continuation=_working_continuation(_state_payload(state)),
             )
         except Exception:
             logger.warning(
@@ -839,3 +844,77 @@ def _state_from_payload(value: Mapping[str, object]) -> KernelState:
         strategy_resume=checkpoint.strategy_resume,
         origin_session=checkpoint.origin_session,
     )
+
+
+def _working_continuation(value: Mapping[str, object]) -> dict[str, object]:
+    checkpoint = KernelStateCheckpoint.model_validate(value)
+    alpha = checkpoint.output.get("alpha_matrix")
+    factor = checkpoint.output.get("factor_evaluation")
+    if not isinstance(alpha, Mapping) or not isinstance(factor, Mapping):
+        raise RuntimeError("DailyTrack continuation output is missing")
+    alpha_sessions = alpha.get("sessions")
+    horizons = factor.get("horizons")
+    if not isinstance(alpha_sessions, list) or not isinstance(horizons, Mapping):
+        raise RuntimeError("DailyTrack continuation output is invalid")
+    selected_alpha = alpha_sessions[-MAX_PENDING_ALPHA_SESSIONS:]
+    if any(not isinstance(item, Mapping) for item in selected_alpha):
+        raise RuntimeError("DailyTrack Pending Alpha continuation is invalid")
+    pending_alpha = [dict(item) for item in selected_alpha if isinstance(item, Mapping)]
+    rolling_factor: list[dict[str, object]] = []
+    for horizon in sorted(horizons, key=int):
+        horizon_value = horizons[horizon]
+        if not isinstance(horizon_value, Mapping):
+            raise RuntimeError("DailyTrack Factor continuation is invalid")
+        daily = horizon_value.get("daily")
+        if not isinstance(daily, list):
+            raise RuntimeError("DailyTrack Factor continuation is invalid")
+        selected_daily = daily[-(MAX_ROLLING_FACTOR_ROWS // 3) :]
+        if any(not isinstance(item, Mapping) for item in selected_daily):
+            raise RuntimeError("DailyTrack Factor continuation is invalid")
+        rolling_factor.extend(
+            {"horizon": int(horizon), **dict(item)}
+            for item in selected_daily
+            if isinstance(item, Mapping)
+        )
+    return {
+        "schema_version": "daily-track-working-state-v1",
+        "pending_alpha": pending_alpha,
+        "rolling_factor": rolling_factor,
+    }
+
+
+def _with_working_continuation(
+    value: Mapping[str, object],
+    continuation: Mapping[str, object],
+) -> dict[str, object]:
+    restored = json.loads(canonical_json_bytes(value))
+    KernelStateCheckpoint.model_validate(restored)
+    expected = _working_continuation(restored)
+    if continuation != expected:
+        raise RuntimeError("DailyTrack Working Cache does not match verified continuation")
+    pending = continuation["pending_alpha"]
+    rolling = continuation["rolling_factor"]
+    assert isinstance(pending, list) and isinstance(rolling, list)
+    output = restored["output"]
+    assert isinstance(output, dict)
+    alpha = output["alpha_matrix"]
+    factor = output["factor_evaluation"]
+    assert isinstance(alpha, dict) and isinstance(factor, dict)
+    alpha_sessions = alpha["sessions"]
+    horizons = factor["horizons"]
+    assert isinstance(alpha_sessions, list) and isinstance(horizons, dict)
+    if pending:
+        alpha_sessions[-len(pending) :] = pending
+    by_horizon: dict[int, list[dict[str, object]]] = {}
+    for row in rolling:
+        assert isinstance(row, dict)
+        horizon = int(row["horizon"])
+        by_horizon.setdefault(horizon, []).append(
+            {key: item for key, item in row.items() if key != "horizon"}
+        )
+    for horizon, rows in by_horizon.items():
+        daily = horizons[str(horizon)]["daily"]
+        assert isinstance(daily, list)
+        if rows:
+            daily[-len(rows) :] = rows
+    return restored

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 const internalDailyTrackMechanics =
-  /(?:^|[^A-Za-z0-9])(?:activation|checkpoint|manifest|object|receipt|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker|ordinal|failure_reason|started_at|finished_at|execution_fence|target_release_id|predecessor_release_id)(?:$|[^A-Za-z0-9])/i;
+  /(?:^|[^A-Za-z0-9])(?:activation|checkpoint|manifest|object|receipt|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker|cache|working_cache|working-cache|cache_root|working_cache_root|physical_path|ordinal|failure_reason|started_at|finished_at|execution_fence|target_release_id|predecessor_release_id)(?:$|[^A-Za-z0-9])/i;
 
 test("publishes the first Dataset Release through the real Core", async ({ page }) => {
   test.setTimeout(180_000);
@@ -13,6 +13,10 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
     "manifest_sha256",
     "object_key",
     "worker_id",
+    "working_cache",
+    "working-cache",
+    "working_cache_root",
+    "physical_path",
     "failure_reason",
   ]) {
     expect(internalDailyTrackMechanics.test(forbidden)).toBe(true);

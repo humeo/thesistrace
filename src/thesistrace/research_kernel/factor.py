@@ -196,39 +196,54 @@ def evaluate_factor(labels: dict[str, object]) -> dict[str, object]:
                     **metrics,
                 }
             )
-        summary = {
-            "ic": correlation_summary(daily, "ic"),
-            "rank_ic": correlation_summary(daily, "rank_ic"),
-            "quantile_returns": {
-                name: mean_or_none(
-                    [
-                        float(day["quantile_returns"][name])
-                        for day in daily
-                        if day["quantile_returns"][name] is not None
-                    ]
-                )
-                for name in ("q1", "q2", "q3", "q4", "q5")
-            },
-            "top_bottom_return": mean_or_none(
-                [
-                    float(day["top_bottom_return"])
-                    for day in daily
-                    if day["top_bottom_return"] is not None
-                ]
-            ),
-        }
-        payload = {
-            "horizon": int(horizon),
-            "alpha_checksum": labels["alpha_checksum"],
-            "label_checksum": label_artifact["checksum"],
-            "daily": daily,
-            "summary": summary,
-        }
-        horizons[horizon] = {
-            **payload,
-            "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
-        }
+        horizons[horizon] = factor_horizon_from_daily(
+            horizon=int(horizon),
+            alpha_checksum=str(labels["alpha_checksum"]),
+            label_checksum=str(label_artifact["checksum"]),
+            daily=daily,
+        )
     return {"horizons": horizons}
+
+
+def factor_horizon_from_daily(
+    *,
+    horizon: int,
+    alpha_checksum: str,
+    label_checksum: str,
+    daily: list[dict[str, object]],
+) -> dict[str, object]:
+    summary = {
+        "ic": correlation_summary(daily, "ic"),
+        "rank_ic": correlation_summary(daily, "rank_ic"),
+        "quantile_returns": {
+            name: mean_or_none(
+                [
+                    float(day["quantile_returns"][name])
+                    for day in daily
+                    if day["quantile_returns"][name] is not None
+                ]
+            )
+            for name in ("q1", "q2", "q3", "q4", "q5")
+        },
+        "top_bottom_return": mean_or_none(
+            [
+                float(day["top_bottom_return"])
+                for day in daily
+                if day["top_bottom_return"] is not None
+            ]
+        ),
+    }
+    payload = {
+        "horizon": horizon,
+        "alpha_checksum": alpha_checksum,
+        "label_checksum": label_checksum,
+        "daily": daily,
+        "summary": summary,
+    }
+    return {
+        **payload,
+        "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
+    }
 
 
 def factor_day(samples: list[dict[str, object]]) -> dict[str, object]:

@@ -21,6 +21,7 @@ from thesistrace.research_kernel.factor import (
     affected_label_sessions,
     build_forward_labels,
     evaluate_factor,
+    factor_horizon_from_daily,
 )
 from thesistrace.research_kernel.kernel_run import (
     KernelRunError,
@@ -72,6 +73,7 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     prior_output = prior.output_snapshot()
     prior_matrix = _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix")
     prior_labels = _mapping(prior_output.get("forward_labels"), "prior Labels")
+    prior_factor = _mapping(prior_output.get("factor_evaluation"), "prior Factor")
     appended = advance_input.new_canonical_snapshot()
     canonical = _append_canonical_sessions(
         prior.canonical_snapshot(),
@@ -87,7 +89,7 @@ def advance(advance_input: AdvanceInput) -> KernelState:
         prior.session_count,
     )
     labels = _advance_labels(canonical, matrix, prior_labels, new_sessions)
-    factor = evaluate_factor(labels)
+    factor = _advance_factor(canonical, labels, prior_factor, new_sessions)
     strategy_resume = prior.strategy_resume_snapshot()
     definition = calculation_definition(run_input)
     strategy = transition_strategy(
@@ -200,6 +202,91 @@ def _advance_labels(
         "report_session_count": len(selected_sessions),
         "horizons": horizons,
     }
+
+
+def _advance_factor(
+    canonical: dict[str, object],
+    labels: dict[str, object],
+    prior_factor: Mapping[str, object],
+    new_sessions: list[str],
+) -> dict[str, object]:
+    calendar = canonical_sessions(canonical, "Canonical")
+    label_horizons = _mapping(labels.get("horizons"), "Label horizons")
+    prior_horizons = _mapping(prior_factor.get("horizons"), "prior Factor horizons")
+    partial_horizons: dict[str, object] = {}
+    selected_by_horizon: dict[int, list[str]] = {}
+    for horizon in HORIZONS:
+        label_horizon = _mapping(
+            label_horizons.get(str(horizon)),
+            f"Label horizon {horizon}",
+        )
+        label_sessions = label_horizon.get("sessions")
+        if not isinstance(label_sessions, list):
+            raise KernelRunError("Factor Label sessions are invalid")
+        selected = [str(item["session"]) for item in label_sessions if isinstance(item, Mapping)]
+        if len(selected) != len(label_sessions):
+            raise KernelRunError("Factor Label session is invalid")
+        selected_by_horizon[horizon] = selected
+        affected = set(affected_label_sessions(calendar, new_sessions, horizon))
+        partial_horizons[str(horizon)] = {
+            **dict(label_horizon),
+            "sessions": [
+                dict(item)
+                for item in label_sessions
+                if isinstance(item, Mapping) and str(item["session"]) in affected
+            ],
+        }
+    partial = evaluate_factor(
+        {
+            "alpha_checksum": labels["alpha_checksum"],
+            "horizons": partial_horizons,
+        }
+    )
+    partial_factor_horizons = _mapping(
+        partial.get("horizons"),
+        "partial Factor horizons",
+    )
+    horizons: dict[str, object] = {}
+    for horizon in HORIZONS:
+        selected = selected_by_horizon[horizon]
+        selected_set = set(selected)
+        prior_horizon = _mapping(
+            prior_horizons.get(str(horizon)),
+            f"prior Factor horizon {horizon}",
+        )
+        partial_horizon = _mapping(
+            partial_factor_horizons.get(str(horizon)),
+            f"partial Factor horizon {horizon}",
+        )
+        prior_daily = prior_horizon.get("daily")
+        partial_daily = partial_horizon.get("daily")
+        if not isinstance(prior_daily, list) or not isinstance(partial_daily, list):
+            raise KernelRunError("Factor daily continuation is invalid")
+        by_session = {
+            str(item["session"]): dict(item)
+            for item in prior_daily
+            if isinstance(item, Mapping) and str(item.get("session")) in selected_set
+        }
+        by_session.update(
+            {
+                str(item["session"]): dict(item)
+                for item in partial_daily
+                if isinstance(item, Mapping)
+            }
+        )
+        if set(by_session) != selected_set:
+            raise KernelRunError("Factor daily continuation is incomplete")
+        label_horizon = _mapping(
+            label_horizons.get(str(horizon)),
+            f"Label horizon {horizon}",
+        )
+        horizons[str(horizon)] = factor_horizon_from_daily(
+            horizon=horizon,
+            alpha_checksum=str(labels["alpha_checksum"]),
+            label_checksum=str(label_horizon["checksum"]),
+            daily=[by_session[session] for session in selected],
+        )
+    return {"horizons": horizons}
 
 
 def _append_canonical_sessions(

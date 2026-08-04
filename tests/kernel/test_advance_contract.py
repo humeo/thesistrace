@@ -44,6 +44,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     calls: dict[str, object] = {"label_sessions": [], "strategy_calls": []}
     original_alpha = advance_module.evaluate_alpha_matrix
     original_labels = advance_module.build_forward_labels
+    original_factor = advance_module.evaluate_factor
     original_strategy_transition = advance_module.transition_strategy
 
     def observed_alpha(
@@ -87,8 +88,17 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
         )
         return transition
 
+    def observed_factor(labels: dict[str, object]) -> dict[str, object]:
+        horizons = labels["horizons"]
+        assert isinstance(horizons, dict)
+        calls["factor_sessions"] = [
+            len(horizons[horizon]["sessions"]) for horizon in sorted(horizons, key=int)
+        ]
+        return original_factor(labels)
+
     monkeypatch.setattr(advance_module, "evaluate_alpha_matrix", observed_alpha)
     monkeypatch.setattr(advance_module, "build_forward_labels", observed_labels)
+    monkeypatch.setattr(advance_module, "evaluate_factor", observed_factor)
     monkeypatch.setattr(
         advance_module,
         "transition_strategy",
@@ -140,6 +150,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     assert calls == {
         "alpha_session_count": 21,
         "label_sessions": [2, 2, 2],
+        "factor_sessions": [2, 2, 2],
         "strategy_calls": [(503, 505, 504)],
     }
 

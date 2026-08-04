@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,14 +12,20 @@ from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.daily_track import DailyTrackProgressionFailed
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.publication import PublicationVerificationError, PublishedRef
+from thesistrace.publication import (
+    PublicationNotFoundError,
+    PublicationVerificationError,
+    PublishedRef,
+)
 
 
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_missing_corrupt_stale_and_fence_mismatched_cache_rebuilds_same_state() -> None:
+def test_missing_corrupt_stale_and_fence_mismatched_cache_rebuilds_same_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings)
 
@@ -34,12 +42,22 @@ def test_missing_corrupt_stale_and_fence_mismatched_cache_rebuilds_same_state() 
         rebuilt_path = cache.path(rebuilt["id"])
         assert control_path.is_file() and rebuilt_path.is_file()
         history = [rebuilt_path.read_bytes()]
+        cache_hits: list[bool] = []
+        original_load = cache.load
+
+        def observe_load(**kwargs: object) -> object:
+            result = original_load(**kwargs)
+            cache_hits.append(result is not None)
+            return result
+
+        monkeypatch.setattr(cache, "load", observe_load)
 
         for available_sessions, damage in (
             (2, "missing"),
             (3, "corrupt"),
             (4, "stale-head"),
             (5, "stale-fence"),
+            (6, "oversized"),
         ):
             target = _publish_successor(client, available_sessions)
             assert runtime.daily_tracks.process_next() is True
@@ -50,13 +68,15 @@ def test_missing_corrupt_stale_and_fence_mismatched_cache_rebuilds_same_state() 
                 rebuilt_path.write_bytes(b"not-json")
             elif damage == "stale-head":
                 rebuilt_path.write_bytes(history[-2])
-            else:
+            elif damage == "stale-fence":
                 entry = json.loads(rebuilt_path.read_bytes())
                 entry["fence"] = int(entry["fence"]) - 1
                 rebuilt_path.write_text(
                     json.dumps(entry, sort_keys=True, separators=(",", ":")),
                     encoding="utf-8",
                 )
+            else:
+                rebuilt_path.write_bytes(b"x" * (cache.max_bytes + 1))
 
             assert runtime.daily_tracks.process_next() is True
             assert (
@@ -72,9 +92,15 @@ def test_missing_corrupt_stale_and_fence_mismatched_cache_rebuilds_same_state() 
             )
             assert rebuilt_path.is_file()
             assert rebuilt_path.stat().st_size <= cache.max_bytes
+            entry = json.loads(rebuilt_path.read_bytes())
+            assert entry["pending_alpha_sessions"] <= 21
+            assert entry["rolling_factor_rows"] <= 1_512
+            assert "checkpoint_zlib_base64" not in entry
             history.append(rebuilt_path.read_bytes())
 
         assert runtime.daily_tracks.process_next() is False
+        assert True in cache_hits
+        assert False in cache_hits
         assert sorted(cache.root.glob("*.json")) == sorted([control_path, rebuilt_path])
         assert _cache_schema_names(runtime.database) == []
         assert set(client.get(f"/api/daily-tracks/{rebuilt['id']}").json()) == {
@@ -110,28 +136,55 @@ def test_fresh_worker_uses_empty_local_cache_and_rebuilds_from_publication() -> 
         assert cache.path(track["id"]).is_file()
 
     assert not old_root.exists()
-    with TestClient(create_app(settings)) as fresh_process:
-        runtime = fresh_process.app.state.core_runtime
+    with TestClient(create_app(settings)) as publisher_process:
+        runtime = publisher_process.app.state.core_runtime
         cache = runtime.daily_tracks._working_cache
         assert cache is not None
         assert cache.root != old_root
         assert list(cache.root.iterdir()) == []
-        second = _publish_successor(fresh_process, 2)
-        assert runtime.daily_tracks.process_next() is True
+        second = _publish_successor(publisher_process, 2)
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+    with TestClient(create_app(settings)) as observer_process:
+        runtime = observer_process.app.state.core_runtime
+        cache = runtime.daily_tracks._working_cache
+        assert cache is not None
+        assert list(cache.root.iterdir()) == []
         assert (
-            fresh_process.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
+            observer_process.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
             == second["id"]
         )
         assert second["predecessor_id"] == first["id"]
-        assert cache.path(track["id"]).is_file()
 
 
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_unverifiable_checkpoint_never_falls_back_to_valid_cache(
+@pytest.mark.parametrize(
+    "publication_error",
+    [
+        pytest.param(
+            PublicationVerificationError("injected Checkpoint verification failure"),
+            id="unverifiable",
+        ),
+        pytest.param(
+            PublicationNotFoundError("injected missing Checkpoint"),
+            id="missing",
+        ),
+    ],
+)
+def test_missing_or_unverifiable_checkpoint_never_falls_back_to_valid_cache(
     monkeypatch: pytest.MonkeyPatch,
+    publication_error: Exception,
 ) -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings)
@@ -148,12 +201,12 @@ def test_unverifiable_checkpoint_never_falls_back_to_valid_cache(
         _publish_successor(client, 2)
 
         def fail_verification(*_args: object, **_kwargs: object) -> object:
-            raise PublicationVerificationError("injected Checkpoint verification failure")
+            raise publication_error
 
         monkeypatch.setattr(runtime.publication, "read", fail_verification)
         with pytest.raises(DailyTrackProgressionFailed) as failure:
             runtime.daily_tracks.process_next()
-        assert isinstance(failure.value.__cause__, PublicationVerificationError)
+        assert isinstance(failure.value.__cause__, type(publication_error))
         assert (
             client.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
             == first["id"]
