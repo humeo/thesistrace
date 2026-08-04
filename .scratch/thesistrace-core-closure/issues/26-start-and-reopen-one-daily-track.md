@@ -7,20 +7,22 @@ it later without any continuing dependency on the Definition or Run lifecycle.
 
 **Status:** ready-for-agent
 
-- [ ] Only a succeeded Run with a complete verified Result may Start Tracking.
-- [ ] ResearchRuns validates its own Run, then calls private
+**Implementation:** complete
+
+- [x] Only a succeeded Run with a complete verified Result may Start Tracking.
+- [x] ResearchRuns validates its own Run, then calls private
   DailyTrack activation inside the same PostgreSQL transaction.
-- [ ] Activation stores the complete Tracking Origin: seed identity, immutable
+- [x] Activation stores the complete Tracking Origin: seed identity, immutable
   input, seed Release, verified Result reference and checksum, initial Strategy
   state, and calculation contracts.
-- [ ] Successful activation creates an `active` Track directly; queued and
+- [x] Successful activation creates an `active` Track directly; queued and
   running activation state never becomes a product lifecycle.
-- [ ] DailyTracks owns its schema, migrations, SQL, and Tracking Origin without
+- [x] DailyTracks owns its schema, migrations, SQL, and Tracking Origin without
   ResearchRuns querying its tables.
-- [ ] After activation the Track never reads Definition or ResearchRun again.
-- [ ] DailyTrack has no generic create or delete operation; Start Tracking on a
+- [x] After activation the Track never reads Definition or ResearchRun again.
+- [x] DailyTrack has no generic create or delete operation; Start Tracking on a
   succeeded ResearchRun is its only product activation path.
-- [ ] The stable list/detail page survives restart and exposes no Activation
+- [x] The stable list/detail page survives restart and exposes no Activation
   Checkpoint or other internal object.
 
 **How to verify:**
@@ -51,3 +53,37 @@ stable DailyTrack URL, reopen it, and expose only product origin/state without
 Activation, Checkpoint, manifest, object, receipt, or worker mechanics.
 
 ## Comments
+
+- `POST /api/research-runs/{run_id}/daily-tracks` is the only activation path.
+  ResearchRuns validates its own succeeded Run and complete verified published
+  Result, then passes a complete private `TrackingOrigin` to DailyTracks inside
+  the same PostgreSQL transaction. There is no generic create or delete route.
+- The persisted Origin copies the immutable input, seed Dataset Release,
+  Definition identity and revision, private Result manifest reference and
+  checksum, complete terminal Strategy state, and calculation contracts. A
+  Track is created directly as `active` and can reopen after its source
+  Definition and ResearchRun have been deleted.
+- DailyTracks owns its migrations, tables, SQL, idempotency receipts, and
+  activation locks. ResearchRuns calls only private DailyTrack service seams
+  and never queries `daily_tracks.*`; Publication verification reuses the
+  caller transaction rather than opening a second pooled connection.
+- Receipt resolution happens before source-Run validation. A matching request
+  replays even if the source has since disappeared, while reuse for another
+  source conflicts before missing/status validation. Temporary PostgreSQL,
+  pool, or object-store failures return `503`; deterministic ineligible or
+  damaged Results return `409`; unexpected programming failures propagate.
+- The Web starts from a succeeded ResearchRun, navigates to a stable DailyTrack
+  URL, and reopens it from the list. It exposes product origin and state only,
+  not Activation, Checkpoint, receipt, manifest, object, or worker mechanics.
+- The final ticket backend command written above passed `16 passed, 1 warning`
+  in `15.47s` against real PostgreSQL and RustFS. The final Core browser command
+  passed `12 passed` in `35.8s`; the command's final `down` removed the isolated
+  containers.
+- Independent review passed `Standards: PASS` and `Spec: PASS` with no final
+  findings. The first review identified receipt ordering, missing private
+  manifest provenance, nested pool use, and over-broad exception handling;
+  commit `38b171b` fixed all four and added direct regression coverage.
+- The final repository `make check` invocation exited `0`: Ruff passed, Python
+  passed `522 passed, 90 skipped, 2 warnings` in `459.11s`, Web typecheck and
+  production build passed, and narrow/desktop Playwright passed in `24.9s` and
+  `28.9s`.
