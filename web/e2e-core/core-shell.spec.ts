@@ -1,7 +1,23 @@
 import { expect, test } from "@playwright/test";
 
+const internalDailyTrackMechanics =
+  /(?:^|[^A-Za-z0-9])(?:activation|checkpoint|manifest|object|receipt|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker|ordinal|failure_reason|started_at|finished_at|execution_fence|target_release_id|predecessor_release_id)(?:$|[^A-Za-z0-9])/i;
+
 test("publishes the first Dataset Release through the real Core", async ({ page }) => {
   test.setTimeout(180_000);
+  for (const forbidden of [
+    "attempt_id",
+    "lease_expires_at",
+    "execution_fence",
+    "progression_id",
+    "manifest_sha256",
+    "object_key",
+    "worker_id",
+    "failure_reason",
+  ]) {
+    expect(internalDailyTrackMechanics.test(forbidden)).toBe(true);
+  }
+  expect(internalDailyTrackMechanics.test("Current Dataset Release")).toBe(false);
   await page.goto("/data");
 
   const navigation = page.getByRole("navigation", { name: "Product resources" });
@@ -88,11 +104,7 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   await page.goto("/daily-tracks");
   await expect(page.getByRole("heading", { name: "Daily Tracks" })).toBeVisible();
   await expect(page.getByRole("link", { name: seededTrack.id })).toBeVisible();
-  await expect(
-    page.getByText(
-      /\b(?:checkpoint|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker)\b/i,
-    ),
-  ).toHaveCount(0);
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
   await page.goto("/data");
   const firstRelease = await page
     .getByRole("list", { name: "Dataset Release history" })
@@ -122,11 +134,7 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
       page.getByText(`Current Dataset Release ${successorReleaseId}`, { exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: /advance|catch up/i })).toHaveCount(0);
-    await expect(
-      page.getByText(
-        /\b(?:checkpoint|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker)\b/i,
-      ),
-    ).toHaveCount(0);
+    await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
     await page.goto("/data");
   }
   expect(new Set(observedTrackHeads).size).toBe(3);
@@ -408,11 +416,7 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
   await page.reload();
   await expect(page.getByRole("heading", { name: "DailyTrack" })).toBeVisible();
   await expect(page.getByText("Status active", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText(
-      /\b(?:activation|checkpoint|manifest|object|receipt|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker)\b/i,
-    ),
-  ).toHaveCount(0);
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });
 
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
