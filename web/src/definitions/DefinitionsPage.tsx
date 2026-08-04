@@ -38,9 +38,13 @@ type AlphaEditor = { operatorId: string; operandValues: string[] };
 type ErrorKind = "load" | "save" | "conflict";
 type RunValidationIssue = { code: string; field: string; message: string };
 type DefinitionRunOutcome = {
-  outcome: "rejected";
+  outcome: "rejected" | "accepted";
   definition: DefinitionDetail;
   issues: RunValidationIssue[];
+  run: {
+    id: string;
+    status: "queued";
+  } | null;
 };
 
 export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
@@ -314,9 +318,12 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
       if (!options) throw new Error("Authoring options unavailable");
       applyDefinition(outcome.definition, options);
       setRunIssues(outcome.issues);
-      setStatus(
-        `Run rejected after saving revision ${outcome.definition.revision}.`,
-      );
+      if (outcome.outcome === "accepted" && outcome.run) {
+        runAttempt.current = null;
+        window.location.assign(`/research-runs/${outcome.run.id}`);
+        return;
+      }
+      setStatus(`Run rejected after saving revision ${outcome.definition.revision}.`);
       skipNextRouteLoad.current = true;
       setActiveDefinitionId(outcome.definition.id);
       window.history.replaceState(

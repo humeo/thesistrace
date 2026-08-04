@@ -18,6 +18,8 @@ from thesistrace.publication import Publication
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_kernel import operator_catalog
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
+from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.migrations import MIGRATIONS as RESEARCH_RUN_MIGRATIONS
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -80,6 +82,7 @@ class CoreRuntime:
     database: PostgresDatabase
     data: DataService
     definitions: DefinitionService
+    research_runs: ResearchRunService
     publication: Publication
 
 
@@ -91,6 +94,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         apply_migrations(database, PUBLICATION_MIGRATIONS)
         apply_migrations(database, DATA_MIGRATIONS)
         apply_migrations(database, DEFINITION_MIGRATIONS)
+        apply_migrations(database, RESEARCH_RUN_MIGRATIONS)
         s3 = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,
@@ -105,6 +109,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             validate_normalized_alpha,
             field_bindings=authorable_field_bindings(),
         )
+        research_runs = ResearchRunService(database)
         yield CoreRuntime(
             database=database,
             data=data,
@@ -114,7 +119,9 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 operator_catalog=operator_catalog,
                 validate_alpha=validate_alpha,
                 latest_release=data.latest_release,
+                admit_run=research_runs.admit,
             ),
+            research_runs=research_runs,
             publication=publication,
         )
     finally:

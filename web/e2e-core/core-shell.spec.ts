@@ -276,3 +276,40 @@ test("replays the same Run request after its committed response is lost", async 
   expect(requestIds[0]).toBe(requestIds[1]);
   await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
 });
+
+test("runs valid current content once and opens the queued ResearchRun", async ({ page }) => {
+  await page.goto("/definitions");
+  await page.getByRole("button", { name: "New Definition" }).click();
+  await page.getByLabel("Definition name").fill("Browser admitted run");
+  await page.getByRole("button", { name: "Add Alpha" }).click();
+  await page.getByLabel("Alpha operator").selectOption("ts_mean");
+  await page.getByLabel("Alpha field 1").selectOption("price.close.adjusted");
+  await page.getByLabel("Alpha window 2").fill("20");
+  await page.getByLabel("Universe").selectOption("top1000");
+  await page.getByLabel("Neutralization").selectOption("industry");
+  await page.getByLabel("Holdings count").fill("30");
+  await page.getByLabel("Rebalance interval").fill("5");
+
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() === "POST" && pathname.startsWith("/api/definitions")) {
+      writes.push(pathname);
+    }
+  });
+  await page.getByRole("button", { name: "Run" }).click();
+
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  await expect(page.getByRole("heading", { name: "ResearchRun" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Research Runs" })).toContainText(
+    "Status queued",
+  );
+  await expect(page.getByRole("link", { name: "Revision 1" })).toBeVisible();
+  expect(writes).toEqual(["/api/definitions/run"]);
+  await expect(page.getByText(/Snapshot/i)).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Research Runs" }).click();
+  await expect(page.getByRole("heading", { name: "Research Runs" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Research Runs" })).toContainText("queued");
+  await expect(page.getByText(/Snapshot/i)).toHaveCount(0);
+});

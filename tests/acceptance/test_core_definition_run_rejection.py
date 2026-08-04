@@ -26,7 +26,7 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
         assert _durable_counts(settings) == {
             "definitions": 0,
             "run_receipts": 0,
-            "research_runs_schema": False,
+            "research_runs": 0,
         }
 
         command = {"request_id": "rejected-new-run", "name": "Needs Alpha"}
@@ -50,7 +50,7 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
         assert _durable_counts(settings) == {
             "definitions": 1,
             "run_receipts": 1,
-            "research_runs_schema": False,
+            "research_runs": 0,
         }
 
         replay = client.post("/api/definitions/run", json=command)
@@ -205,12 +205,15 @@ def _drop_definitions_schema(settings: CoreSettings) -> None:
     database.open()
     try:
         with database.transaction() as transaction:
+            transaction.execute("DROP SCHEMA IF EXISTS research_runs CASCADE")
             transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")
+            transaction.execute("DROP SCHEMA IF EXISTS data CASCADE")
+            transaction.execute("DROP SCHEMA IF EXISTS publication CASCADE")
     finally:
         database.close()
 
 
-def _durable_counts(settings: CoreSettings) -> dict[str, int | bool]:
+def _durable_counts(settings: CoreSettings) -> dict[str, int]:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -220,7 +223,7 @@ def _durable_counts(settings: CoreSettings) -> dict[str, int | bool]:
                 SELECT
                     (SELECT count(*) FROM definitions.records) AS definitions,
                     (SELECT count(*) FROM definitions.run_receipts) AS run_receipts,
-                    to_regnamespace('research_runs') IS NOT NULL AS research_runs_schema
+                    (SELECT count(*) FROM research_runs.runs) AS research_runs
                 """
             ).fetchone()
     finally:
@@ -229,5 +232,5 @@ def _durable_counts(settings: CoreSettings) -> dict[str, int | bool]:
     return {
         "definitions": int(row["definitions"]),
         "run_receipts": int(row["run_receipts"]),
-        "research_runs_schema": bool(row["research_runs_schema"]),
+        "research_runs": int(row["research_runs"]),
     }

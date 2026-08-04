@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import datetime
 
 from psycopg.errors import UniqueViolation
@@ -27,6 +28,14 @@ class DataUpdateConflict(RuntimeError):
 MAX_UPDATE_ATTEMPTS = 3
 
 
+@dataclass(frozen=True)
+class ReleaseReference:
+    """Private admission reference resolved wholly by the Data module."""
+
+    id: str
+    field_bindings: dict[str, str]
+
+
 class DataService:
     def __init__(
         self,
@@ -42,7 +51,7 @@ class DataService:
         """Expose Data-owned product field definitions without Kernel bindings."""
         return AUTHORABLE_FIELDS
 
-    def latest_release(self, transaction: PostgresTransaction) -> ReleaseSummary | None:
+    def latest_release(self, transaction: PostgresTransaction) -> ReleaseReference | None:
         """Resolve the current immutable Release in the caller's transaction."""
         row = transaction.execute(
             f"""
@@ -52,7 +61,24 @@ class DataService:
             WHERE state.singleton = 1
             """
         ).fetchone()
-        return _release_summary(row)
+        if row is None:
+            return None
+        available_rows = transaction.execute(
+            """
+            SELECT field_id
+            FROM data.release_fields
+            WHERE release_id = %s
+            ORDER BY field_id
+            """,
+            (row["id"],),
+        ).fetchall()
+        available = {str(item["field_id"]) for item in available_rows}
+        bindings = {
+            field.field_id: field.evaluation_name
+            for field in AUTHORABLE_FIELDS
+            if field.field_id in available
+        }
+        return ReleaseReference(id=str(row["id"]), field_bindings=bindings)
 
     def overview(self) -> DataOverview:
         with self._database.transaction() as transaction:

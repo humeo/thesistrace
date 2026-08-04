@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data import AuthorableField
+from thesistrace.data.service import ReleaseReference
 from thesistrace.definition.models import (
     AuthorableFieldOption,
     DefinitionAuthoringOptions,
@@ -22,6 +23,8 @@ from thesistrace.definition.models import (
     OperatorOption,
     RunValidationIssue,
 )
+from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
+from thesistrace.research_run import ImmutableRunInput, ResearchRunSummary
 
 CONTENT_FIELDS = (
     "name",
@@ -32,6 +35,22 @@ CONTENT_FIELDS = (
     "holdings_count",
     "rebalance_every_sessions",
 )
+
+FIXED_STRATEGY_KIND = "long_only_top_n_equal_weight"
+FIXED_INITIAL_CASH_CNY = "10000000"
+FIXED_EXECUTION = "next_open_full_fill"
+FIXED_COSTS = {
+    "commission_rate_all_in": "0.0003",
+    "commission_min_cny": "5",
+    "stamp_duty_sell_rate": "0.0005",
+    "transfer_fee_rate": "0.00001",
+}
+SEMANTIC_VERSIONS = {
+    "alpha": "alpha-v1",
+    "factor": "factor-v1",
+    "strategy": "strategy-v1",
+    "kernel": "kernel-v1",
+}
 
 
 class DefinitionConflict(RuntimeError):
@@ -52,13 +71,17 @@ class DefinitionService:
         authorable_fields: Callable[[], tuple[AuthorableField, ...]],
         operator_catalog: Callable[[], dict[str, object]],
         validate_alpha: Callable[[Mapping[str, object]], object],
-        latest_release: Callable[[PostgresTransaction], object | None],
+        latest_release: Callable[[PostgresTransaction], ReleaseReference | None],
+        admit_run: Callable[
+            [PostgresTransaction, ImmutableRunInput], ResearchRunSummary
+        ],
     ) -> None:
         self._database = database
         self._authorable_fields = authorable_fields
         self._operator_catalog = operator_catalog
         self._validate_alpha = validate_alpha
         self._latest_release = latest_release
+        self._admit_run = admit_run
 
     def authoring_options(self) -> DefinitionAuthoringOptions:
         catalog = self._operator_catalog()
@@ -193,7 +216,8 @@ class DefinitionService:
             receipt = transaction.execute(
                 """
                 SELECT request_fingerprint, definition_id, saved_revision,
-                       saved_content, issues
+                       saved_content, outcome, issues, research_run_id,
+                       dataset_release_id
                 FROM definitions.run_receipts
                 WHERE request_id = %s
                 """,
@@ -249,16 +273,46 @@ class DefinitionService:
 
             release = self._latest_release(transaction)
             issues = _runnability_issues(content, has_release=release is not None)
-            if not issues:
-                raise RuntimeError("accepted Definition Run admission is not available")
-
             serialized_issues = [issue.model_dump(mode="json") for issue in issues]
+            if issues:
+                transaction.execute(
+                    """
+                    INSERT INTO definitions.run_receipts (
+                        request_id, request_fingerprint, definition_id,
+                        saved_revision, saved_content, outcome, issues
+                    ) VALUES (%s, %s, %s, %s, %s, 'rejected', %s)
+                    """,
+                    (
+                        request_id,
+                        fingerprint,
+                        saved_id,
+                        saved_revision,
+                        Jsonb(content),
+                        Jsonb(serialized_issues),
+                    ),
+                )
+                return DefinitionRunOutcome(
+                    outcome="rejected",
+                    definition=_detail_from_values(saved_id, saved_revision, content),
+                    issues=issues,
+                )
+
+            assert release is not None
+            immutable_input = _immutable_run_input(
+                definition_id=saved_id,
+                definition_revision=saved_revision,
+                content=content,
+                release=release,
+                operator_catalog=self._operator_catalog(),
+            )
+            run = self._admit_run(transaction, immutable_input)
             transaction.execute(
                 """
                 INSERT INTO definitions.run_receipts (
                     request_id, request_fingerprint, definition_id,
-                    saved_revision, saved_content, outcome, issues
-                ) VALUES (%s, %s, %s, %s, %s, 'rejected', %s)
+                    saved_revision, saved_content, outcome, issues,
+                    research_run_id, dataset_release_id
+                ) VALUES (%s, %s, %s, %s, %s, 'accepted', %s, %s, %s)
                 """,
                 (
                     request_id,
@@ -267,12 +321,15 @@ class DefinitionService:
                     saved_revision,
                     Jsonb(content),
                     Jsonb(serialized_issues),
+                    run.id,
+                    release.id,
                 ),
             )
         return DefinitionRunOutcome(
-            outcome="rejected",
+            outcome="accepted",
             definition=_detail_from_values(saved_id, saved_revision, content),
             issues=issues,
+            run=run,
         )
 
     def _validate_structure(self, command: DefinitionSaveCommand) -> None:
@@ -337,14 +394,62 @@ def _run_outcome_from_receipt(row: object) -> DefinitionRunOutcome:
     assert isinstance(row, dict)
     content = row["saved_content"]
     assert isinstance(content, dict)
+    run = None
+    if row["outcome"] == "accepted":
+        run_id = row["research_run_id"]
+        assert isinstance(run_id, str)
+        run = ResearchRunSummary(
+            id=run_id,
+            status="queued",
+            definition_id=str(row["definition_id"]),
+            definition_revision=int(row["saved_revision"]),
+            dataset_release_id=str(row["dataset_release_id"]),
+        )
     return DefinitionRunOutcome(
-        outcome="rejected",
+        outcome=row["outcome"],
         definition=_detail_from_values(
             str(row["definition_id"]),
             int(row["saved_revision"]),
             content,
         ),
         issues=[RunValidationIssue.model_validate(issue) for issue in row["issues"]],
+        run=run,
+    )
+
+
+def _immutable_run_input(
+    *,
+    definition_id: str,
+    definition_revision: int,
+    content: dict[str, object],
+    release: ReleaseReference,
+    operator_catalog: dict[str, object],
+) -> ImmutableRunInput:
+    catalog_version = operator_catalog.get("semantic_version")
+    if not isinstance(catalog_version, str):
+        raise RuntimeError("Research Kernel operator catalog is malformed")
+    return ImmutableRunInput(
+        definition={
+            "id": definition_id,
+            "revision": definition_revision,
+            "content": dict(content),
+        },
+        dataset_release_id=release.id,
+        field_bindings=dict(release.field_bindings),
+        strategy={
+            "kind": FIXED_STRATEGY_KIND,
+            "holdings_count": content["holdings_count"],
+            "rebalance_every_sessions": content["rebalance_every_sessions"],
+            "initial_cash_cny": FIXED_INITIAL_CASH_CNY,
+            "execution": FIXED_EXECUTION,
+        },
+        costs=FIXED_COSTS,
+        risk_free_rate="0",
+        numeric_execution_contract=NUMERIC_CONTRACT_ID,
+        semantic_versions={
+            **SEMANTIC_VERSIONS,
+            "operator_catalog": catalog_version,
+        },
     )
 
 

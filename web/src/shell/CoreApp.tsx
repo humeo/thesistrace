@@ -1,5 +1,6 @@
 import { DataPage } from "../data/DataPage";
 import { DefinitionsPage } from "../definitions/DefinitionsPage";
+import { ResearchRunsPage } from "../research-runs/ResearchRunsPage";
 import { AppShell, type ResourceRoute } from "./AppShell";
 
 const routes = new Set<ResourceRoute>([
@@ -12,19 +13,26 @@ const routes = new Set<ResourceRoute>([
 export function isCoreRoute(pathname: string): boolean {
   return (
     routes.has(pathname as ResourceRoute) ||
-    /^\/definitions\/def_[a-f0-9]+$/.test(pathname)
+    /^\/definitions\/def_[a-f0-9]+$/.test(pathname) ||
+    /^\/research-runs\/run_[a-f0-9]+$/.test(pathname)
   );
 }
 
 export function CoreApp({ currentPath }: { currentPath: string }) {
   const definitionMatch = currentPath.match(/^\/definitions\/(def_[a-f0-9]+)$/);
+  const researchRunMatch = currentPath.match(/^\/research-runs\/(run_[a-f0-9]+)$/);
   return (
     <AppShell currentPath={currentPath}>
       {currentPath === "/data" ? <DataPage /> : null}
       {currentPath === "/definitions" || definitionMatch ? (
         <DefinitionsPage definitionId={definitionMatch?.[1]} />
       ) : null}
-      {currentPath !== "/data" && !currentPath.startsWith("/definitions") ? (
+      {currentPath === "/research-runs" || researchRunMatch ? (
+        <ResearchRunsPage runId={researchRunMatch?.[1]} />
+      ) : null}
+      {currentPath !== "/data" &&
+      !currentPath.startsWith("/definitions") &&
+      !currentPath.startsWith("/research-runs") ? (
         <div aria-label="Resource outlet" />
       ) : null}
     </AppShell>

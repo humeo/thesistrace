@@ -8,7 +8,14 @@ from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
 from thesistrace.research_kernel import kernel_advance, kernel_run, strategy
 
 ROOT = Path(__file__).resolve().parents[2]
-CORE_PACKAGES = ("_postgres", "data", "definition", "entrypoints", "publication")
+CORE_PACKAGES = (
+    "_postgres",
+    "data",
+    "definition",
+    "entrypoints",
+    "publication",
+    "research_run",
+)
 FORBIDDEN_IMPORTS = (
     "thesistrace.hosted",
     "thesistrace.auth",
@@ -140,6 +147,29 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
     for product_schema in ("data.", "definitions.", "research_runs.", "daily_tracks."):
         assert product_schema not in service
         assert product_schema not in migrations
+
+
+def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> None:
+    definition_source = (
+        ROOT / "src" / "thesistrace" / "definition" / "service.py"
+    ).read_text()
+    definition_migrations = (
+        ROOT / "src" / "thesistrace" / "definition" / "migrations.py"
+    ).read_text()
+    run_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
+    ).read_text()
+    run_migrations = (
+        ROOT / "src" / "thesistrace" / "research_run" / "migrations.py"
+    ).read_text()
+
+    assert "def admit(" in run_source
+    assert ".commit(" not in run_source
+    assert "CREATE TABLE research_runs.runs" in run_migrations
+    assert "research_runs." not in definition_source
+    assert "research_runs." not in definition_migrations
+    assert "definitions." not in run_source
+    assert "definitions." not in run_migrations
 
 
 def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> None:

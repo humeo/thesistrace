@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from thesistrace.research_run import ResearchRunSummary
+
 Revision = Annotated[int, Field(strict=True, ge=1)]
 HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
 RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
@@ -77,9 +79,10 @@ class RunValidationIssue(BaseModel):
 class DefinitionRunOutcome(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    outcome: Literal["rejected"]
+    outcome: Literal["rejected", "accepted"]
     definition: DefinitionDetail
     issues: list[RunValidationIssue]
+    run: ResearchRunSummary | None = None
 
 
 class IntegerBounds(BaseModel):
