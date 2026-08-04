@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 type DefinitionSummary = { id: string; name: string; revision: number };
 type DefinitionList = { items: DefinitionSummary[]; next_cursor: string | null };
@@ -23,42 +23,71 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [busy, setBusy] = useState<"loading" | "refreshing" | "saving" | null>(
     "loading",
   );
+  const busyRef = useRef(false);
+  const loadController = useRef<AbortController | null>(null);
+  const loadGeneration = useRef(0);
+  const skipNextRouteLoad = useRef(false);
 
-  const load = useCallback(async (kind: "loading" | "refreshing" = "loading") => {
-    if (busy !== null && kind === "refreshing") return;
+  const load = useCallback(async (
+    kind: "loading" | "refreshing" = "loading",
+    supersede = false,
+  ) => {
+    if (busyRef.current && !supersede) return;
+    loadController.current?.abort();
+    const controller = new AbortController();
+    loadController.current = controller;
+    const generation = ++loadGeneration.current;
+    busyRef.current = true;
     setBusy(kind);
     setError(null);
+    setStatus(null);
     try {
       if (activeDefinitionId) {
-        const response = await fetch(`/api/definitions/${activeDefinitionId}`);
+        const response = await fetch(`/api/definitions/${activeDefinitionId}`, {
+          signal: controller.signal,
+        });
         if (!response.ok) throw new Error("Research Definition unavailable");
         const loaded = (await response.json()) as DefinitionDetail;
+        if (generation !== loadGeneration.current) return;
         setDefinition(loaded);
         setName(loaded.name);
         setHypothesis(loaded.hypothesis ?? "");
         setCreating(false);
       } else {
-        const response = await fetch("/api/definitions");
+        const response = await fetch("/api/definitions", { signal: controller.signal });
         if (!response.ok) throw new Error("Research Definitions unavailable");
-        setItems(((await response.json()) as DefinitionList).items);
+        const loaded = (await response.json()) as DefinitionList;
+        if (generation !== loadGeneration.current) return;
+        setItems(loaded.items);
       }
       if (kind === "refreshing") setStatus("Refreshed.");
-    } catch {
+    } catch (reason: unknown) {
+      if (
+        generation !== loadGeneration.current ||
+        (reason instanceof DOMException && reason.name === "AbortError")
+      ) return;
+      setStatus(null);
       setError(
         activeDefinitionId
           ? "Research Definition unavailable"
           : "Research Definitions unavailable",
       );
     } finally {
-      setBusy(null);
+      if (generation === loadGeneration.current) {
+        busyRef.current = false;
+        setBusy(null);
+      }
     }
-  }, [activeDefinitionId, busy]);
+  }, [activeDefinitionId]);
 
   useEffect(() => {
-    void load();
-    // A route identity change is the load trigger; busy changes are not.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDefinitionId]);
+    if (skipNextRouteLoad.current) {
+      skipNextRouteLoad.current = false;
+      return;
+    }
+    void load("loading", true);
+    return () => loadController.current?.abort();
+  }, [load]);
 
   function startNew() {
     setCreating(true);
@@ -71,7 +100,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   }
 
   async function save() {
-    if (busy !== null) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusy("saving");
     setError(null);
     setStatus("Saving…");
@@ -96,6 +126,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
       setName(saved.name);
       setHypothesis(saved.hypothesis ?? "");
       setStatus(`Saved revision ${saved.revision}.`);
+      skipNextRouteLoad.current = true;
       setActiveDefinitionId(saved.id);
       window.history.replaceState({}, "", `/definitions/${saved.id}`);
     } catch (reason: unknown) {
@@ -104,6 +135,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         reason instanceof Error ? reason.message : "Research Definition was not saved",
       );
     } finally {
+      busyRef.current = false;
       setBusy(null);
     }
   }
@@ -131,7 +163,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
           <button disabled={busy !== null} onClick={() => void load("refreshing")}>Refresh</button>
           {busy === "refreshing" && <p role="status">Refreshing…</p>}
           {status && busy === null && <p role="status">{status}</p>}
-          {error && <><p role="alert">{error}</p><button onClick={() => void load()}>Retry</button></>}
+          {error && <><p role="alert">{error}</p><button disabled={busy !== null} onClick={() => void load()}>Retry</button></>}
           {items?.length === 0 && <p>No Research Definitions yet.</p>}
           <ol aria-label="Research Definitions">
             {items?.map((item) => (
@@ -170,7 +202,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
             Refresh
           </button>
           {busy === "refreshing" && <p role="status">Refreshing…</p>}
-          {error && <><p role="alert">{error}</p><button type="button" onClick={() => void load()}>Retry</button></>}
+          {error && <><p role="alert">{error}</p><button disabled={busy !== null} type="button" onClick={() => void load()}>Retry</button></>}
           {status && busy !== "refreshing" && <p role="status">{status}</p>}
         </form>
       )}

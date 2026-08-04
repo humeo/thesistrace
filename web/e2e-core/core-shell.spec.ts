@@ -86,6 +86,7 @@ test("saves and reopens an incomplete nameless Definition", async ({ page }) => 
     route.abort(), { times: 1 });
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByRole("alert")).toHaveText("Research Definition unavailable");
+  await expect(page.getByRole("status")).toHaveCount(0);
   await page.getByRole("button", { name: "Retry" }).click();
   await expect(page.getByRole("alert")).toHaveCount(0);
 
