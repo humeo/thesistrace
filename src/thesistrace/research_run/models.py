@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 
 
 class ImmutableRunInput(BaseModel):
@@ -32,6 +34,12 @@ class ResearchRunSummary(BaseModel):
         default=None,
         exclude_if=lambda value: value is None,
     )
+
+
+class ResearchRunCancelCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
 
 
 class ResearchRunList(BaseModel):

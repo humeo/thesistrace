@@ -197,6 +197,9 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "PublicationPreparationError" not in run_source
     assert "PublicationVerificationError" not in run_source
     assert "ADD COLUMN failure_reason text" in run_migrations
+    assert "def cancel(" in run_source
+    assert "CREATE TABLE research_runs.cancel_receipts" in run_migrations
+    assert "execution_fence = execution_fence + 1" in run_source
     assert "load_canonical" in run_source
     assert "self._publication.prepare(" in run_source
     assert "self._publication.record(" in run_source

@@ -29,6 +29,7 @@ from thesistrace.research_kernel.kernel_run import RunInput, RunOutput
 from thesistrace.research_kernel.kernel_run import run as run_kernel
 from thesistrace.research_run.models import (
     ImmutableRunInput,
+    ResearchRunCancelCommand,
     ResearchRunDetail,
     ResearchRunList,
     ResearchRunResult,
@@ -66,6 +67,10 @@ Progress = Callable[[str, str], None]
 
 
 class ResearchRunFenced(RuntimeError):
+    pass
+
+
+class ResearchRunCancelConflict(RuntimeError):
     pass
 
 
@@ -188,6 +193,89 @@ class ResearchRunService:
                 (run_id,),
             ).fetchone()
         return None if row is None else _summary(row)
+
+    def cancel(
+        self,
+        run_id: str,
+        command: ResearchRunCancelCommand,
+    ) -> ResearchRunSummary | None:
+        request_id = command.request_id.strip()
+        if not request_id:
+            raise ValueError("ResearchRun Cancel request_id is required")
+        fingerprint = _cancel_fingerprint(run_id)
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.cancel:{request_id}",),
+            ).fetchone()
+            receipt = transaction.execute(
+                """
+                SELECT request_fingerprint, outcome
+                FROM research_runs.cancel_receipts
+                WHERE request_id = %s
+                """,
+                (request_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise ResearchRunCancelConflict(
+                        "ResearchRun Cancel request_id conflicts"
+                    )
+                return ResearchRunSummary.model_validate(receipt["outcome"])
+
+            row = transaction.execute(
+                """
+                SELECT id, status, definition_id, definition_revision,
+                       dataset_release_id, failure_reason
+                FROM research_runs.runs
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["status"] in {"queued", "running"}:
+                transaction.execute(
+                    """
+                    UPDATE research_runs.attempts
+                    SET status = 'cancelled', heartbeat_at = now(),
+                        lease_expires_at = now(), finished_at = now(),
+                        failure_reason = 'UserCancelled'
+                    WHERE run_id = %s AND status = 'running'
+                    """,
+                    (run_id,),
+                )
+                updated = transaction.execute(
+                    """
+                    UPDATE research_runs.runs
+                    SET status = 'cancelled',
+                        execution_fence = execution_fence + 1,
+                        failure_reason = NULL, updated_at = now()
+                    WHERE id = %s AND status IN ('queued', 'running')
+                    RETURNING id, status, definition_id, definition_revision,
+                              dataset_release_id, failure_reason
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if updated is None:
+                    raise ResearchRunFenced
+                row = updated
+            outcome = _summary(row)
+            transaction.execute(
+                """
+                INSERT INTO research_runs.cancel_receipts (
+                    request_id, request_fingerprint, run_id, outcome
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (
+                    request_id,
+                    fingerprint,
+                    run_id,
+                    Jsonb(outcome.model_dump(mode="json")),
+                ),
+            )
+        return outcome
 
     def get_detail(self, run_id: str) -> ResearchRunDetail | None:
         with self._database.transaction() as transaction:
@@ -681,6 +769,12 @@ def _failure_policy(error: Exception) -> _FailurePolicy:
         max_attempts=1,
         retryable=False,
     )
+
+
+def _cancel_fingerprint(run_id: str) -> str:
+    value = {"action": "research-runs.cancel/v1", "run_id": run_id}
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
 
 
 def _summary(row: object) -> ResearchRunSummary:

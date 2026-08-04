@@ -84,6 +84,47 @@ test("shows one sanitized terminal ResearchRun failure", async ({ page }) => {
   await expect(page.getByText(/Attempt|retry count|exception|endpoint/i)).toHaveCount(0);
 });
 
+test("keeps Cancel authoritative after delayed ResearchRun work returns", async ({ page }) => {
+  let cancelled = false;
+  let workerReleased = false;
+  const run = {
+    id: "run_cafef00d",
+    definition_id: "def_cancel",
+    definition_revision: 1,
+    dataset_release_id: "release_cancel",
+  };
+  await page.route("**/api/research-runs/run_cafef00d", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...run,
+        status: cancelled ? "cancelled" : workerReleased ? "succeeded" : "running",
+      }),
+    }),
+  );
+  await page.route("**/api/research-runs/run_cafef00d/cancel", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      request_id: expect.stringMatching(/^cancel_/),
+    });
+    cancelled = true;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ...run, status: "cancelled" }),
+    });
+  });
+
+  await page.goto("/research-runs/run_cafef00d");
+  await expect(page.getByText(/Status\s+running/)).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+
+  workerReleased = true;
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
+  await expect(page.getByText(/Attempt|fence|receipt|manifest|object/i)).toHaveCount(0);
+});
+
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
   await page.goto("/definitions");
 

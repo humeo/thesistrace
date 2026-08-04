@@ -21,9 +21,27 @@ allowing late computation or publication to change the committed outcome.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` with queued cancel,
-  running cancel, terminal-state races, replay, conflict, and stale publication.
-- Run `bun run --cwd web test:e2e` and confirm Cancel becomes visible before the
-  deliberately delayed worker finishes and remains authoritative afterward.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/integration \
+  tests/acceptance/test_core_research_run_cancel.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The tests must use real PostgreSQL and RustFS to cancel queued and genuinely
+running work, pause a stale worker before publication, and race Cancel against
+success and failure commits. They must prove atomic `cancelled` plus fence
+advance, no late Result or lifecycle write, terminal-winner preservation,
+same-request replay, different-input conflict, and zero receipt for malformed
+input. The browser must observe Cancel before a delayed worker is released,
+refresh the same ResearchRun to authoritative `cancelled`, and expose no
+Attempt, fence, receipt, worker diagnostic, manifest, or object detail.
 
 ## Comments

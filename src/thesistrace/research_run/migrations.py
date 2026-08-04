@@ -68,5 +68,17 @@ MIGRATIONS = MigrationPlan(
                     ADD COLUMN failure_reason text;
             """,
         ),
+        Migration(
+            name="0004_cancel_receipts",
+            statement="""
+                CREATE TABLE research_runs.cancel_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    run_id text NOT NULL,
+                    outcome jsonb NOT NULL CHECK (jsonb_typeof(outcome) = 'object'),
+                    created_at timestamptz NOT NULL DEFAULT now()
+                );
+            """,
+        ),
     ),
 )

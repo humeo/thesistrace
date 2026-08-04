@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -91,7 +91,9 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [items, setItems] = useState<ResearchRun[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
+  const [canceling, setCanceling] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const cancelRequestId = useRef<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -136,6 +138,28 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     setRefreshGeneration((generation) => generation + 1);
   }
 
+  async function cancel() {
+    if (run === null || !["queued", "running"].includes(run.status)) return;
+    setCanceling(true);
+    setError(null);
+    const requestId = cancelRequestId.current ?? `cancel_${crypto.randomUUID()}`;
+    cancelRequestId.current = requestId;
+    try {
+      const response = await fetch(`/api/research-runs/${run.id}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId }),
+      });
+      if (!response.ok) throw new Error("ResearchRun cancellation failed");
+      setRun((await response.json()) as ResearchRun);
+      cancelRequestId.current = null;
+    } catch {
+      setError("ResearchRun cancellation failed");
+    } finally {
+      setCanceling(false);
+    }
+  }
+
   if (error) {
     return (
       <section aria-label="Research Runs">
@@ -159,7 +183,16 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             <p className="eyebrow">Immutable research execution</p>
             <h1>ResearchRun</h1>
           </div>
-          <button disabled={loadState !== null} onClick={refresh}>Refresh</button>
+          <div>
+            {run.status === "queued" || run.status === "running" ? (
+              <button disabled={canceling} onClick={() => void cancel()}>
+                {canceling ? "Cancelling…" : "Cancel"}
+              </button>
+            ) : null}
+            <button disabled={loadState !== null || canceling} onClick={refresh}>
+              Refresh
+            </button>
+          </div>
         </header>
         {loadState === "refreshing" ? (
           <p role="status">Refreshing ResearchRun…</p>
