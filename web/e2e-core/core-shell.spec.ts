@@ -178,7 +178,17 @@ test("keeps unsaved editor values after revision and structure errors", async ({
     "My unsaved hypothesis",
   );
   await expect(page.getByText("Revision 1")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await page.getByRole("button", {
+    name: "Discard my edits and load server version",
+  }).click();
+  await expect(page.getByRole("status")).toHaveText("Refreshed.");
+  await expect(page.getByLabel("Definition name")).toHaveValue("External edit");
+  await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");
+  await expect(page.getByText("Revision 2")).toBeVisible();
 
+  await page.getByLabel("Definition name").fill("My corrected name");
+  await page.getByLabel("Hypothesis (optional)").fill("My corrected hypothesis");
   await page.getByRole("button", { name: "Add Alpha" }).click();
   await page.getByLabel("Alpha operator").selectOption("ts_mean");
   await page.getByLabel("Alpha window 2").evaluate((element) => {
@@ -189,9 +199,21 @@ test("keeps unsaved editor values after revision and structure errors", async ({
   await expect(page.getByRole("alert")).toHaveText(
     "Definition has structural errors. Your edits are unchanged.",
   );
-  await expect(page.getByLabel("Definition name")).toHaveValue("My unsaved name");
+  await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await expect(page.getByRole("button", {
+    name: "Discard my edits and load server version",
+  })).toHaveCount(0);
+  await expect(page.getByLabel("Definition name")).toHaveValue("My corrected name");
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue(
-    "My unsaved hypothesis",
+    "My corrected hypothesis",
   );
   await expect(page.getByLabel("Alpha window 2")).toHaveValue("0");
+
+  await page.getByLabel("Alpha window 2").fill("20");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved revision 3.");
+  await expect(page.getByLabel("Definition name")).toHaveValue("My corrected name");
+  await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue(
+    "My corrected hypothesis",
+  );
 });

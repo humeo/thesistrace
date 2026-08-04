@@ -1,4 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+from time import monotonic, sleep
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,14 +22,41 @@ def test_revision_conflicts_and_malformed_edits_never_corrupt_definition() -> No
         created = client.post("/api/definitions", json={}).json()
         definition_id = created["id"]
 
-        def edit(name: str):
-            return client.put(
-                f"/api/definitions/{definition_id}",
-                json={"expected_revision": 1, "name": name},
-            )
+        blocker = PostgresDatabase(settings.database_url)
+        observer = PostgresDatabase(settings.database_url)
+        blocker.open()
+        observer.open()
+        try:
+            with (
+                TestClient(create_app(settings)) as client_a,
+                TestClient(create_app(settings)) as client_b,
+                ThreadPoolExecutor(max_workers=2) as executor,
+            ):
+                start = Barrier(3)
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            responses = list(executor.map(edit, ("Concurrent A", "Concurrent B")))
+                def edit(edit_client: TestClient, name: str):
+                    start.wait(timeout=10)
+                    return edit_client.put(
+                        f"/api/definitions/{definition_id}",
+                        json={"expected_revision": 1, "name": name},
+                    )
+
+                with blocker.transaction() as transaction:
+                    transaction.execute(
+                        "SELECT id FROM definitions.records WHERE id = %s FOR UPDATE",
+                        (definition_id,),
+                    ).fetchone()
+                    futures = (
+                        executor.submit(edit, client_a, "Concurrent A"),
+                        executor.submit(edit, client_b, "Concurrent B"),
+                    )
+                    start.wait(timeout=10)
+                    _wait_for_blocked_definition_locks(observer, expected=2)
+                    assert all(not future.done() for future in futures)
+                responses = [future.result(timeout=10) for future in futures]
+        finally:
+            observer.close()
+            blocker.close()
 
         assert sorted(response.status_code for response in responses) == [200, 409]
         conflict = next(response for response in responses if response.status_code == 409)
@@ -107,3 +136,33 @@ def _drop_definitions_schema(settings: CoreSettings) -> None:
             transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")
     finally:
         database.close()
+
+
+def _wait_for_blocked_definition_locks(
+    observer: PostgresDatabase,
+    *,
+    expected: int,
+) -> None:
+    deadline = monotonic() + 10
+    blocked = 0
+    while monotonic() < deadline:
+        with observer.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT count(*) AS blocked
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND wait_event_type = 'Lock'
+                  AND query LIKE '%%definitions.records%%'
+                  AND query LIKE '%%FOR UPDATE%%'
+                """
+            ).fetchone()
+        assert row is not None
+        blocked = int(row["blocked"])
+        if blocked >= expected:
+            return
+        sleep(0.05)
+    raise AssertionError(
+        f"expected {expected} concurrent Definition requests waiting on row locks; "
+        f"observed {blocked}"
+    )

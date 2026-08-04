@@ -35,6 +35,7 @@ type AuthoringOptions = {
   rebalance_every_sessions: IntegerBounds;
 };
 type AlphaEditor = { operatorId: string; operandValues: string[] };
+type ErrorKind = "load" | "save" | "conflict";
 
 export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [activeDefinitionId, setActiveDefinitionId] = useState(definitionId);
@@ -52,6 +53,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [rebalanceInterval, setRebalanceInterval] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<ErrorKind | null>(null);
   const [busy, setBusy] = useState<"loading" | "refreshing" | "saving" | null>(
     "loading",
   );
@@ -85,6 +87,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     busyRef.current = true;
     setBusy(kind);
     setError(null);
+    setErrorKind(null);
     setStatus(null);
     try {
       const optionsRequest = fetch("/api/definitions/authoring-options", {
@@ -124,6 +127,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         (reason instanceof DOMException && reason.name === "AbortError")
       ) return;
       setStatus(null);
+      setErrorKind("load");
       setError(
         activeDefinitionId
           ? "Research Definition unavailable"
@@ -163,6 +167,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setRebalanceInterval("");
     setStatus(null);
     setError(null);
+    setErrorKind(null);
   }
 
   function startAlpha() {
@@ -198,6 +203,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     busyRef.current = true;
     setBusy("saving");
     setError(null);
+    setErrorKind(null);
     setStatus("Saving…");
     const body: Record<string, unknown> = {
       hypothesis: hypothesis.trim() ? hypothesis : null,
@@ -209,6 +215,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     };
     if (name.trim()) body.name = name;
     if (definition) body.expected_revision = definition.revision;
+    let failureKind: ErrorKind = "save";
     try {
       const response = await fetch(
         definition ? `/api/definitions/${definition.id}` : "/api/definitions",
@@ -219,6 +226,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         },
       );
       if (response.status === 409) {
+        failureKind = "conflict";
         const payload = await response.json() as {
           detail?: { current_revision?: number };
         };
@@ -242,6 +250,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
       window.history.replaceState({}, "", `/definitions/${saved.id}`);
     } catch (reason: unknown) {
       setStatus(null);
+      setErrorKind(failureKind);
       setError(
         reason instanceof Error ? reason.message : "Research Definition was not saved",
       );
@@ -277,7 +286,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
           <button disabled={busy !== null} onClick={() => void load("refreshing")}>Refresh</button>
           {busy === "refreshing" && <p role="status">Refreshing…</p>}
           {status && busy === null && <p role="status">{status}</p>}
-          {error && <><p role="alert">{error}</p><button disabled={busy !== null} onClick={() => void load()}>Retry</button></>}
+          {error && <><p role="alert">{error}</p>{errorKind === "load" && <button disabled={busy !== null} onClick={() => void load()}>Retry</button>}</>}
           {items?.length === 0 && <p>No Research Definitions yet.</p>}
           <ol aria-label="Research Definitions">
             {items?.map((item) => (
@@ -367,7 +376,25 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
           <button disabled={busy !== null} type="submit">Save</button>
           <button disabled={busy !== null} type="button" onClick={() => void load("refreshing")}>Refresh</button>
           {busy === "refreshing" && <p role="status">Refreshing…</p>}
-          {error && <><p role="alert">{error}</p><button disabled={busy !== null} type="button" onClick={() => void load()}>Retry</button></>}
+          {error && (
+            <>
+              <p role="alert">{error}</p>
+              {errorKind === "load" && (
+                <button disabled={busy !== null} type="button" onClick={() => void load()}>
+                  Retry
+                </button>
+              )}
+              {errorKind === "conflict" && (
+                <button
+                  disabled={busy !== null}
+                  type="button"
+                  onClick={() => void load("refreshing")}
+                >
+                  Discard my edits and load server version
+                </button>
+              )}
+            </>
+          )}
           {status && busy !== "refreshing" && <p role="status">{status}</p>}
         </form>
       )}
