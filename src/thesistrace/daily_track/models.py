@@ -62,6 +62,7 @@ class DailyTrackSummary(BaseModel):
     status: Literal["active"]
     seed_run_id: str
     seed_release_id: str
+    current_release_id: str
     definition_id: str
     definition_revision: int
     result_checksum_sha256: str
@@ -73,3 +74,32 @@ class DailyTrackList(BaseModel):
 
     items: list[DailyTrackSummary]
     next_cursor: str | None
+
+
+class KernelRunInputSnapshot(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    alpha_expression: str | dict[str, object]
+    field_bindings: dict[str, str]
+    universe: str
+    neutralization: str
+    holdings_count: int
+    rebalance_interval: int
+    initial_cash_cny: str
+    commission_rate_all_in: str
+    commission_min_cny: str
+    stamp_duty_sell_rate: str
+    transfer_fee_rate: str
+
+
+class KernelStateCheckpoint(BaseModel):
+    """Complete private immutable state required by the next Kernel Advance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal["daily-track-kernel-state-v1"]
+    origin_session: str
+    canonical: dict[str, object]
+    output: dict[str, dict[str, object]]
+    strategy_resume: dict[str, object]
+    run_input: KernelRunInputSnapshot

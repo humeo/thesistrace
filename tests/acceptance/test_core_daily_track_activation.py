@@ -58,12 +58,13 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
             "status": "active",
             "seed_run_id": original["id"],
             "seed_release_id": original["dataset_release_id"],
+            "current_release_id": original["dataset_release_id"],
             "definition_id": original["definition_id"],
             "definition_revision": original["definition_revision"],
             "result_checksum_sha256": hashlib.sha256(result_payload.content).hexdigest(),
-            "strategy_session": _result_json(result_payload.content)[
-                "terminal_strategy_state"
-            ]["session"],
+            "strategy_session": _result_json(result_payload.content)["terminal_strategy_state"][
+                "session"
+            ],
         }
         origin = _stored_origin(settings, track["id"])
         assert origin == {
@@ -82,9 +83,7 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
             "initial_strategy_state": _result_json(result_payload.content)[
                 "terminal_strategy_state"
             ],
-            "calculation_contracts": stored_seed["result_provenance"][
-                "calculation_contracts"
-            ],
+            "calculation_contracts": stored_seed["result_provenance"]["calculation_contracts"],
         }
         assert _counts(settings) == {"tracks": 1, "receipts": 1}
 
@@ -251,9 +250,10 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
             json=command,
         )
         assert conflict_before_missing_validation.status_code == 409
-        assert conflict_before_missing_validation.json()[
-            "detail"
-        ] == "Start Tracking request_id conflicts"
+        assert (
+            conflict_before_missing_validation.json()["detail"]
+            == "Start Tracking request_id conflicts"
+        )
 
     _restart_worker_once(settings)
 

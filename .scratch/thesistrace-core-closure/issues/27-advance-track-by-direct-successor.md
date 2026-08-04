@@ -27,10 +27,34 @@ and its product detail.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/kernel tests/integration tests/acceptance` with a
-  seed Release and one direct successor against real PostgreSQL and RustFS.
-- Run `bun run --cwd web test:e2e`; publish the successor through Data and
-  observe the existing Track move exactly one Head without a manual advance
-  control.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/kernel \
+  tests/integration \
+  tests/acceptance/test_core_daily_track_advance.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The tests must use real PostgreSQL and RustFS to create a Track at one seed
+Release, publish one direct successor through Data, and let the Core worker
+discover and process the target without a manual advance endpoint or control.
+They must prove `Data.next_release(current_head)` returns only the direct
+successor; Kernel Advance receives the prior immutable state plus only newly
+appended canonical sessions; one complete immutable Checkpoint is prepared,
+verified, and recorded before the same transaction moves Head under fence; and
+provenance binds Track, Origin or prior Head, target Release, contracts, and
+predecessor. Publication, claim, and stale-fence failures must leave Head
+unchanged and uploaded bytes invisible, while repeated processing cannot create
+a second visible Checkpoint for the same Track/target. The browser must publish
+the successor from Data and observe the existing stable DailyTrack URL move to
+the new authoritative Head automatically while Data and ResearchRun pages remain
+usable and no manual Advance control or internal worker/fence object is shown.
 
 ## Comments

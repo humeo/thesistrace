@@ -30,6 +30,42 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   });
   await expect(page.getByText("756 Research Sessions")).toBeVisible();
   await expect(page.getByText("First Release")).toBeVisible();
+  const seedRunResponse = await page.request.post("/api/definitions/run", {
+    data: {
+      request_id: "core-browser-track-seed",
+      name: "Core browser Track seed",
+      alpha: {
+        operator_id: "ts_mean",
+        operands: [
+          { field_id: "price.close.adjusted" },
+          { literal: 20 },
+        ],
+      },
+      universe: "top1000",
+      neutralization: "industry",
+      holdings_count: 30,
+      rebalance_every_sessions: 5,
+    },
+  });
+  expect(seedRunResponse.ok()).toBe(true);
+  const seedRun = (await seedRunResponse.json()).run as {
+    id: string;
+    dataset_release_id: string;
+  };
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/research-runs/${seedRun.id}`);
+    return (await response.json()).status;
+  }, { timeout: 60_000 }).toBe("succeeded");
+  const trackResponse = await page.request.post(
+    `/api/research-runs/${seedRun.id}/daily-tracks`,
+    { data: { request_id: "core-browser-start-track" } },
+  );
+  expect(trackResponse.status()).toBe(201);
+  const seededTrack = (await trackResponse.json()) as {
+    id: string;
+    current_release_id: string;
+  };
+  expect(seededTrack.current_release_id).toBe(seedRun.dataset_release_id);
   const firstRelease = await page
     .getByRole("list", { name: "Dataset Release history" })
     .getByRole("listitem")
@@ -42,6 +78,19 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   await expect(releaseHistory.getByRole("listitem")).toHaveCount(2);
   await expect(releaseHistory).toContainText(firstRelease ?? "missing-root-release");
   await expect(page.getByText("Later Release")).toBeVisible();
+  const latestData = await (await page.request.get("/api/data")).json();
+  const successorReleaseId = latestData.latest_release.id as string;
+  await expect.poll(async () => {
+    const response = await page.request.get(`/api/daily-tracks/${seededTrack.id}`);
+    return (await response.json()).current_release_id;
+  }, { timeout: 60_000 }).toBe(successorReleaseId);
+  await page.goto(`/daily-tracks/${seededTrack.id}`);
+  await expect(
+    page.getByText(`Current Dataset Release ${successorReleaseId}`, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /advance/i })).toHaveCount(0);
+  await expect(page.getByText(/Checkpoint|claim|fence|worker/i)).toHaveCount(0);
+  await page.goto("/data");
   const latestRelease = await page
     .getByRole("heading", { name: "Latest Dataset Release" })
     .locator("..")
@@ -285,6 +334,7 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
     status: "active",
     seed_run_id: run.id,
     seed_release_id: run.dataset_release_id,
+    current_release_id: run.dataset_release_id,
     definition_id: run.definition_id,
     definition_revision: run.definition_revision,
     result_checksum_sha256: "a".repeat(64),
@@ -328,7 +378,6 @@ test("saves and reopens an incomplete nameless Definition", async ({ page }) => 
   await page.goto("/definitions");
 
   await expect(page.getByRole("heading", { name: "Definitions" })).toBeVisible();
-  await expect(page.getByText("No Research Definitions yet.")).toBeVisible();
   await page.getByRole("button", { name: "New Definition" }).click();
   await expect(page.getByLabel("Definition name")).toHaveValue("");
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");

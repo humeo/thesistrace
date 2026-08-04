@@ -152,18 +152,12 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
 
 
 def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> None:
-    definition_source = (
-        ROOT / "src" / "thesistrace" / "definition" / "service.py"
-    ).read_text()
+    definition_source = (ROOT / "src" / "thesistrace" / "definition" / "service.py").read_text()
     definition_migrations = (
         ROOT / "src" / "thesistrace" / "definition" / "migrations.py"
     ).read_text()
-    run_source = (
-        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
-    ).read_text()
-    run_migrations = (
-        ROOT / "src" / "thesistrace" / "research_run" / "migrations.py"
-    ).read_text()
+    run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
 
     assert "def admit(" in run_source
     assert ".commit(" not in run_source
@@ -175,15 +169,9 @@ def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> 
 
 
 def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
-    run_source = (
-        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
-    ).read_text()
-    run_migrations = (
-        ROOT / "src" / "thesistrace" / "research_run" / "migrations.py"
-    ).read_text()
-    worker_source = (
-        ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py"
-    ).read_text()
+    run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
+    worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
     assert "def process_next(" in run_source
     assert "FOR UPDATE OF run SKIP LOCKED" in run_source
@@ -221,21 +209,17 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
 
 
 def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
-    track_source = (
-        ROOT / "src" / "thesistrace" / "daily_track" / "service.py"
-    ).read_text()
-    track_migrations = (
-        ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py"
-    ).read_text()
-    run_source = (
-        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
-    ).read_text()
-    http_source = (
-        ROOT / "src" / "thesistrace" / "entrypoints" / "http.py"
-    ).read_text()
+    track_source = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
+    track_migrations = (ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py").read_text()
+    run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
+    data_source = (ROOT / "src" / "thesistrace" / "data" / "service.py").read_text()
+    worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
     assert "CREATE TABLE daily_tracks.tracks" in track_migrations
     assert "CREATE TABLE daily_tracks.activation_receipts" in track_migrations
+    assert "CREATE TABLE daily_tracks.progressions" in track_migrations
+    assert "CREATE TABLE daily_tracks.checkpoints" in track_migrations
     assert "def activate(" in track_source
     assert "def resolve_activation(" in track_source
     assert "origin" in track_source
@@ -246,18 +230,21 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "daily_tracks." not in run_source
     assert "research_runs." not in track_source
     assert "research_runs." not in track_migrations
+    assert "def next_release(" in data_source
+    assert "daily_tracks" not in data_source
+    for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
+        assert f"{sql_verb} data." not in track_source
+    assert "AdvanceInput(" in track_source
+    assert 'kind="daily-track.checkpoint"' in track_source
+    assert "runtime.daily_tracks.process_next()" in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
     assert '@app.post("/api/daily-tracks"' not in http_source
     assert '@app.delete("/api/daily-tracks' not in http_source
 
 
 def test_research_run_owns_its_embedded_result_product_projection() -> None:
-    run_source = (
-        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
-    ).read_text()
-    http_source = (
-        ROOT / "src" / "thesistrace" / "entrypoints" / "http.py"
-    ).read_text()
+    run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
 
     assert "def get_detail(" in run_source
     assert "self._publication.read(" in run_source

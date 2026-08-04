@@ -5,6 +5,7 @@ type DailyTrack = {
   status: "active";
   seed_run_id: string;
   seed_release_id: string;
+  current_release_id: string;
   definition_id: string;
   definition_revision: number;
   result_checksum_sha256: string;
@@ -78,6 +79,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             <a href={`/research-runs/${track.seed_run_id}`}>{track.seed_run_id}</a>
           </p>
           <p><strong>Seed Dataset Release</strong> {track.seed_release_id}</p>
+          <p><strong>Current Dataset Release</strong> {track.current_release_id}</p>
           <p>
             <strong>Definition</strong>{" "}
             <a href={`/definitions/${track.definition_id}`}>

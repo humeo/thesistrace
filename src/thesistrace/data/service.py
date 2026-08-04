@@ -36,6 +36,16 @@ class ReleaseReference:
     field_bindings: dict[str, str]
 
 
+@dataclass(frozen=True)
+class NextRelease:
+    """Private direct-successor reference for an independent consumer."""
+
+    id: str
+    predecessor_id: str
+    appended_session_start: str
+    appended_session_end: str
+
+
 class DataService:
     def __init__(
         self,
@@ -79,6 +89,35 @@ class DataService:
             if field.field_id in available
         }
         return ReleaseReference(id=str(row["id"]), field_bindings=bindings)
+
+    def next_release(
+        self,
+        transaction: PostgresTransaction,
+        current_release_id: str,
+    ) -> NextRelease | None:
+        """Return only the direct successor; never schedule or wait for consumers."""
+        rows = transaction.execute(
+            """
+            SELECT id, predecessor_id, appended_session_start,
+                   appended_session_end
+            FROM data.releases
+            WHERE predecessor_id = %s
+            ORDER BY created_at, id
+            LIMIT 2
+            """,
+            (current_release_id,),
+        ).fetchall()
+        if len(rows) > 1:
+            raise RuntimeError("Dataset Release graph has multiple direct successors")
+        if not rows:
+            return None
+        successor = rows[0]
+        return NextRelease(
+            id=str(successor["id"]),
+            predecessor_id=str(successor["predecessor_id"]),
+            appended_session_start=str(successor["appended_session_start"]),
+            appended_session_end=str(successor["appended_session_end"]),
+        )
 
     def overview(self) -> DataOverview:
         with self._database.transaction() as transaction:
@@ -337,9 +376,7 @@ class DataService:
         calendar = batch.canonical.get("research_calendar")
         validate_release_batch(
             batch,
-            predecessor_session=(
-                None if not has_predecessor else str(predecessor["session_end"])
-            ),
+            predecessor_session=(None if not has_predecessor else str(predecessor["session_end"])),
         )
         assert isinstance(calendar, list)
         predecessor_id = None if not has_predecessor else str(predecessor["id"])
@@ -390,9 +427,7 @@ class DataService:
             if current is None:
                 raise RuntimeError("Data state is not initialized")
             current_id = (
-                None
-                if current["latest_release_id"] is None
-                else str(current["latest_release_id"])
+                None if current["latest_release_id"] is None else str(current["latest_release_id"])
             )
             if current_id != predecessor_id:
                 raise DataUpdateConflict("latest Dataset Release changed during collection")

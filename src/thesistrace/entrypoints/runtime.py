@@ -113,7 +113,12 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             validate_normalized_alpha,
             field_bindings=authorable_field_bindings(),
         )
-        daily_tracks = DailyTrackService(database)
+        daily_tracks = DailyTrackService(
+            database,
+            publication=publication,
+            next_release=data.next_release,
+            load_canonical=data.load_canonical,
+        )
         research_runs = ResearchRunService(
             database,
             load_canonical=data.load_canonical,

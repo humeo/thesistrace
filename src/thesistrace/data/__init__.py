@@ -4,7 +4,7 @@ from thesistrace.data.fields import (
     authorable_field_bindings_from_snapshot,
 )
 from thesistrace.data.models import DataOverview, ReleaseHistory, ReleaseSummary, UpdateAcceptance
-from thesistrace.data.service import DataService
+from thesistrace.data.service import DataService, NextRelease
 from thesistrace.data.source import (
     DATA_SOURCE_ERROR_CATEGORIES,
     CanonicalSourceBatch,
@@ -20,6 +20,7 @@ __all__ = [
     "DATA_SOURCE_ERROR_CATEGORIES",
     "DataOverview",
     "DataService",
+    "NextRelease",
     "DataSource",
     "DataSourceError",
     "ReleaseHistory",
