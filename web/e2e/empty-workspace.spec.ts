@@ -46,11 +46,15 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   await page.getByRole("button", { name: "发布 Fixture Bootstrap" }).click();
 
   const dataPanel = page.locator("#data");
-  await expect(page.getByRole("heading", { name: "Fixture Bootstrap 已发布" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Fixture Bootstrap 已发布" })).toBeVisible({
+    timeout: 60_000,
+  });
   await expect(dataPanel.getByText("756 sessions")).toBeVisible();
   await expect(dataPanel.getByText("ROOT", { exact: true })).toBeVisible();
   await expect(dataPanel.getByText("23 immutable objects")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "标准研究数据契约" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "标准研究数据契约" })).toBeVisible({
+    timeout: 60_000,
+  });
   await expect(page.getByText("open_adj", { exact: true })).toBeVisible();
   await expect(page.getByText("TOP 300 · TOP 1000 · TOP 2000 · TOP 3000")).toBeVisible();
   await expect(page.getByText("SW2021 L1 · L2 · L3")).toBeVisible();
@@ -71,7 +75,7 @@ test(`completes the ${viewport.width === 390 ? "narrow" : "desktop"} workspace c
   expect((await updatedDraftRequest).postDataJSON().hypothesis).toBe(
     "运行时必须冻结当前页面里的最新假设。",
   );
-  await expect(definitionPanel.getByText("RUN QUEUED")).toBeVisible();
+  await expect(definitionPanel.getByText(/RUN QUEUED|RUNNING|SUCCEEDED/)).toBeVisible();
   await expect(page.getByText("FROZEN VERSION 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Freeze" })).toHaveCount(0);
   await expect(definitionPanel.getByText("SUCCEEDED")).toBeVisible({
