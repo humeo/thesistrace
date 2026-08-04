@@ -1,15 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.data import AuthorableField
 from thesistrace.definition.models import (
+    AuthorableFieldOption,
+    DefinitionAuthoringOptions,
     DefinitionDetail,
     DefinitionList,
     DefinitionSaveCommand,
     DefinitionSummary,
+    IntegerBounds,
+    OperatorOption,
 )
 
 CONTENT_FIELDS = (
@@ -30,8 +36,37 @@ class DefinitionConflict(RuntimeError):
 
 
 class DefinitionService:
-    def __init__(self, database: PostgresDatabase) -> None:
+    def __init__(
+        self,
+        database: PostgresDatabase,
+        *,
+        authorable_fields: Callable[[], tuple[AuthorableField, ...]],
+        operator_catalog: Callable[[], dict[str, object]],
+    ) -> None:
         self._database = database
+        self._authorable_fields = authorable_fields
+        self._operator_catalog = operator_catalog
+
+    def authoring_options(self) -> DefinitionAuthoringOptions:
+        catalog = self._operator_catalog()
+        raw_operators = catalog.get("operators")
+        if not isinstance(raw_operators, list):
+            raise RuntimeError("Research Kernel operator catalog is malformed")
+        return DefinitionAuthoringOptions(
+            fields=[
+                AuthorableFieldOption(
+                    field_id=field.field_id,
+                    definition=field.definition,
+                    unit=field.unit,
+                )
+                for field in self._authorable_fields()
+            ],
+            operators=[OperatorOption.model_validate(item) for item in raw_operators],
+            universes=["top300", "top1000", "top2000", "top3000"],
+            neutralizations=["none", "industry"],
+            holdings_count=IntegerBounds(minimum=1, maximum=100),
+            rebalance_every_sessions=IntegerBounds(minimum=1, maximum=20),
+        )
 
     def list(self) -> DefinitionList:
         with self._database.transaction() as transaction:

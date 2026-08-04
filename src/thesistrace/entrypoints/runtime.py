@@ -15,6 +15,7 @@ from thesistrace.definition import DefinitionService
 from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
 from thesistrace.publication import Publication
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
+from thesistrace.research_kernel import operator_catalog
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -97,10 +98,15 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
+        data = DataService(database, publication, FixtureDataSource())
         yield CoreRuntime(
             database=database,
-            data=DataService(database, publication, FixtureDataSource()),
-            definitions=DefinitionService(database),
+            data=data,
+            definitions=DefinitionService(
+                database,
+                authorable_fields=data.authorable_fields,
+                operator_catalog=operator_catalog,
+            ),
             publication=publication,
         )
     finally:

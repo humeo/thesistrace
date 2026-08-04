@@ -22,9 +22,23 @@ in the Web.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/kernel tests/integration tests/acceptance` and
-  confirm authoring options originate from Data and Kernel.
-- Run `bun run --cwd web typecheck` and `bun run --cwd web test:e2e`; create and
-  reopen an expression using visible field and operator controls.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/kernel \
+  tests/integration \
+  tests/acceptance/test_core_definition_authoring.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The backend test must prove authoring options are composed from Data-owned
+fields and Kernel-owned operators. The browser must save and reopen the same
+stable-ID expression tree through visible authoring controls.
 
 ## Comments

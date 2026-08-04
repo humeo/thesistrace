@@ -17,6 +17,7 @@ from thesistrace.data import (
 )
 from thesistrace.data.service import DataUpdateConflict
 from thesistrace.definition import (
+    DefinitionAuthoringOptions,
     DefinitionConflict,
     DefinitionDetail,
     DefinitionList,
@@ -74,6 +75,13 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     @app.get("/api/definitions", response_model=DefinitionList)
     def list_definitions(request: Request) -> DefinitionList:
         return _runtime(request).definitions.list()
+
+    @app.get(
+        "/api/definitions/authoring-options",
+        response_model=DefinitionAuthoringOptions,
+    )
+    def definition_authoring_options(request: Request) -> DefinitionAuthoringOptions:
+        return _runtime(request).definitions.authoring_options()
 
     @app.get("/api/definitions/{definition_id}", response_model=DefinitionDetail)
     def get_definition(request: Request, definition_id: str) -> DefinitionDetail:

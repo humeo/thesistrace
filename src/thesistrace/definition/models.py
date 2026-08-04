@@ -45,3 +45,41 @@ class DefinitionList(BaseModel):
 
     items: list[DefinitionSummary]
     next_cursor: str | None
+
+
+class IntegerBounds(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    minimum: int
+    maximum: int
+
+
+class AuthorableFieldOption(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    field_id: str
+    definition: str
+    unit: str
+    result_type: Literal["numeric"] = "numeric"
+
+
+class OperatorOption(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    operator_id: str
+    kind: Literal["arithmetic", "scalar", "historical", "rolling"]
+    arity: int
+    operand_rules: list[Literal["numeric", "window"]]
+    result_type: Literal["numeric"]
+    rolling_bounds: IntegerBounds | None
+
+
+class DefinitionAuthoringOptions(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    fields: list[AuthorableFieldOption]
+    operators: list[OperatorOption]
+    universes: list[Literal["top300", "top1000", "top2000", "top3000"]]
+    neutralizations: list[Literal["none", "industry"]]
+    holdings_count: IntegerBounds
+    rebalance_every_sessions: IntegerBounds

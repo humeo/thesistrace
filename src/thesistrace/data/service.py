@@ -7,6 +7,7 @@ from datetime import datetime
 from psycopg.errors import UniqueViolation
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.data.fields import AUTHORABLE_FIELDS, AuthorableField
 from thesistrace.data.models import (
     DataOverview,
     ReleaseHistory,
@@ -36,6 +37,10 @@ class DataService:
         self._database = database
         self._publication = publication
         self._source = source
+
+    def authorable_fields(self) -> tuple[AuthorableField, ...]:
+        """Expose Data-owned product field definitions without Kernel bindings."""
+        return AUTHORABLE_FIELDS
 
     def overview(self) -> DataOverview:
         with self._database.transaction() as transaction:

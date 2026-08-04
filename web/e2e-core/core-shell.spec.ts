@@ -109,3 +109,41 @@ test("saves and reopens an incomplete nameless Definition", async ({ page }) => 
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");
   await expect(page.getByText(/Draft|Snapshot|Frozen version/i)).toHaveCount(0);
 });
+
+test("authors and reopens an Alpha using authoritative stable IDs", async ({ page }) => {
+  await page.goto("/definitions");
+  await page.getByRole("button", { name: "New Definition" }).click();
+  await page.getByRole("button", { name: "Add Alpha" }).click();
+
+  await page.getByLabel("Alpha operator").selectOption("ts_mean");
+  await page.getByLabel("Alpha field 1").selectOption("price.close.adjusted");
+  await page.getByLabel("Alpha window 2").fill("20");
+  await page.getByLabel("Universe").selectOption("top1000");
+  await page.getByLabel("Neutralization").selectOption("industry");
+  await page.getByLabel("Holdings count").fill("30");
+  await page.getByLabel("Rebalance interval").fill("5");
+
+  const saveRequest = page.waitForRequest(
+    (request) => request.method() === "POST" && request.url().endsWith("/api/definitions"),
+  );
+  await page.getByRole("button", { name: "Save" }).click();
+  const submitted = (await saveRequest).postDataJSON();
+  expect(submitted.alpha).toEqual({
+    operator_id: "ts_mean",
+    operands: [
+      { field_id: "price.close.adjusted" },
+      { literal: 20 },
+    ],
+  });
+  expect(JSON.stringify(submitted)).not.toContain("close_adj");
+  await expect(page.getByRole("status")).toHaveText("Saved revision 1.");
+
+  await page.reload();
+  await expect(page.getByLabel("Alpha operator")).toHaveValue("ts_mean");
+  await expect(page.getByLabel("Alpha field 1")).toHaveValue("price.close.adjusted");
+  await expect(page.getByLabel("Alpha window 2")).toHaveValue("20");
+  await expect(page.getByLabel("Universe")).toHaveValue("top1000");
+  await expect(page.getByLabel("Neutralization")).toHaveValue("industry");
+  await expect(page.getByLabel("Holdings count")).toHaveValue("30");
+  await expect(page.getByLabel("Rebalance interval")).toHaveValue("5");
+});
