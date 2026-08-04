@@ -61,5 +61,12 @@ MIGRATIONS = MigrationPlan(
                     WHERE status = 'running';
             """,
         ),
+        Migration(
+            name="0003_terminal_failure_reason",
+            statement="""
+                ALTER TABLE research_runs.runs
+                    ADD COLUMN failure_reason text;
+            """,
+        ),
     ),
 )

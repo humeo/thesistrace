@@ -28,6 +28,10 @@ class ResearchRunSummary(BaseModel):
     definition_id: str
     definition_revision: int
     dataset_release_id: str
+    failure_reason: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
 
 class ResearchRunList(BaseModel):

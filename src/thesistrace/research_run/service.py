@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from threading import Event, Thread
 from uuid import uuid4
 
+from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
@@ -16,6 +17,8 @@ from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
     Publication,
+    PublicationPreparationError,
+    PublicationVerificationError,
     PublishedRef,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -38,6 +41,16 @@ logger = logging.getLogger(__name__)
 MAX_RESULT_BUNDLE_BYTES = 1_048_576
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
+MAX_RESEARCH_RUN_ATTEMPTS = 3
+MAX_RESOURCE_EXHAUSTED_ATTEMPTS = 2
+INFRASTRUCTURE_FAILURE = "InfrastructureUnavailable"
+RESOURCE_EXHAUSTED_FAILURE = "ResourceExhausted"
+WORKER_LOST_FAILURE = "WorkerLost"
+RETRYABLE_FAILURES = (
+    INFRASTRUCTURE_FAILURE,
+    RESOURCE_EXHAUSTED_FAILURE,
+    WORKER_LOST_FAILURE,
+)
 LoadCanonical = Callable[[str], dict[str, object]]
 ExecuteKernel = Callable[[RunInput], RunOutput]
 Progress = Callable[[str, str], None]
@@ -57,6 +70,14 @@ class _ExecutionClaim:
     attempt_id: str
     fence: int
     immutable_input: ImmutableRunInput
+
+
+@dataclass(frozen=True)
+class _FailurePolicy:
+    attempt_reason: str
+    public_reason: str
+    max_attempts: int
+    retryable: bool
 
 
 class ResearchRunService:
@@ -127,7 +148,7 @@ class ResearchRunService:
                     extra={"run_id": claim.run_id},
                 )
             except Exception as error:
-                self._record_failure(claim, type(error).__name__)
+                self._record_failure(claim, error)
                 logger.error(
                     "ResearchRun execution failed",
                     extra={"run_id": claim.run_id, "error_type": type(error).__name__},
@@ -139,7 +160,7 @@ class ResearchRunService:
             rows = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id
+                       dataset_release_id, failure_reason
                 FROM research_runs.runs
                 ORDER BY created_at DESC, id
                 """
@@ -151,7 +172,7 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id
+                       dataset_release_id, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -165,7 +186,7 @@ class ResearchRunService:
                 """
                 SELECT id, status, definition_id, definition_revision,
                        dataset_release_id, result_manifest_sha256,
-                       result_provenance
+                       result_provenance, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -215,36 +236,69 @@ class ResearchRunService:
                 """
                 SELECT run.id, run.status, run.immutable_input,
                        run.execution_fence,
-                       attempt.id AS active_attempt_id
+                       attempt.id AS latest_attempt_id,
+                       attempt.ordinal AS latest_attempt_ordinal,
+                       attempt.status AS latest_attempt_status
                 FROM research_runs.runs AS run
-                LEFT JOIN research_runs.attempts AS attempt
-                  ON attempt.run_id = run.id AND attempt.status = 'running'
+                LEFT JOIN LATERAL (
+                    SELECT id, ordinal, status, lease_expires_at, failure_reason
+                    FROM research_runs.attempts
+                    WHERE run_id = run.id
+                    ORDER BY ordinal DESC
+                    LIMIT 1
+                ) AS attempt ON true
                 WHERE run.status = 'queued'
                    OR (
                         run.status = 'running'
-                        AND attempt.lease_expires_at <= now()
+                        AND (
+                            (
+                                attempt.status = 'running'
+                                AND attempt.lease_expires_at <= now()
+                            )
+                            OR (
+                                attempt.status = 'failed'
+                                AND attempt.failure_reason = ANY(%s)
+                            )
+                        )
                    )
                 ORDER BY run.created_at, run.id
                 FOR UPDATE OF run SKIP LOCKED
                 LIMIT 1
-                """
+                """,
+                (list(RETRYABLE_FAILURES),),
             ).fetchone()
             if row is None:
                 return None
             run_id = str(row["id"])
-            if row["status"] == "running":
+            if row["latest_attempt_status"] == "running":
                 recovered = transaction.execute(
                     """
                     UPDATE research_runs.attempts
                     SET status = 'failed', heartbeat_at = now(),
                         lease_expires_at = now(), finished_at = now(),
-                        failure_reason = 'abandoned'
+                        failure_reason = %s
                     WHERE id = %s AND run_id = %s AND status = 'running'
                       AND lease_expires_at <= now()
                     """,
-                    (row["active_attempt_id"], run_id),
+                    (WORKER_LOST_FAILURE, row["latest_attempt_id"], run_id),
                 )
                 if recovered.rowcount != 1:
+                    return None
+                if int(row["latest_attempt_ordinal"]) >= MAX_RESEARCH_RUN_ATTEMPTS:
+                    transaction.execute(
+                        """
+                        UPDATE research_runs.runs
+                        SET status = 'failed',
+                            failure_reason = %s, updated_at = now()
+                        WHERE id = %s AND status = 'running'
+                          AND execution_fence = %s
+                        """,
+                        (
+                            "Research execution could not complete after automatic retries.",
+                            run_id,
+                            row["execution_fence"],
+                        ),
+                    )
                     return None
             fence = int(row["execution_fence"]) + 1
             ordinal_row = transaction.execute(
@@ -260,7 +314,8 @@ class ResearchRunService:
             transaction.execute(
                 """
                 UPDATE research_runs.runs
-                SET status = 'running', execution_fence = %s, updated_at = now()
+                SET status = 'running', execution_fence = %s,
+                    failure_reason = NULL, updated_at = now()
                 WHERE id = %s
                 """,
                 (fence, run_id),
@@ -409,7 +464,8 @@ class ResearchRunService:
                 """
                 UPDATE research_runs.runs
                 SET status = 'succeeded', result_manifest_sha256 = %s,
-                    result_provenance = %s, updated_at = now()
+                    result_provenance = %s, failure_reason = NULL,
+                    updated_at = now()
                 WHERE id = %s AND status = 'running' AND execution_fence = %s
                 """,
                 (
@@ -422,7 +478,8 @@ class ResearchRunService:
             if updated.rowcount != 1:
                 raise ResearchRunFenced
 
-    def _record_failure(self, claim: _ExecutionClaim, reason: str) -> None:
+    def _record_failure(self, claim: _ExecutionClaim, error: Exception) -> None:
+        policy = _failure_policy(error)
         with self._database.transaction() as transaction:
             current = transaction.execute(
                 """
@@ -435,22 +492,52 @@ class ResearchRunService:
             ).fetchone()
             if current != {"status": "running", "execution_fence": claim.fence}:
                 return
-            transaction.execute(
+            attempt = transaction.execute(
+                """
+                SELECT status,
+                       (SELECT count(*)
+                        FROM research_runs.attempts AS counted
+                        WHERE counted.run_id = %s) AS attempt_count
+                FROM research_runs.attempts
+                WHERE id = %s AND run_id = %s AND fence = %s
+                FOR UPDATE
+                """,
+                (claim.run_id, claim.attempt_id, claim.run_id, claim.fence),
+            ).fetchone()
+            if attempt is None or attempt["status"] != "running":
+                return
+            retry = (
+                policy.retryable
+                and int(attempt["attempt_count"]) < policy.max_attempts
+            )
+            failed_attempt = transaction.execute(
                 """
                 UPDATE research_runs.attempts
                 SET status = 'failed', heartbeat_at = now(), finished_at = now(),
-                    failure_reason = %s
+                    lease_expires_at = now(), failure_reason = %s
                 WHERE id = %s AND run_id = %s AND fence = %s AND status = 'running'
                 """,
-                (reason, claim.attempt_id, claim.run_id, claim.fence),
+                (
+                    policy.attempt_reason,
+                    claim.attempt_id,
+                    claim.run_id,
+                    claim.fence,
+                ),
             )
+            if failed_attempt.rowcount != 1:
+                return
             transaction.execute(
                 """
                 UPDATE research_runs.runs
-                SET status = 'failed', updated_at = now()
+                SET status = %s, failure_reason = %s, updated_at = now()
                 WHERE id = %s AND status = 'running' AND execution_fence = %s
                 """,
-                (claim.run_id, claim.fence),
+                (
+                    "running" if retry else "failed",
+                    None if retry else policy.public_reason,
+                    claim.run_id,
+                    claim.fence,
+                ),
             )
 
 
@@ -510,20 +597,53 @@ def _result_provenance(
     }
 
 
+def _failure_policy(error: Exception) -> _FailurePolicy:
+    if isinstance(error, MemoryError):
+        return _FailurePolicy(
+            attempt_reason=RESOURCE_EXHAUSTED_FAILURE,
+            public_reason="Research execution exceeded its resource limit.",
+            max_attempts=MAX_RESOURCE_EXHAUSTED_ATTEMPTS,
+            retryable=True,
+        )
+    if isinstance(
+        error,
+        (
+            PublicationPreparationError,
+            PublicationVerificationError,
+            OperationalError,
+            OSError,
+        ),
+    ):
+        return _FailurePolicy(
+            attempt_reason=INFRASTRUCTURE_FAILURE,
+            public_reason=(
+                "Research execution could not access required infrastructure."
+            ),
+            max_attempts=MAX_RESEARCH_RUN_ATTEMPTS,
+            retryable=True,
+        )
+    return _FailurePolicy(
+        attempt_reason="PermanentExecutionFailure",
+        public_reason="Research execution failed.",
+        max_attempts=1,
+        retryable=False,
+    )
+
+
 def _summary(row: object) -> ResearchRunSummary:
     assert isinstance(row, dict)
-    return ResearchRunSummary.model_validate(
-        {
-            name: row[name]
-            for name in (
-                "id",
-                "status",
-                "definition_id",
-                "definition_revision",
-                "dataset_release_id",
-            )
-        }
-    )
+    summary = {
+        name: row[name]
+        for name in (
+            "id",
+            "status",
+            "definition_id",
+            "definition_revision",
+            "dataset_release_id",
+        )
+    }
+    summary["failure_reason"] = row.get("failure_reason")
+    return ResearchRunSummary.model_validate(summary)
 
 
 def _public_result(

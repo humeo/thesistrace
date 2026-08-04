@@ -60,6 +60,30 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   await expect(page.getByText("object_key")).toHaveCount(0);
 });
 
+test("shows one sanitized terminal ResearchRun failure", async ({ page }) => {
+  await page.route("**/api/research-runs/run_deadbeef", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        id: "run_deadbeef",
+        status: "failed",
+        definition_id: "def_retry",
+        definition_revision: 1,
+        dataset_release_id: "release_retry",
+        failure_reason:
+          "Research execution could not access required infrastructure.",
+      }),
+    }),
+  );
+
+  await page.goto("/research-runs/run_deadbeef");
+
+  await expect(page.getByRole("alert")).toHaveText(
+    "Failure Research execution could not access required infrastructure.",
+  );
+  await expect(page.getByText(/Attempt|retry count|exception|endpoint/i)).toHaveCount(0);
+});
+
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
   await page.goto("/definitions");
 

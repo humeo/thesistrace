@@ -21,9 +21,30 @@ policy is exhausted.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` with recoverable and
-  permanent infrastructure failures across process restart.
-- Confirm the public lifecycle stays on one Run ID, shows running during retry,
-  and ends once with the expected sanitized failure.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/integration \
+  tests/acceptance/test_core_research_run_retry.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The tests must use real PostgreSQL and RustFS to inject an eligible transient
+infrastructure failure that later succeeds across a fresh runtime, a permanent
+failure, and repeated transient failure through exhaustion. They must prove
+that every Attempt stays under one ResearchRun identity, the public state stays
+`running` while another automatic retry is eligible, exhaustion publishes no
+Result and commits one terminal `failed` state with a readable sanitized
+reason, terminal states reject late Attempt writes, and persisted retry state
+cannot loop past its configured bound or enter the product projection. The
+browser must render the terminal sanitized reason on the ResearchRun detail and
+must not expose Attempt, retry count, exception text, or other execution
+mechanics.
 
 ## Comments

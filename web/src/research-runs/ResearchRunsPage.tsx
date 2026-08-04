@@ -78,6 +78,7 @@ type ResearchRun = {
   definition_id: string;
   definition_revision: number;
   dataset_release_id: string;
+  failure_reason?: string;
   result?: ResearchResult;
 };
 
@@ -173,6 +174,9 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
           </p>
           <p><strong>Dataset Release</strong> {run.dataset_release_id}</p>
         </div>
+        {run.status === "failed" && run.failure_reason ? (
+          <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
+        ) : null}
         {run.status === "succeeded" && run.result ? (
           <ResearchResultView result={run.result} />
         ) : null}

@@ -190,6 +190,10 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "lease_expires_at <= now()" in run_source
     assert "def _maintain_claim(" in run_source
     assert "def _heartbeat_claim(" in run_source
+    assert "MAX_RESEARCH_RUN_ATTEMPTS = 3" in run_source
+    assert "MAX_RESOURCE_EXHAUSTED_ATTEMPTS = 2" in run_source
+    assert "def _failure_policy(" in run_source
+    assert "ADD COLUMN failure_reason text" in run_migrations
     assert "load_canonical" in run_source
     assert "self._publication.prepare(" in run_source
     assert "self._publication.record(" in run_source
