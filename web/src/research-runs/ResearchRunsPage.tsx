@@ -94,6 +94,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
   const [rerunning, setRerunning] = useState(false);
+  const [startingTracking, setStartingTracking] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
   const cancelGeneration = useRef(0);
@@ -102,6 +103,9 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const rerunGeneration = useRef(0);
   const rerunController = useRef<AbortController | null>(null);
   const rerunRequest = useRef<{ runId: string; requestId: string } | null>(null);
+  const trackingGeneration = useRef(0);
+  const trackingController = useRef<AbortController | null>(null);
+  const trackingRequest = useRef<{ runId: string; requestId: string } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -157,6 +161,10 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     rerunController.current?.abort();
     rerunController.current = null;
     rerunRequest.current = null;
+    trackingGeneration.current += 1;
+    trackingController.current?.abort();
+    trackingController.current = null;
+    trackingRequest.current = null;
   }, [runId]);
 
   function refresh() {
@@ -242,6 +250,46 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     }
   }
 
+  async function startTracking() {
+    if (run === null || run.status !== "succeeded") return;
+    const targetRun = run;
+    const generation = ++trackingGeneration.current;
+    loadGeneration.current += 1;
+    setLoadState(null);
+    trackingController.current?.abort();
+    const controller = new AbortController();
+    trackingController.current = controller;
+    setStartingTracking(true);
+    setError(null);
+    const pending = trackingRequest.current;
+    const requestId = pending?.runId === targetRun.id
+      ? pending.requestId
+      : `track_${crypto.randomUUID()}`;
+    trackingRequest.current = { runId: targetRun.id, requestId };
+    try {
+      const response = await fetch(`/api/research-runs/${targetRun.id}/daily-tracks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("Start Tracking failed");
+      const track = (await response.json()) as { id: string };
+      if (generation !== trackingGeneration.current) return;
+      trackingRequest.current = null;
+      window.location.assign(`/daily-tracks/${track.id}`);
+    } catch (reason: unknown) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (generation !== trackingGeneration.current) return;
+      setError("Start Tracking failed");
+    } finally {
+      if (generation === trackingGeneration.current) {
+        trackingController.current = null;
+        setStartingTracking(false);
+      }
+    }
+  }
+
   if (error) {
     return (
       <section aria-label="Research Runs">
@@ -272,11 +320,25 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
               </button>
             ) : null}
             {["succeeded", "failed", "cancelled"].includes(run.status) ? (
-              <button disabled={rerunning} onClick={() => void rerunSelected()}>
+              <button
+                disabled={rerunning || startingTracking}
+                onClick={() => void rerunSelected()}
+              >
                 {rerunning ? "Rerunning…" : "Rerun"}
               </button>
             ) : null}
-            <button disabled={loadState !== null || canceling || rerunning} onClick={refresh}>
+            {run.status === "succeeded" ? (
+              <button
+                disabled={rerunning || startingTracking}
+                onClick={() => void startTracking()}
+              >
+                {startingTracking ? "Starting Tracking…" : "Start Tracking"}
+              </button>
+            ) : null}
+            <button
+              disabled={loadState !== null || canceling || rerunning || startingTracking}
+              onClick={refresh}
+            >
               Refresh
             </button>
           </div>

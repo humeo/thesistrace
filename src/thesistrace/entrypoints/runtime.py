@@ -10,6 +10,8 @@ import boto3
 
 from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.adapters.fixture_data import FixtureDataSource
+from thesistrace.daily_track import DailyTrackService
+from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
 from thesistrace.data import DataService, authorable_field_bindings
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.definition import DefinitionService
@@ -83,6 +85,7 @@ class CoreRuntime:
     data: DataService
     definitions: DefinitionService
     research_runs: ResearchRunService
+    daily_tracks: DailyTrackService
     publication: Publication
 
 
@@ -95,6 +98,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         apply_migrations(database, DATA_MIGRATIONS)
         apply_migrations(database, DEFINITION_MIGRATIONS)
         apply_migrations(database, RESEARCH_RUN_MIGRATIONS)
+        apply_migrations(database, DAILY_TRACK_MIGRATIONS)
         s3 = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,
@@ -109,10 +113,12 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             validate_normalized_alpha,
             field_bindings=authorable_field_bindings(),
         )
+        daily_tracks = DailyTrackService(database)
         research_runs = ResearchRunService(
             database,
             load_canonical=data.load_canonical,
             publication=publication,
+            activate_track=daily_tracks.activate,
         )
         yield CoreRuntime(
             database=database,
@@ -126,6 +132,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 admit_run=research_runs.admit,
             ),
             research_runs=research_runs,
+            daily_tracks=daily_tracks,
             publication=publication,
         )
     finally:

@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = (
     "_postgres",
     "data",
+    "daily_track",
     "definition",
     "entrypoints",
     "publication",
@@ -213,6 +214,34 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     for foreign_schema in ("data", "definitions", "publication", "daily_tracks"):
         for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
             assert f"{sql_verb} {foreign_schema}." not in run_source
+
+
+def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
+    track_source = (
+        ROOT / "src" / "thesistrace" / "daily_track" / "service.py"
+    ).read_text()
+    track_migrations = (
+        ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py"
+    ).read_text()
+    run_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
+    ).read_text()
+    http_source = (
+        ROOT / "src" / "thesistrace" / "entrypoints" / "http.py"
+    ).read_text()
+
+    assert "CREATE TABLE daily_tracks.tracks" in track_migrations
+    assert "CREATE TABLE daily_tracks.activation_receipts" in track_migrations
+    assert "def activate(" in track_source
+    assert "origin" in track_source
+    assert "activate_track" in run_source
+    assert "TrackingOrigin(" in run_source
+    assert "daily_tracks." not in run_source
+    assert "research_runs." not in track_source
+    assert "research_runs." not in track_migrations
+    assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
+    assert '@app.post("/api/daily-tracks"' not in http_source
+    assert '@app.delete("/api/daily-tracks' not in http_source
 
 
 def test_research_run_owns_its_embedded_result_product_projection() -> None:

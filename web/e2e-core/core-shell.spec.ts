@@ -272,6 +272,58 @@ test("reruns the selected immutable input at a new stable Run URL", async ({ pag
   expect(originalReads).toBeGreaterThan(0);
 });
 
+test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) => {
+  const run = {
+    id: "run_3333cccc",
+    status: "succeeded",
+    definition_id: "def_track",
+    definition_revision: 1,
+    dataset_release_id: "release_track_seed",
+  };
+  const track = {
+    id: "track_4444dddd",
+    status: "active",
+    seed_run_id: run.id,
+    seed_release_id: run.dataset_release_id,
+    definition_id: run.definition_id,
+    definition_revision: run.definition_revision,
+    result_checksum_sha256: "a".repeat(64),
+    strategy_session: "2025-12-31",
+  };
+  await page.route("**/api/research-runs/run_3333cccc", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(run) }),
+  );
+  await page.route("**/api/research-runs/run_3333cccc/daily-tracks", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      request_id: expect.stringMatching(/^track_/),
+    });
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify(track),
+    });
+  });
+  await page.route("**/api/daily-tracks/track_4444dddd", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(track) }),
+  );
+
+  await page.goto("/research-runs/run_3333cccc");
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/daily-tracks\/track_4444dddd$/);
+  await expect(page.getByText("Status active", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "run_3333cccc" })).toHaveAttribute(
+    "href",
+    "/research-runs/run_3333cccc",
+  );
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "DailyTrack" })).toBeVisible();
+  await expect(page.getByText("Status active", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/Activation|Checkpoint|manifest|object|receipt|Attempt|worker/i),
+  ).toHaveCount(0);
+});
+
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
   await page.goto("/definitions");
 

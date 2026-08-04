@@ -25,9 +25,29 @@ it later without any continuing dependency on the Definition or Run lifecycle.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` for one successful
-  activation, complete Origin, direct `active` state, reopen, and restart.
-- Run `bun run --cwd web test:e2e` and confirm Start Tracking navigates from the
-  succeeded Run to one reopenable DailyTrack URL.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/integration \
+  tests/acceptance/test_core_daily_track_activation.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The tests must use real PostgreSQL and RustFS to reject queued, running, failed,
+cancelled, missing, unreadable, and incomplete seed Runs; activate from one
+verified succeeded Result; and reopen after fresh HTTP and worker processes.
+They must prove same-transaction Run validation plus private DailyTrack
+activation, direct `active` state, complete copied Tracking Origin, no later
+Definition/ResearchRun dependency, matching-request replay, different-input
+conflict, malformed zero receipt, and absence of generic create/delete routes.
+The browser must Start Tracking from the succeeded ResearchRun, navigate to the
+stable DailyTrack URL, reopen it, and expose only product origin/state without
+Activation, Checkpoint, manifest, object, receipt, or worker mechanics.
 
 ## Comments

@@ -9,6 +9,12 @@ import uvicorn
 from fastapi import Body, FastAPI, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from thesistrace.daily_track import (
+    DailyTrackActivationConflict,
+    DailyTrackList,
+    DailyTrackSummary,
+    StartTrackingCommand,
+)
 from thesistrace.data import (
     DataOverview,
     ReleaseHistory,
@@ -36,6 +42,7 @@ from thesistrace.research_run import (
     ResearchRunRerunConflict,
     ResearchRunResultUnavailable,
     ResearchRunSummary,
+    ResearchRunTrackingUnavailable,
 )
 
 
@@ -179,6 +186,39 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         if run is None:
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return run
+
+    @app.post(
+        "/api/research-runs/{run_id}/daily-tracks",
+        response_model=DailyTrackSummary,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def start_tracking(
+        request: Request,
+        run_id: str,
+        command: StartTrackingCommand,
+    ) -> DailyTrackSummary:
+        try:
+            track = _runtime(request).research_runs.start_tracking(run_id, command)
+        except DailyTrackActivationConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchRunTrackingUnavailable as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if track is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return track
+
+    @app.get("/api/daily-tracks", response_model=DailyTrackList)
+    def list_daily_tracks(request: Request) -> DailyTrackList:
+        return _runtime(request).daily_tracks.list()
+
+    @app.get("/api/daily-tracks/{track_id}", response_model=DailyTrackSummary)
+    def get_daily_track(request: Request, track_id: str) -> DailyTrackSummary:
+        track = _runtime(request).daily_tracks.get(track_id)
+        if track is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return track
 
     @app.post(
         "/api/definitions",

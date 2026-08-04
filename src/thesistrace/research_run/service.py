@@ -13,6 +13,11 @@ from psycopg import OperationalError
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.daily_track import (
+    DailyTrackSummary,
+    StartTrackingCommand,
+    TrackingOrigin,
+)
 from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
@@ -65,6 +70,10 @@ RETRYABLE_FAILURES = (
 LoadCanonical = Callable[[str], dict[str, object]]
 ExecuteKernel = Callable[[RunInput], RunOutput]
 Progress = Callable[[str, str], None]
+ActivateTrack = Callable[
+    [PostgresTransaction, TrackingOrigin, str],
+    DailyTrackSummary,
+]
 
 
 class ResearchRunFenced(RuntimeError):
@@ -80,6 +89,10 @@ class ResearchRunRerunConflict(RuntimeError):
 
 
 class ResearchRunResultUnavailable(RuntimeError):
+    pass
+
+
+class ResearchRunTrackingUnavailable(RuntimeError):
     pass
 
 
@@ -110,6 +123,7 @@ class ResearchRunService:
         progress: Progress | None = None,
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
+        activate_track: ActivateTrack | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -120,6 +134,7 @@ class ResearchRunService:
         self._progress = progress or (lambda _stage, _run_id: None)
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
+        self._activate_track = activate_track
 
     def admit(
         self,
@@ -347,6 +362,43 @@ class ResearchRunService:
             )
         return outcome
 
+    def start_tracking(
+        self,
+        run_id: str,
+        command: StartTrackingCommand,
+    ) -> DailyTrackSummary | None:
+        if self._activate_track is None or self._publication is None:
+            raise RuntimeError("DailyTrack activation dependencies are not configured")
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT id, status, definition_id, definition_revision,
+                       dataset_release_id, immutable_input,
+                       result_manifest_sha256, result_provenance
+                FROM research_runs.runs
+                WHERE id = %s
+                FOR SHARE
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["status"] != "succeeded":
+                raise ResearchRunTrackingUnavailable(
+                    "Start Tracking requires a succeeded ResearchRun"
+                )
+            try:
+                origin = self._tracking_origin(row)
+            except Exception as error:
+                logger.error(
+                    "ResearchRun Tracking Origin validation failed",
+                    extra={"run_id": run_id, "error_type": type(error).__name__},
+                )
+                raise ResearchRunTrackingUnavailable(
+                    "Start Tracking requires a complete verified Result"
+                ) from error
+            return self._activate_track(transaction, origin, command.request_id)
+
     def get_detail(self, run_id: str) -> ResearchRunDetail | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
@@ -392,6 +444,60 @@ class ResearchRunService:
             )
             raise ResearchRunResultUnavailable from error
         return ResearchRunDetail(**summary.model_dump(), result=result)
+
+    def _tracking_origin(self, row: dict[str, object]) -> TrackingOrigin:
+        if self._publication is None:
+            raise ResearchRunTrackingUnavailable
+        immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+        manifest_sha256 = row.get("result_manifest_sha256")
+        provenance = row.get("result_provenance")
+        if not isinstance(manifest_sha256, str) or not isinstance(provenance, Mapping):
+            raise ResearchRunTrackingUnavailable
+        selected_provenance = dict(provenance)
+        expected_digest = hashlib.sha256(
+            canonical_json_bytes(immutable_input.model_dump(mode="json"))
+        ).hexdigest()
+        if (
+            selected_provenance.get("research_run_id") != row["id"]
+            or selected_provenance.get("dataset_release_id") != row["dataset_release_id"]
+            or selected_provenance.get("immutable_input_sha256") != expected_digest
+        ):
+            raise ResearchRunTrackingUnavailable
+        bundle = self._publication.read(
+            PublishedRef(
+                manifest_sha256=manifest_sha256,
+                kind="research.result",
+                provenance=selected_provenance,
+            )
+        )
+        payload = bundle.payloads.get("result")
+        if payload is None or payload.media_type != "application/json":
+            raise ResearchRunTrackingUnavailable
+        stored_result = json.loads(payload.content)
+        _public_result(stored_result, selected_provenance)
+        if not isinstance(stored_result, Mapping):
+            raise ResearchRunTrackingUnavailable
+        initial_strategy_state = stored_result.get("terminal_strategy_state")
+        calculation_contracts = selected_provenance.get("calculation_contracts")
+        if not isinstance(initial_strategy_state, Mapping) or not isinstance(
+            calculation_contracts, Mapping
+        ):
+            raise ResearchRunTrackingUnavailable
+        return TrackingOrigin(
+            seed_run_id=str(row["id"]),
+            definition_id=str(row["definition_id"]),
+            definition_revision=int(row["definition_revision"]),
+            immutable_input=immutable_input.model_dump(mode="json"),
+            seed_release_id=str(row["dataset_release_id"]),
+            verified_result={
+                "kind": "research.result",
+                "research_run_id": str(row["id"]),
+                "schema_version": str(selected_provenance["schema_version"]),
+                "result_checksum_sha256": hashlib.sha256(payload.content).hexdigest(),
+            },
+            initial_strategy_state=dict(initial_strategy_state),
+            calculation_contracts=dict(calculation_contracts),
+        )
 
     def _require_execution_dependencies(self) -> None:
         if self._load_canonical is None or self._publication is None:
