@@ -123,7 +123,6 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     @app.get(
         "/api/research-runs/{run_id}",
         response_model=ResearchRunDetail,
-        response_model_exclude_none=True,
     )
     def get_research_run(request: Request, run_id: str) -> ResearchRunDetail:
         try:

@@ -161,7 +161,61 @@ def test_result_read_failure_returns_only_a_sanitized_product_error(
         assert "object" not in response.text.lower()
 
 
-def _execute_run(client: TestClient, *, request_id: str) -> str:
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_result_preserves_legal_null_factor_summary_fields() -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        run_id = _execute_run(
+            client,
+            request_id="ticket-21-null-summary",
+            alpha={
+                "operator_id": "subtract",
+                "operands": [
+                    {"field_id": "price.close.adjusted"},
+                    {"field_id": "price.close.adjusted"},
+                ],
+            },
+        )
+        response = client.get(f"/api/research-runs/{run_id}")
+
+        assert response.status_code == 200
+        horizons = response.json()["result"]["factor"]["horizons"]
+        for horizon in horizons.values():
+            assert horizon["summary"]["ic"] == {
+                "mean": None,
+                "sample_deviation": None,
+                "icir": None,
+                "positive_fraction": None,
+                "valid_session_count": 0,
+            }
+            assert horizon["summary"]["rank_ic"] == {
+                "mean": None,
+                "sample_deviation": None,
+                "icir": None,
+                "positive_fraction": None,
+                "valid_session_count": 0,
+            }
+            assert set(horizon["summary"]["quantile_returns"]) == {
+                "q1",
+                "q2",
+                "q3",
+                "q4",
+                "q5",
+            }
+            assert horizon["summary"]["top_bottom_return"] is None
+
+
+def _execute_run(
+    client: TestClient,
+    *,
+    request_id: str,
+    alpha: dict[str, object] | None = None,
+) -> str:
     runtime = client.app.state.core_runtime
     runtime.data.update(f"{request_id}-release")
     assert runtime.data.process_next_update() is True
@@ -170,7 +224,8 @@ def _execute_run(client: TestClient, *, request_id: str) -> str:
         json={
             "request_id": request_id,
             "name": "Bounded visible result",
-            "alpha": {
+            "alpha": alpha
+            or {
                 "operator_id": "ts_mean",
                 "operands": [
                     {"field_id": "price.close.adjusted"},

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ImmutableRunInput(BaseModel):
@@ -140,4 +140,7 @@ class ResearchRunResult(BaseModel):
 
 
 class ResearchRunDetail(ResearchRunSummary):
-    result: ResearchRunResult | None = None
+    result: ResearchRunResult | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
