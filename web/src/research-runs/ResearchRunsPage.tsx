@@ -159,6 +159,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     const targetRun = run;
     const generation = ++cancelGeneration.current;
     loadGeneration.current += 1;
+    setLoadState(null);
     cancelController.current?.abort();
     const controller = new AbortController();
     cancelController.current = controller;

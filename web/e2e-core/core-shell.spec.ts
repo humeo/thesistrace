@@ -163,9 +163,13 @@ test("keeps Cancel authoritative after delayed ResearchRun work returns", async 
     (window as typeof window & { delayNextResearchRunBody?: boolean })
       .delayNextResearchRunBody = true;
   });
+  await page.getByRole("button", { name: "Refresh" }).click();
   await oldPollObserved;
+  await expect(page.getByRole("status")).toHaveText("Refreshing ResearchRun…");
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
+  await expect(page.getByText("Refreshing ResearchRun…", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
   await page.evaluate(() => {
     (window as typeof window & { releaseOldPollBody?: () => void })
       .releaseOldPollBody?.();
