@@ -15,6 +15,7 @@ from thesistrace.publication import (
     ParquetRowsPayload,
     Publication,
     PublicationPreparationError,
+    PublicationUnavailableError,
     PublicationVerificationError,
 )
 
@@ -108,6 +109,41 @@ def test_all_payloads_are_serialized_before_any_upload(
 
     assert str(captured.value) == "Parquet payload violates its contract"
     assert not _bucket_contains_content(rustfs_admin, core_settings.s3_bucket, valid_content)
+
+
+@pytest.mark.parametrize(
+    ("code", "status", "expected_type"),
+    [
+        ("ServiceUnavailable", 503, PublicationUnavailableError),
+        ("AccessDenied", 403, PublicationPreparationError),
+    ],
+)
+def test_bucket_failures_distinguish_transient_from_deterministic_errors(
+    core_settings: CoreSettings,
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    status: int,
+    expected_type: type[Exception],
+) -> None:
+    def fail_head_bucket(**_arguments: object) -> None:
+        raise ClientError(
+            {
+                "Error": {"Code": code},
+                "ResponseMetadata": {"HTTPStatusCode": status},
+            },
+            "HeadBucket",
+        )
+
+    with open_core_runtime(core_settings) as runtime:
+        monkeypatch.setattr(runtime.publication._s3, "head_bucket", fail_head_bucket)
+        with pytest.raises(expected_type) as captured:
+            runtime.publication.prepare(
+                kind="classification.probe",
+                payloads={"only": JsonPayload({"valid": True})},
+                provenance={"ticket": 23},
+            )
+
+    assert isinstance(captured.value, PublicationUnavailableError) is (status >= 500)
 
 
 @pytest.mark.parametrize("damage", ["missing", "truncated", "substituted"])

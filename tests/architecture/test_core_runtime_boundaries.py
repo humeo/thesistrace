@@ -193,6 +193,9 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "MAX_RESEARCH_RUN_ATTEMPTS = 3" in run_source
     assert "MAX_RESOURCE_EXHAUSTED_ATTEMPTS = 2" in run_source
     assert "def _failure_policy(" in run_source
+    assert "PublicationUnavailableError" in run_source
+    assert "PublicationPreparationError" not in run_source
+    assert "PublicationVerificationError" not in run_source
     assert "ADD COLUMN failure_reason text" in run_migrations
     assert "load_canonical" in run_source
     assert "self._publication.prepare(" in run_source

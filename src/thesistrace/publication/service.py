@@ -9,7 +9,14 @@ from datetime import datetime
 from typing import Any
 
 from botocore.client import BaseClient
-from botocore.exceptions import ClientError
+from botocore.exceptions import (
+    ClientError,
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    HTTPClientError,
+    ReadTimeoutError,
+)
 from pyarrow import ArrowException
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
@@ -22,6 +29,13 @@ from thesistrace.publication.serialization import (
 
 MANIFEST_SCHEMA_VERSION = 1
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
+TRANSIENT_S3_ERRORS = (
+    ConnectionClosedError,
+    ConnectTimeoutError,
+    EndpointConnectionError,
+    HTTPClientError,
+    ReadTimeoutError,
+)
 
 
 class PublicationPreparationError(ValueError):
@@ -30,6 +44,13 @@ class PublicationPreparationError(ValueError):
 
 class PublicationVerificationError(ValueError):
     pass
+
+
+class PublicationUnavailableError(
+    PublicationPreparationError,
+    PublicationVerificationError,
+):
+    """The object store could not complete an otherwise valid operation."""
 
 
 class PublicationNotFoundError(LookupError):
@@ -365,14 +386,30 @@ class Publication:
             return
         except ClientError as error:
             if _error_code(error) not in {"404", "NoSuchBucket", "NotFound"}:
+                if _client_error_is_transient(error):
+                    raise PublicationUnavailableError(
+                        "Publication bucket is temporarily unavailable"
+                    ) from error
                 raise PublicationPreparationError("Publication bucket is unavailable") from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication bucket is temporarily unavailable"
+            ) from error
         try:
             self._s3.create_bucket(Bucket=self._bucket)
         except ClientError as error:
             if _error_code(error) not in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}:
+                if _client_error_is_transient(error):
+                    raise PublicationUnavailableError(
+                        "Publication bucket could not be reached"
+                    ) from error
                 raise PublicationPreparationError(
                     "Publication bucket could not be created"
                 ) from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication bucket could not be reached"
+            ) from error
 
     def _put_immutable(self, digest: str, content: bytes, *, media_type: str) -> None:
         if self._object_exists(digest):
@@ -395,7 +432,15 @@ class Publication:
                 "ConditionalRequestConflict",
                 "PreconditionFailed",
             }:
+                if _client_error_is_transient(error):
+                    raise PublicationUnavailableError(
+                        "Publication object upload is temporarily unavailable"
+                    ) from error
                 raise PublicationPreparationError("Publication object upload failed") from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication object upload is temporarily unavailable"
+            ) from error
         self._verify_existing(digest, content)
 
     def _object_exists(self, digest: str) -> bool:
@@ -405,7 +450,15 @@ class Publication:
         except ClientError as error:
             if _error_code(error) in {"404", "NoSuchKey", "NotFound"}:
                 return False
+            if _client_error_is_transient(error):
+                raise PublicationUnavailableError(
+                    "Publication object lookup is temporarily unavailable"
+                ) from error
             raise PublicationPreparationError("Publication object lookup failed") from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication object lookup is temporarily unavailable"
+            ) from error
 
     def _verify_existing(self, digest: str, expected: bytes) -> None:
         try:
@@ -414,7 +467,15 @@ class Publication:
                 Key=_object_key(digest),
             )["Body"].read()
         except ClientError as error:
+            if _client_error_is_transient(error):
+                raise PublicationUnavailableError(
+                    "Publication object verification is temporarily unavailable"
+                ) from error
             raise PublicationVerificationError("Publication object is missing") from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication object verification is temporarily unavailable"
+            ) from error
         if actual != expected or hashlib.sha256(actual).hexdigest() != digest:
             raise PublicationVerificationError(
                 "Publication content address contains different bytes"
@@ -427,7 +488,15 @@ class Publication:
                 Key=_object_key(digest),
             )["Body"].read()
         except ClientError as error:
+            if _client_error_is_transient(error):
+                raise PublicationUnavailableError(
+                    "Publication object read is temporarily unavailable"
+                ) from error
             raise PublicationVerificationError("Publication object is missing") from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication object read is temporarily unavailable"
+            ) from error
         if len(content) != expected_bytes:
             raise PublicationVerificationError("Publication object length is invalid")
         if hashlib.sha256(content).hexdigest() != digest:
@@ -537,3 +606,22 @@ def _object_descriptor(
 
 def _error_code(error: ClientError) -> str:
     return str(error.response.get("Error", {}).get("Code", ""))
+
+
+def _client_error_is_transient(error: ClientError) -> bool:
+    status = error.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    return (
+        isinstance(status, int)
+        and status >= 500
+        or _error_code(error)
+        in {
+            "500",
+            "502",
+            "503",
+            "504",
+            "InternalError",
+            "RequestTimeout",
+            "ServiceUnavailable",
+            "SlowDown",
+        }
+    )

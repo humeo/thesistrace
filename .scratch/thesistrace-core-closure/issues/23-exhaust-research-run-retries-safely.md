@@ -37,14 +37,17 @@ set -eu
 
 The tests must use real PostgreSQL and RustFS to inject an eligible transient
 infrastructure failure that later succeeds across a fresh runtime, a permanent
-failure, and repeated transient failure through exhaustion. They must prove
+failure, deterministic Publication/permission errors, and repeated transient
+failure through exhaustion. Mixed sequences must prove that any earlier
+resource exhaustion keeps the whole Run at the two-Attempt limit even when the
+second failure is infrastructure loss or worker loss. The tests must also prove
 that every Attempt stays under one ResearchRun identity, the public state stays
 `running` while another automatic retry is eligible, exhaustion publishes no
 Result and commits one terminal `failed` state with a readable sanitized
-reason, terminal states reject late Attempt writes, and persisted retry state
-cannot loop past its configured bound or enter the product projection. The
-browser must render the terminal sanitized reason on the ResearchRun detail and
-must not expose Attempt, retry count, exception text, or other execution
-mechanics.
+reason, a real stale Attempt cannot overwrite succeeded, failed, or cancelled,
+and persisted retry state cannot loop past its configured bound or enter the
+product projection. The browser must render the terminal sanitized reason on
+the ResearchRun detail and must not expose Attempt, retry count, exception
+text, or other execution mechanics.
 
 ## Comments

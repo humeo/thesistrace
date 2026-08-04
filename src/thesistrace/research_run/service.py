@@ -17,8 +17,7 @@ from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
     Publication,
-    PublicationPreparationError,
-    PublicationVerificationError,
+    PublicationUnavailableError,
     PublishedRef,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -46,6 +45,16 @@ MAX_RESOURCE_EXHAUSTED_ATTEMPTS = 2
 INFRASTRUCTURE_FAILURE = "InfrastructureUnavailable"
 RESOURCE_EXHAUSTED_FAILURE = "ResourceExhausted"
 WORKER_LOST_FAILURE = "WorkerLost"
+INFRASTRUCTURE_PUBLIC_REASON = (
+    "Research execution could not access required infrastructure."
+)
+RESOURCE_EXHAUSTED_PUBLIC_REASON = (
+    "Research execution exceeded its resource limit."
+)
+AUTOMATIC_RETRIES_PUBLIC_REASON = (
+    "Research execution could not complete after automatic retries."
+)
+PERMANENT_FAILURE_PUBLIC_REASON = "Research execution failed."
 RETRYABLE_FAILURES = (
     INFRASTRUCTURE_FAILURE,
     RESOURCE_EXHAUSTED_FAILURE,
@@ -238,7 +247,13 @@ class ResearchRunService:
                        run.execution_fence,
                        attempt.id AS latest_attempt_id,
                        attempt.ordinal AS latest_attempt_ordinal,
-                       attempt.status AS latest_attempt_status
+                       attempt.status AS latest_attempt_status,
+                       EXISTS (
+                           SELECT 1
+                           FROM research_runs.attempts AS exhausted
+                           WHERE exhausted.run_id = run.id
+                             AND exhausted.failure_reason = %s
+                       ) AS resource_exhausted_seen
                 FROM research_runs.runs AS run
                 LEFT JOIN LATERAL (
                     SELECT id, ordinal, status, lease_expires_at, failure_reason
@@ -265,7 +280,7 @@ class ResearchRunService:
                 FOR UPDATE OF run SKIP LOCKED
                 LIMIT 1
                 """,
-                (list(RETRYABLE_FAILURES),),
+                (RESOURCE_EXHAUSTED_FAILURE, list(RETRYABLE_FAILURES)),
             ).fetchone()
             if row is None:
                 return None
@@ -284,7 +299,17 @@ class ResearchRunService:
                 )
                 if recovered.rowcount != 1:
                     return None
-                if int(row["latest_attempt_ordinal"]) >= MAX_RESEARCH_RUN_ATTEMPTS:
+                attempt_limit = (
+                    MAX_RESOURCE_EXHAUSTED_ATTEMPTS
+                    if row["resource_exhausted_seen"]
+                    else MAX_RESEARCH_RUN_ATTEMPTS
+                )
+                if int(row["latest_attempt_ordinal"]) >= attempt_limit:
+                    terminal_reason = (
+                        RESOURCE_EXHAUSTED_PUBLIC_REASON
+                        if row["resource_exhausted_seen"]
+                        else AUTOMATIC_RETRIES_PUBLIC_REASON
+                    )
                     transaction.execute(
                         """
                         UPDATE research_runs.runs
@@ -294,7 +319,7 @@ class ResearchRunService:
                           AND execution_fence = %s
                         """,
                         (
-                            "Research execution could not complete after automatic retries.",
+                            terminal_reason,
                             run_id,
                             row["execution_fence"],
                         ),
@@ -497,18 +522,40 @@ class ResearchRunService:
                 SELECT status,
                        (SELECT count(*)
                         FROM research_runs.attempts AS counted
-                        WHERE counted.run_id = %s) AS attempt_count
+                        WHERE counted.run_id = %s) AS attempt_count,
+                       EXISTS (
+                           SELECT 1
+                           FROM research_runs.attempts AS exhausted
+                           WHERE exhausted.run_id = %s
+                             AND exhausted.failure_reason = %s
+                       ) AS resource_exhausted_seen
                 FROM research_runs.attempts
                 WHERE id = %s AND run_id = %s AND fence = %s
                 FOR UPDATE
                 """,
-                (claim.run_id, claim.attempt_id, claim.run_id, claim.fence),
+                (
+                    claim.run_id,
+                    claim.run_id,
+                    RESOURCE_EXHAUSTED_FAILURE,
+                    claim.attempt_id,
+                    claim.run_id,
+                    claim.fence,
+                ),
             ).fetchone()
             if attempt is None or attempt["status"] != "running":
                 return
+            resource_limited = (
+                policy.attempt_reason == RESOURCE_EXHAUSTED_FAILURE
+                or bool(attempt["resource_exhausted_seen"])
+            )
+            attempt_limit = (
+                MAX_RESOURCE_EXHAUSTED_ATTEMPTS
+                if resource_limited
+                else policy.max_attempts
+            )
             retry = (
                 policy.retryable
-                and int(attempt["attempt_count"]) < policy.max_attempts
+                and int(attempt["attempt_count"]) < attempt_limit
             )
             failed_attempt = transaction.execute(
                 """
@@ -534,7 +581,15 @@ class ResearchRunService:
                 """,
                 (
                     "running" if retry else "failed",
-                    None if retry else policy.public_reason,
+                    (
+                        None
+                        if retry
+                        else (
+                            RESOURCE_EXHAUSTED_PUBLIC_REASON
+                            if resource_limited
+                            else policy.public_reason
+                        )
+                    ),
                     claim.run_id,
                     claim.fence,
                 ),
@@ -601,30 +656,28 @@ def _failure_policy(error: Exception) -> _FailurePolicy:
     if isinstance(error, MemoryError):
         return _FailurePolicy(
             attempt_reason=RESOURCE_EXHAUSTED_FAILURE,
-            public_reason="Research execution exceeded its resource limit.",
+            public_reason=RESOURCE_EXHAUSTED_PUBLIC_REASON,
             max_attempts=MAX_RESOURCE_EXHAUSTED_ATTEMPTS,
             retryable=True,
         )
     if isinstance(
         error,
         (
-            PublicationPreparationError,
-            PublicationVerificationError,
+            PublicationUnavailableError,
             OperationalError,
-            OSError,
+            ConnectionError,
+            TimeoutError,
         ),
     ):
         return _FailurePolicy(
             attempt_reason=INFRASTRUCTURE_FAILURE,
-            public_reason=(
-                "Research execution could not access required infrastructure."
-            ),
+            public_reason=INFRASTRUCTURE_PUBLIC_REASON,
             max_attempts=MAX_RESEARCH_RUN_ATTEMPTS,
             retryable=True,
         )
     return _FailurePolicy(
         attempt_reason="PermanentExecutionFailure",
-        public_reason="Research execution failed.",
+        public_reason=PERMANENT_FAILURE_PUBLIC_REASON,
         max_attempts=1,
         retryable=False,
     )
