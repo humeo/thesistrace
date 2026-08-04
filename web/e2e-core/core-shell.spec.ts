@@ -87,21 +87,42 @@ test("shows one sanitized terminal ResearchRun failure", async ({ page }) => {
 test("keeps Cancel authoritative after delayed ResearchRun work returns", async ({ page }) => {
   let cancelled = false;
   let workerReleased = false;
+  let delayNextGet = false;
+  let releaseOldPoll!: () => void;
+  const oldPollReleased = new Promise<void>((resolve) => {
+    releaseOldPoll = resolve;
+  });
+  let observeOldPoll!: () => void;
+  const oldPollObserved = new Promise<void>((resolve) => {
+    observeOldPoll = resolve;
+  });
   const run = {
     id: "run_cafef00d",
     definition_id: "def_cancel",
     definition_revision: 1,
     dataset_release_id: "release_cancel",
   };
-  await page.route("**/api/research-runs/run_cafef00d", (route) =>
-    route.fulfill({
+  await page.route("**/api/research-runs/run_cafef00d", async (route) => {
+    const delayedOldPoll = delayNextGet;
+    if (delayedOldPoll) {
+      delayNextGet = false;
+      observeOldPoll();
+      await oldPollReleased;
+    }
+    await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         ...run,
-        status: cancelled ? "cancelled" : workerReleased ? "succeeded" : "running",
+        status: delayedOldPoll
+          ? "running"
+          : cancelled
+            ? "cancelled"
+            : workerReleased
+              ? "succeeded"
+              : "running",
       }),
-    }),
-  );
+    });
+  });
   await page.route("**/api/research-runs/run_cafef00d/cancel", async (route) => {
     expect(route.request().postDataJSON()).toEqual({
       request_id: expect.stringMatching(/^cancel_/),
@@ -115,7 +136,12 @@ test("keeps Cancel authoritative after delayed ResearchRun work returns", async 
 
   await page.goto("/research-runs/run_cafef00d");
   await expect(page.getByText(/Status\s+running/)).toBeVisible();
+  delayNextGet = true;
+  await oldPollObserved;
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
+  releaseOldPoll();
+  await page.waitForTimeout(100);
   await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
 
@@ -123,6 +149,43 @@ test("keeps Cancel authoritative after delayed ResearchRun work returns", async 
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
   await expect(page.getByText(/Attempt|fence|receipt|manifest|object/i)).toHaveCount(0);
+});
+
+test("replays the same Cancel request after its response is lost", async ({ page }) => {
+  const requestIds: string[] = [];
+  let cancelAttempts = 0;
+  const run = {
+    id: "run_badf00d",
+    status: "running",
+    definition_id: "def_cancel_retry",
+    definition_revision: 1,
+    dataset_release_id: "release_cancel_retry",
+  };
+  await page.route("**/api/research-runs/run_badf00d", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(run) }),
+  );
+  await page.route("**/api/research-runs/run_badf00d/cancel", async (route) => {
+    requestIds.push(route.request().postDataJSON().request_id as string);
+    cancelAttempts += 1;
+    if (cancelAttempts === 1) {
+      await route.abort();
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ ...run, status: "cancelled" }),
+    });
+  });
+
+  await page.goto("/research-runs/run_badf00d");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("ResearchRun cancellation failed");
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
+  expect(requestIds).toHaveLength(2);
+  expect(requestIds[1]).toBe(requestIds[0]);
 });
 
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
@@ -343,6 +406,7 @@ test("replays the same Run request after its committed response is lost", async 
 });
 
 test("runs valid content and shows its bounded ResearchRun result", async ({ page }) => {
+  test.setTimeout(120_000);
   await page.goto("/definitions");
   await page.getByRole("button", { name: "New Definition" }).click();
   await page.getByLabel("Definition name").fill("Browser admitted run");

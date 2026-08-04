@@ -10,6 +10,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.research_kernel.kernel_run import RunInput, RunOutput
+from thesistrace.research_kernel.kernel_run import run as run_kernel
 from thesistrace.research_run import ResearchRunService
 
 
@@ -62,6 +63,13 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt() -> None
         assert malformed.status_code == 422
         assert _cancel_receipt_count(runtime.database) == 1
         assert _run_storage(runtime.database, second_id)["status"] == "queued"
+
+        missing = client.post(
+            "/api/research-runs/run_00000000/cancel",
+            json={"request_id": "ticket-24-missing"},
+        )
+        assert missing.status_code == 404
+        assert _cancel_receipt_count(runtime.database) == 1
 
 
 @pytest.mark.skipif(
@@ -129,6 +137,51 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart() ->
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_running_cancel_fences_a_late_failure_write() -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+    entered = Event()
+    release_failure = Event()
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="ticket-24-late-failure")
+
+        def delayed_failure(_run_input: RunInput) -> RunOutput:
+            entered.set()
+            if not release_failure.wait(timeout=30):
+                raise TimeoutError("late failure was not released")
+            raise ValueError("secret-late-failure-detail")
+
+        stale = ResearchRunService(
+            runtime.database,
+            load_canonical=runtime.data.load_canonical,
+            publication=runtime.publication,
+            execute_kernel=delayed_failure,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(stale.process_next)
+            assert entered.wait(timeout=20)
+            try:
+                cancelled = client.post(
+                    f"/api/research-runs/{run_id}/cancel",
+                    json={"request_id": "ticket-24-late-failure-cancel"},
+                )
+                assert cancelled.status_code == 200
+                assert cancelled.json()["status"] == "cancelled"
+            finally:
+                release_failure.set()
+            assert future.result(timeout=30) is True
+
+        assert client.get(f"/api/research-runs/{run_id}").json() == cancelled.json()
+        assert _attempt_status(runtime.database, run_id) == "cancelled"
+        assert _run_storage(runtime.database, run_id)["result_count"] == 0
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 @pytest.mark.parametrize("terminal_status", ["succeeded", "failed"])
 def test_terminal_winner_is_returned_without_overwrite(terminal_status: str) -> None:
     settings = CoreSettings.from_environment()
@@ -157,6 +210,65 @@ def test_terminal_winner_is_returned_without_overwrite(terminal_status: str) -> 
         assert outcome.json()["id"] == run_id
         assert outcome.json()["status"] == terminal_status
         assert client.get(f"/api/research-runs/{run_id}").json() == before
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+@pytest.mark.parametrize("worker_outcome", ["success", "failure"])
+def test_cancel_races_a_terminal_worker_commit(worker_outcome: str) -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+    ready = Event()
+    release_worker = Event()
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id=f"ticket-24-race-{worker_outcome}")
+
+        def pause_success(stage: str, _run_id: str) -> None:
+            if stage != "prepared":
+                return
+            ready.set()
+            if not release_worker.wait(timeout=30):
+                raise TimeoutError("success race was not released")
+
+        def pause_failure(_run_input: RunInput) -> RunOutput:
+            ready.set()
+            if not release_worker.wait(timeout=30):
+                raise TimeoutError("failure race was not released")
+            raise ValueError("secret-raced-failure")
+
+        worker = ResearchRunService(
+            runtime.database,
+            load_canonical=runtime.data.load_canonical,
+            publication=runtime.publication,
+            execute_kernel=(
+                pause_failure
+                if worker_outcome == "failure"
+                else run_kernel
+            ),
+            progress=pause_success if worker_outcome == "success" else None,
+        )
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            worker_future = executor.submit(worker.process_next)
+            assert ready.wait(timeout=20)
+            cancel_future = executor.submit(
+                client.post,
+                f"/api/research-runs/{run_id}/cancel",
+                json={"request_id": f"ticket-24-race-cancel-{worker_outcome}"},
+            )
+            release_worker.set()
+            cancel_response = cancel_future.result(timeout=30)
+            assert worker_future.result(timeout=30) is True
+
+        assert cancel_response.status_code == 200
+        final = client.get(f"/api/research-runs/{run_id}").json()
+        assert cancel_response.json()["status"] == final["status"]
+        assert final["status"] in {"cancelled", "succeeded", "failed"}
+        expected_results = 1 if final["status"] == "succeeded" else 0
+        assert _run_storage(runtime.database, run_id)["result_count"] == expected_results
 
 
 def _permanent_failure(_run_input: RunInput) -> RunOutput:

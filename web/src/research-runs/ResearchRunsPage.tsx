@@ -93,10 +93,14 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
-  const cancelRequestId = useRef<string | null>(null);
+  const loadGeneration = useRef(0);
+  const cancelGeneration = useRef(0);
+  const cancelController = useRef<AbortController | null>(null);
+  const cancelRequest = useRef<{ runId: string; requestId: string } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
+    const generation = ++loadGeneration.current;
     let timeout: number | undefined;
     setError(null);
     setLoadState(refreshGeneration === 0 ? "loading" : "refreshing");
@@ -106,6 +110,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       try {
         const response = await fetch(path, { signal: controller.signal });
         if (!response.ok) throw new Error("ResearchRun unavailable");
+        if (generation !== loadGeneration.current) return;
         if (runId) {
           const nextRun = (await response.json()) as ResearchRun;
           setRun(nextRun);
@@ -122,6 +127,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         if (!polling) setLoadState(null);
       } catch (reason: unknown) {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
+        if (generation !== loadGeneration.current) return;
         setLoadState(null);
         setError("ResearchRun unavailable");
       }
@@ -129,10 +135,18 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
     void load();
     return () => {
+      if (generation === loadGeneration.current) loadGeneration.current += 1;
       if (timeout !== undefined) window.clearTimeout(timeout);
       controller.abort();
     };
   }, [refreshGeneration, runId]);
+
+  useEffect(() => () => {
+    cancelGeneration.current += 1;
+    cancelController.current?.abort();
+    cancelController.current = null;
+    cancelRequest.current = null;
+  }, [runId]);
 
   function refresh() {
     setRefreshGeneration((generation) => generation + 1);
@@ -140,23 +154,39 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
   async function cancel() {
     if (run === null || !["queued", "running"].includes(run.status)) return;
+    const targetRun = run;
+    const generation = ++cancelGeneration.current;
+    loadGeneration.current += 1;
+    cancelController.current?.abort();
+    const controller = new AbortController();
+    cancelController.current = controller;
     setCanceling(true);
     setError(null);
-    const requestId = cancelRequestId.current ?? `cancel_${crypto.randomUUID()}`;
-    cancelRequestId.current = requestId;
+    const pending = cancelRequest.current;
+    const requestId = pending?.runId === targetRun.id
+      ? pending.requestId
+      : `cancel_${crypto.randomUUID()}`;
+    cancelRequest.current = { runId: targetRun.id, requestId };
     try {
-      const response = await fetch(`/api/research-runs/${run.id}/cancel`, {
+      const response = await fetch(`/api/research-runs/${targetRun.id}/cancel`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ request_id: requestId }),
+        signal: controller.signal,
       });
       if (!response.ok) throw new Error("ResearchRun cancellation failed");
+      if (generation !== cancelGeneration.current) return;
       setRun((await response.json()) as ResearchRun);
-      cancelRequestId.current = null;
-    } catch {
+      cancelRequest.current = null;
+    } catch (reason: unknown) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (generation !== cancelGeneration.current) return;
       setError("ResearchRun cancellation failed");
     } finally {
-      setCanceling(false);
+      if (generation === cancelGeneration.current) {
+        cancelController.current = null;
+        setCanceling(false);
+      }
     }
   }
 
