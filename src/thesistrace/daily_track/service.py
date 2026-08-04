@@ -6,12 +6,14 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.daily_track.cache import _DailyTrackWorkingCache
 from thesistrace.daily_track.models import (
     DailyTrackList,
     DailyTrackSummary,
@@ -89,6 +91,7 @@ class DailyTrackService:
         progress: Progress | None = None,
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
+        working_cache_root: Path | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
@@ -100,6 +103,9 @@ class DailyTrackService:
         self._progress = progress or (lambda _stage, _track_id, _target_id: None)
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
+        self._working_cache = (
+            None if working_cache_root is None else _DailyTrackWorkingCache(working_cache_root)
+        )
 
     def activate(
         self,
@@ -201,7 +207,8 @@ class DailyTrackService:
             try:
                 prepared, provenance, state = self._execute(claim)
                 self._progress("prepared", claim.track_id, claim.target.id)
-                self._publish_success(claim, prepared, provenance, state)
+                published = self._publish_success(claim, prepared, provenance, state)
+                self._store_working_cache(claim, published, state)
                 self._progress("succeeded", claim.track_id, claim.target.id)
             except DailyTrackFenced:
                 logger.info(
@@ -536,6 +543,24 @@ class DailyTrackService:
         value = json.loads(payload.content)
         if not isinstance(value, Mapping):
             raise RuntimeError("DailyTrack Checkpoint payload is invalid")
+        if self._working_cache is None:
+            return _state_from_payload(value)
+        cached = self._working_cache.load(
+            track_id=claim.track_id,
+            release_id=claim.current_release_id,
+            head_manifest_sha256=claim.head_manifest_sha256,
+            fence=claim.fence - 1,
+            verified_checkpoint=payload.content,
+        )
+        if cached is not None:
+            return _state_from_payload(cached)
+        self._working_cache.store(
+            track_id=claim.track_id,
+            release_id=claim.current_release_id,
+            head_manifest_sha256=claim.head_manifest_sha256,
+            fence=claim.fence - 1,
+            verified_checkpoint=payload.content,
+        )
         return _state_from_payload(value)
 
     def _publish_success(
@@ -544,7 +569,7 @@ class DailyTrackService:
         prepared: PreparedPublication,
         provenance: dict[str, object],
         state: KernelState,
-    ) -> None:
+    ) -> PublishedRef:
         assert self._publication is not None
         with self._database.transaction() as transaction:
             current = transaction.execute(
@@ -662,6 +687,42 @@ class DailyTrackService:
             )
             if completed_attempt.rowcount != 1:
                 raise DailyTrackFenced
+        return published
+
+    def _store_working_cache(
+        self,
+        claim: _ProgressionClaim,
+        published: PublishedRef,
+        state: KernelState,
+    ) -> None:
+        if self._working_cache is None:
+            return
+        try:
+            stored = self._working_cache.store(
+                track_id=claim.track_id,
+                release_id=claim.target.id,
+                head_manifest_sha256=published.manifest_sha256,
+                fence=claim.fence,
+                verified_checkpoint=canonical_json_bytes(_state_payload(state)),
+            )
+        except Exception:
+            logger.warning(
+                "DailyTrack Working Cache update failed",
+                extra={
+                    "track_id": claim.track_id,
+                    "target_release_id": claim.target.id,
+                },
+                exc_info=True,
+            )
+            return
+        if not stored:
+            logger.info(
+                "DailyTrack Working Cache entry exceeded its bound or was unavailable",
+                extra={
+                    "track_id": claim.track_id,
+                    "target_release_id": claim.target.id,
+                },
+            )
 
     def _require_progression_dependencies(self) -> None:
         if self._publication is None or self._next_release is None or self._load_canonical is None:

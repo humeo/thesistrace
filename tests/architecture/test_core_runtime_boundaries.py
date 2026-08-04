@@ -242,6 +242,22 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert '@app.delete("/api/daily-tracks' not in http_source
 
 
+def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> None:
+    package = ROOT / "src" / "thesistrace" / "daily_track"
+    source = "\n".join(path.read_text() for path in package.rglob("*.py"))
+    exported = (package / "__init__.py").read_text()
+    runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
+    http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
+
+    assert "thesistrace.working_cache" not in source
+    assert "WorkingCachePort" not in source
+    assert "_DailyTrackWorkingCache" not in exported
+    assert "working_cache_root" not in CoreSettings.__dataclass_fields__
+    assert "TemporaryDirectory" in runtime_source
+    assert "working_cache_root=Path(working_cache.name)" in runtime_source
+    assert "/api/working-cache" not in http_source
+
+
 def test_research_run_owns_its_embedded_result_product_projection() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()

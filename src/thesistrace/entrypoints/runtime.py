@@ -5,6 +5,8 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import boto3
 
@@ -91,9 +93,10 @@ class CoreRuntime:
 
 @contextmanager
 def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
+    working_cache = TemporaryDirectory(prefix="thesistrace-core-working-cache-")
     database = PostgresDatabase(settings.database_url)
-    database.open()
     try:
+        database.open()
         apply_migrations(database, PUBLICATION_MIGRATIONS)
         apply_migrations(database, DATA_MIGRATIONS)
         apply_migrations(database, DEFINITION_MIGRATIONS)
@@ -130,6 +133,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             publication=publication,
             next_release=data.next_release,
             load_canonical=data.load_canonical,
+            working_cache_root=Path(working_cache.name) / "daily-tracks",
         )
         research_runs = ResearchRunService(
             database,
@@ -155,3 +159,4 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
     finally:
         database.close()
+        working_cache.cleanup()
