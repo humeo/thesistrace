@@ -77,21 +77,34 @@ export function HostedAuthBoundary({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true;
-    void globalThis.fetch("/api/v1/session", { headers: { Accept: "application/json" } }).then(
-      async (response) => {
+    let retry: number | undefined;
+
+    async function detectAuthMode() {
+      try {
+        const response = await globalThis.fetch("/api/v1/session", {
+          headers: { Accept: "application/json" },
+        });
         if (!active) return;
         if (response.status === 404) {
           setMode("v1");
-        } else {
+        } else if (response.status === 401 || response.status === 403) {
           setMode("login");
+        } else {
+          retry = window.setTimeout(() => void detectAuthMode(), 250);
         }
-      },
-      () => {
-        if (active) setMode("login");
-      },
-    );
+      } catch {
+        if (active) {
+          retry = window.setTimeout(() => void detectAuthMode(), 250);
+        }
+      }
+    }
+
+    void detectAuthMode();
     return () => {
       active = false;
+      if (retry !== undefined) {
+        window.clearTimeout(retry);
+      }
     };
   }, []);
 
