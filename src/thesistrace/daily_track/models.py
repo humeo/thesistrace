@@ -19,6 +19,7 @@ class VerifiedResultOrigin(BaseModel):
     kind: Literal["research.result"]
     research_run_id: str
     schema_version: str
+    result_manifest_sha256: str
     result_checksum_sha256: str
 
 

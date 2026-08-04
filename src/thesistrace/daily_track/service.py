@@ -29,27 +29,14 @@ class DailyTrackService:
         request_id: str,
     ) -> DailyTrackSummary:
         selected_request_id = request_id.strip()
-        if not selected_request_id:
-            raise ValueError("Start Tracking request_id is required")
+        replay = self.resolve_activation(
+            transaction,
+            selected_request_id,
+            origin.seed_run_id,
+        )
+        if replay is not None:
+            return replay
         fingerprint = _activation_fingerprint(origin.seed_run_id)
-        transaction.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"daily_tracks.activation.request:{selected_request_id}",),
-        ).fetchone()
-        receipt = transaction.execute(
-            """
-            SELECT request_fingerprint, outcome
-            FROM daily_tracks.activation_receipts
-            WHERE request_id = %s
-            """,
-            (selected_request_id,),
-        ).fetchone()
-        if receipt is not None:
-            if receipt["request_fingerprint"] != fingerprint:
-                raise DailyTrackActivationConflict(
-                    "Start Tracking request_id conflicts"
-                )
-            return DailyTrackSummary.model_validate(receipt["outcome"])
 
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -93,6 +80,34 @@ class DailyTrackService:
             ),
         )
         return outcome
+
+    def resolve_activation(
+        self,
+        transaction: PostgresTransaction,
+        request_id: str,
+        seed_run_id: str,
+    ) -> DailyTrackSummary | None:
+        selected_request_id = request_id.strip()
+        if not selected_request_id:
+            raise ValueError("Start Tracking request_id is required")
+        fingerprint = _activation_fingerprint(seed_run_id)
+        transaction.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"daily_tracks.activation.request:{selected_request_id}",),
+        ).fetchone()
+        receipt = transaction.execute(
+            """
+            SELECT request_fingerprint, outcome
+            FROM daily_tracks.activation_receipts
+            WHERE request_id = %s
+            """,
+            (selected_request_id,),
+        ).fetchone()
+        if receipt is None:
+            return None
+        if receipt["request_fingerprint"] != fingerprint:
+            raise DailyTrackActivationConflict("Start Tracking request_id conflicts")
+        return DailyTrackSummary.model_validate(receipt["outcome"])
 
     def list(self) -> DailyTrackList:
         with self._database.transaction() as transaction:

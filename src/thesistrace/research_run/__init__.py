@@ -12,6 +12,7 @@ from thesistrace.research_run.service import (
     ResearchRunRerunConflict,
     ResearchRunResultUnavailable,
     ResearchRunService,
+    ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
 )
 
@@ -28,4 +29,5 @@ __all__ = [
     "ResearchRunService",
     "ResearchRunSummary",
     "ResearchRunTrackingUnavailable",
+    "ResearchRunTrackingTemporarilyUnavailable",
 ]

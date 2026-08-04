@@ -11,6 +11,8 @@ from uuid import uuid4
 
 from psycopg import OperationalError
 from psycopg.types.json import Jsonb
+from psycopg_pool import PoolTimeout
+from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track import (
@@ -22,7 +24,9 @@ from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
     Publication,
+    PublicationNotFoundError,
     PublicationUnavailableError,
+    PublicationVerificationError,
     PublishedRef,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -74,6 +78,10 @@ ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin, str],
     DailyTrackSummary,
 ]
+ResolveTrackActivation = Callable[
+    [PostgresTransaction, str, str],
+    DailyTrackSummary | None,
+]
 
 
 class ResearchRunFenced(RuntimeError):
@@ -93,6 +101,10 @@ class ResearchRunResultUnavailable(RuntimeError):
 
 
 class ResearchRunTrackingUnavailable(RuntimeError):
+    pass
+
+
+class ResearchRunTrackingTemporarilyUnavailable(RuntimeError):
     pass
 
 
@@ -124,6 +136,7 @@ class ResearchRunService:
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         activate_track: ActivateTrack | None = None,
+        resolve_track_activation: ResolveTrackActivation | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -135,6 +148,7 @@ class ResearchRunService:
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._activate_track = activate_track
+        self._resolve_track_activation = resolve_track_activation
 
     def admit(
         self,
@@ -367,37 +381,66 @@ class ResearchRunService:
         run_id: str,
         command: StartTrackingCommand,
     ) -> DailyTrackSummary | None:
-        if self._activate_track is None or self._publication is None:
+        if (
+            self._activate_track is None
+            or self._resolve_track_activation is None
+            or self._publication is None
+        ):
             raise RuntimeError("DailyTrack activation dependencies are not configured")
-        with self._database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, immutable_input,
-                       result_manifest_sha256, result_provenance
-                FROM research_runs.runs
-                WHERE id = %s
-                FOR SHARE
-                """,
-                (run_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            if row["status"] != "succeeded":
-                raise ResearchRunTrackingUnavailable(
-                    "Start Tracking requires a succeeded ResearchRun"
+        try:
+            with self._database.transaction() as transaction:
+                replay = self._resolve_track_activation(
+                    transaction,
+                    command.request_id,
+                    run_id,
                 )
-            try:
-                origin = self._tracking_origin(row)
-            except Exception as error:
-                logger.error(
-                    "ResearchRun Tracking Origin validation failed",
-                    extra={"run_id": run_id, "error_type": type(error).__name__},
-                )
-                raise ResearchRunTrackingUnavailable(
-                    "Start Tracking requires a complete verified Result"
-                ) from error
-            return self._activate_track(transaction, origin, command.request_id)
+                if replay is not None:
+                    return replay
+                row = transaction.execute(
+                    """
+                    SELECT id, status, definition_id, definition_revision,
+                           dataset_release_id, immutable_input,
+                           result_manifest_sha256, result_provenance
+                    FROM research_runs.runs
+                    WHERE id = %s
+                    FOR SHARE
+                    """,
+                    (run_id,),
+                ).fetchone()
+                if row is None:
+                    return None
+                if row["status"] != "succeeded":
+                    raise ResearchRunTrackingUnavailable(
+                        "Start Tracking requires a succeeded ResearchRun"
+                    )
+                try:
+                    origin = self._tracking_origin(transaction, row)
+                except PublicationUnavailableError:
+                    raise
+                except (
+                    json.JSONDecodeError,
+                    KeyError,
+                    PublicationNotFoundError,
+                    PublicationVerificationError,
+                    ResearchRunResultUnavailable,
+                    ValidationError,
+                ) as error:
+                    logger.info(
+                        "ResearchRun is not eligible for Tracking",
+                        extra={"run_id": run_id, "error_type": type(error).__name__},
+                    )
+                    raise ResearchRunTrackingUnavailable(
+                        "Start Tracking requires a complete verified Result"
+                    ) from error
+                return self._activate_track(transaction, origin, command.request_id)
+        except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
+            logger.warning(
+                "Start Tracking infrastructure is temporarily unavailable",
+                extra={"run_id": run_id, "error_type": type(error).__name__},
+            )
+            raise ResearchRunTrackingTemporarilyUnavailable(
+                "Start Tracking is temporarily unavailable"
+            ) from error
 
     def get_detail(self, run_id: str) -> ResearchRunDetail | None:
         with self._database.transaction() as transaction:
@@ -445,7 +488,11 @@ class ResearchRunService:
             raise ResearchRunResultUnavailable from error
         return ResearchRunDetail(**summary.model_dump(), result=result)
 
-    def _tracking_origin(self, row: dict[str, object]) -> TrackingOrigin:
+    def _tracking_origin(
+        self,
+        transaction: PostgresTransaction,
+        row: dict[str, object],
+    ) -> TrackingOrigin:
         if self._publication is None:
             raise ResearchRunTrackingUnavailable
         immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
@@ -463,7 +510,8 @@ class ResearchRunService:
             or selected_provenance.get("immutable_input_sha256") != expected_digest
         ):
             raise ResearchRunTrackingUnavailable
-        bundle = self._publication.read(
+        bundle = self._publication.read_in_transaction(
+            transaction,
             PublishedRef(
                 manifest_sha256=manifest_sha256,
                 kind="research.result",
@@ -493,6 +541,7 @@ class ResearchRunService:
                 "kind": "research.result",
                 "research_run_id": str(row["id"]),
                 "schema_version": str(selected_provenance["schema_version"]),
+                "result_manifest_sha256": manifest_sha256,
                 "result_checksum_sha256": hashlib.sha256(payload.content).hexdigest(),
             },
             initial_strategy_state=dict(initial_strategy_state),

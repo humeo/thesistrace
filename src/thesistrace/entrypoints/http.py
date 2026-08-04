@@ -42,6 +42,7 @@ from thesistrace.research_run import (
     ResearchRunRerunConflict,
     ResearchRunResultUnavailable,
     ResearchRunSummary,
+    ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
 )
 
@@ -203,6 +204,8 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchRunTrackingUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchRunTrackingTemporarilyUnavailable as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         if track is None:

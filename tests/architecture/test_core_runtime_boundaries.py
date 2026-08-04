@@ -144,6 +144,7 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
     assert "CREATE TABLE publication.manifests" in migrations
     assert "CREATE TABLE publication.manifest_objects" in migrations
     assert "def record(" in service
+    assert "def read_in_transaction(" in service
     assert ".commit(" not in service
     for product_schema in ("data.", "definitions.", "research_runs.", "daily_tracks."):
         assert product_schema not in service
@@ -195,8 +196,11 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "MAX_RESOURCE_EXHAUSTED_ATTEMPTS = 2" in run_source
     assert "def _failure_policy(" in run_source
     assert "PublicationUnavailableError" in run_source
-    assert "PublicationPreparationError" not in run_source
-    assert "PublicationVerificationError" not in run_source
+    failure_policy_source = run_source[
+        run_source.index("def _failure_policy(") : run_source.index("def _cancel_fingerprint(")
+    ]
+    assert "PublicationPreparationError" not in failure_policy_source
+    assert "PublicationVerificationError" not in failure_policy_source
     assert "ADD COLUMN failure_reason text" in run_migrations
     assert "def cancel(" in run_source
     assert "CREATE TABLE research_runs.cancel_receipts" in run_migrations
@@ -233,8 +237,11 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "CREATE TABLE daily_tracks.tracks" in track_migrations
     assert "CREATE TABLE daily_tracks.activation_receipts" in track_migrations
     assert "def activate(" in track_source
+    assert "def resolve_activation(" in track_source
     assert "origin" in track_source
     assert "activate_track" in run_source
+    assert "resolve_track_activation" in run_source
+    assert "read_in_transaction" in run_source
     assert "TrackingOrigin(" in run_source
     assert "daily_tracks." not in run_source
     assert "research_runs." not in track_source

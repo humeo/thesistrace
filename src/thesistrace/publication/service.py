@@ -289,20 +289,27 @@ class Publication:
 
     def read(self, published_ref: PublishedRef) -> VerifiedBundle:
         with self._database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT schema_version, kind, manifest_bytes
-                FROM publication.manifests
-                WHERE sha256 = %s
-                """,
-                (published_ref.manifest_sha256,),
-            ).fetchone()
-            if row is None:
-                raise PublicationNotFoundError("Publication is not committed")
-            manifest_bytes = bytes(row["manifest_bytes"])
-            manifest = _load_manifest(manifest_bytes, published_ref.manifest_sha256)
-            objects = _manifest_objects(manifest)
-            self._verify_recorded_links(transaction, published_ref.manifest_sha256, objects)
+            return self.read_in_transaction(transaction, published_ref)
+
+    def read_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        published_ref: PublishedRef,
+    ) -> VerifiedBundle:
+        row = transaction.execute(
+            """
+            SELECT schema_version, kind, manifest_bytes
+            FROM publication.manifests
+            WHERE sha256 = %s
+            """,
+            (published_ref.manifest_sha256,),
+        ).fetchone()
+        if row is None:
+            raise PublicationNotFoundError("Publication is not committed")
+        manifest_bytes = bytes(row["manifest_bytes"])
+        manifest = _load_manifest(manifest_bytes, published_ref.manifest_sha256)
+        objects = _manifest_objects(manifest)
+        self._verify_recorded_links(transaction, published_ref.manifest_sha256, objects)
         if row["schema_version"] != manifest["schema_version"]:
             raise PublicationVerificationError(
                 "Publication manifest schema record does not match manifest"

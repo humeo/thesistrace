@@ -5,6 +5,8 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,14 +15,20 @@ from psycopg.types.json import Jsonb
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.publication import JsonPayload, PublishedRef
+from thesistrace.publication import (
+    JsonPayload,
+    PublicationUnavailableError,
+    PublishedRef,
+)
 
 
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_start_tracking_copies_one_complete_origin_and_reopens_independently() -> None:
+def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings)
 
@@ -68,6 +76,7 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently() -
                 "kind": "research.result",
                 "research_run_id": original["id"],
                 "schema_version": stored_seed["result_provenance"]["schema_version"],
+                "result_manifest_sha256": stored_seed["result_manifest_sha256"],
                 "result_checksum_sha256": track["result_checksum_sha256"],
             },
             "initial_strategy_state": _result_json(result_payload.content)[
@@ -93,6 +102,29 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently() -
         assert same_seed_new_request.json() == track
         assert _counts(settings) == {"tracks": 1, "receipts": 2}
 
+        read_barrier = Barrier(4)
+        original_read = runtime.publication.read_in_transaction
+
+        def synchronized_read(*args: object, **kwargs: object) -> object:
+            read_barrier.wait(timeout=10)
+            return original_read(*args, **kwargs)
+
+        monkeypatch.setattr(runtime.publication, "read_in_transaction", synchronized_read)
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            concurrent = [
+                executor.submit(
+                    client.post,
+                    f"/api/research-runs/{original['id']}/daily-tracks",
+                    json={"request_id": f"ticket-26-concurrent-{index}"},
+                )
+                for index in range(4)
+            ]
+            concurrent_responses = [future.result(timeout=20) for future in concurrent]
+        monkeypatch.setattr(runtime.publication, "read_in_transaction", original_read)
+        assert [response.status_code for response in concurrent_responses] == [201] * 4
+        assert [response.json() for response in concurrent_responses] == [track] * 4
+        assert _counts(settings) == {"tracks": 1, "receipts": 6}
+
         other = _admit_and_execute(client, request_id="ticket-26-other")
         conflict = client.post(
             f"/api/research-runs/{other['id']}/daily-tracks",
@@ -100,6 +132,23 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently() -
         )
         assert conflict.status_code == 409
         assert conflict.json()["detail"] == "Start Tracking request_id conflicts"
+
+        def publication_unavailable(*_args: object, **_kwargs: object) -> object:
+            raise PublicationUnavailableError("temporary object read failure")
+
+        monkeypatch.setattr(
+            runtime.publication,
+            "read_in_transaction",
+            publication_unavailable,
+        )
+        unavailable = client.post(
+            f"/api/research-runs/{other['id']}/daily-tracks",
+            json={"request_id": "ticket-26-temporary"},
+        )
+        monkeypatch.setattr(runtime.publication, "read_in_transaction", original_read)
+        assert unavailable.status_code == 503
+        assert unavailable.json()["detail"] == "Start Tracking is temporarily unavailable"
+        assert _counts(settings) == {"tracks": 1, "receipts": 6}
 
         before_malformed = _counts(settings)
         for body in ({}, {"request_id": "malformed", "extra": True}):
@@ -190,6 +239,21 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently() -
         assert client.delete(f"/api/daily-tracks/{track['id']}").status_code in {404, 405}
 
         _delete_seed_definition_and_run(settings, original)
+
+        replay_after_delete = client.post(
+            f"/api/research-runs/{original['id']}/daily-tracks",
+            json=command,
+        )
+        assert replay_after_delete.status_code == 201
+        assert replay_after_delete.json() == track
+        conflict_before_missing_validation = client.post(
+            "/api/research-runs/run_00000000/daily-tracks",
+            json=command,
+        )
+        assert conflict_before_missing_validation.status_code == 409
+        assert conflict_before_missing_validation.json()[
+            "detail"
+        ] == "Start Tracking request_id conflicts"
 
     _restart_worker_once(settings)
 
