@@ -184,9 +184,12 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     ).read_text()
 
     assert "def process_next(" in run_source
-    assert "FOR UPDATE SKIP LOCKED" in run_source
+    assert "FOR UPDATE OF run SKIP LOCKED" in run_source
     assert "CREATE TABLE research_runs.attempts" in run_migrations
     assert "execution_fence" in run_migrations
+    assert "lease_expires_at <= now()" in run_source
+    assert "def _maintain_claim(" in run_source
+    assert "def _heartbeat_claim(" in run_source
     assert "load_canonical" in run_source
     assert "self._publication.prepare(" in run_source
     assert "self._publication.record(" in run_source

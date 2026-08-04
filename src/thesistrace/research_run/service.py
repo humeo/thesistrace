@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import Event, Thread
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -34,6 +36,8 @@ from thesistrace.research_run.result import build_result_payload
 
 logger = logging.getLogger(__name__)
 MAX_RESULT_BUNDLE_BYTES = 1_048_576
+ATTEMPT_LEASE_SECONDS = 15 * 60
+ATTEMPT_HEARTBEAT_SECONDS = 30
 LoadCanonical = Callable[[str], dict[str, object]]
 ExecuteKernel = Callable[[RunInput], RunOutput]
 Progress = Callable[[str, str], None]
@@ -64,12 +68,18 @@ class ResearchRunService:
         publication: Publication | None = None,
         execute_kernel: ExecuteKernel = run_kernel,
         progress: Progress | None = None,
+        lease_seconds: float = ATTEMPT_LEASE_SECONDS,
+        heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
     ) -> None:
+        if lease_seconds <= 0 or heartbeat_seconds <= 0:
+            raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
         self._database = database
         self._load_canonical = load_canonical
         self._publication = publication
         self._execute_kernel = execute_kernel
         self._progress = progress or (lambda _stage, _run_id: None)
+        self._lease_seconds = lease_seconds
+        self._heartbeat_seconds = heartbeat_seconds
 
     def admit(
         self,
@@ -104,23 +114,24 @@ class ResearchRunService:
         claim = self._claim_next()
         if claim is None:
             return False
-        self._progress("claimed", claim.run_id)
-        try:
-            prepared, provenance = self._execute(claim)
-            self._progress("prepared", claim.run_id)
-            self._publish_success(claim, prepared, provenance)
-            self._progress("succeeded", claim.run_id)
-        except ResearchRunFenced:
-            logger.info(
-                "ResearchRun result rejected by execution fence",
-                extra={"run_id": claim.run_id},
-            )
-        except Exception as error:
-            self._record_failure(claim, type(error).__name__)
-            logger.error(
-                "ResearchRun execution failed",
-                extra={"run_id": claim.run_id, "error_type": type(error).__name__},
-            )
+        with self._maintain_claim(claim):
+            self._progress("claimed", claim.run_id)
+            try:
+                prepared, provenance = self._execute(claim)
+                self._progress("prepared", claim.run_id)
+                self._publish_success(claim, prepared, provenance)
+                self._progress("succeeded", claim.run_id)
+            except ResearchRunFenced:
+                logger.info(
+                    "ResearchRun result rejected by execution fence",
+                    extra={"run_id": claim.run_id},
+                )
+            except Exception as error:
+                self._record_failure(claim, type(error).__name__)
+                logger.error(
+                    "ResearchRun execution failed",
+                    extra={"run_id": claim.run_id, "error_type": type(error).__name__},
+                )
         return True
 
     def list(self) -> ResearchRunList:
@@ -202,21 +213,43 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT id, immutable_input, execution_fence
-                FROM research_runs.runs
-                WHERE status = 'queued'
-                ORDER BY created_at, id
-                FOR UPDATE SKIP LOCKED
+                SELECT run.id, run.status, run.immutable_input,
+                       run.execution_fence,
+                       attempt.id AS active_attempt_id
+                FROM research_runs.runs AS run
+                LEFT JOIN research_runs.attempts AS attempt
+                  ON attempt.run_id = run.id AND attempt.status = 'running'
+                WHERE run.status = 'queued'
+                   OR (
+                        run.status = 'running'
+                        AND attempt.lease_expires_at <= now()
+                   )
+                ORDER BY run.created_at, run.id
+                FOR UPDATE OF run SKIP LOCKED
                 LIMIT 1
                 """
             ).fetchone()
             if row is None:
                 return None
             run_id = str(row["id"])
+            if row["status"] == "running":
+                recovered = transaction.execute(
+                    """
+                    UPDATE research_runs.attempts
+                    SET status = 'failed', heartbeat_at = now(),
+                        lease_expires_at = now(), finished_at = now(),
+                        failure_reason = 'abandoned'
+                    WHERE id = %s AND run_id = %s AND status = 'running'
+                      AND lease_expires_at <= now()
+                    """,
+                    (row["active_attempt_id"], run_id),
+                )
+                if recovered.rowcount != 1:
+                    return None
             fence = int(row["execution_fence"]) + 1
             ordinal_row = transaction.execute(
                 """
-                SELECT count(*) + 1 AS ordinal
+                SELECT coalesce(max(ordinal), 0) + 1 AS ordinal
                 FROM research_runs.attempts
                 WHERE run_id = %s
                 """,
@@ -236,9 +269,18 @@ class ResearchRunService:
                 """
                 INSERT INTO research_runs.attempts (
                     id, run_id, ordinal, fence, status, lease_expires_at
-                ) VALUES (%s, %s, %s, %s, 'running', now() + interval '15 minutes')
+                ) VALUES (
+                    %s, %s, %s, %s, 'running',
+                    now() + make_interval(secs => %s)
+                )
                 """,
-                (attempt_id, run_id, int(ordinal_row["ordinal"]), fence),
+                (
+                    attempt_id,
+                    run_id,
+                    int(ordinal_row["ordinal"]),
+                    fence,
+                    self._lease_seconds,
+                ),
             )
         return _ExecutionClaim(
             run_id=run_id,
@@ -246,6 +288,60 @@ class ResearchRunService:
             fence=fence,
             immutable_input=ImmutableRunInput.model_validate(row["immutable_input"]),
         )
+
+    @contextmanager
+    def _maintain_claim(self, claim: _ExecutionClaim) -> Iterator[None]:
+        stopped = Event()
+        heartbeat = Thread(
+            target=self._heartbeat_claim,
+            args=(claim, stopped),
+            name=f"research-run-heartbeat-{claim.run_id}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            heartbeat.join(timeout=5)
+
+    def _heartbeat_claim(self, claim: _ExecutionClaim, stopped: Event) -> None:
+        while not stopped.wait(self._heartbeat_seconds):
+            try:
+                with self._database.transaction() as transaction:
+                    renewed = transaction.execute(
+                        """
+                        UPDATE research_runs.attempts AS attempt
+                        SET heartbeat_at = now(),
+                            lease_expires_at = now() + make_interval(secs => %s)
+                        WHERE attempt.id = %s AND attempt.run_id = %s
+                          AND attempt.fence = %s AND attempt.status = 'running'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM research_runs.runs AS run
+                              WHERE run.id = attempt.run_id
+                                AND run.status = 'running'
+                                AND run.execution_fence = attempt.fence
+                          )
+                        """,
+                        (
+                            self._lease_seconds,
+                            claim.attempt_id,
+                            claim.run_id,
+                            claim.fence,
+                        ),
+                    )
+            except Exception as error:
+                logger.error(
+                    "ResearchRun claim heartbeat failed",
+                    extra={
+                        "run_id": claim.run_id,
+                        "error_type": type(error).__name__,
+                    },
+                )
+                return
+            if renewed.rowcount != 1:
+                return
 
     def _execute(
         self,

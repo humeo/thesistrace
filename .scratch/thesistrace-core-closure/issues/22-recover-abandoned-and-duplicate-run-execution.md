@@ -21,9 +21,23 @@ delivery without creating a duplicate terminal result.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration` with concurrent workers, duplicate
-  delivery, lease expiry, stale publication, and process restart.
-- Confirm the public ResearchRun remains one identity with at most one visible
-  Result and no internal recovery fields.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/integration \
+  tests/acceptance/test_core_research_run_recovery.py
+./scripts/core-test-runtime down
+```
+
+The tests must use real PostgreSQL and RustFS with two ResearchRun service
+instances to prove exclusive live ownership, duplicate processing as a no-op,
+expired-lease recovery after worker loss, stale-fence rejection after recovery,
+and fresh-runtime restart recovery of the same ResearchRun identity. The public
+HTTP detail must end with at most one visible Result and contain no Attempt,
+claim, lease, heartbeat, fence, or recovery fields.
 
 ## Comments
