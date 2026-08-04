@@ -80,5 +80,22 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0005_exact_input_reruns",
+            statement="""
+                ALTER TABLE research_runs.runs
+                    ADD COLUMN rerun_of_id text
+                        REFERENCES research_runs.runs(id);
+
+                CREATE TABLE research_runs.rerun_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    source_run_id text NOT NULL REFERENCES research_runs.runs(id),
+                    rerun_id text NOT NULL REFERENCES research_runs.runs(id),
+                    outcome jsonb NOT NULL CHECK (jsonb_typeof(outcome) = 'object'),
+                    created_at timestamptz NOT NULL DEFAULT now()
+                );
+            """,
+        ),
     ),
 )

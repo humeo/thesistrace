@@ -221,6 +221,57 @@ test("replays the same Cancel request after its response is lost", async ({ page
   expect(requestIds[1]).toBe(requestIds[0]);
 });
 
+test("reruns the selected immutable input at a new stable Run URL", async ({ page }) => {
+  const original = {
+    id: "run_1111aaaa",
+    status: "succeeded",
+    definition_id: "def_rerun",
+    definition_revision: 1,
+    dataset_release_id: "release_original",
+  };
+  const rerun = {
+    ...original,
+    id: "run_2222bbbb",
+    status: "queued",
+    rerun_of_id: original.id,
+  };
+  let originalReads = 0;
+  await page.route("**/api/research-runs/run_1111aaaa", async (route) => {
+    originalReads += 1;
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(original),
+    });
+  });
+  await page.route("**/api/research-runs/run_1111aaaa/rerun", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({
+      request_id: expect.stringMatching(/^rerun_/),
+    });
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify(rerun),
+    });
+  });
+  await page.route("**/api/research-runs/run_2222bbbb", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(rerun) }),
+  );
+
+  await page.goto("/research-runs/run_1111aaaa");
+  await expect(page.getByText("Status succeeded", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Rerun", exact: true }).click();
+
+  await expect(page).toHaveURL(/\/research-runs\/run_2222bbbb$/);
+  await expect(page.getByText("Status queued", { exact: true })).toBeVisible();
+  await expect(page.getByRole("link", { name: "run_1111aaaa" })).toHaveAttribute(
+    "href",
+    "/research-runs/run_1111aaaa",
+  );
+  await expect(page.getByText(/compare|comparison/i)).toHaveCount(0);
+  await expect(page.getByText(/Attempt|fence|receipt|manifest|object/i)).toHaveCount(0);
+  expect(originalReads).toBeGreaterThan(0);
+});
+
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
   await page.goto("/definitions");
 

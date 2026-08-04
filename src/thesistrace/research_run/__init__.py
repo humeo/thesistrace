@@ -3,11 +3,13 @@ from thesistrace.research_run.models import (
     ResearchRunCancelCommand,
     ResearchRunDetail,
     ResearchRunList,
+    ResearchRunRerunCommand,
     ResearchRunResult,
     ResearchRunSummary,
 )
 from thesistrace.research_run.service import (
     ResearchRunCancelConflict,
+    ResearchRunRerunConflict,
     ResearchRunResultUnavailable,
     ResearchRunService,
 )
@@ -20,6 +22,8 @@ __all__ = [
     "ResearchRunList",
     "ResearchRunResult",
     "ResearchRunResultUnavailable",
+    "ResearchRunRerunCommand",
+    "ResearchRunRerunConflict",
     "ResearchRunService",
     "ResearchRunSummary",
 ]

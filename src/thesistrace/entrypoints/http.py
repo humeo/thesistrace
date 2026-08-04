@@ -32,6 +32,8 @@ from thesistrace.research_run import (
     ResearchRunCancelConflict,
     ResearchRunDetail,
     ResearchRunList,
+    ResearchRunRerunCommand,
+    ResearchRunRerunConflict,
     ResearchRunResultUnavailable,
     ResearchRunSummary,
 )
@@ -151,6 +153,26 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         try:
             run = _runtime(request).research_runs.cancel(run_id, command)
         except ResearchRunCancelConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if run is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return run
+
+    @app.post(
+        "/api/research-runs/{run_id}/rerun",
+        response_model=ResearchRunSummary,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def rerun_research_run(
+        request: Request,
+        run_id: str,
+        command: ResearchRunRerunCommand,
+    ) -> ResearchRunSummary:
+        try:
+            run = _runtime(request).research_runs.rerun(run_id, command)
+        except ResearchRunRerunConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error

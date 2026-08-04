@@ -30,6 +30,10 @@ class ResearchRunSummary(BaseModel):
     definition_id: str
     definition_revision: int
     dataset_release_id: str
+    rerun_of_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     failure_reason: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -37,6 +41,12 @@ class ResearchRunSummary(BaseModel):
 
 
 class ResearchRunCancelCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+
+
+class ResearchRunRerunCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     request_id: RequestId

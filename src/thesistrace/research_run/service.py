@@ -32,6 +32,7 @@ from thesistrace.research_run.models import (
     ResearchRunCancelCommand,
     ResearchRunDetail,
     ResearchRunList,
+    ResearchRunRerunCommand,
     ResearchRunResult,
     ResearchRunSummary,
 )
@@ -71,6 +72,10 @@ class ResearchRunFenced(RuntimeError):
 
 
 class ResearchRunCancelConflict(RuntimeError):
+    pass
+
+
+class ResearchRunRerunConflict(RuntimeError):
     pass
 
 
@@ -131,7 +136,7 @@ class ResearchRunService:
                 dataset_release_id, status, immutable_input
             ) VALUES (%s, %s, %s, %s, 'queued', %s)
             RETURNING id, status, definition_id, definition_revision,
-                      dataset_release_id
+                      dataset_release_id, rerun_of_id
             """,
             (
                 run_id,
@@ -174,7 +179,7 @@ class ResearchRunService:
             rows = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, failure_reason
+                       dataset_release_id, rerun_of_id, failure_reason
                 FROM research_runs.runs
                 ORDER BY created_at DESC, id
                 """
@@ -186,7 +191,7 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, failure_reason
+                       dataset_release_id, rerun_of_id, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -226,7 +231,7 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, failure_reason
+                       dataset_release_id, rerun_of_id, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 FOR UPDATE
@@ -254,7 +259,7 @@ class ResearchRunService:
                         failure_reason = NULL, updated_at = now()
                     WHERE id = %s AND status IN ('queued', 'running')
                     RETURNING id, status, definition_id, definition_revision,
-                              dataset_release_id, failure_reason
+                              dataset_release_id, rerun_of_id, failure_reason
                     """,
                     (run_id,),
                 ).fetchone()
@@ -277,12 +282,77 @@ class ResearchRunService:
             )
         return outcome
 
+    def rerun(
+        self,
+        run_id: str,
+        command: ResearchRunRerunCommand,
+    ) -> ResearchRunSummary | None:
+        request_id = command.request_id.strip()
+        if not request_id:
+            raise ValueError("ResearchRun Rerun request_id is required")
+        fingerprint = _rerun_fingerprint(run_id)
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.rerun:{request_id}",),
+            ).fetchone()
+            receipt = transaction.execute(
+                """
+                SELECT request_fingerprint, outcome
+                FROM research_runs.rerun_receipts
+                WHERE request_id = %s
+                """,
+                (request_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise ResearchRunRerunConflict(
+                        "ResearchRun Rerun request_id conflicts"
+                    )
+                return ResearchRunSummary.model_validate(receipt["outcome"])
+
+            rerun_id = f"run_{uuid4().hex[:20]}"
+            row = transaction.execute(
+                """
+                INSERT INTO research_runs.runs (
+                    id, definition_id, definition_revision, dataset_release_id,
+                    status, immutable_input, rerun_of_id
+                )
+                SELECT %s, definition_id, definition_revision,
+                       dataset_release_id, 'queued', immutable_input, id
+                FROM research_runs.runs
+                WHERE id = %s
+                RETURNING id, status, definition_id, definition_revision,
+                          dataset_release_id, rerun_of_id
+                """,
+                (rerun_id, run_id),
+            ).fetchone()
+            if row is None:
+                return None
+            outcome = _summary(row)
+            transaction.execute(
+                """
+                INSERT INTO research_runs.rerun_receipts (
+                    request_id, request_fingerprint, source_run_id,
+                    rerun_id, outcome
+                ) VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    request_id,
+                    fingerprint,
+                    run_id,
+                    rerun_id,
+                    Jsonb(outcome.model_dump(mode="json")),
+                ),
+            )
+        return outcome
+
     def get_detail(self, run_id: str) -> ResearchRunDetail | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, result_manifest_sha256,
+                       dataset_release_id, rerun_of_id, result_manifest_sha256,
                        result_provenance, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
@@ -777,6 +847,12 @@ def _cancel_fingerprint(run_id: str) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+def _rerun_fingerprint(run_id: str) -> str:
+    value = {"action": "research-runs.rerun/v1", "run_id": run_id}
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
 def _summary(row: object) -> ResearchRunSummary:
     assert isinstance(row, dict)
     summary = {
@@ -789,6 +865,7 @@ def _summary(row: object) -> ResearchRunSummary:
             "dataset_release_id",
         )
     }
+    summary["rerun_of_id"] = row.get("rerun_of_id")
     summary["failure_reason"] = row.get("failure_reason")
     return ResearchRunSummary.model_validate(summary)
 

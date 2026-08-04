@@ -78,6 +78,7 @@ type ResearchRun = {
   definition_id: string;
   definition_revision: number;
   dataset_release_id: string;
+  rerun_of_id?: string;
   failure_reason?: string;
   result?: ResearchResult;
 };
@@ -92,11 +93,15 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
+  const [rerunning, setRerunning] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
   const cancelGeneration = useRef(0);
   const cancelController = useRef<AbortController | null>(null);
   const cancelRequest = useRef<{ runId: string; requestId: string } | null>(null);
+  const rerunGeneration = useRef(0);
+  const rerunController = useRef<AbortController | null>(null);
+  const rerunRequest = useRef<{ runId: string; requestId: string } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -148,6 +153,10 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     cancelController.current?.abort();
     cancelController.current = null;
     cancelRequest.current = null;
+    rerunGeneration.current += 1;
+    rerunController.current?.abort();
+    rerunController.current = null;
+    rerunRequest.current = null;
   }, [runId]);
 
   function refresh() {
@@ -193,6 +202,46 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     }
   }
 
+  async function rerunSelected() {
+    if (run === null || !["succeeded", "failed", "cancelled"].includes(run.status)) return;
+    const targetRun = run;
+    const generation = ++rerunGeneration.current;
+    loadGeneration.current += 1;
+    setLoadState(null);
+    rerunController.current?.abort();
+    const controller = new AbortController();
+    rerunController.current = controller;
+    setRerunning(true);
+    setError(null);
+    const pending = rerunRequest.current;
+    const requestId = pending?.runId === targetRun.id
+      ? pending.requestId
+      : `rerun_${crypto.randomUUID()}`;
+    rerunRequest.current = { runId: targetRun.id, requestId };
+    try {
+      const response = await fetch(`/api/research-runs/${targetRun.id}/rerun`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: requestId }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error("ResearchRun rerun failed");
+      const nextRun = (await response.json()) as ResearchRun;
+      if (generation !== rerunGeneration.current) return;
+      rerunRequest.current = null;
+      window.location.assign(`/research-runs/${nextRun.id}`);
+    } catch (reason: unknown) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (generation !== rerunGeneration.current) return;
+      setError("ResearchRun rerun failed");
+    } finally {
+      if (generation === rerunGeneration.current) {
+        rerunController.current = null;
+        setRerunning(false);
+      }
+    }
+  }
+
   if (error) {
     return (
       <section aria-label="Research Runs">
@@ -222,7 +271,12 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
                 {canceling ? "Cancelling…" : "Cancel"}
               </button>
             ) : null}
-            <button disabled={loadState !== null || canceling} onClick={refresh}>
+            {["succeeded", "failed", "cancelled"].includes(run.status) ? (
+              <button disabled={rerunning} onClick={() => void rerunSelected()}>
+                {rerunning ? "Rerunning…" : "Rerun"}
+              </button>
+            ) : null}
+            <button disabled={loadState !== null || canceling || rerunning} onClick={refresh}>
               Refresh
             </button>
           </div>
@@ -239,6 +293,12 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             </a>
           </p>
           <p><strong>Dataset Release</strong> {run.dataset_release_id}</p>
+          {run.rerun_of_id ? (
+            <p>
+              <strong>Rerun of</strong>{" "}
+              <a href={`/research-runs/${run.rerun_of_id}`}>{run.rerun_of_id}</a>
+            </p>
+          ) : null}
         </div>
         {run.status === "failed" && run.failure_reason ? (
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
