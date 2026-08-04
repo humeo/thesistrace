@@ -7,11 +7,26 @@ from pydantic import BaseModel, ConfigDict, Field
 Revision = Annotated[int, Field(strict=True, ge=1)]
 HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
 RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
+RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 
 
 class DefinitionSaveCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
+    expected_revision: Revision | None = None
+    name: str | None = None
+    hypothesis: str | None = None
+    alpha: dict[str, object] | None = None
+    universe: Literal["top300", "top1000", "top2000", "top3000"] | None = None
+    neutralization: Literal["none", "industry"] | None = None
+    holdings_count: HoldingsCount | None = None
+    rebalance_every_sessions: RebalanceInterval | None = None
+
+
+class DefinitionRunCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
     expected_revision: Revision | None = None
     name: str | None = None
     hypothesis: str | None = None
@@ -49,6 +64,22 @@ class DefinitionList(BaseModel):
 
     items: list[DefinitionSummary]
     next_cursor: str | None
+
+
+class RunValidationIssue(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    code: str
+    field: str
+    message: str
+
+
+class DefinitionRunOutcome(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    outcome: Literal["rejected"]
+    definition: DefinitionDetail
+    issues: list[RunValidationIssue]
 
 
 class IntegerBounds(BaseModel):

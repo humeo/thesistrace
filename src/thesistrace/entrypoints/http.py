@@ -21,6 +21,9 @@ from thesistrace.definition import (
     DefinitionConflict,
     DefinitionDetail,
     DefinitionList,
+    DefinitionRunCommand,
+    DefinitionRunConflict,
+    DefinitionRunOutcome,
     DefinitionSaveCommand,
 )
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
@@ -71,6 +74,24 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.post("/api/definitions/run", response_model=DefinitionRunOutcome)
+    def run_new_definition(
+        request: Request,
+        command: DefinitionRunCommand,
+    ) -> DefinitionRunOutcome:
+        return _run_definition(request, None, command)
+
+    @app.post(
+        "/api/definitions/{definition_id}/run",
+        response_model=DefinitionRunOutcome,
+    )
+    def run_existing_definition(
+        request: Request,
+        definition_id: str,
+        command: DefinitionRunCommand,
+    ) -> DefinitionRunOutcome:
+        return _run_definition(request, definition_id, command)
 
     @app.get("/api/definitions", response_model=DefinitionList)
     def list_definitions(request: Request) -> DefinitionList:
@@ -128,6 +149,26 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
 def _runtime(request: Request) -> CoreRuntime:
     return request.app.state.core_runtime
+
+
+def _run_definition(
+    request: Request,
+    definition_id: str | None,
+    command: DefinitionRunCommand,
+) -> DefinitionRunOutcome:
+    try:
+        return _runtime(request).definitions.run(definition_id, command)
+    except DefinitionRunConflict as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except DefinitionConflict as error:
+        raise HTTPException(
+            status_code=409,
+            detail={"current_revision": error.current_revision},
+        ) from error
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Research Definition not found") from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 app = create_app()

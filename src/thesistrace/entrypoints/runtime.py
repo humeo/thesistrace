@@ -113,6 +113,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 authorable_fields=data.authorable_fields,
                 operator_catalog=operator_catalog,
                 validate_alpha=validate_alpha,
+                latest_release=data.latest_release,
             ),
             publication=publication,
         )

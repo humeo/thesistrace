@@ -219,3 +219,31 @@ test("keeps unsaved editor values after revision and structure errors", async ({
     "My corrected hypothesis",
   );
 });
+
+test("saves one rejected Run action and shows actionable issues", async ({ page }) => {
+  await page.goto("/definitions");
+  await page.getByRole("button", { name: "New Definition" }).click();
+  await page.getByLabel("Definition name").fill("Incomplete run");
+
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (
+      ["POST", "PUT"].includes(request.method()) &&
+      new URL(request.url()).pathname.startsWith("/api/definitions")
+    ) writes.push(new URL(request.url()).pathname);
+  });
+  await page.getByRole("button", { name: "Run" }).click();
+
+  await expect(page.getByRole("status")).toHaveText(
+    "Run rejected after saving revision 1.",
+  );
+  expect(writes).toEqual(["/api/definitions/run"]);
+  await expect(page).toHaveURL(/\/definitions\/def_[a-f0-9]+$/);
+  await expect(page.getByRole("list", { name: "Run validation issues" })).toContainText(
+    "Alpha is required",
+  );
+  await expect(page.getByRole("list", { name: "Run validation issues" })).not.toContainText(
+    "hypothesis",
+  );
+  await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
+});

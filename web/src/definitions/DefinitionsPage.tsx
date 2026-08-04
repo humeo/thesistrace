@@ -36,6 +36,12 @@ type AuthoringOptions = {
 };
 type AlphaEditor = { operatorId: string; operandValues: string[] };
 type ErrorKind = "load" | "save" | "conflict";
+type RunValidationIssue = { code: string; field: string; message: string };
+type DefinitionRunOutcome = {
+  outcome: "rejected";
+  definition: DefinitionDetail;
+  issues: RunValidationIssue[];
+};
 
 export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [activeDefinitionId, setActiveDefinitionId] = useState(definitionId);
@@ -54,9 +60,10 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<ErrorKind | null>(null);
-  const [busy, setBusy] = useState<"loading" | "refreshing" | "saving" | null>(
-    "loading",
-  );
+  const [runIssues, setRunIssues] = useState<RunValidationIssue[]>([]);
+  const [busy, setBusy] = useState<
+    "loading" | "refreshing" | "saving" | "running" | null
+  >("loading");
   const busyRef = useRef(false);
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
@@ -88,6 +95,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setBusy(kind);
     setError(null);
     setErrorKind(null);
+    setRunIssues([]);
     setStatus(null);
     try {
       const optionsRequest = fetch("/api/definitions/authoring-options", {
@@ -168,6 +176,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setStatus(null);
     setError(null);
     setErrorKind(null);
+    setRunIssues([]);
   }
 
   function startAlpha() {
@@ -204,16 +213,9 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setBusy("saving");
     setError(null);
     setErrorKind(null);
+    setRunIssues([]);
     setStatus("Saving…");
-    const body: Record<string, unknown> = {
-      hypothesis: hypothesis.trim() ? hypothesis : null,
-      alpha,
-      universe: universe || null,
-      neutralization: neutralization || null,
-      holdings_count: optionalNumber(holdingsCount),
-      rebalance_every_sessions: optionalNumber(rebalanceInterval),
-    };
-    if (name.trim()) body.name = name;
+    const body = currentContent();
     if (definition) body.expected_revision = definition.revision;
     let failureKind: ErrorKind = "save";
     try {
@@ -258,6 +260,82 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
       busyRef.current = false;
       setBusy(null);
     }
+  }
+
+  async function run() {
+    if (busyRef.current) return;
+    busyRef.current = true;
+    setBusy("running");
+    setError(null);
+    setErrorKind(null);
+    setRunIssues([]);
+    setStatus("Checking Run…");
+    const body = {
+      ...currentContent(),
+      request_id: crypto.randomUUID(),
+      ...(definition ? { expected_revision: definition.revision } : {}),
+    };
+    let failureKind: ErrorKind = "save";
+    try {
+      const response = await fetch(
+        definition ? `/api/definitions/${definition.id}/run` : "/api/definitions/run",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (response.status === 409) {
+        failureKind = "conflict";
+        const payload = await response.json() as {
+          detail?: { current_revision?: number };
+        };
+        const currentRevision = payload.detail?.current_revision;
+        throw new Error(
+          typeof currentRevision === "number"
+            ? `Definition changed elsewhere at revision ${currentRevision}. Your edits are unchanged.`
+            : "Definition Run request conflicts. Your edits are unchanged.",
+        );
+      }
+      if (response.status === 422) {
+        throw new Error("Definition has structural errors. Your edits are unchanged.");
+      }
+      if (!response.ok) throw new Error("Definition Run failed");
+      const outcome = (await response.json()) as DefinitionRunOutcome;
+      if (!options) throw new Error("Authoring options unavailable");
+      applyDefinition(outcome.definition, options);
+      setRunIssues(outcome.issues);
+      setStatus(
+        `Run rejected after saving revision ${outcome.definition.revision}.`,
+      );
+      skipNextRouteLoad.current = true;
+      setActiveDefinitionId(outcome.definition.id);
+      window.history.replaceState(
+        {},
+        "",
+        `/definitions/${outcome.definition.id}`,
+      );
+    } catch (reason: unknown) {
+      setStatus(null);
+      setErrorKind(failureKind);
+      setError(reason instanceof Error ? reason.message : "Definition Run failed");
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  }
+
+  function currentContent(): Record<string, unknown> {
+    const content: Record<string, unknown> = {
+      hypothesis: hypothesis.trim() ? hypothesis : null,
+      alpha,
+      universe: universe || null,
+      neutralization: neutralization || null,
+      holdings_count: optionalNumber(holdingsCount),
+      rebalance_every_sessions: optionalNumber(rebalanceInterval),
+    };
+    if (name.trim()) content.name = name;
+    return content;
   }
 
   if (error && !creating && definition === null && items === null) {
@@ -374,6 +452,9 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
 
           {definition && <p>Revision {definition.revision}</p>}
           <button disabled={busy !== null} type="submit">Save</button>
+          <button disabled={busy !== null} type="button" onClick={() => void run()}>
+            Run
+          </button>
           {(errorKind === null || errorKind === "load") && (
             <button
               disabled={busy !== null}
@@ -404,6 +485,13 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
             </>
           )}
           {status && busy !== "refreshing" && <p role="status">{status}</p>}
+          {runIssues.length > 0 && (
+            <ul aria-label="Run validation issues">
+              {runIssues.map((issue) => (
+                <li key={`${issue.code}-${issue.field}`}>{issue.message}</li>
+              ))}
+            </ul>
+          )}
         </form>
       )}
     </section>

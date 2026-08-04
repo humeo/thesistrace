@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping
 from uuid import uuid4
 
@@ -12,10 +14,13 @@ from thesistrace.definition.models import (
     DefinitionAuthoringOptions,
     DefinitionDetail,
     DefinitionList,
+    DefinitionRunCommand,
+    DefinitionRunOutcome,
     DefinitionSaveCommand,
     DefinitionSummary,
     IntegerBounds,
     OperatorOption,
+    RunValidationIssue,
 )
 
 CONTENT_FIELDS = (
@@ -35,6 +40,10 @@ class DefinitionConflict(RuntimeError):
         self.current_revision = current_revision
 
 
+class DefinitionRunConflict(RuntimeError):
+    pass
+
+
 class DefinitionService:
     def __init__(
         self,
@@ -43,11 +52,13 @@ class DefinitionService:
         authorable_fields: Callable[[], tuple[AuthorableField, ...]],
         operator_catalog: Callable[[], dict[str, object]],
         validate_alpha: Callable[[Mapping[str, object]], object],
+        latest_release: Callable[[], object | None],
     ) -> None:
         self._database = database
         self._authorable_fields = authorable_fields
         self._operator_catalog = operator_catalog
         self._validate_alpha = validate_alpha
+        self._latest_release = latest_release
 
     def authoring_options(self) -> DefinitionAuthoringOptions:
         catalog = self._operator_catalog()
@@ -162,13 +173,187 @@ class DefinitionService:
                 raise DefinitionConflict(int(current["revision"]))
         return _detail(row)
 
+    def run(
+        self,
+        definition_id: str | None,
+        command: DefinitionRunCommand,
+    ) -> DefinitionRunOutcome:
+        request_id = command.request_id.strip()
+        if not request_id:
+            raise ValueError("Run request_id is required")
+        self._validate_run_structure(command)
+        fingerprint = _run_fingerprint(definition_id, command)
+        content = {field: getattr(command, field) for field in CONTENT_FIELDS}
+
+        with self._database.transaction() as transaction:
+            receipt = transaction.execute(
+                """
+                SELECT request_fingerprint, definition_id, saved_revision,
+                       saved_content, issues
+                FROM definitions.run_receipts
+                WHERE request_id = %s
+                """,
+                (request_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise DefinitionRunConflict("Definition Run request_id conflicts")
+                return _run_outcome_from_receipt(receipt)
+
+            release = self._latest_release()
+            issues = _runnability_issues(content, has_release=release is not None)
+            if not issues:
+                raise RuntimeError("accepted Definition Run admission is not available")
+
+            if definition_id is None:
+                if command.expected_revision is not None:
+                    raise ValueError("Running a new Definition takes no expected revision")
+                saved_id = f"def_{uuid4().hex[:20]}"
+                submitted_name = str(content.get("name") or "").strip()
+                content["name"] = submitted_name or _generated_name(saved_id)
+                saved_revision = 1
+                transaction.execute(
+                    """
+                    INSERT INTO definitions.records (id, revision, content)
+                    VALUES (%s, %s, %s)
+                    """,
+                    (saved_id, saved_revision, Jsonb(content)),
+                )
+            else:
+                if command.expected_revision is None:
+                    raise ValueError("Running an existing Definition requires expected revision")
+                current = transaction.execute(
+                    """
+                    SELECT id, revision, content
+                    FROM definitions.records
+                    WHERE id = %s
+                    FOR UPDATE
+                    """,
+                    (definition_id,),
+                ).fetchone()
+                if current is None:
+                    raise KeyError(definition_id)
+                if int(current["revision"]) != command.expected_revision:
+                    raise DefinitionConflict(int(current["revision"]))
+                saved_id = definition_id
+                saved_revision = command.expected_revision + 1
+                submitted_name = str(content.get("name") or "").strip()
+                content["name"] = submitted_name or str(current["content"]["name"])
+                transaction.execute(
+                    """
+                    UPDATE definitions.records
+                    SET revision = %s, content = %s, updated_at = now()
+                    WHERE id = %s
+                    """,
+                    (saved_revision, Jsonb(content), saved_id),
+                )
+
+            serialized_issues = [issue.model_dump(mode="json") for issue in issues]
+            transaction.execute(
+                """
+                INSERT INTO definitions.run_receipts (
+                    request_id, request_fingerprint, definition_id,
+                    saved_revision, saved_content, outcome, issues
+                ) VALUES (%s, %s, %s, %s, %s, 'rejected', %s)
+                """,
+                (
+                    request_id,
+                    fingerprint,
+                    saved_id,
+                    saved_revision,
+                    Jsonb(content),
+                    Jsonb(serialized_issues),
+                ),
+            )
+        return DefinitionRunOutcome(
+            outcome="rejected",
+            definition=_detail_from_values(saved_id, saved_revision, content),
+            issues=issues,
+        )
+
     def _validate_structure(self, command: DefinitionSaveCommand) -> None:
+        if command.alpha is not None:
+            self._validate_alpha(command.alpha)
+
+    def _validate_run_structure(self, command: DefinitionRunCommand) -> None:
         if command.alpha is not None:
             self._validate_alpha(command.alpha)
 
 
 def _generated_name(definition_id: str) -> str:
     return f"Research {definition_id[-8:].upper()}"
+
+
+def _run_fingerprint(
+    definition_id: str | None,
+    command: DefinitionRunCommand,
+) -> str:
+    value = {
+        "action": "definitions.run/v1",
+        "definition_id": definition_id,
+        "command": command.model_dump(mode="json", exclude={"request_id"}),
+    }
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _runnability_issues(
+    content: dict[str, object],
+    *,
+    has_release: bool,
+) -> list[RunValidationIssue]:
+    required = (
+        ("alpha", "ALPHA_REQUIRED", "Alpha is required"),
+        ("universe", "UNIVERSE_REQUIRED", "Universe is required"),
+        ("neutralization", "NEUTRALIZATION_REQUIRED", "Neutralization is required"),
+        ("holdings_count", "HOLDINGS_COUNT_REQUIRED", "Holdings count is required"),
+        (
+            "rebalance_every_sessions",
+            "REBALANCE_INTERVAL_REQUIRED",
+            "Rebalance interval is required",
+        ),
+    )
+    issues = [
+        RunValidationIssue(code=code, field=field, message=message)
+        for field, code, message in required
+        if content.get(field) is None
+    ]
+    if not has_release:
+        issues.append(
+            RunValidationIssue(
+                code="DATASET_RELEASE_REQUIRED",
+                field="dataset_release",
+                message="Publish canonical Data before running research",
+            )
+        )
+    return issues
+
+
+def _run_outcome_from_receipt(row: object) -> DefinitionRunOutcome:
+    assert isinstance(row, dict)
+    content = row["saved_content"]
+    assert isinstance(content, dict)
+    return DefinitionRunOutcome(
+        outcome="rejected",
+        definition=_detail_from_values(
+            str(row["definition_id"]),
+            int(row["saved_revision"]),
+            content,
+        ),
+        issues=[RunValidationIssue.model_validate(issue) for issue in row["issues"]],
+    )
+
+
+def _detail_from_values(
+    definition_id: str,
+    revision: int,
+    content: dict[str, object],
+) -> DefinitionDetail:
+    return DefinitionDetail(
+        id=definition_id,
+        revision=revision,
+        **{field: content.get(field) for field in CONTENT_FIELDS},
+    )
 
 
 def _detail(row: object) -> DefinitionDetail:

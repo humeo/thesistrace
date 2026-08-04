@@ -21,9 +21,25 @@ issues without creating a ResearchRun when the saved content is not runnable.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` with rejected,
-  replayed, conflicting, and structurally malformed Run requests.
-- Run `bun run --cwd web test:e2e` and confirm rejection saves once, displays
-  issues, and leaves the ResearchRun list unchanged.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/kernel \
+  tests/integration \
+  tests/acceptance/test_core_definition_run_rejection.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The backend test must distinguish structural rejection from semantic Run
+rejection, prove the latter saves exactly one revision and receipt but creates
+no immutable input or ResearchRun, and cover replay plus fingerprint conflict.
+The browser must send one Run action with the current editor content, display
+the saved revision and actionable issues, and leave Research Runs empty.
 
 ## Comments

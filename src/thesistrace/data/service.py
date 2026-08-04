@@ -42,6 +42,10 @@ class DataService:
         """Expose Data-owned product field definitions without Kernel bindings."""
         return AUTHORABLE_FIELDS
 
+    def latest_release(self) -> ReleaseSummary | None:
+        """Return the current immutable Dataset Release product reference."""
+        return self.overview().latest_release
+
     def overview(self) -> DataOverview:
         with self._database.transaction() as transaction:
             state = transaction.execute(

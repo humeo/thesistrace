@@ -20,5 +20,22 @@ MIGRATIONS = MigrationPlan(
                     ON definitions.records (updated_at DESC, id);
             """,
         ),
+        Migration(
+            name="0002_definition_run_receipts",
+            statement="""
+                CREATE TABLE definitions.run_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    definition_id text NOT NULL REFERENCES definitions.records(id),
+                    saved_revision integer NOT NULL CHECK (saved_revision > 0),
+                    saved_content jsonb NOT NULL CHECK (
+                        jsonb_typeof(saved_content) = 'object'
+                    ),
+                    outcome text NOT NULL CHECK (outcome = 'rejected'),
+                    issues jsonb NOT NULL CHECK (jsonb_typeof(issues) = 'array'),
+                    created_at timestamptz NOT NULL DEFAULT now()
+                );
+            """,
+        ),
     ),
 )
