@@ -277,7 +277,7 @@ test("replays the same Run request after its committed response is lost", async 
   await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
 });
 
-test("runs valid current content once and opens the queued ResearchRun", async ({ page }) => {
+test("runs valid content and shows its bounded ResearchRun result", async ({ page }) => {
   await page.goto("/definitions");
   await page.getByRole("button", { name: "New Definition" }).click();
   await page.getByLabel("Definition name").fill("Browser admitted run");
@@ -313,9 +313,48 @@ test("runs valid current content once and opens the queued ResearchRun", async (
   await expect(page.getByText("Status succeeded", { exact: true })).toBeVisible({
     timeout: 90_000,
   });
+  await expect(page.getByRole("heading", { name: "Factor Evaluation" })).toBeVisible();
+  for (const horizon of [1, 5, 20]) {
+    const region = page.getByRole("region", { name: `${horizon}-session Factor` });
+    await expect(region).toContainText("504 signal sessions");
+    await expect(region).toContainText("Rank IC");
+    await expect(region).toContainText("IC");
+  }
+  await expect(page.getByRole("heading", { name: "Strategy / Benchmark" })).toBeVisible();
+  await expect(page.getByText("Selected universe top1000", { exact: true })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Strategy and benchmark NAV" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Provenance" })).toBeVisible();
   await expect(
     page.getByText(/\b(?:attempt|claim|lease|heartbeat|fence|manifest|object)\b/i),
   ).toHaveCount(0);
+  await expect(page.getByText(/download|compare|comparison|continuation/i)).toHaveCount(0);
+
+  await page.route("**/api/research-runs/*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await route.continue();
+  }, { times: 1 });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.getByText("Loading ResearchRun…", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Factor Evaluation" })).toBeVisible();
+
+  await page.route("**/api/research-runs/*", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await route.continue();
+  }, { times: 1 });
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByRole("status")).toHaveText("Refreshing ResearchRun…");
+  await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
+
+  await page.route("**/api/research-runs/*", async (route) => {
+    await route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "secret bucket object checksum mismatch" }),
+    });
+  }, { times: 1 });
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByRole("alert")).toHaveText("ResearchRun unavailable");
+  await expect(page.getByText(/secret|bucket|checksum/i)).toHaveCount(0);
 
   await page.getByRole("link", { name: "Research Runs" }).click();
   await expect(page.getByRole("heading", { name: "Research Runs" })).toBeVisible();

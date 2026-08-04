@@ -18,6 +18,7 @@ def build_result_payload(
     output: RunOutput,
     *,
     rebalance_interval: int,
+    universe: str,
 ) -> dict[str, object]:
     """Project transient Kernel output into the bounded durable Result contract."""
     artifacts = output.artifacts_snapshot()
@@ -28,7 +29,7 @@ def build_result_payload(
         raise ResearchResultError("Result requires exactly 504 Strategy observations")
     return {
         "factor_summary": _factor_summary(factor),
-        "strategy_summary": _strategy_summary(strategy),
+        "strategy_summary": _strategy_summary(strategy, universe=universe),
         "strategy_daily_observations": _strategy_daily_observations(strategy),
         "terminal_strategy_state": _terminal_strategy_state(
             strategy,
@@ -46,17 +47,39 @@ def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
         value = horizons[horizon]
         if not isinstance(value, Mapping) or not isinstance(value.get("summary"), Mapping):
             raise ResearchResultError(f"Factor horizon {horizon} is incomplete")
+        daily = value.get("daily")
+        if not isinstance(daily, list):
+            raise ResearchResultError(f"Factor horizon {horizon} has no observations")
+        summary = copy.deepcopy(dict(value["summary"]))
+        ic = summary.get("ic")
+        rank_ic = summary.get("rank_ic")
+        if not isinstance(ic, Mapping) or not isinstance(rank_ic, Mapping):
+            raise ResearchResultError(f"Factor horizon {horizon} summary is invalid")
         projected[horizon] = {
             "horizon": int(value["horizon"]),
             "alpha_checksum": str(value["alpha_checksum"]),
             "label_checksum": str(value["label_checksum"]),
             "source_checksum": str(value["checksum"]),
-            "summary": copy.deepcopy(dict(value["summary"])),
+            "summary": summary,
+            "coverage": {
+                "signal_session_count": len(daily),
+                "ic_valid_session_count": int(ic["valid_session_count"]),
+                "rank_ic_valid_session_count": int(rank_ic["valid_session_count"]),
+                "quantile_valid_session_count": sum(
+                    isinstance(observation, Mapping)
+                    and observation.get("quantile_reason") is None
+                    for observation in daily
+                ),
+            },
         }
     return {"horizons": projected}
 
 
-def _strategy_summary(strategy: Mapping[str, object]) -> dict[str, object]:
+def _strategy_summary(
+    strategy: Mapping[str, object],
+    *,
+    universe: str,
+) -> dict[str, object]:
     metrics = strategy.get("metrics")
     if not isinstance(metrics, Mapping):
         raise ResearchResultError("Strategy result has no metrics")
@@ -70,6 +93,10 @@ def _strategy_summary(strategy: Mapping[str, object]) -> dict[str, object]:
         "alpha_checksum": str(strategy["alpha_checksum"]),
         "initial_cash_cny": str(strategy["initial_cash_cny"]),
         "source_checksum": str(strategy["checksum"]),
+        "benchmark": {
+            "universe": universe,
+            "methodology": "selected_universe_equal_weight",
+        },
         "metrics": projected,
     }
 

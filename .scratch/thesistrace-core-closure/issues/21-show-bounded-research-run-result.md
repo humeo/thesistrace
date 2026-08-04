@@ -21,10 +21,30 @@ succeeded ResearchRun detail without creating a fifth product resource.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` and inspect the
-  exact Result Bundle size and product projection.
-- Run `bun run --cwd web typecheck` and `bun run --cwd web test:e2e`; open the
-  succeeded Run and confirm only Factor plus its own Strategy/Benchmark result
-  is shown.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/kernel \
+  tests/integration \
+  tests/acceptance/test_core_research_run_result.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The backend test must execute a real Run, inspect its exact owned Result bytes,
+and verify that the succeeded ResearchRun detail returns only the bounded
+product projection: 1-, 5-, and 20-session Factor summaries with coverage,
+Strategy summary, 504 retained Strategy/Benchmark observations, and provenance.
+It must also prove that private or excluded evidence is absent and that loading
+survives a runtime restart with sanitized errors. The browser must open the same
+succeeded ResearchRun, observe loading and refresh, render only its Factor plus
+Strategy/Benchmark conclusions and provenance, and expose no Result resource,
+URL, download, cross-Run comparison, manifest, object, continuation, Attempt,
+or raw execution details.
 
 ## Comments

@@ -199,6 +199,28 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
             assert f"{sql_verb} {foreign_schema}." not in run_source
 
 
+def test_research_run_owns_its_embedded_result_product_projection() -> None:
+    run_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
+    ).read_text()
+    http_source = (
+        ROOT / "src" / "thesistrace" / "entrypoints" / "http.py"
+    ).read_text()
+
+    assert "def get_detail(" in run_source
+    assert "self._publication.read(" in run_source
+    assert '"factor": {"horizons": horizons}' in run_source
+    assert '"observations": observations' in run_source
+    assert "publication." not in http_source
+    assert '"/api/research-runs/{run_id}/result"' not in http_source
+    for private_field in (
+        '"terminal_strategy_state"',
+        '"result_manifest_sha256"',
+        '"result_provenance"',
+    ):
+        assert private_field not in run_source[run_source.index("def _public_result(") :]
+
+
 def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> None:
     package = ROOT / "src" / "thesistrace" / "research_kernel"
     source = "\n".join(path.read_text() for path in package.rglob("*.py"))

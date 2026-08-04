@@ -42,19 +42,30 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
         assert observed[0] == ("claimed", "running")
         detail = client.get(f"/api/research-runs/{run_id}")
         assert detail.status_code == 200
-        assert detail.json() == {
+        public_run = detail.json()
+        assert {
+            name: public_run[name]
+            for name in (
+                "id",
+                "status",
+                "definition_id",
+                "definition_revision",
+                "dataset_release_id",
+            )
+        } == {
             "id": run_id,
             "status": "succeeded",
-            "definition_id": detail.json()["definition_id"],
+            "definition_id": public_run["definition_id"],
             "definition_revision": 1,
             "dataset_release_id": immutable_input["dataset_release_id"],
         }
-        assert set(detail.json()) == {
+        assert set(public_run) == {
             "id",
             "status",
             "definition_id",
             "definition_revision",
             "dataset_release_id",
+            "result",
         }
         assert not {
             "attempt",
@@ -64,7 +75,7 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
             "fence",
             "manifest",
             "object",
-        }.intersection(str(detail.json()).lower().replace("_", " ").split())
+        }.intersection(str(public_run).lower().replace("_", " ").split())
 
         stored = _stored_execution(runtime.database, run_id)
         assert stored["status"] == "succeeded"

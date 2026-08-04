@@ -27,7 +27,11 @@ from thesistrace.definition import (
     DefinitionSaveCommand,
 )
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
-from thesistrace.research_run import ResearchRunList, ResearchRunSummary
+from thesistrace.research_run import (
+    ResearchRunDetail,
+    ResearchRunList,
+    ResearchRunResultUnavailable,
+)
 
 
 class DataUpdateRequest(BaseModel):
@@ -116,9 +120,19 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     def list_research_runs(request: Request) -> ResearchRunList:
         return _runtime(request).research_runs.list()
 
-    @app.get("/api/research-runs/{run_id}", response_model=ResearchRunSummary)
-    def get_research_run(request: Request, run_id: str) -> ResearchRunSummary:
-        run = _runtime(request).research_runs.get(run_id)
+    @app.get(
+        "/api/research-runs/{run_id}",
+        response_model=ResearchRunDetail,
+        response_model_exclude_none=True,
+    )
+    def get_research_run(request: Request, run_id: str) -> ResearchRunDetail:
+        try:
+            run = _runtime(request).research_runs.get_detail(run_id)
+        except ResearchRunResultUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="ResearchRun Result unavailable",
+            ) from error
         if run is None:
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return run
