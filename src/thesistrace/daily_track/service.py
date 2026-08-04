@@ -17,9 +17,24 @@ from thesistrace.daily_track.models import (
     TrackingOrigin,
 )
 from thesistrace.data import NextRelease
-from thesistrace.publication import JsonPayload, PreparedPublication, Publication, PublishedRef
+from thesistrace.publication import (
+    JsonPayload,
+    PreparedPublication,
+    Publication,
+    PublicationNotFoundError,
+    PublicationUnavailableError,
+    PublicationVerificationError,
+    PublishedRef,
+)
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_kernel import AdvanceInput, KernelState, RunInput, advance, run
+from thesistrace.research_kernel import (
+    AdvanceInput,
+    KernelRunError,
+    KernelState,
+    RunInput,
+    advance,
+    run,
+)
 from thesistrace.research_kernel.canonical_state import (
     canonical_sessions,
     slice_canonical_sessions,
@@ -37,6 +52,10 @@ class DailyTrackActivationConflict(RuntimeError):
 
 
 class DailyTrackFenced(RuntimeError):
+    pass
+
+
+class DailyTrackProgressionFailed(RuntimeError):
     pass
 
 
@@ -162,14 +181,23 @@ class DailyTrackService:
         claim = self._claim_next()
         if claim is None:
             return False
-        prepared, provenance, state = self._execute(claim)
         try:
+            prepared, provenance, state = self._execute(claim)
             self._publish_success(claim, prepared, provenance, state)
         except DailyTrackFenced:
             logger.info(
                 "DailyTrack Checkpoint rejected by execution fence",
                 extra={"track_id": claim.track_id, "target_release_id": claim.target.id},
             )
+        except (
+            KernelRunError,
+            PublicationNotFoundError,
+            PublicationUnavailableError,
+            PublicationVerificationError,
+        ) as error:
+            raise DailyTrackProgressionFailed(
+                "DailyTrack progression failed at its current target"
+            ) from error
         return True
 
     def list(self) -> DailyTrackList:

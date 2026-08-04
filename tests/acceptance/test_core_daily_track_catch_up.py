@@ -11,6 +11,7 @@ from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.worker import _process_once
 from thesistrace.publication import PublishedRef
+from thesistrace.research_kernel import KernelRunError
 
 
 @pytest.mark.skipif(
@@ -92,12 +93,11 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         def fail_middle(advance_input: object) -> object:
             sessions = advance_input.new_canonical_snapshot()["research_calendar"]
             if sessions == [releases[1]["covered_session_range"]["end"]]:
-                raise RuntimeError("injected middle target failure")
+                raise KernelRunError("injected middle target failure")
             return original_advance(advance_input)
 
         monkeypatch.setattr(runtime.daily_tracks, "_advance_kernel", fail_middle)
-        with pytest.raises(RuntimeError, match="injected middle target failure"):
-            _process_once(runtime)
+        _process_once(runtime)
         failed_detail = client.get(f"/api/daily-tracks/{failed_track['id']}").json()
         assert failed_detail["current_release_id"] == releases[0]["id"]
         assert failed_detail["strategy_session"] != seed_session
@@ -106,7 +106,22 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         ] == [releases[0]["id"]]
         assert _running_target(settings, failed_track["id"]) == releases[1]["id"]
         assert runtime.daily_tracks.process_next() is False
-        assert client.get("/api/data").json()["latest_release"]["id"] == releases[-1]["id"]
+        runtime.data._source = FixtureDataSource(sessions_after_bootstrap=4)
+        accepted = client.post(
+            "/api/data/update",
+            headers={"Idempotency-Key": "ticket-28-after-track-failure"},
+            json={},
+        )
+        assert accepted.status_code == 202
+        _process_once(runtime)
+        assert (
+            client.get("/api/data").json()["latest_release"]["predecessor_id"] == releases[-1]["id"]
+        )
+        assert (
+            client.get(f"/api/daily-tracks/{failed_track['id']}").json()["current_release_id"]
+            == releases[0]["id"]
+        )
+        assert _running_target(settings, failed_track["id"]) == releases[1]["id"]
 
         assert client.post(f"/api/daily-tracks/{failed_track['id']}/catch-up").status_code in {
             404,

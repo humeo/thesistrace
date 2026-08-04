@@ -6,11 +6,13 @@ from thesistrace.daily_track.models import (
 )
 from thesistrace.daily_track.service import (
     DailyTrackActivationConflict,
+    DailyTrackProgressionFailed,
     DailyTrackService,
 )
 
 __all__ = [
     "DailyTrackActivationConflict",
+    "DailyTrackProgressionFailed",
     "DailyTrackList",
     "DailyTrackService",
     "DailyTrackSummary",

@@ -71,26 +71,33 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
     .getByRole("listitem")
     .first()
     .textContent();
-  await page.getByRole("button", { name: "Update Data" }).click();
-  await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
-  await expect(page.getByText("757 Research Sessions")).toBeVisible({ timeout: 60_000 });
   const releaseHistory = page.getByRole("list", { name: "Dataset Release history" });
-  await expect(releaseHistory.getByRole("listitem")).toHaveCount(2);
-  await expect(releaseHistory).toContainText(firstRelease ?? "missing-root-release");
-  await expect(page.getByText("Later Release")).toBeVisible();
-  const latestData = await (await page.request.get("/api/data")).json();
-  const successorReleaseId = latestData.latest_release.id as string;
-  await expect.poll(async () => {
-    const response = await page.request.get(`/api/daily-tracks/${seededTrack.id}`);
-    return (await response.json()).current_release_id;
-  }, { timeout: 60_000 }).toBe(successorReleaseId);
-  await page.goto(`/daily-tracks/${seededTrack.id}`);
-  await expect(
-    page.getByText(`Current Dataset Release ${successorReleaseId}`, { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: /advance/i })).toHaveCount(0);
-  await expect(page.getByText(/Checkpoint|claim|fence|worker/i)).toHaveCount(0);
-  await page.goto("/data");
+  const observedTrackHeads: string[] = [];
+  for (const [index, sessionCount] of [757, 758, 759].entries()) {
+    await page.getByRole("button", { name: "Update Data" }).click();
+    await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
+    await expect(page.getByText(`${sessionCount} Research Sessions`)).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(releaseHistory.getByRole("listitem")).toHaveCount(index + 2);
+    await expect(releaseHistory).toContainText(firstRelease ?? "missing-root-release");
+    await expect(page.getByText("Later Release")).toBeVisible();
+    const latestData = await (await page.request.get("/api/data")).json();
+    const successorReleaseId = latestData.latest_release.id as string;
+    observedTrackHeads.push(successorReleaseId);
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/daily-tracks/${seededTrack.id}`);
+      return (await response.json()).current_release_id;
+    }, { timeout: 60_000 }).toBe(successorReleaseId);
+    await page.goto(`/daily-tracks/${seededTrack.id}`);
+    await expect(
+      page.getByText(`Current Dataset Release ${successorReleaseId}`, { exact: true }),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /advance|catch up/i })).toHaveCount(0);
+    await expect(page.getByText(/Checkpoint|progression|claim|fence|worker/i)).toHaveCount(0);
+    await page.goto("/data");
+  }
+  expect(new Set(observedTrackHeads).size).toBe(3);
   const latestRelease = await page
     .getByRole("heading", { name: "Latest Dataset Release" })
     .locator("..")
@@ -101,7 +108,7 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
     "No new completed Research Session. Latest Release unchanged.",
     { timeout: 60_000 },
   );
-  await expect(releaseHistory.getByRole("listitem")).toHaveCount(2);
+  await expect(releaseHistory.getByRole("listitem")).toHaveCount(4);
   await expect(
     page.getByRole("heading", { name: "Latest Dataset Release" }).locator(".."),
   ).toHaveText(latestRelease ?? "missing-latest-release");

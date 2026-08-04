@@ -6,10 +6,23 @@ from thesistrace.fixture import build_fixture
 
 
 class FixtureDataSource:
-    def __init__(self, *, sessions_after_bootstrap: int = 1) -> None:
+    def __init__(
+        self,
+        *,
+        sessions_after_bootstrap: int = 1,
+        availability_sequence: tuple[int, ...] | None = None,
+    ) -> None:
         if not 1 <= sessions_after_bootstrap <= 20:
             raise ValueError("Fixture availability must be between 1 and 20 sessions")
         self._sessions_after_bootstrap = sessions_after_bootstrap
+        sequence = availability_sequence or (sessions_after_bootstrap,)
+        if (
+            not sequence
+            or tuple(sorted(set(sequence))) != sequence
+            or any(not 1 <= count <= 20 for count in sequence)
+        ):
+            raise ValueError("Fixture availability sequence must increase within 1..20")
+        self._availability_sequence = sequence
 
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
         if plan.kind not in {"bootstrap", "incremental"}:
@@ -17,10 +30,15 @@ class FixtureDataSource:
         if plan.kind == "bootstrap" and plan.after_session is not None:
             raise ValueError("Fixture bootstrap requires an empty canonical history")
         source, canonical = build_fixture()
+        selected_sessions_after_bootstrap = self._sessions_after_bootstrap
         if plan.kind == "incremental":
             if plan.after_session is None:
                 raise ValueError("Fixture incremental collection requires a frontier")
-            for _ in range(self._sessions_after_bootstrap):
+            selected_sessions_after_bootstrap = _next_available_session_count(
+                plan.after_session,
+                self._availability_sequence,
+            )
+            for _ in range(selected_sessions_after_bootstrap):
                 _append_session(canonical)
             if plan.after_session not in canonical["research_calendar"]:
                 raise DataSourceError(
@@ -39,13 +57,35 @@ class FixtureDataSource:
             source_lineage={
                 "adapter": "fixture-v1",
                 "after_session": plan.after_session,
-                "source_horizon_sessions_after_bootstrap": self._sessions_after_bootstrap,
+                "source_horizon_sessions_after_bootstrap": (selected_sessions_after_bootstrap),
                 "source": source["source"],
                 "source_units": source["source_units"],
             },
             canonical=canonical,
             covered_session_range=(str(calendar[0]), str(calendar[-1])),
         )
+
+
+def _next_available_session_count(
+    after_session: str,
+    availability_sequence: tuple[int, ...],
+) -> int:
+    _source, probe = build_fixture()
+    boundaries: dict[int, str] = {}
+    for count in range(1, availability_sequence[-1] + 1):
+        _append_session(probe)
+        calendar = probe["research_calendar"]
+        assert isinstance(calendar, list)
+        boundaries[count] = str(calendar[-1])
+    if after_session not in probe["research_calendar"]:
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="FRONTIER_NOT_RESEARCH_SESSION",
+        )
+    return next(
+        (count for count in availability_sequence if boundaries[count] > after_session),
+        availability_sequence[-1],
+    )
 
 
 def _append_session(canonical: dict[str, object]) -> None:
@@ -75,8 +115,6 @@ def _append_session(canonical: dict[str, object]) -> None:
     for rows in universes.values():
         assert isinstance(rows, list)
         prior = next(
-            row
-            for row in rows
-            if isinstance(row, dict) and str(row["session"]) == prior_session
+            row for row in rows if isinstance(row, dict) and str(row["session"]) == prior_session
         )
         rows.append({**copy.deepcopy(prior), "session": new_session})

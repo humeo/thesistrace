@@ -108,7 +108,19 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
-        data = DataService(database, publication, FixtureDataSource())
+        fixture_availability = tuple(
+            int(value)
+            for value in os.environ.get(
+                "THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE",
+                "1",
+            ).split(",")
+            if value.strip()
+        )
+        data = DataService(
+            database,
+            publication,
+            FixtureDataSource(availability_sequence=fixture_availability),
+        )
         validate_alpha = partial(
             validate_normalized_alpha,
             field_bindings=authorable_field_bindings(),

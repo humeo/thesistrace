@@ -22,11 +22,7 @@ def test_fixture_implements_only_the_canonical_collection_contract() -> None:
     assert "manifest" not in evidence
     assert "bucket" not in evidence
     source = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "thesistrace"
-        / "adapters"
-        / "fixture_data.py"
+        Path(__file__).resolve().parents[2] / "src" / "thesistrace" / "adapters" / "fixture_data.py"
     ).read_text()
     for forbidden in ("release", "postgres", "publication", "s3", "research_run", "daily_track"):
         assert forbidden not in source.lower()
@@ -38,9 +34,7 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
 
     direct = FixtureDataSource().collect(CollectionPlan.incremental(frontier))
     wider_source = FixtureDataSource(sessions_after_bootstrap=3)
-    catch_up = wider_source.collect(
-        CollectionPlan.incremental(frontier)
-    )
+    catch_up = wider_source.collect(CollectionPlan.incremental(frontier))
 
     assert len(direct.canonical["research_calendar"]) == 757
     assert len(catch_up.canonical["research_calendar"]) == 759
@@ -62,6 +56,20 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
     )
     assert len(no_change.canonical["research_calendar"]) == 757
     assert no_change.covered_session_range == direct.covered_session_range
+
+
+def test_fixture_availability_sequence_advances_deterministically_by_frontier() -> None:
+    source = FixtureDataSource(availability_sequence=(1, 2, 3))
+    root = source.collect(CollectionPlan.bootstrap())
+    observed_counts: list[int] = []
+    frontier = root.covered_session_range[1]
+
+    for _ in range(4):
+        batch = source.collect(CollectionPlan.incremental(frontier))
+        observed_counts.append(len(batch.canonical["research_calendar"]))
+        frontier = batch.covered_session_range[1]
+
+    assert observed_counts == [757, 758, 759, 759]
 
 
 def test_fixture_uses_the_provider_independent_error_contract() -> None:
