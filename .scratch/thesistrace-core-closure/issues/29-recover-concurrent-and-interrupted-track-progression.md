@@ -19,9 +19,32 @@ stale claims, or process restart without publishing the same target twice.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration` with concurrent claims, duplicate
-  delivery, stale publication, worker termination, and restart.
-- Inspect product state after recovery and confirm one Checkpoint and one Head
-  movement exist for each target.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/integration \
+  tests/acceptance/test_core_daily_track_recovery.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The tests must use real PostgreSQL and RustFS with independently assembled
+workers sharing the same durable state. They must force duplicate concurrent
+claims, expire and replace a live owner's claim or fence before its prepared
+publication returns, and construct unfinished durable progression state before
+creating a fresh worker runtime. They must prove only one owner can remain live
+for one Track and target, a stale owner cannot record a Publication, Checkpoint,
+or Head movement, restart recovers the same target without creating a second
+progression identity, and repeated delivery becomes a no-op after exactly one
+Checkpoint and one Head movement. With a later Release already published,
+recovery must finish the interrupted target first and then resume direct-
+successor catch-up in order. DailyTrack list, detail, and browser views must
+remain usable while exposing none of the claim, Attempt, lease, fence,
+publication, Checkpoint, recovery, or worker mechanics.
 
 ## Comments

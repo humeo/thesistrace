@@ -80,5 +80,52 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0003_recoverable_progression_attempts",
+            statement="""
+                CREATE TABLE daily_tracks.progression_attempts (
+                    id text PRIMARY KEY,
+                    track_id text NOT NULL,
+                    target_release_id text NOT NULL,
+                    ordinal integer NOT NULL CHECK (ordinal > 0),
+                    fence bigint NOT NULL CHECK (fence > 0),
+                    status text NOT NULL CHECK (
+                        status IN ('running', 'abandoned', 'succeeded')
+                    ),
+                    started_at timestamptz NOT NULL DEFAULT now(),
+                    heartbeat_at timestamptz NOT NULL DEFAULT now(),
+                    lease_expires_at timestamptz NOT NULL,
+                    finished_at timestamptz NULL,
+                    UNIQUE (track_id, target_release_id, ordinal),
+                    FOREIGN KEY (track_id, target_release_id)
+                        REFERENCES daily_tracks.progressions(track_id, target_release_id)
+                );
+
+                CREATE UNIQUE INDEX daily_tracks_one_live_progression_attempt_idx
+                    ON daily_tracks.progression_attempts (track_id, target_release_id)
+                    WHERE status = 'running';
+
+                INSERT INTO daily_tracks.progression_attempts (
+                    id, track_id, target_release_id, ordinal, fence, status,
+                    lease_expires_at, finished_at
+                )
+                SELECT
+                    'attempt_migrated_' || md5(track_id || ':' || target_release_id),
+                    track_id,
+                    target_release_id,
+                    1,
+                    fence,
+                    CASE status
+                        WHEN 'succeeded' THEN 'succeeded'
+                        ELSE 'running'
+                    END,
+                    now(),
+                    CASE status
+                        WHEN 'succeeded' THEN now()
+                        ELSE NULL
+                    END
+                FROM daily_tracks.progressions;
+            """,
+        ),
     ),
 )

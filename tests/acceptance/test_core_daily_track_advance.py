@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.daily_track import DailyTrackProgressionFailed
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import PublicationUnavailableError, PublishedRef
@@ -142,8 +143,9 @@ def test_active_track_advances_only_to_one_direct_successor(
             raise PublicationUnavailableError("injected Publication failure")
 
         monkeypatch.setattr(runtime.publication, "record", fail_record)
-        with pytest.raises(PublicationUnavailableError):
+        with pytest.raises(DailyTrackProgressionFailed) as failure:
             runtime.daily_tracks.process_next()
+        assert isinstance(failure.value.__cause__, PublicationUnavailableError)
         after_failure = _track_state(settings, second_track_id)
         assert after_failure["current_release_id"] == before_failure["current_release_id"]
         assert after_failure["head_manifest_sha256"] == before_failure["head_manifest_sha256"]
@@ -314,6 +316,13 @@ def _clear_injected_stale_claim(
     database.open()
     try:
         with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DELETE FROM daily_tracks.progression_attempts
+                WHERE track_id = %s AND target_release_id = %s
+                """,
+                (track_id, release_id),
+            )
             transaction.execute(
                 """
                 DELETE FROM daily_tracks.progressions
