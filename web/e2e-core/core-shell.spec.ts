@@ -66,6 +66,34 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
     current_release_id: string;
   };
   expect(seededTrack.current_release_id).toBe(seedRun.dataset_release_id);
+  const expectedTrackKeys = [
+    "current_release_id",
+    "definition_id",
+    "definition_revision",
+    "id",
+    "result_checksum_sha256",
+    "seed_release_id",
+    "seed_run_id",
+    "status",
+    "strategy_session",
+  ];
+  const trackDetail = await (
+    await page.request.get(`/api/daily-tracks/${seededTrack.id}`)
+  ).json();
+  expect(Object.keys(trackDetail).sort()).toEqual(expectedTrackKeys);
+  const trackList = await (await page.request.get("/api/daily-tracks")).json();
+  expect(Object.keys(trackList).sort()).toEqual(["items", "next_cursor"]);
+  expect(trackList.items).toHaveLength(1);
+  expect(Object.keys(trackList.items[0]).sort()).toEqual(expectedTrackKeys);
+  await page.goto("/daily-tracks");
+  await expect(page.getByRole("heading", { name: "Daily Tracks" })).toBeVisible();
+  await expect(page.getByRole("link", { name: seededTrack.id })).toBeVisible();
+  await expect(
+    page.getByText(
+      /\b(?:checkpoint|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker)\b/i,
+    ),
+  ).toHaveCount(0);
+  await page.goto("/data");
   const firstRelease = await page
     .getByRole("list", { name: "Dataset Release history" })
     .getByRole("listitem")
@@ -94,7 +122,11 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
       page.getByText(`Current Dataset Release ${successorReleaseId}`, { exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: /advance|catch up/i })).toHaveCount(0);
-    await expect(page.getByText(/Checkpoint|progression|claim|fence|worker/i)).toHaveCount(0);
+    await expect(
+      page.getByText(
+        /\b(?:checkpoint|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker)\b/i,
+      ),
+    ).toHaveCount(0);
     await page.goto("/data");
   }
   expect(new Set(observedTrackHeads).size).toBe(3);
@@ -377,7 +409,9 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
   await expect(page.getByRole("heading", { name: "DailyTrack" })).toBeVisible();
   await expect(page.getByText("Status active", { exact: true })).toBeVisible();
   await expect(
-    page.getByText(/Activation|Checkpoint|manifest|object|receipt|Attempt|worker/i),
+    page.getByText(
+      /\b(?:activation|checkpoint|manifest|object|receipt|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker)\b/i,
+    ),
   ).toHaveCount(0);
 });
 

@@ -50,6 +50,7 @@ KernelAdvance = Callable[[AdvanceInput], KernelState]
 Progress = Callable[[str, str, str], None]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
+WORKER_LOST_FAILURE = "WorkerLost"
 
 
 class DailyTrackActivationConflict(RuntimeError):
@@ -295,18 +296,24 @@ class DailyTrackService:
                     if latest_attempt["status"] == "running" and not latest_attempt["expired"]:
                         continue
                     if latest_attempt["status"] == "running":
-                        abandoned = transaction.execute(
+                        failed = transaction.execute(
                             """
                             UPDATE daily_tracks.progression_attempts
-                            SET status = 'abandoned', heartbeat_at = now(),
-                                lease_expires_at = now(), finished_at = now()
+                            SET status = 'failed', heartbeat_at = now(),
+                                lease_expires_at = now(), finished_at = now(),
+                                failure_reason = %s
                             WHERE id = %s AND track_id = %s
                               AND target_release_id = %s AND status = 'running'
                               AND lease_expires_at <= now()
                             """,
-                            (latest_attempt["id"], row["id"], target.id),
+                            (
+                                WORKER_LOST_FAILURE,
+                                latest_attempt["id"],
+                                row["id"],
+                                target.id,
+                            ),
                         )
-                        if abandoned.rowcount != 1:
+                        if failed.rowcount != 1:
                             continue
                 fence = int(row["execution_fence"]) + 1
                 if progression is None:

@@ -90,12 +90,15 @@ MIGRATIONS = MigrationPlan(
                     ordinal integer NOT NULL CHECK (ordinal > 0),
                     fence bigint NOT NULL CHECK (fence > 0),
                     status text NOT NULL CHECK (
-                        status IN ('running', 'abandoned', 'succeeded')
+                        status IN (
+                            'queued', 'running', 'succeeded', 'failed', 'cancelled'
+                        )
                     ),
                     started_at timestamptz NOT NULL DEFAULT now(),
                     heartbeat_at timestamptz NOT NULL DEFAULT now(),
                     lease_expires_at timestamptz NOT NULL,
                     finished_at timestamptz NULL,
+                    failure_reason text NULL,
                     UNIQUE (track_id, target_release_id, ordinal),
                     FOREIGN KEY (track_id, target_release_id)
                         REFERENCES daily_tracks.progressions(track_id, target_release_id)

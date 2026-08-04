@@ -8,7 +8,7 @@ from threading import Event
 import pytest
 from fastapi.testclient import TestClient
 
-from thesistrace._postgres import PostgresDatabase
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.daily_track import DailyTrackService
 from thesistrace.entrypoints.http import create_app
@@ -17,8 +17,98 @@ from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
 )
+from thesistrace.publication import PreparedPublication, Publication, PublishedRef
 from thesistrace.research_kernel import AdvanceInput, KernelState
 from thesistrace.research_kernel import advance as advance_kernel
+
+_TRACK_FIELDS = {
+    "id",
+    "status",
+    "seed_run_id",
+    "seed_release_id",
+    "current_release_id",
+    "definition_id",
+    "definition_revision",
+    "result_checksum_sha256",
+    "strategy_session",
+}
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_0003_migration_backfills_existing_progressions_and_recovers_running() -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as old_process:
+        runtime = old_process.app.state.core_runtime
+        succeeded_track = _seed_track(old_process, "ticket-29-upgrade")
+        running_track = _rerun_track(
+            old_process,
+            succeeded_track["seed_run_id"],
+            "ticket-29-upgrade-running",
+        )
+        successor = _publish_successor(old_process, 1)
+        assert runtime.daily_tracks.process_next() is True
+        assert (
+            old_process.get(f"/api/daily-tracks/{succeeded_track['id']}").json()[
+                "current_release_id"
+            ]
+            == successor["id"]
+        )
+
+        lost_worker = _service(
+            runtime,
+            progress=lambda stage, _track_id, _target_id: _lose_process(stage),
+        )
+        with pytest.raises(SystemExit, match="simulated DailyTrack worker loss"):
+            lost_worker.process_next()
+        with runtime.database.transaction() as transaction:
+            transaction.execute("DROP TABLE daily_tracks.progression_attempts")
+            deleted = transaction.execute(
+                """
+                DELETE FROM daily_tracks.schema_migrations
+                WHERE name = '0003_recoverable_progression_attempts'
+                """
+            )
+            assert deleted.rowcount == 1
+
+    with TestClient(create_app(settings)) as upgraded_process:
+        runtime = upgraded_process.app.state.core_runtime
+        snapshots = {
+            str(snapshot.pop("track_id")): snapshot
+            for snapshot in _attempt_snapshots(runtime.database)
+        }
+        assert snapshots == {
+            succeeded_track["id"]: {
+                "status": "succeeded",
+                "ordinal": 1,
+                "fence": 1,
+                "expired": True,
+                "finished": True,
+                "failure_reason": None,
+            },
+            running_track["id"]: {
+                "status": "running",
+                "ordinal": 1,
+                "fence": 1,
+                "expired": True,
+                "finished": False,
+                "failure_reason": None,
+            },
+        }
+
+        assert runtime.daily_tracks.process_next() is True
+        recovered = upgraded_process.get(f"/api/daily-tracks/{running_track['id']}").json()
+        assert recovered["current_release_id"] == successor["id"]
+        assert _durable_counts(runtime.database, running_track["id"]) == {
+            "progressions": 1,
+            "attempts": {"failed": 1, "succeeded": 1},
+            "checkpoints": 1,
+        }
+        assert _failed_attempt_reasons(runtime.database, running_track["id"]) == ["WorkerLost"]
 
 
 @pytest.mark.skipif(
@@ -59,9 +149,10 @@ def test_fresh_worker_recovers_interrupted_target_then_resumes_ordered_catch_up(
         assert runtime.daily_tracks.process_next() is False
         assert _durable_counts(runtime.database, track["id"]) == {
             "progressions": 2,
-            "attempts": {"abandoned": 1, "succeeded": 2},
+            "attempts": {"failed": 1, "succeeded": 2},
             "checkpoints": 2,
         }
+        assert _failed_attempt_reasons(runtime.database, track["id"]) == ["WorkerLost"]
 
 
 @pytest.mark.skipif(
@@ -136,7 +227,12 @@ def test_recovered_winner_fences_stale_prepared_worker_and_public_state_is_clean
             if not release_stale.wait(timeout=30):
                 raise TimeoutError("stale DailyTrack worker was not released")
 
-        stale = _service(runtime, progress=pause_after_prepare)
+        stale_publication = _PublicationRecordSpy(runtime.publication)
+        stale = _service(
+            runtime,
+            publication=stale_publication,
+            progress=pause_after_prepare,
+        )
         winner = _service(runtime)
         with ThreadPoolExecutor(max_workers=1) as executor:
             stale_future = executor.submit(stale.process_next)
@@ -152,30 +248,26 @@ def test_recovered_winner_fences_stale_prepared_worker_and_public_state_is_clean
         assert client.get(f"/api/daily-tracks/{track['id']}").json() == winning_detail
         assert _durable_counts(runtime.database, track["id"]) == {
             "progressions": 1,
-            "attempts": {"abandoned": 1, "succeeded": 1},
+            "attempts": {"failed": 1, "succeeded": 1},
             "checkpoints": 1,
         }
+        assert _failed_attempt_reasons(runtime.database, track["id"]) == ["WorkerLost"]
+        assert stale_publication.record_calls == 0
         assert _checkpoint_publication_count(runtime.database, track["id"]) == 1
         assert winner.process_next() is False
 
         listed = client.get("/api/daily-tracks").json()
-        product_text = f"{listed} {winning_detail}".lower().replace("_", " ").split()
-        assert not {
-            "attempt",
-            "claim",
-            "lease",
-            "heartbeat",
-            "fence",
-            "publication",
-            "checkpoint",
-            "recovery",
-            "worker",
-        }.intersection(product_text)
+        assert set(winning_detail) == _TRACK_FIELDS
+        assert set(listed) == {"items", "next_cursor"}
+        assert listed["next_cursor"] is None
+        assert len(listed["items"]) == 1
+        assert set(listed["items"][0]) == _TRACK_FIELDS
 
 
 def _service(
     runtime: CoreRuntime,
     *,
+    publication: object | None = None,
     advance: Callable[[AdvanceInput], KernelState] = advance_kernel,
     progress: Callable[[str, str, str], None] | None = None,
     lease_seconds: float = 15 * 60,
@@ -183,7 +275,7 @@ def _service(
 ) -> DailyTrackService:
     return DailyTrackService(
         runtime.database,
-        publication=runtime.publication,
+        publication=publication or runtime.publication,
         next_release=runtime.data.next_release,
         load_canonical=runtime.data.load_canonical,
         advance_kernel=advance,
@@ -191,6 +283,23 @@ def _service(
         lease_seconds=lease_seconds,
         heartbeat_seconds=heartbeat_seconds,
     )
+
+
+class _PublicationRecordSpy:
+    def __init__(self, delegate: Publication) -> None:
+        self._delegate = delegate
+        self.record_calls = 0
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._delegate, name)
+
+    def record(
+        self,
+        transaction: PostgresTransaction,
+        prepared: PreparedPublication,
+    ) -> PublishedRef:
+        self.record_calls += 1
+        return self._delegate.record(transaction, prepared)
 
 
 def _lose_process(stage: str) -> None:
@@ -225,6 +334,27 @@ def _seed_track(client: TestClient, request_id: str) -> dict[str, object]:
     assert runtime.research_runs.process_next() is True
     started = client.post(
         f"/api/research-runs/{run_id}/daily-tracks",
+        json={"request_id": f"{request_id}-track"},
+    )
+    assert started.status_code == 201
+    return started.json()
+
+
+def _rerun_track(
+    client: TestClient,
+    run_id: str,
+    request_id: str,
+) -> dict[str, object]:
+    runtime = client.app.state.core_runtime
+    accepted = client.post(
+        f"/api/research-runs/{run_id}/rerun",
+        json={"request_id": f"{request_id}-run"},
+    )
+    assert accepted.status_code == 202
+    rerun_id = accepted.json()["id"]
+    assert runtime.research_runs.process_next() is True
+    started = client.post(
+        f"/api/research-runs/{rerun_id}/daily-tracks",
         json={"request_id": f"{request_id}-track"},
     )
     assert started.status_code == 201
@@ -277,6 +407,24 @@ def _wait_for_lease_renewal(database: PostgresDatabase, track_id: str) -> bool:
     return False
 
 
+def _attempt_snapshots(database: PostgresDatabase) -> list[dict[str, object]]:
+    with database.transaction() as transaction:
+        rows = transaction.execute(
+            """
+            SELECT attempt.track_id, attempt.status, attempt.ordinal,
+                   attempt.fence, attempt.lease_expires_at <= now() AS expired,
+                   attempt.finished_at IS NOT NULL AS finished,
+                   attempt.failure_reason
+            FROM daily_tracks.progression_attempts AS attempt
+            JOIN daily_tracks.progressions AS progression
+              ON progression.track_id = attempt.track_id
+             AND progression.target_release_id = attempt.target_release_id
+            ORDER BY progression.created_at, attempt.track_id, attempt.ordinal
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _durable_counts(database: PostgresDatabase, track_id: str) -> dict[str, object]:
     with database.transaction() as transaction:
         row = transaction.execute(
@@ -304,6 +452,20 @@ def _durable_counts(database: PostgresDatabase, track_id: str) -> dict[str, obje
         "attempts": {str(item["status"]): int(item["count"]) for item in attempts},
         "checkpoints": int(row["checkpoints"]),
     }
+
+
+def _failed_attempt_reasons(database: PostgresDatabase, track_id: str) -> list[str]:
+    with database.transaction() as transaction:
+        rows = transaction.execute(
+            """
+            SELECT failure_reason
+            FROM daily_tracks.progression_attempts
+            WHERE track_id = %s AND status = 'failed'
+            ORDER BY ordinal
+            """,
+            (track_id,),
+        ).fetchall()
+    return [str(row["failure_reason"]) for row in rows]
 
 
 def _checkpoint_publication_count(database: PostgresDatabase, track_id: str) -> int:
