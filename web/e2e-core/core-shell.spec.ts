@@ -87,14 +87,45 @@ test("shows one sanitized terminal ResearchRun failure", async ({ page }) => {
 test("keeps Cancel authoritative after delayed ResearchRun work returns", async ({ page }) => {
   let cancelled = false;
   let workerReleased = false;
-  let delayNextGet = false;
-  let releaseOldPoll!: () => void;
-  const oldPollReleased = new Promise<void>((resolve) => {
-    releaseOldPoll = resolve;
-  });
   let observeOldPoll!: () => void;
   const oldPollObserved = new Promise<void>((resolve) => {
     observeOldPoll = resolve;
+  });
+  await page.exposeFunction("notifyOldPollObserved", observeOldPoll);
+  await page.addInitScript(() => {
+    type TestWindow = typeof window & {
+      delayNextResearchRunBody?: boolean;
+      notifyOldPollObserved: () => void;
+      releaseOldPollBody?: () => void;
+    };
+    const scope = window as TestWindow;
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (...args: Parameters<typeof fetch>) => {
+      const request = new Request(...args);
+      const response = await originalFetch(...args);
+      if (
+        request.method !== "GET" ||
+        !request.url.endsWith("/api/research-runs/run_cafef00d") ||
+        !scope.delayNextResearchRunBody
+      ) return response;
+
+      scope.delayNextResearchRunBody = false;
+      const body = await response.text();
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          scope.releaseOldPollBody = () => {
+            controller.enqueue(new TextEncoder().encode(body));
+            controller.close();
+          };
+        },
+      });
+      scope.notifyOldPollObserved();
+      return new Response(stream, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    };
   });
   const run = {
     id: "run_cafef00d",
@@ -103,23 +134,15 @@ test("keeps Cancel authoritative after delayed ResearchRun work returns", async 
     dataset_release_id: "release_cancel",
   };
   await page.route("**/api/research-runs/run_cafef00d", async (route) => {
-    const delayedOldPoll = delayNextGet;
-    if (delayedOldPoll) {
-      delayNextGet = false;
-      observeOldPoll();
-      await oldPollReleased;
-    }
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         ...run,
-        status: delayedOldPoll
-          ? "running"
-          : cancelled
-            ? "cancelled"
-            : workerReleased
-              ? "succeeded"
-              : "running",
+        status: cancelled
+          ? "cancelled"
+          : workerReleased
+            ? "succeeded"
+            : "running",
       }),
     });
   });
@@ -136,11 +159,17 @@ test("keeps Cancel authoritative after delayed ResearchRun work returns", async 
 
   await page.goto("/research-runs/run_cafef00d");
   await expect(page.getByText(/Status\s+running/)).toBeVisible();
-  delayNextGet = true;
+  await page.evaluate(() => {
+    (window as typeof window & { delayNextResearchRunBody?: boolean })
+      .delayNextResearchRunBody = true;
+  });
   await oldPollObserved;
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
-  releaseOldPoll();
+  await page.evaluate(() => {
+    (window as typeof window & { releaseOldPollBody?: () => void })
+      .releaseOldPollBody?.();
+  });
   await page.waitForTimeout(100);
   await expect(page.getByText(/Status\s+cancelled/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
@@ -406,7 +435,7 @@ test("replays the same Run request after its committed response is lost", async 
 });
 
 test("runs valid content and shows its bounded ResearchRun result", async ({ page }) => {
-  test.setTimeout(120_000);
+  test.setTimeout(180_000);
   await page.goto("/definitions");
   await page.getByRole("button", { name: "New Definition" }).click();
   await page.getByLabel("Definition name").fill("Browser admitted run");

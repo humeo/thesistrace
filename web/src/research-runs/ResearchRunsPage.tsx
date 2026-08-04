@@ -113,12 +113,14 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         if (generation !== loadGeneration.current) return;
         if (runId) {
           const nextRun = (await response.json()) as ResearchRun;
+          if (generation !== loadGeneration.current) return;
           setRun(nextRun);
           if (nextRun.status === "queued" || nextRun.status === "running") {
             timeout = window.setTimeout(() => void load(true), 500);
           }
         } else {
           const nextItems = ((await response.json()) as ResearchRunList).items;
+          if (generation !== loadGeneration.current) return;
           setItems(nextItems);
           if (nextItems.some((item) => item.status === "queued" || item.status === "running")) {
             timeout = window.setTimeout(() => void load(true), 500);
