@@ -305,7 +305,8 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
     corrected, appended = append_fixture_session(canonical)
-    historical_session = canonical["research_calendar"][-5]
+    uncorrected = copy.deepcopy(corrected)
+    historical_session = canonical["research_calendar"][-20]
     corrected_price = next(
         row for row in corrected["prices"] if row["session"] == historical_session
     )
@@ -313,6 +314,13 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
     prior = run(_run_input(canonical, definition)).track_state
     appended_sessions = list(appended["research_calendar"])
 
+    uncorrected_ordinary = advance(
+        AdvanceInput(
+            prior_state=prior,
+            target_canonical_release=uncorrected,
+            appended_sessions=appended_sessions,
+        )
+    )
     ordinary = advance(
         AdvanceInput(
             prior_state=prior,
@@ -327,6 +335,8 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
         appended_sessions=appended_sessions,
     )
 
+    assert continuation_snapshot(ordinary) != continuation_snapshot(uncorrected_ordinary)
+    assert ordinary.strategy_resume_snapshot() != uncorrected_ordinary.strategy_resume_snapshot()
     assert rebuilt == continuation_snapshot(ordinary)
     assert prior.canonical_snapshot() == canonical
 
