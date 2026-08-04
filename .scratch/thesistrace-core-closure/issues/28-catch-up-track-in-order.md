@@ -5,17 +5,19 @@ successor Dataset Release one at a time without skipping a boundary.
 
 **Blocked by:** 27.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Each progression targets only the direct successor of the committed Head.
-- [ ] A successful progression makes the following successor eligible until
+**Implementation:** complete
+
+- [x] Each progression targets only the direct successor of the committed Head.
+- [x] A successful progression makes the following successor eligible until
   Head reaches the current latest Release.
-- [ ] The Track never jumps directly to latest, merges targets, or skips a
+- [x] The Track never jumps directly to latest, merges targets, or skips a
   failed target.
-- [ ] Every intermediate Checkpoint is independently committed and verified.
-- [ ] A failure leaves Head at the last successful Release and stops catch-up at
+- [x] Every intermediate Checkpoint is independently committed and verified.
+- [x] A failure leaves Head at the last successful Release and stops catch-up at
   that exact target.
-- [ ] Dataset publication catch-up and DailyTrack progression catch-up remain
+- [x] Dataset publication catch-up and DailyTrack progression catch-up remain
   separate concepts and neither waits for the other.
 
 **How to verify:**
@@ -51,3 +53,35 @@ stable URL without exposing Checkpoint, progression, claim, fence, or worker
 mechanics.
 
 ## Comments
+
+- Implemented in `88d1511` and corrected in `41cd443`. The ordinary worker now
+  drains an available DailyTrack backlog by repeatedly invoking the existing
+  one-successor progression. Each invocation still derives the direct successor
+  from the committed Head and commits its own immutable Checkpoint before the
+  following successor becomes eligible; no latest-Release target or merged
+  catch-up operation was added.
+- Expected kernel or publication failures are converted to a typed
+  `DailyTrackProgressionFailed` boundary. The worker stops that catch-up pass at
+  the exact failed target without killing its daemon loop. Acceptance coverage
+  proves a later Data update can still publish while the failed Track retains
+  its last successful Head and exact target.
+- The fixture data adapter accepts a deterministic ordered availability
+  sequence only through test/runtime assembly; its default one-boundary
+  behavior remains unchanged. Browser assembly publishes three real successors
+  and observes the same stable DailyTrack URL visit every successor without
+  exposing Checkpoint, progression, claim, fence, or worker mechanics.
+- The first independent two-axis review found two P1 gaps: an expected Track
+  failure could terminate the shared worker, and the browser only exercised one
+  successor. Commit `41cd443` fixed both. The second review passed Standards and
+  Spec with no blocking findings. It retained only non-blocking test-code smells:
+  duplicated acceptance helpers and a stale first browser-test name.
+- Final ticket verification was run exactly from **How to verify** and passed:
+  backend `83 passed, 1 warning in 309.79s`; real Core browser `12 passed in
+  2.2m`; the command then removed the PostgreSQL and RustFS test containers.
+- Final repository verification passed with `make check`: Ruff passed; pytest
+  reported `523 passed, 92 skipped, 2 warnings in 1045.73s`; Web typecheck and
+  production build passed; narrow E2E reported `1 passed in 1.4m`; desktop E2E
+  reported `1 passed in 1.2m`. An earlier sandboxed attempt reached passing
+  Python/typecheck/build but could not bind `127.0.0.1:5273` (`listen EPERM`);
+  the complete recorded run was therefore repeated with local-listen permission
+  and exited successfully.
