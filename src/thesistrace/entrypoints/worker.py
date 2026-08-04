@@ -34,7 +34,7 @@ def _process_once(runtime: CoreRuntime) -> None:
     _process_data(runtime)
     if runtime.research_runs.process_next():
         logger.info("Core worker processed ResearchRun")
-    if runtime.daily_tracks.process_next():
+    while runtime.daily_tracks.process_next():
         logger.info("Core worker advanced DailyTrack")
 
 

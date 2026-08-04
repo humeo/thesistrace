@@ -20,9 +20,34 @@ successor Dataset Release one at a time without skipping a boundary.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` with at least three
-  ordered successor Releases and inspect every committed intermediate Head.
-- Confirm a failure at the middle target leaves later Releases published but
-  unprocessed by that Track.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/kernel \
+  tests/integration \
+  tests/acceptance/test_core_daily_track_catch_up.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The tests must use real PostgreSQL and RustFS to activate a Track at one seed
+Release, publish at least three ordered successors before progressing the
+Track, and invoke ordinary Core worker processing without a manual catch-up
+endpoint or control. They must observe the stable DailyTrack detail move through
+each direct successor in order, never jump to latest or merge targets, verify
+one independently committed immutable Checkpoint per intermediate Release, and
+prove repeated processing becomes a no-op only after Head reaches latest. A
+deterministic failure at the middle target must leave Head at the last successful
+Release, keep that exact failed target ahead of newer already-published Releases,
+and stop this Track from processing later targets while Data publication remains
+complete and independently readable. The browser must publish multiple later
+Releases through Data and observe the existing Track catch up in order on its
+stable URL without exposing Checkpoint, progression, claim, fence, or worker
+mechanics.
 
 ## Comments
