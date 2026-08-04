@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import copy
+from collections import Counter, defaultdict
 from collections.abc import Mapping
 from decimal import Decimal
 
 from thesistrace.research_kernel.kernel_run import RunOutput
+from thesistrace.research_kernel.numeric import canonical_decimal
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 
 
@@ -27,7 +29,7 @@ def build_result_payload(
     return {
         "factor_summary": _factor_summary(factor),
         "strategy_summary": _strategy_summary(strategy),
-        "strategy_daily_observations": [_daily_observation(row) for row in daily],
+        "strategy_daily_observations": _strategy_daily_observations(strategy),
         "terminal_strategy_state": _terminal_strategy_state(
             strategy,
             rebalance_interval=rebalance_interval,
@@ -72,26 +74,40 @@ def _strategy_summary(strategy: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def _daily_observation(row: Mapping[str, object]) -> dict[str, object]:
-    return {
-        name: copy.deepcopy(row[name])
-        for name in (
-            "session",
-            "cycle_type",
-            "rebalance",
-            "gross_nav",
-            "net_nav",
-            "benchmark_nav",
-            "gross_return",
-            "net_return",
-            "benchmark_return",
-            "net_cash",
-            "cumulative_transaction_cost",
-            "holdings_count",
-            "maximum_single_name_weight",
-            "cash_ratio",
+def _strategy_daily_observations(
+    strategy: Mapping[str, object],
+) -> list[dict[str, object]]:
+    daily = _rows(strategy, "daily")
+    rejections = _rows(strategy, "rejections")
+    rejection_counts: dict[str, Counter[str]] = defaultdict(Counter)
+    for rejection in rejections:
+        rejection_counts[str(rejection["session"])][str(rejection["reason"])] += 1
+
+    prior_cost = Decimal(0)
+    observations: list[dict[str, object]] = []
+    for row in daily:
+        cumulative_cost = Decimal(str(row["cumulative_transaction_cost"]))
+        session_cost = cumulative_cost - prior_cost
+        prior_cost = cumulative_cost
+        counts = rejection_counts[str(row["session"])]
+        observations.append(
+            {
+                "session": str(row["session"]),
+                "gross_nav": str(row["gross_nav"]),
+                "net_nav": str(row["net_nav"]),
+                "benchmark_nav": str(row["benchmark_nav"]),
+                "net_cash": str(row["net_cash"]),
+                "transaction_cost_cny": canonical_decimal(session_cost),
+                "holdings_count": int(row["holdings_count"]),
+                "maximum_single_name_weight": float(
+                    row["maximum_single_name_weight"]
+                ),
+                "upper_limit_buy_rejections": counts["upper_limit_buy"],
+                "lower_limit_sell_rejections": counts["lower_limit_sell"],
+                "suspension_rejections": counts["suspension"],
+            }
         )
-    }
+    return observations
 
 
 def _terminal_strategy_state(

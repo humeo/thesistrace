@@ -109,6 +109,23 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
             for horizon in result["factor_summary"]["horizons"].values()
         )
         assert len(result["strategy_daily_observations"]) == 504
+        expected_daily_fields = {
+            "session",
+            "gross_nav",
+            "net_nav",
+            "benchmark_nav",
+            "net_cash",
+            "transaction_cost_cny",
+            "holdings_count",
+            "maximum_single_name_weight",
+            "upper_limit_buy_rejections",
+            "lower_limit_sell_rejections",
+            "suspension_rejections",
+        }
+        assert all(
+            set(observation) == expected_daily_fields
+            for observation in result["strategy_daily_observations"]
+        )
         assert "alpha_matrix" not in result
         assert "forward_labels" not in result
         assert "orders" not in result
