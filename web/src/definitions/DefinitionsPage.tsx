@@ -12,6 +12,7 @@ type DefinitionDetail = DefinitionSummary & {
 };
 
 export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
+  const [activeDefinitionId, setActiveDefinitionId] = useState(definitionId);
   const [items, setItems] = useState<DefinitionSummary[] | null>(null);
   const [definition, setDefinition] = useState<DefinitionDetail | null>(null);
   const [creating, setCreating] = useState(false);
@@ -19,31 +20,50 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [hypothesis, setHypothesis] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"loading" | "refreshing" | "saving" | null>(
+    "loading",
+  );
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (kind: "loading" | "refreshing" = "loading") => {
+    if (busy !== null && kind === "refreshing") return;
+    setBusy(kind);
     setError(null);
-    if (definitionId) {
-      const response = await fetch(`/api/definitions/${definitionId}`);
-      if (!response.ok) throw new Error("Research Definition unavailable");
-      const loaded = (await response.json()) as DefinitionDetail;
-      setDefinition(loaded);
-      setName(loaded.name);
-      setHypothesis(loaded.hypothesis ?? "");
-      setCreating(false);
-      return;
+    try {
+      if (activeDefinitionId) {
+        const response = await fetch(`/api/definitions/${activeDefinitionId}`);
+        if (!response.ok) throw new Error("Research Definition unavailable");
+        const loaded = (await response.json()) as DefinitionDetail;
+        setDefinition(loaded);
+        setName(loaded.name);
+        setHypothesis(loaded.hypothesis ?? "");
+        setCreating(false);
+      } else {
+        const response = await fetch("/api/definitions");
+        if (!response.ok) throw new Error("Research Definitions unavailable");
+        setItems(((await response.json()) as DefinitionList).items);
+      }
+      if (kind === "refreshing") setStatus("Refreshed.");
+    } catch {
+      setError(
+        activeDefinitionId
+          ? "Research Definition unavailable"
+          : "Research Definitions unavailable",
+      );
+    } finally {
+      setBusy(null);
     }
-    const response = await fetch("/api/definitions");
-    if (!response.ok) throw new Error("Research Definitions unavailable");
-    setItems(((await response.json()) as DefinitionList).items);
-  }, [definitionId]);
+  }, [activeDefinitionId, busy]);
 
   useEffect(() => {
-    void load().catch((reason: Error) => setError(reason.message));
-  }, [load]);
+    void load();
+    // A route identity change is the load trigger; busy changes are not.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDefinitionId]);
 
   function startNew() {
     setCreating(true);
     setDefinition(null);
+    setActiveDefinitionId(undefined);
     setName("");
     setHypothesis("");
     setStatus(null);
@@ -51,39 +71,48 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   }
 
   async function save() {
+    if (busy !== null) return;
+    setBusy("saving");
     setError(null);
     setStatus("Saving…");
     const body: Record<string, unknown> = {};
     if (name.trim()) body.name = name;
-    if (hypothesis.trim()) body.hypothesis = hypothesis;
+    if (definition) body.hypothesis = hypothesis.trim() ? hypothesis : null;
+    else if (hypothesis.trim()) body.hypothesis = hypothesis;
     if (definition) body.expected_revision = definition.revision;
-    const response = await fetch(
-      definition ? `/api/definitions/${definition.id}` : "/api/definitions",
-      {
-        method: definition ? "PUT" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      },
-    );
-    if (!response.ok) {
+    try {
+      const response = await fetch(
+        definition ? `/api/definitions/${definition.id}` : "/api/definitions",
+        {
+          method: definition ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!response.ok) throw new Error("Research Definition was not saved");
+      const saved = (await response.json()) as DefinitionDetail;
+      setDefinition(saved);
+      setCreating(false);
+      setName(saved.name);
+      setHypothesis(saved.hypothesis ?? "");
+      setStatus(`Saved revision ${saved.revision}.`);
+      setActiveDefinitionId(saved.id);
+      window.history.replaceState({}, "", `/definitions/${saved.id}`);
+    } catch (reason: unknown) {
       setStatus(null);
-      setError("Research Definition was not saved");
-      return;
+      setError(
+        reason instanceof Error ? reason.message : "Research Definition was not saved",
+      );
+    } finally {
+      setBusy(null);
     }
-    const saved = (await response.json()) as DefinitionDetail;
-    setDefinition(saved);
-    setCreating(false);
-    setName(saved.name);
-    setHypothesis(saved.hypothesis ?? "");
-    setStatus(`Saved revision ${saved.revision}.`);
-    window.history.replaceState({}, "", `/definitions/${saved.id}`);
   }
 
-  if (error) {
+  if (error && !creating && definition === null && items === null) {
     return (
       <section aria-label="Definitions">
         <p role="alert">{error}</p>
-        <button onClick={() => void load()}>Retry</button>
+        <button disabled={busy !== null} onClick={() => void load()}>Retry</button>
       </section>
     );
   }
@@ -98,8 +127,11 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
       <h1>Definitions</h1>
       {!editing ? (
         <>
-          <button onClick={startNew}>New Definition</button>
-          <button onClick={() => void load()}>Refresh</button>
+          <button disabled={busy !== null} onClick={startNew}>New Definition</button>
+          <button disabled={busy !== null} onClick={() => void load("refreshing")}>Refresh</button>
+          {busy === "refreshing" && <p role="status">Refreshing…</p>}
+          {status && busy === null && <p role="status">{status}</p>}
+          {error && <><p role="alert">{error}</p><button onClick={() => void load()}>Retry</button></>}
           {items?.length === 0 && <p>No Research Definitions yet.</p>}
           <ol aria-label="Research Definitions">
             {items?.map((item) => (
@@ -129,9 +161,17 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
             />
           </label>
           {definition && <p>Revision {definition.revision}</p>}
-          <button type="submit">Save</button>
-          <button type="button" onClick={() => void load()}>Refresh</button>
-          {status && <p role="status">{status}</p>}
+          <button disabled={busy !== null} type="submit">Save</button>
+          <button
+            disabled={busy !== null}
+            type="button"
+            onClick={() => void load("refreshing")}
+          >
+            Refresh
+          </button>
+          {busy === "refreshing" && <p role="status">Refreshing…</p>}
+          {error && <><p role="alert">{error}</p><button type="button" onClick={() => void load()}>Retry</button></>}
+          {status && busy !== "refreshing" && <p role="status">{status}</p>}
         </form>
       )}
     </section>

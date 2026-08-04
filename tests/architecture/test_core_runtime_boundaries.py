@@ -8,7 +8,7 @@ from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
 from thesistrace.research_kernel import kernel_advance, kernel_run, strategy
 
 ROOT = Path(__file__).resolve().parents[2]
-CORE_PACKAGES = ("_postgres", "data", "entrypoints", "publication")
+CORE_PACKAGES = ("_postgres", "data", "definition", "entrypoints", "publication")
 FORBIDDEN_IMPORTS = (
     "thesistrace.hosted",
     "thesistrace.auth",

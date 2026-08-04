@@ -75,9 +75,31 @@ test("saves and reopens an incomplete nameless Definition", async ({ page }) => 
   await expect(page).toHaveURL(/\/definitions\/def_[a-f0-9]+$/);
   const stableUrl = page.url();
 
+  const detailRefresh = page.waitForRequest(
+    (request) => request.method() === "GET" && request.url() === stableUrl.replace("/definitions/", "/api/definitions/"),
+  );
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await detailRefresh;
+  await expect(page.getByRole("status")).toHaveText("Refreshed.");
+
+  await page.route(`**/api/definitions/${stableUrl.split("/").at(-1)}`, (route) =>
+    route.abort(), { times: 1 });
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByRole("alert")).toHaveText("Research Definition unavailable");
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+
+  await page.getByLabel("Hypothesis (optional)").fill("Temporary hypothesis");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved revision 2.");
+  await page.getByLabel("Hypothesis (optional)").fill("");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved revision 3.");
+
   await page.reload();
   await expect(page.getByLabel("Definition name")).toHaveValue(generatedName);
-  await expect(page.getByText("Revision 1")).toBeVisible();
+  await expect(page.getByText("Revision 3")).toBeVisible();
+  await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");
   await page.getByRole("link", { name: "Definitions" }).click();
   await expect(page.getByRole("link", { name: generatedName })).toBeVisible();
   await page.getByRole("button", { name: "Refresh" }).click();
