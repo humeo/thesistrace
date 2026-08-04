@@ -23,6 +23,7 @@ from thesistrace.definition.models import (
     OperatorOption,
     RunValidationIssue,
 )
+from thesistrace.research_kernel.alpha_expression import AlphaValidationError
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run import ImmutableRunInput, ResearchRunSummary
 
@@ -70,7 +71,7 @@ class DefinitionService:
         *,
         authorable_fields: Callable[[], tuple[AuthorableField, ...]],
         operator_catalog: Callable[[], dict[str, object]],
-        validate_alpha: Callable[[Mapping[str, object]], object],
+        validate_alpha: Callable[..., object],
         latest_release: Callable[[PostgresTransaction], ReleaseReference | None],
         admit_run: Callable[
             [PostgresTransaction, ImmutableRunInput], ResearchRunSummary
@@ -273,6 +274,23 @@ class DefinitionService:
 
             release = self._latest_release(transaction)
             issues = _runnability_issues(content, has_release=release is not None)
+            if release is not None and isinstance(content.get("alpha"), Mapping):
+                try:
+                    self._validate_alpha(
+                        content["alpha"],
+                        field_bindings=release.field_bindings,
+                    )
+                except AlphaValidationError:
+                    issues.append(
+                        RunValidationIssue(
+                            code="FIELD_UNAVAILABLE_IN_RELEASE",
+                            field="alpha",
+                            message=(
+                                "Alpha field is unavailable in the latest "
+                                "Dataset Release"
+                            ),
+                        )
+                    )
             serialized_issues = [issue.model_dump(mode="json") for issue in issues]
             if issues:
                 transaction.execute(

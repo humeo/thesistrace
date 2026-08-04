@@ -25,7 +25,11 @@ def test_valid_run_admission_is_atomic_immutable_and_replayable(
         runtime = client.app.state.core_runtime
         runtime.data.update("ticket-19-release")
         assert runtime.data.process_next_update() is True
+        first_release_id = client.get("/api/data").json()["latest_release"]["id"]
+        runtime.data.update("ticket-19-later-release")
+        assert runtime.data.process_next_update() is True
         release_id = client.get("/api/data").json()["latest_release"]["id"]
+        assert release_id != first_release_id
 
         command = _valid_command("ticket-19-first", name="First immutable run")
         accepted = client.post("/api/definitions/run", json=command)
@@ -131,9 +135,10 @@ def test_valid_run_admission_is_atomic_immutable_and_replayable(
         original_admit: Callable[..., object] = runtime.definitions._admit_run
 
         def fail_admission(
-            _transaction: PostgresTransaction,
-            _immutable_input: object,
+            transaction: PostgresTransaction,
+            immutable_input: object,
         ) -> object:
+            original_admit(transaction, immutable_input)
             raise RuntimeError("forced ResearchRun admission failure")
 
         monkeypatch.setattr(runtime.definitions, "_admit_run", fail_admission)
@@ -167,6 +172,45 @@ def test_valid_run_admission_is_atomic_immutable_and_replayable(
         }
         assert client.get("/api/snapshots").status_code == 404
         assert client.get("/api/definition-snapshots").status_code == 404
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_run_rejects_an_alpha_field_absent_from_the_latest_release() -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        runtime.data.update("ticket-19-field-release")
+        assert runtime.data.process_next_update() is True
+        release_id = client.get("/api/data").json()["latest_release"]["id"]
+        with runtime.database.transaction() as transaction:
+            transaction.execute(
+                """
+                DELETE FROM data.release_fields
+                WHERE release_id = %s AND field_id = 'price.close.adjusted'
+                """,
+                (release_id,),
+            )
+
+        rejected = client.post(
+            "/api/definitions/run",
+            json=_valid_command("ticket-19-missing-field", name="Unavailable field"),
+        )
+
+        assert rejected.status_code == 200
+        assert rejected.json()["outcome"] == "rejected"
+        assert rejected.json()["issues"] == [
+            {
+                "code": "FIELD_UNAVAILABLE_IN_RELEASE",
+                "field": "alpha",
+                "message": "Alpha field is unavailable in the latest Dataset Release",
+            }
+        ]
+        assert _counts(settings) == {"definitions": 1, "receipts": 1, "runs": 0}
 
 
 def _valid_command(
