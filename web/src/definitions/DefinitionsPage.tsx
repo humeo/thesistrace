@@ -83,10 +83,13 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   useEffect(() => {
     if (skipNextRouteLoad.current) {
       skipNextRouteLoad.current = false;
-      return;
+    } else {
+      void load("loading", true);
     }
-    void load("loading", true);
-    return () => loadController.current?.abort();
+    return () => {
+      loadGeneration.current += 1;
+      loadController.current?.abort();
+    };
   }, [load]);
 
   function startNew() {
