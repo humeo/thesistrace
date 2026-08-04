@@ -1,3 +1,6 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -130,6 +133,71 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
         )
         assert replay_after_data_changed.json() == data_rejected.json()
         assert client.post("/api/definitions/run", json=command).json() == outcome
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_concurrent_request_ids_serialize_without_pool_reentry() -> None:
+    settings = CoreSettings.from_environment()
+    _drop_definitions_schema(settings)
+
+    with TestClient(create_app(settings)) as client_a, TestClient(create_app(settings)) as client_b:
+        matching = {"request_id": "concurrent-matching", "name": "Matching"}
+        start = Barrier(3)
+
+        def submit(client: TestClient, command: dict[str, object]):
+            start.wait(timeout=10)
+            return client.post("/api/definitions/run", json=command)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (
+                executor.submit(submit, client_a, matching),
+                executor.submit(submit, client_b, matching),
+            )
+            start.wait(timeout=10)
+            matching_responses = [future.result(timeout=10) for future in futures]
+        assert [response.status_code for response in matching_responses] == [200, 200]
+        assert matching_responses[0].json() == matching_responses[1].json()
+        assert _durable_counts(settings)["definitions"] == 1
+        assert _durable_counts(settings)["run_receipts"] == 1
+
+        conflicting = Barrier(3)
+
+        def conflict(client: TestClient, name: str):
+            conflicting.wait(timeout=10)
+            return client.post(
+                "/api/definitions/run",
+                json={"request_id": "concurrent-conflict", "name": name},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = (
+                executor.submit(conflict, client_a, "Conflict A"),
+                executor.submit(conflict, client_b, "Conflict B"),
+            )
+            conflicting.wait(timeout=10)
+            conflict_responses = [future.result(timeout=10) for future in futures]
+        assert sorted(response.status_code for response in conflict_responses) == [200, 409]
+        assert _durable_counts(settings)["definitions"] == 2
+        assert _durable_counts(settings)["run_receipts"] == 2
+
+    with TestClient(create_app(settings)) as shared_client:
+        pool_start = Barrier(5)
+
+        def unique(index: int):
+            pool_start.wait(timeout=10)
+            return shared_client.post(
+                "/api/definitions/run",
+                json={"request_id": f"pool-run-{index}", "name": f"Pool {index}"},
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = [executor.submit(unique, index) for index in range(4)]
+            pool_start.wait(timeout=10)
+            responses = [future.result(timeout=10) for future in futures]
+        assert [response.status_code for response in responses] == [200, 200, 200, 200]
 
 
 def _drop_definitions_schema(settings: CoreSettings) -> None:

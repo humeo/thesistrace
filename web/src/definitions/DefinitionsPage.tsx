@@ -68,6 +68,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const skipNextRouteLoad = useRef(false);
+  const runAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
 
   const applyDefinition = useCallback((loaded: DefinitionDetail, catalog: AuthoringOptions) => {
     setDefinition(loaded);
@@ -270,12 +271,17 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setErrorKind(null);
     setRunIssues([]);
     setStatus("Checking Run…");
-    const body = {
+    const action = {
       ...currentContent(),
-      request_id: crypto.randomUUID(),
       ...(definition ? { expected_revision: definition.revision } : {}),
     };
+    const fingerprint = JSON.stringify({ definitionId: definition?.id ?? null, action });
+    if (runAttempt.current?.fingerprint !== fingerprint) {
+      runAttempt.current = { fingerprint, requestId: crypto.randomUUID() };
+    }
+    const body = { ...action, request_id: runAttempt.current.requestId };
     let failureKind: ErrorKind = "save";
+    let terminalResponse = false;
     try {
       const response = await fetch(
         definition ? `/api/definitions/${definition.id}/run` : "/api/definitions/run",
@@ -286,6 +292,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         },
       );
       if (response.status === 409) {
+        terminalResponse = true;
         failureKind = "conflict";
         const payload = await response.json() as {
           detail?: { current_revision?: number };
@@ -298,10 +305,12 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         );
       }
       if (response.status === 422) {
+        terminalResponse = true;
         throw new Error("Definition has structural errors. Your edits are unchanged.");
       }
       if (!response.ok) throw new Error("Definition Run failed");
       const outcome = (await response.json()) as DefinitionRunOutcome;
+      terminalResponse = true;
       if (!options) throw new Error("Authoring options unavailable");
       applyDefinition(outcome.definition, options);
       setRunIssues(outcome.issues);
@@ -318,8 +327,13 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     } catch (reason: unknown) {
       setStatus(null);
       setErrorKind(failureKind);
-      setError(reason instanceof Error ? reason.message : "Definition Run failed");
+      setError(
+        terminalResponse && reason instanceof Error
+          ? reason.message
+          : "Definition Run response was not received. Run again to retry the same action.",
+      );
     } finally {
+      if (terminalResponse) runAttempt.current = null;
       busyRef.current = false;
       setBusy(null);
     }

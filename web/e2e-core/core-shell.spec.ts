@@ -247,3 +247,32 @@ test("saves one rejected Run action and shows actionable issues", async ({ page 
   );
   await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
 });
+
+test("replays the same Run request after its committed response is lost", async ({ page }) => {
+  await page.goto("/definitions");
+  await page.getByRole("button", { name: "New Definition" }).click();
+  await page.getByLabel("Definition name").fill("Retry one logical run");
+
+  const requestIds: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && request.url().endsWith("/api/definitions/run")) {
+      requestIds.push(request.postDataJSON().request_id as string);
+    }
+  });
+  await page.route("**/api/definitions/run", async (route) => {
+    await route.fetch();
+    await route.abort("failed");
+  }, { times: 1 });
+
+  await page.getByRole("button", { name: "Run" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Definition Run response was not received. Run again to retry the same action.",
+  );
+  await page.getByRole("button", { name: "Run" }).click();
+  await expect(page.getByRole("status")).toHaveText(
+    "Run rejected after saving revision 1.",
+  );
+  expect(requestIds).toHaveLength(2);
+  expect(requestIds[0]).toBe(requestIds[1]);
+  await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
+});

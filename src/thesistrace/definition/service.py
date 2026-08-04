@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
-from thesistrace._postgres import PostgresDatabase
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data import AuthorableField
 from thesistrace.definition.models import (
     AuthorableFieldOption,
@@ -52,7 +52,7 @@ class DefinitionService:
         authorable_fields: Callable[[], tuple[AuthorableField, ...]],
         operator_catalog: Callable[[], dict[str, object]],
         validate_alpha: Callable[[Mapping[str, object]], object],
-        latest_release: Callable[[], object | None],
+        latest_release: Callable[[PostgresTransaction], object | None],
     ) -> None:
         self._database = database
         self._authorable_fields = authorable_fields
@@ -186,6 +186,10 @@ class DefinitionService:
         content = {field: getattr(command, field) for field in CONTENT_FIELDS}
 
         with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"definitions.run:{request_id}",),
+            ).fetchone()
             receipt = transaction.execute(
                 """
                 SELECT request_fingerprint, definition_id, saved_revision,
@@ -199,11 +203,6 @@ class DefinitionService:
                 if receipt["request_fingerprint"] != fingerprint:
                     raise DefinitionRunConflict("Definition Run request_id conflicts")
                 return _run_outcome_from_receipt(receipt)
-
-            release = self._latest_release()
-            issues = _runnability_issues(content, has_release=release is not None)
-            if not issues:
-                raise RuntimeError("accepted Definition Run admission is not available")
 
             if definition_id is None:
                 if command.expected_revision is not None:
@@ -247,6 +246,11 @@ class DefinitionService:
                     """,
                     (saved_revision, Jsonb(content), saved_id),
                 )
+
+            release = self._latest_release(transaction)
+            issues = _runnability_issues(content, has_release=release is not None)
+            if not issues:
+                raise RuntimeError("accepted Definition Run admission is not available")
 
             serialized_issues = [issue.model_dump(mode="json") for issue in issues]
             transaction.execute(

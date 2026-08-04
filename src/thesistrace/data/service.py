@@ -42,9 +42,17 @@ class DataService:
         """Expose Data-owned product field definitions without Kernel bindings."""
         return AUTHORABLE_FIELDS
 
-    def latest_release(self) -> ReleaseSummary | None:
-        """Return the current immutable Dataset Release product reference."""
-        return self.overview().latest_release
+    def latest_release(self, transaction: PostgresTransaction) -> ReleaseSummary | None:
+        """Resolve the current immutable Release in the caller's transaction."""
+        row = transaction.execute(
+            f"""
+            {_RELEASE_SELECT}
+            JOIN data.state AS state
+              ON state.latest_release_id = data.releases.id
+            WHERE state.singleton = 1
+            """
+        ).fetchone()
+        return _release_summary(row)
 
     def overview(self) -> DataOverview:
         with self._database.transaction() as transaction:
