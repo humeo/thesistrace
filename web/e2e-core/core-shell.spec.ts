@@ -179,6 +179,7 @@ test("keeps unsaved editor values after revision and structure errors", async ({
   );
   await expect(page.getByText("Revision 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
   await page.getByRole("button", {
     name: "Discard my edits and load server version",
   }).click();
@@ -200,6 +201,7 @@ test("keeps unsaved editor values after revision and structure errors", async ({
     "Definition has structural errors. Your edits are unchanged.",
   );
   await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
   await expect(page.getByRole("button", {
     name: "Discard my edits and load server version",
   })).toHaveCount(0);

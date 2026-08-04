@@ -374,7 +374,15 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
 
           {definition && <p>Revision {definition.revision}</p>}
           <button disabled={busy !== null} type="submit">Save</button>
-          <button disabled={busy !== null} type="button" onClick={() => void load("refreshing")}>Refresh</button>
+          {(errorKind === null || errorKind === "load") && (
+            <button
+              disabled={busy !== null}
+              type="button"
+              onClick={() => void load("refreshing")}
+            >
+              Refresh
+            </button>
+          )}
           {busy === "refreshing" && <p role="status">Refreshing…</p>}
           {error && (
             <>
