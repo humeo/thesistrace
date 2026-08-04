@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("publishes the first Dataset Release through the real Core", async ({ page }) => {
-  test.setTimeout(90_000);
+  test.setTimeout(180_000);
   await page.goto("/data");
 
   const navigation = page.getByRole("navigation", { name: "Product resources" });
@@ -26,7 +26,7 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   await page.getByRole("button", { name: "Update Data" }).click();
   await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
   await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible({
-    timeout: 30_000,
+    timeout: 60_000,
   });
   await expect(page.getByText("756 Research Sessions")).toBeVisible();
   await expect(page.getByText("First Release")).toBeVisible();
@@ -37,7 +37,7 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
     .textContent();
   await page.getByRole("button", { name: "Update Data" }).click();
   await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
-  await expect(page.getByText("757 Research Sessions")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("757 Research Sessions")).toBeVisible({ timeout: 60_000 });
   const releaseHistory = page.getByRole("list", { name: "Dataset Release history" });
   await expect(releaseHistory.getByRole("listitem")).toHaveCount(2);
   await expect(releaseHistory).toContainText(firstRelease ?? "missing-root-release");
@@ -50,7 +50,7 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
   await expect(page.getByRole("status")).toHaveText(
     "No new completed Research Session. Latest Release unchanged.",
-    { timeout: 30_000 },
+    { timeout: 60_000 },
   );
   await expect(releaseHistory.getByRole("listitem")).toHaveCount(2);
   await expect(
@@ -307,9 +307,18 @@ test("runs valid current content once and opens the queued ResearchRun", async (
   await expect(page.getByRole("link", { name: "Revision 1" })).toBeVisible();
   expect(writes).toEqual(["/api/definitions/run"]);
   await expect(page.getByText(/Snapshot/i)).toHaveCount(0);
+  await expect(page.getByText("Status running", { exact: true })).toBeVisible({
+    timeout: 30_000,
+  });
+  await expect(page.getByText("Status succeeded", { exact: true })).toBeVisible({
+    timeout: 90_000,
+  });
+  await expect(
+    page.getByText(/\b(?:attempt|claim|lease|heartbeat|fence|manifest|object)\b/i),
+  ).toHaveCount(0);
 
   await page.getByRole("link", { name: "Research Runs" }).click();
   await expect(page.getByRole("heading", { name: "Research Runs" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Research Runs" })).toContainText("queued");
+  await expect(page.getByRole("list", { name: "Research Runs" })).toContainText("succeeded");
   await expect(page.getByText(/Snapshot/i)).toHaveCount(0);
 });

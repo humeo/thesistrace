@@ -28,5 +28,38 @@ MIGRATIONS = MigrationPlan(
                     ON research_runs.runs (created_at DESC, id);
             """,
         ),
+        Migration(
+            name="0002_execution_attempts_and_results",
+            statement="""
+                ALTER TABLE research_runs.runs
+                    ADD COLUMN execution_fence integer NOT NULL DEFAULT 0
+                        CHECK (execution_fence >= 0),
+                    ADD COLUMN result_manifest_sha256 text,
+                    ADD COLUMN result_provenance jsonb CHECK (
+                        result_provenance IS NULL
+                        OR jsonb_typeof(result_provenance) = 'object'
+                    );
+
+                CREATE TABLE research_runs.attempts (
+                    id text PRIMARY KEY,
+                    run_id text NOT NULL REFERENCES research_runs.runs(id),
+                    ordinal integer NOT NULL CHECK (ordinal > 0),
+                    fence integer NOT NULL CHECK (fence > 0),
+                    status text NOT NULL CHECK (
+                        status IN ('running', 'succeeded', 'failed', 'cancelled')
+                    ),
+                    started_at timestamptz NOT NULL DEFAULT now(),
+                    heartbeat_at timestamptz NOT NULL DEFAULT now(),
+                    lease_expires_at timestamptz NOT NULL,
+                    finished_at timestamptz,
+                    failure_reason text,
+                    UNIQUE (run_id, ordinal)
+                );
+
+                CREATE UNIQUE INDEX research_runs_one_running_attempt_idx
+                    ON research_runs.attempts (run_id)
+                    WHERE status = 'running';
+            """,
+        ),
     ),
 )

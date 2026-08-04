@@ -17,19 +17,36 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
   useEffect(() => {
     const controller = new AbortController();
+    let timeout: number | undefined;
     setError(null);
     const path = runId ? `/api/research-runs/${runId}` : "/api/research-runs";
-    void fetch(path, { signal: controller.signal })
-      .then(async (response) => {
+    async function refresh() {
+      try {
+        const response = await fetch(path, { signal: controller.signal });
         if (!response.ok) throw new Error("ResearchRun unavailable");
-        if (runId) setRun(await response.json() as ResearchRun);
-        else setItems((await response.json() as ResearchRunList).items);
-      })
-      .catch((reason: unknown) => {
+        if (runId) {
+          const nextRun = await response.json() as ResearchRun;
+          setRun(nextRun);
+          if (nextRun.status === "queued" || nextRun.status === "running") {
+            timeout = window.setTimeout(() => void refresh(), 500);
+          }
+        } else {
+          const nextItems = (await response.json() as ResearchRunList).items;
+          setItems(nextItems);
+          if (nextItems.some((item) => item.status === "queued" || item.status === "running")) {
+            timeout = window.setTimeout(() => void refresh(), 500);
+          }
+        }
+      } catch (reason: unknown) {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
         setError("ResearchRun unavailable");
-      });
-    return () => controller.abort();
+      }
+    }
+    void refresh();
+    return () => {
+      if (timeout !== undefined) window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, [runId]);
 
   if (error) return <section aria-label="Research Runs"><p role="alert">{error}</p></section>;

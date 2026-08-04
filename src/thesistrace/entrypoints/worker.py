@@ -18,16 +18,22 @@ def main() -> None:
     settings = CoreSettings.from_environment()
 
     with open_core_runtime(settings) as runtime:
-        _process_data(runtime)
+        _process_once(runtime)
         if arguments.once:
             return
         while True:
             time.sleep(5)
-            _process_data(runtime)
+            _process_once(runtime)
 
 
 def _observe_data_state(status: str) -> None:
     logger.debug("Core worker observed Data state", extra={"data_status": status})
+
+
+def _process_once(runtime: CoreRuntime) -> None:
+    _process_data(runtime)
+    if runtime.research_runs.process_next():
+        logger.info("Core worker processed ResearchRun")
 
 
 def _process_data(runtime: CoreRuntime) -> None:

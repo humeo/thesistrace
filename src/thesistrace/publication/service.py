@@ -72,6 +72,13 @@ class PreparedPublication:
             )
         }
 
+    @property
+    def exact_bytes(self) -> int:
+        manifest = _load_manifest(self._manifest_bytes, self.manifest_sha256)
+        return len(self._manifest_bytes) + sum(
+            int(item["bytes"]) for item in _manifest_objects(manifest)
+        )
+
 
 @dataclass(frozen=True)
 class VerifiedPayload:

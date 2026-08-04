@@ -109,7 +109,11 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             validate_normalized_alpha,
             field_bindings=authorable_field_bindings(),
         )
-        research_runs = ResearchRunService(database)
+        research_runs = ResearchRunService(
+            database,
+            load_canonical=data.load_canonical,
+            publication=publication,
+        )
         yield CoreRuntime(
             database=database,
             data=data,
