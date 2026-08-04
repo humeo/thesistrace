@@ -1,21 +1,25 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+Revision = Annotated[int, Field(strict=True, ge=1)]
+HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
+RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
 
 
 class DefinitionSaveCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    expected_revision: int | None = None
+    expected_revision: Revision | None = None
     name: str | None = None
     hypothesis: str | None = None
     alpha: dict[str, object] | None = None
     universe: Literal["top300", "top1000", "top2000", "top3000"] | None = None
     neutralization: Literal["none", "industry"] | None = None
-    holdings_count: int | None = None
-    rebalance_every_sessions: int | None = None
+    holdings_count: HoldingsCount | None = None
+    rebalance_every_sessions: RebalanceInterval | None = None
 
 
 class DefinitionDetail(BaseModel):

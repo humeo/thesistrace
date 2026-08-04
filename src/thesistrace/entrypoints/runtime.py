@@ -4,18 +4,20 @@ import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 
 import boto3
 
 from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.adapters.fixture_data import FixtureDataSource
-from thesistrace.data import DataService
+from thesistrace.data import DataService, authorable_field_bindings
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.definition import DefinitionService
 from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
 from thesistrace.publication import Publication
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_kernel import operator_catalog
+from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -99,6 +101,10 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
         data = DataService(database, publication, FixtureDataSource())
+        validate_alpha = partial(
+            validate_normalized_alpha,
+            field_bindings=authorable_field_bindings(),
+        )
         yield CoreRuntime(
             database=database,
             data=data,
@@ -106,6 +112,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 database,
                 authorable_fields=data.authorable_fields,
                 operator_catalog=operator_catalog,
+                validate_alpha=validate_alpha,
             ),
             publication=publication,
         )

@@ -46,12 +46,22 @@ export function DataPage() {
   }, [overview?.status, refresh]);
 
   async function updateData() {
+    const previousOverview = overview;
     setError(null);
-    const response = await fetch("/api/data/update", {
-      method: "POST",
-      headers: { "Idempotency-Key": crypto.randomUUID() },
-    });
+    setOverview((current) => current && { ...current, status: "updating" });
+    let response: Response;
+    try {
+      response = await fetch("/api/data/update", {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+      });
+    } catch {
+      setOverview(previousOverview);
+      setError("Data Update was not accepted");
+      return;
+    }
     if (!response.ok) {
+      setOverview(previousOverview);
       setError("Data Update was not accepted");
       return;
     }

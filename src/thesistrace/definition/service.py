@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
@@ -42,10 +42,12 @@ class DefinitionService:
         *,
         authorable_fields: Callable[[], tuple[AuthorableField, ...]],
         operator_catalog: Callable[[], dict[str, object]],
+        validate_alpha: Callable[[Mapping[str, object]], object],
     ) -> None:
         self._database = database
         self._authorable_fields = authorable_fields
         self._operator_catalog = operator_catalog
+        self._validate_alpha = validate_alpha
 
     def authoring_options(self) -> DefinitionAuthoringOptions:
         catalog = self._operator_catalog()
@@ -97,6 +99,7 @@ class DefinitionService:
     def create(self, command: DefinitionSaveCommand) -> DefinitionDetail:
         if command.expected_revision is not None:
             raise ValueError("Creating a Research Definition takes no expected revision")
+        self._validate_structure(command)
         definition_id = f"def_{uuid4().hex[:20]}"
         content = {field: getattr(command, field) for field in CONTENT_FIELDS}
         name = str(content["name"] or "").strip()
@@ -120,6 +123,7 @@ class DefinitionService:
     ) -> DefinitionDetail | None:
         if command.expected_revision is None:
             raise ValueError("Updating a Research Definition requires expected revision")
+        self._validate_structure(command)
         with self._database.transaction() as transaction:
             current = transaction.execute(
                 """
@@ -157,6 +161,10 @@ class DefinitionService:
             if row is None:
                 raise DefinitionConflict(int(current["revision"]))
         return _detail(row)
+
+    def _validate_structure(self, command: DefinitionSaveCommand) -> None:
+        if command.alpha is not None:
+            self._validate_alpha(command.alpha)
 
 
 def _generated_name(definition_id: str) -> str:

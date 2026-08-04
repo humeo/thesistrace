@@ -218,6 +218,20 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
           body: JSON.stringify(body),
         },
       );
+      if (response.status === 409) {
+        const payload = await response.json() as {
+          detail?: { current_revision?: number };
+        };
+        const currentRevision = payload.detail?.current_revision;
+        throw new Error(
+          typeof currentRevision === "number"
+            ? `Definition changed elsewhere at revision ${currentRevision}. Your edits are unchanged.`
+            : "Definition changed elsewhere. Your edits are unchanged.",
+        );
+      }
+      if (response.status === 422) {
+        throw new Error("Definition has structural errors. Your edits are unchanged.");
+      }
       if (!response.ok) throw new Error("Research Definition was not saved");
       const saved = (await response.json()) as DefinitionDetail;
       if (!options) throw new Error("Authoring options unavailable");

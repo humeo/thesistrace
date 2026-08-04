@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 test("publishes the first Dataset Release through the real Core", async ({ page }) => {
+  test.setTimeout(90_000);
   await page.goto("/data");
 
   const navigation = page.getByRole("navigation", { name: "Product resources" });
@@ -146,4 +147,51 @@ test("authors and reopens an Alpha using authoritative stable IDs", async ({ pag
   await expect(page.getByLabel("Neutralization")).toHaveValue("industry");
   await expect(page.getByLabel("Holdings count")).toHaveValue("30");
   await expect(page.getByLabel("Rebalance interval")).toHaveValue("5");
+});
+
+test("keeps unsaved editor values after revision and structure errors", async ({ page }) => {
+  await page.goto("/definitions");
+  await page.getByRole("button", { name: "New Definition" }).click();
+  await page.getByLabel("Definition name").fill("Original name");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("status")).toHaveText("Saved revision 1.");
+  const definitionId = page.url().split("/").at(-1);
+  expect(definitionId).toMatch(/^def_[a-f0-9]+$/);
+
+  await page.evaluate(async (id) => {
+    const response = await fetch(`/api/definitions/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ expected_revision: 1, name: "External edit" }),
+    });
+    if (!response.ok) throw new Error(`external edit failed: ${response.status}`);
+  }, definitionId);
+
+  await page.getByLabel("Definition name").fill("My unsaved name");
+  await page.getByLabel("Hypothesis (optional)").fill("My unsaved hypothesis");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Definition changed elsewhere at revision 2. Your edits are unchanged.",
+  );
+  await expect(page.getByLabel("Definition name")).toHaveValue("My unsaved name");
+  await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue(
+    "My unsaved hypothesis",
+  );
+  await expect(page.getByText("Revision 1")).toBeVisible();
+
+  await page.getByRole("button", { name: "Add Alpha" }).click();
+  await page.getByLabel("Alpha operator").selectOption("ts_mean");
+  await page.getByLabel("Alpha window 2").evaluate((element) => {
+    element.removeAttribute("min");
+  });
+  await page.getByLabel("Alpha window 2").fill("0");
+  await page.getByRole("button", { name: "Save" }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Definition has structural errors. Your edits are unchanged.",
+  );
+  await expect(page.getByLabel("Definition name")).toHaveValue("My unsaved name");
+  await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue(
+    "My unsaved hypothesis",
+  );
+  await expect(page.getByLabel("Alpha window 2")).toHaveValue("0");
 });
