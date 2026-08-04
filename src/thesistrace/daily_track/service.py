@@ -6,7 +6,6 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from decimal import Decimal
 from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
@@ -38,14 +37,17 @@ from thesistrace.research_kernel import (
     KernelState,
     RunInput,
     advance,
+    advance_continuation,
     continuation_snapshot,
+    empty_continuation,
+    project_tracking_checkpoint,
+    restore_tracking_checkpoint,
     run,
 )
 from thesistrace.research_kernel.canonical_state import (
     canonical_sessions,
     slice_canonical_sessions,
 )
-from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +58,10 @@ Progress = Callable[[str, str, str], None]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
+# 504 rolling signal sessions plus the 21-session maximum label maturity tail.
+# Every Checkpoint advances at least one Research Session, so this is a fixed
+# upper bound even when a Track has run indefinitely.
+REBUILD_CHECKPOINT_LIMIT = 525
 
 
 class DailyTrackActivationConflict(RuntimeError):
@@ -517,7 +523,17 @@ class DailyTrackService:
         }
         prepared = self._publication.prepare(
             kind="daily-track.checkpoint",
-            payloads={"checkpoint": JsonPayload(_state_payload(state))},
+            payloads={
+                "checkpoint": JsonPayload(
+                    _state_payload(
+                        state,
+                        retained_strategy_sessions=[
+                            prior.boundary_session,
+                            *appended_sessions,
+                        ],
+                    )
+                )
+            },
             provenance=provenance,
         )
         return prepared, provenance, state
@@ -557,8 +573,7 @@ class DailyTrackService:
         canonical = self._load_canonical(claim.current_release_id)
         state = _state_from_payload(value, canonical)
         if self._working_cache is None:
-            rebuilt = self._rebuild_prior_state(claim)
-            continuation = continuation_snapshot(rebuilt)
+            continuation = self._rebuild_prior_continuation(claim, state)
             _verify_checkpoint_continuation(checkpoint, continuation)
             return state, continuation
         cached = self._working_cache.load(
@@ -572,8 +587,7 @@ class DailyTrackService:
         )
         if cached is not None:
             return state, cached
-        rebuilt = self._rebuild_prior_state(claim)
-        verified_continuation = continuation_snapshot(rebuilt)
+        verified_continuation = self._rebuild_prior_continuation(claim, state)
         _verify_checkpoint_continuation(checkpoint, verified_continuation)
         self._working_cache.store(
             track_id=claim.track_id,
@@ -584,35 +598,56 @@ class DailyTrackService:
         )
         return state, verified_continuation
 
-    def _rebuild_prior_state(self, claim: _ProgressionClaim) -> KernelState:
-        """Replay the verified immutable chain; never infer truth from cache bytes."""
+    def _rebuild_prior_continuation(
+        self,
+        claim: _ProgressionClaim,
+        head_state: KernelState,
+    ) -> Mapping[str, object]:
+        """Rebuild fixed-size transient windows from a bounded verified Release tail."""
         assert self._publication is not None
         assert self._load_canonical is not None
-        seed = self._load_canonical(claim.origin.seed_release_id)
-        seed_sessions = canonical_sessions(seed, "Seed Dataset Release")
-        if len(seed_sessions) < 756:
-            raise RuntimeError("Seed Dataset Release has fewer than 756 sessions")
-        state = run(
-            _kernel_input(
-                claim.origin,
-                slice_canonical_sessions(seed, seed_sessions[-756:]),
-            )
-        ).track_state
-        predecessor_release_id = claim.origin.seed_release_id
         with self._database.transaction() as transaction:
-            rows = transaction.execute(
+            fetched = transaction.execute(
                 """
                 SELECT target_release_id, predecessor_release_id,
                        manifest_sha256, provenance
                 FROM daily_tracks.checkpoints
                 WHERE track_id = %s
-                ORDER BY created_at, target_release_id
+                ORDER BY strategy_session DESC, target_release_id DESC
+                LIMIT %s
                 """,
-                (claim.track_id,),
+                (claim.track_id, REBUILD_CHECKPOINT_LIMIT + 1),
             ).fetchall()
+        truncated = len(fetched) > REBUILD_CHECKPOINT_LIMIT
+        rows = list(reversed(fetched[:REBUILD_CHECKPOINT_LIMIT]))
         if not rows:
             raise RuntimeError("DailyTrack Checkpoint chain is missing")
-        reached_head = False
+        if str(rows[-1]["target_release_id"]) != claim.current_release_id:
+            raise RuntimeError("DailyTrack Checkpoint chain does not reach its Head")
+        predecessor_release_id = str(rows[0]["predecessor_release_id"])
+        predecessor_canonical = self._load_canonical(predecessor_release_id)
+        predecessor_sessions = canonical_sessions(
+            predecessor_canonical,
+            "Checkpoint predecessor Dataset Release",
+        )
+        predecessor_boundary = predecessor_sessions[-1]
+        if truncated:
+            continuation: Mapping[str, object] = empty_continuation()
+        else:
+            if predecessor_release_id != claim.origin.seed_release_id:
+                raise RuntimeError("DailyTrack Checkpoint chain does not start at its Origin")
+            if len(predecessor_sessions) < 756:
+                raise RuntimeError("Seed Dataset Release has fewer than 756 sessions")
+            seed_state = run(
+                _kernel_input(
+                    claim.origin,
+                    slice_canonical_sessions(
+                        predecessor_canonical,
+                        predecessor_sessions[-756:],
+                    ),
+                )
+            ).track_state
+            continuation = continuation_snapshot(seed_state)
         for row in rows:
             target_release_id = str(row["target_release_id"])
             if str(row["predecessor_release_id"]) != predecessor_release_id:
@@ -627,33 +662,33 @@ class DailyTrackService:
             checkpoint_payload = bundle.payloads.get("checkpoint")
             if checkpoint_payload is None or checkpoint_payload.media_type != "application/json":
                 raise RuntimeError("DailyTrack Checkpoint payload is missing")
+            checkpoint_value = json.loads(checkpoint_payload.content)
+            if not isinstance(checkpoint_value, Mapping):
+                raise RuntimeError("DailyTrack Checkpoint payload is invalid")
+            checkpoint = KernelStateCheckpoint.model_validate(checkpoint_value)
             target_canonical = self._load_canonical(target_release_id)
             target_sessions = canonical_sessions(target_canonical, "Dataset Release")
             appended_sessions = [
-                session for session in target_sessions if session > state.boundary_session
+                session for session in target_sessions if session > predecessor_boundary
             ]
             if not appended_sessions:
                 raise RuntimeError("DailyTrack Checkpoint Release has no appended sessions")
-            state = self._advance_kernel(
-                AdvanceInput(
-                    prior_state=state,
-                    new_canonical_sessions=slice_canonical_sessions(
-                        target_canonical,
-                        appended_sessions,
-                    ),
+            if (
+                checkpoint.session_count != len(target_sessions)
+                or checkpoint.boundary_session != target_sessions[-1]
+            ):
+                raise RuntimeError(
+                    "DailyTrack Checkpoint boundary does not match its Dataset Release"
                 )
+            continuation = advance_continuation(
+                run_input=head_state.run_input_with_canonical(target_canonical),
+                prior_continuation=continuation,
+                target_canonical=target_canonical,
+                appended_sessions=appended_sessions,
             )
-            if canonical_json_bytes(_state_payload(state)) != checkpoint_payload.content:
-                raise PublicationVerificationError(
-                    "DailyTrack Checkpoint does not match rebuilt Kernel state"
-                )
             predecessor_release_id = target_release_id
-            if target_release_id == claim.current_release_id:
-                reached_head = True
-                break
-        if not reached_head:
-            raise RuntimeError("DailyTrack Checkpoint chain does not reach its Head")
-        return state
+            predecessor_boundary = target_sessions[-1]
+        return continuation
 
     def _publish_success(
         self,
@@ -884,44 +919,16 @@ def _kernel_input(origin: TrackingOrigin, canonical: dict[str, object]) -> RunIn
     )
 
 
-def _state_payload(state: KernelState) -> dict[str, object]:
-    run_input = state.run_input_with_canonical(state.canonical_snapshot())
-    output = state.output_snapshot()
-    alpha = output.get("alpha_matrix")
-    factor = output.get("factor_evaluation")
-    strategy = output.get("strategy_backtest")
-    if not all(isinstance(value, Mapping) for value in (alpha, factor, strategy)):
-        raise RuntimeError("DailyTrack Kernel output is incomplete")
-    continuation = continuation_snapshot(state)
-    continuation_bytes = canonical_json_bytes(continuation)
-    return KernelStateCheckpoint(
-        schema_version="daily-track-checkpoint-v1",
-        origin_session=state.origin_session,
-        session_count=state.session_count,
-        boundary_session=state.boundary_session,
-        run_input={
-            "alpha_expression": run_input.alpha_expression_snapshot(),
-            "field_bindings": run_input.field_bindings_snapshot(),
-            "universe": run_input.universe,
-            "neutralization": run_input.neutralization,
-            "holdings_count": run_input.holdings_count,
-            "rebalance_interval": run_input.rebalance_interval,
-            "initial_cash_cny": run_input.initial_cash_cny,
-            "commission_rate_all_in": run_input.commission_rate_all_in,
-            "commission_min_cny": run_input.commission_min_cny,
-            "stamp_duty_sell_rate": run_input.stamp_duty_sell_rate,
-            "transfer_fee_rate": run_input.transfer_fee_rate,
-        },
-        alpha_state={
-            "expression": alpha["expression"],
-            "effective_lookback": alpha["effective_lookback"],
-            "neutralization": alpha["neutralization"],
-        },
-        factor_summary=_factor_summary(factor),
-        strategy_state=_strategy_state(strategy, state.strategy_resume_snapshot()),
-        continuation_sha256=hashlib.sha256(continuation_bytes).hexdigest(),
-        pending_alpha_sessions=len(continuation["pending_alpha"]),
-        rolling_factor_rows=len(continuation["rolling_factor"]),
+def _state_payload(
+    state: KernelState,
+    *,
+    retained_strategy_sessions: list[str],
+) -> dict[str, object]:
+    return KernelStateCheckpoint.model_validate(
+        project_tracking_checkpoint(
+            state,
+            retained_strategy_sessions=retained_strategy_sessions,
+        )
     ).model_dump(mode="json")
 
 
@@ -930,178 +937,10 @@ def _state_from_payload(
     canonical: dict[str, object],
 ) -> KernelState:
     checkpoint = KernelStateCheckpoint.model_validate(value)
-    contract = checkpoint.run_input
-    run_input = RunInput(
-        canonical_data=canonical,
-        alpha_expression=contract.alpha_expression,
-        field_bindings=contract.field_bindings,
-        universe=contract.universe,
-        neutralization=contract.neutralization,
-        holdings_count=contract.holdings_count,
-        rebalance_interval=contract.rebalance_interval,
-        initial_cash_cny=contract.initial_cash_cny,
-        commission_rate_all_in=contract.commission_rate_all_in,
-        commission_min_cny=contract.commission_min_cny,
-        stamp_duty_sell_rate=contract.stamp_duty_sell_rate,
-        transfer_fee_rate=contract.transfer_fee_rate,
+    return restore_tracking_checkpoint(
+        checkpoint.model_dump(mode="json"),
+        canonical=canonical,
     )
-    sessions = canonical_sessions(canonical, "DailyTrack Head Dataset Release")
-    if len(sessions) != checkpoint.session_count or sessions[-1] != checkpoint.boundary_session:
-        raise RuntimeError("DailyTrack Checkpoint boundary does not match its Dataset Release")
-    strategy_state = checkpoint.strategy_state
-    continuation = strategy_state.get("continuation")
-    latest_observation = strategy_state.get("latest_observation")
-    strategy_summary = strategy_state.get("summary")
-    if not all(
-        isinstance(item, Mapping) for item in (continuation, latest_observation, strategy_summary)
-    ):
-        raise RuntimeError("DailyTrack Strategy Checkpoint is invalid")
-    retained = continuation.get("retained_observations")
-    positions = continuation.get("positions")
-    metric_state = continuation.get("metric_state")
-    if (
-        not isinstance(retained, list)
-        or not isinstance(positions, list)
-        or not isinstance(metric_state, Mapping)
-    ):
-        raise RuntimeError("DailyTrack Strategy continuation is invalid")
-    strategy_resume = {
-        "daily": retained,
-        "positions": positions,
-        "report_session_count": int(metric_state["session_count"]),
-        "metric_state": dict(metric_state),
-    }
-    alpha_state = checkpoint.alpha_state
-    factor_horizons = checkpoint.factor_summary.get("horizons")
-    if not isinstance(factor_horizons, Mapping):
-        raise RuntimeError("DailyTrack Factor Summary is invalid")
-    factor_output = {
-        "horizons": {
-            str(horizon): {**dict(summary), "daily": []}
-            for horizon, summary in factor_horizons.items()
-            if isinstance(summary, Mapping)
-        }
-    }
-    strategy_output = {
-        "daily": [dict(latest_observation)],
-        "positions": positions,
-        "metrics": dict(strategy_summary),
-        "orders": [],
-        "child_orders": [],
-        "fills": [],
-        "rebalance_events": [],
-        "rejections": [],
-        "diagnostics": [],
-    }
-    return KernelState(
-        run_input=run_input,
-        output={
-            "alpha_matrix": {**alpha_state, "sessions": []},
-            "forward_labels": {"horizons": {}},
-            "factor_evaluation": factor_output,
-            "strategy_backtest": strategy_output,
-            "strategy_time_series": {"daily": [dict(latest_observation)]},
-            "strategy_events": {},
-            "diagnostics": {},
-        },
-        strategy_resume=strategy_resume,
-        origin_session=checkpoint.origin_session,
-    )
-
-
-def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
-    horizons = factor.get("horizons")
-    if not isinstance(horizons, Mapping):
-        raise RuntimeError("DailyTrack Factor output is invalid")
-    projected: dict[str, object] = {}
-    for horizon in ("1", "5", "20"):
-        value = horizons.get(horizon)
-        if not isinstance(value, Mapping) or not isinstance(value.get("summary"), Mapping):
-            raise RuntimeError("DailyTrack Factor horizon is incomplete")
-        projected[horizon] = {
-            "horizon": int(value["horizon"]),
-            "summary": json.loads(canonical_json_bytes(value["summary"])),
-        }
-    return {"horizons": projected}
-
-
-def _strategy_state(
-    strategy: Mapping[str, object],
-    resume: dict[str, object],
-) -> dict[str, object]:
-    finalized_daily = strategy.get("daily")
-    resume_daily = resume.get("daily")
-    positions = resume.get("positions")
-    metrics = strategy.get("metrics")
-    if (
-        not isinstance(finalized_daily, list)
-        or not finalized_daily
-        or not isinstance(resume_daily, list)
-        or not resume_daily
-        or not isinstance(positions, list)
-        or not isinstance(metrics, Mapping)
-    ):
-        raise RuntimeError("DailyTrack Strategy output is incomplete")
-    metric_state = resume.get("metric_state")
-    if not isinstance(metric_state, Mapping):
-        resume_metrics = resume.get("metrics")
-        turnover = resume_metrics.get("turnover") if isinstance(resume_metrics, Mapping) else None
-        turnover_events = turnover.get("events") if isinstance(turnover, Mapping) else None
-        rejections = resume.get("rejections")
-        if not isinstance(turnover_events, list) or not isinstance(rejections, list):
-            raise RuntimeError("DailyTrack Strategy metric continuation is incomplete")
-        terminal = resume_daily[-1]
-        if not isinstance(terminal, Mapping):
-            raise RuntimeError("DailyTrack Strategy terminal observation is invalid")
-        metric_state = advance_strategy_metric_state(
-            None,
-            daily=[dict(item) for item in resume_daily if isinstance(item, Mapping)],
-            turnover_events=[dict(item) for item in turnover_events if isinstance(item, Mapping)],
-            cumulative_cost=Decimal(str(terminal["cumulative_transaction_cost"])),
-            rejections=[dict(item) for item in rejections if isinstance(item, Mapping)],
-        )
-    return {
-        "summary": _compact_strategy_metrics(metrics),
-        "latest_observation": _strategy_observation(finalized_daily[-1]),
-        "continuation": {
-            "retained_observations": [
-                _strategy_observation(item)
-                for item in resume_daily[-504:]
-                if isinstance(item, Mapping)
-            ],
-            "positions": [
-                json.loads(canonical_json_bytes(item))
-                for item in positions
-                if isinstance(item, Mapping)
-            ],
-            "metric_state": json.loads(canonical_json_bytes(metric_state)),
-        },
-    }
-
-
-def _strategy_observation(value: object) -> dict[str, object]:
-    if not isinstance(value, Mapping):
-        raise RuntimeError("DailyTrack Strategy observation is invalid")
-    return {
-        str(key): json.loads(canonical_json_bytes(item))
-        for key, item in value.items()
-        if key != "valuation_events"
-    }
-
-
-def _compact_strategy_metrics(metrics: Mapping[str, object]) -> dict[str, object]:
-    value = json.loads(canonical_json_bytes(metrics))
-    for parent, child in (
-        ("maximum_drawdown", "series"),
-        ("turnover", "events"),
-        ("holdings_count", "daily"),
-        ("maximum_single_name_weight", "daily"),
-        ("cash_ratio", "daily"),
-    ):
-        nested = value.get(parent)
-        if isinstance(nested, dict):
-            nested.pop(child, None)
-    return value
 
 
 def _verify_checkpoint_continuation(

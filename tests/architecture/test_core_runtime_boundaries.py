@@ -258,6 +258,15 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     assert "/api/working-cache" not in http_source
 
 
+def test_daily_track_cache_rebuild_has_a_fixed_checkpoint_tail() -> None:
+    service = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
+
+    assert "REBUILD_CHECKPOINT_LIMIT = 525" in service
+    assert "LIMIT %s" in service
+    assert "_rebuild_prior_state" not in service
+    assert "advance_continuation(" in service
+
+
 def test_research_run_owns_its_embedded_result_product_projection() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()

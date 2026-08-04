@@ -10,7 +10,11 @@ from thesistrace.research_kernel import (
     KernelState,
     RunInput,
     advance,
+    advance_continuation,
     continuation_snapshot,
+    empty_continuation,
+    project_tracking_checkpoint,
+    restore_tracking_checkpoint,
     run,
 )
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
@@ -250,6 +254,112 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
                 new_canonical_sessions=appended,
             )
         )
+
+
+def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    assert isinstance(canonical, dict)
+    complete, appended = append_fixture_session(canonical)
+    prior = run(_run_input(canonical, definition)).track_state
+    expected = advance(AdvanceInput(prior_state=prior, new_canonical_sessions=appended))
+
+    rebuilt = advance_continuation(
+        run_input=prior.run_input_with_canonical(complete),
+        prior_continuation=continuation_snapshot(prior),
+        target_canonical=complete,
+        appended_sessions=list(appended["research_calendar"]),
+    )
+
+    assert rebuilt == continuation_snapshot(expected)
+    assert len(rebuilt["pending_alpha"]) == 21
+    assert len(rebuilt["rolling_factor"]) == 1_512
+
+
+def test_kernel_rebuild_warms_from_empty_with_fixed_525_session_tail(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    assert isinstance(canonical, dict)
+    state = run(_run_input(canonical, definition)).track_state
+    calendar = list(canonical["research_calendar"])
+
+    rebuilt = advance_continuation(
+        run_input=state.run_input_with_canonical(canonical),
+        prior_continuation=empty_continuation(),
+        target_canonical=canonical,
+        appended_sessions=calendar[-525:],
+    )
+
+    assert rebuilt == continuation_snapshot(state)
+
+
+def test_kernel_owns_minimal_tracking_checkpoint_projection_and_restoration(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    assert isinstance(canonical, dict)
+    complete, appended = append_fixture_session(canonical)
+    prior = run(_run_input(canonical, definition)).track_state
+    advanced = advance(AdvanceInput(prior_state=prior, new_canonical_sessions=appended))
+
+    checkpoint = project_tracking_checkpoint(
+        advanced,
+        retained_strategy_sessions=[prior.boundary_session, advanced.boundary_session],
+    )
+    delta = checkpoint["strategy_state"]["retained_delta"]
+    assert len(delta) == 2
+    assert set(delta[0]) == {
+        "session",
+        "gross_nav",
+        "net_nav",
+        "benchmark_nav",
+        "net_cash",
+        "transaction_cost_cny",
+        "holdings_count",
+        "maximum_single_name_weight",
+        "upper_limit_buy_rejections",
+        "lower_limit_sell_rejections",
+        "suspension_rejections",
+    }
+    terminal = checkpoint["strategy_state"]["terminal"]
+    assert set(terminal["continuation_observation"]) == {
+        "session",
+        "gross_cash",
+        "net_cash",
+        "cumulative_transaction_cost",
+        "benchmark_nav",
+        "gross_nav",
+        "net_nav",
+    }
+    restored = restore_tracking_checkpoint(checkpoint, canonical=complete)
+
+    complete_next, appended_next = append_fixture_session(complete)
+    expected = advance(AdvanceInput(prior_state=advanced, new_canonical_sessions=appended_next))
+    actual = advance(
+        AdvanceInput(
+            prior_state=restored,
+            new_canonical_sessions=appended_next,
+            continuation=continuation_snapshot(advanced),
+        )
+    )
+
+    assert actual.boundary_session == complete_next["research_calendar"][-1]
+    assert continuation_snapshot(actual) == continuation_snapshot(expected)
+    actual_strategy = actual.output_snapshot()["strategy_backtest"]
+    expected_strategy = expected.output_snapshot()["strategy_backtest"]
+    assert actual_strategy["daily"][1:] == expected_strategy["daily"][-2:]
+    assert actual_strategy["positions"] == expected_strategy["positions"]
+    assert _compact_metrics(actual_strategy["metrics"]) == _compact_metrics(
+        expected_strategy["metrics"]
+    )
 
 
 def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state(

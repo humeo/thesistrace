@@ -196,6 +196,15 @@ def test_missing_or_unverifiable_checkpoint_never_falls_back_to_valid_cache(
         cache = runtime.daily_tracks._working_cache
         assert cache is not None
         cached = cache.path(track["id"]).read_bytes()
+        cache_loads = 0
+        original_cache_load = cache.load
+
+        def observe_cache_load(**kwargs: object) -> object:
+            nonlocal cache_loads
+            cache_loads += 1
+            return original_cache_load(**kwargs)
+
+        monkeypatch.setattr(cache, "load", observe_cache_load)
         before = _durable_counts(runtime.database, track["id"])
         _publish_successor(client, 2)
 
@@ -216,6 +225,7 @@ def test_missing_or_unverifiable_checkpoint_never_falls_back_to_valid_cache(
             "attempts": before["attempts"] + 1,
         }
         assert cache.path(track["id"]).read_bytes() == cached
+        assert cache_loads == 0
 
 
 def _seed_two_tracks(

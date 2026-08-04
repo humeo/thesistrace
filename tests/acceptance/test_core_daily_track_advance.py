@@ -132,6 +132,22 @@ def test_active_track_advances_only_to_one_direct_successor(
             '"rejections"',
         ):
             assert forbidden not in serialized_state
+        retained_delta = state["strategy_state"]["retained_delta"]
+        assert len(retained_delta) == 2
+        assert set(retained_delta[0]) == {
+            "session",
+            "gross_nav",
+            "net_nav",
+            "benchmark_nav",
+            "net_cash",
+            "transaction_cost_cny",
+            "holdings_count",
+            "maximum_single_name_weight",
+            "upper_limit_buy_rejections",
+            "lower_limit_sell_rejections",
+            "suspension_rejections",
+        }
+        assert state["strategy_state"]["terminal"]["session"] == (successor.appended_session_end)
 
         rerun = client.post(
             f"/api/research-runs/{run['id']}/rerun",

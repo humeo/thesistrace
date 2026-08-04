@@ -6,7 +6,9 @@ if TYPE_CHECKING:
     from thesistrace.research_kernel.kernel_advance import (
         AdvanceInput,
         advance,
+        advance_continuation,
         continuation_snapshot,
+        empty_continuation,
     )
     from thesistrace.research_kernel.kernel_run import (
         KernelRunError,
@@ -14,6 +16,10 @@ if TYPE_CHECKING:
         RunInput,
         RunOutput,
         run,
+    )
+    from thesistrace.research_kernel.tracking_state import (
+        project_tracking_checkpoint,
+        restore_tracking_checkpoint,
     )
 
 __all__ = [
@@ -23,10 +29,14 @@ __all__ = [
     "RunInput",
     "RunOutput",
     "advance",
+    "advance_continuation",
     "continuation_snapshot",
+    "empty_continuation",
     "equivalence_bytes",
     "first_divergence",
     "operator_catalog",
+    "project_tracking_checkpoint",
+    "restore_tracking_checkpoint",
     "run",
 ]
 
@@ -36,17 +46,37 @@ def __getattr__(name: str) -> object:
         from thesistrace.research_kernel.alpha_expression import operator_catalog
 
         return operator_catalog
-    if name in {"AdvanceInput", "advance", "continuation_snapshot"}:
+    if name in {
+        "AdvanceInput",
+        "advance",
+        "advance_continuation",
+        "continuation_snapshot",
+        "empty_continuation",
+    }:
         from thesistrace.research_kernel.kernel_advance import (
             AdvanceInput,
             advance,
+            advance_continuation,
             continuation_snapshot,
+            empty_continuation,
         )
 
         return {
             "AdvanceInput": AdvanceInput,
             "advance": advance,
+            "advance_continuation": advance_continuation,
             "continuation_snapshot": continuation_snapshot,
+            "empty_continuation": empty_continuation,
+        }[name]
+    if name in {"project_tracking_checkpoint", "restore_tracking_checkpoint"}:
+        from thesistrace.research_kernel.tracking_state import (
+            project_tracking_checkpoint,
+            restore_tracking_checkpoint,
+        )
+
+        return {
+            "project_tracking_checkpoint": project_tracking_checkpoint,
+            "restore_tracking_checkpoint": restore_tracking_checkpoint,
         }[name]
     if name in {"equivalence_bytes", "first_divergence"}:
         from thesistrace.research_kernel.equivalence import (

@@ -38,6 +38,9 @@ EVOLVING_REFERENCE_TABLES = (
     "adjustment_anchors",
     "industry_membership",
 )
+MAX_PENDING_ALPHA_SESSIONS = 21
+MAX_ROLLING_FACTOR_SESSIONS = 504
+MAX_ALPHA_LOOKBACK_SESSIONS = 252
 
 
 @dataclass(frozen=True, init=False)
@@ -142,7 +145,7 @@ def continuation_snapshot(state: KernelState) -> dict[str, object]:
     horizons = _mapping(factor.get("horizons"), "Factor horizons")
     if not isinstance(alpha_sessions, list):
         raise KernelRunError("Pending Alpha continuation is invalid")
-    selected_alpha = alpha_sessions[-21:]
+    selected_alpha = alpha_sessions[-MAX_PENDING_ALPHA_SESSIONS:]
     if any(not isinstance(item, Mapping) for item in selected_alpha):
         raise KernelRunError("Pending Alpha continuation is invalid")
     rolling_factor: list[dict[str, object]] = []
@@ -154,7 +157,7 @@ def continuation_snapshot(state: KernelState) -> dict[str, object]:
         daily = horizon_value.get("daily")
         if not isinstance(daily, list):
             raise KernelRunError("rolling Factor continuation is invalid")
-        selected_daily = daily[-504:]
+        selected_daily = daily[-MAX_ROLLING_FACTOR_SESSIONS:]
         if any(not isinstance(item, Mapping) for item in selected_daily):
             raise KernelRunError("rolling Factor continuation is invalid")
         rolling_factor.extend(
@@ -165,6 +168,133 @@ def continuation_snapshot(state: KernelState) -> dict[str, object]:
     return {
         "schema_version": "daily-track-working-state-v1",
         "pending_alpha": [dict(item) for item in selected_alpha if isinstance(item, Mapping)],
+        "rolling_factor": rolling_factor,
+    }
+
+
+def empty_continuation() -> dict[str, object]:
+    return {
+        "schema_version": "daily-track-working-state-v1",
+        "pending_alpha": [],
+        "rolling_factor": [],
+    }
+
+
+def advance_continuation(
+    *,
+    run_input: RunInput,
+    prior_continuation: Mapping[str, object],
+    target_canonical: dict[str, object],
+    appended_sessions: list[str],
+) -> dict[str, object]:
+    """Advance only the bounded transient Alpha and Factor working state."""
+    restored = _with_continuation(
+        {
+            "alpha_matrix": {
+                "expression": run_input.alpha_expression_snapshot(),
+                "effective_lookback": MAX_ALPHA_LOOKBACK_SESSIONS,
+                "neutralization": run_input.neutralization,
+                "sessions": [],
+            },
+            "factor_evaluation": {
+                "horizons": {
+                    str(horizon): {"horizon": horizon, "daily": []} for horizon in HORIZONS
+                }
+            },
+        },
+        prior_continuation,
+    )
+    prior_alpha = _mapping(restored.get("alpha_matrix"), "prior Alpha continuation")
+    prior_factor = _mapping(restored.get("factor_evaluation"), "prior Factor continuation")
+    calendar = canonical_sessions(target_canonical, "Continuation rebuild")
+    if not appended_sessions or any(session not in calendar for session in appended_sessions):
+        raise KernelRunError("Continuation rebuild appended sessions are invalid")
+    first_index = calendar.index(appended_sessions[0])
+    window = slice_canonical_sessions(
+        target_canonical,
+        calendar[max(0, first_index - MAX_ALPHA_LOOKBACK_SESSIONS) :],
+    )
+    evaluated = evaluate_alpha_matrix(
+        window,
+        expression=run_input.alpha_expression_snapshot(),
+        field_bindings=run_input.field_bindings_snapshot(),
+        universe_name=run_input.universe,
+        neutralization=run_input.neutralization,
+    )
+    evaluated_rows = evaluated.get("sessions")
+    prior_rows = prior_alpha.get("sessions")
+    if not isinstance(evaluated_rows, list) or not isinstance(prior_rows, list):
+        raise KernelRunError("Continuation rebuild Alpha state is invalid")
+    selected_set = set(calendar[-MAX_ROLLING_FACTOR_SESSIONS:])
+    new_set = set(appended_sessions)
+    alpha_rows = [dict(item) for item in prior_rows if isinstance(item, Mapping)]
+    alpha_rows.extend(
+        dict(item)
+        for item in evaluated_rows
+        if isinstance(item, Mapping)
+        and str(item.get("session")) in new_set
+        and str(item.get("session")) in selected_set
+    )
+    alpha_by_session = {str(item["session"]): item for item in alpha_rows}
+    matrix = {
+        "expression": run_input.alpha_expression_snapshot(),
+        "effective_lookback": int(evaluated["effective_lookback"]),
+        "neutralization": run_input.neutralization,
+        "sessions": list(alpha_by_session.values()),
+        "checksum": alpha_matrix_checksum(list(alpha_by_session.values())),
+    }
+    prior_horizons = _mapping(prior_factor.get("horizons"), "prior Factor horizons")
+    rolling_factor: list[dict[str, object]] = []
+    for horizon in HORIZONS:
+        affected = [
+            session
+            for session in affected_label_sessions(calendar, appended_sessions, horizon)
+            if session in alpha_by_session and session in selected_set
+        ]
+        partial_daily: list[dict[str, object]] = []
+        if affected:
+            labels = build_forward_labels(
+                target_canonical,
+                matrix,
+                signal_sessions=affected,
+                horizons=(horizon,),
+            )
+            partial_factor = evaluate_factor(labels)
+            partial_horizon = _mapping(
+                _mapping(partial_factor.get("horizons"), "partial Factor horizons").get(
+                    str(horizon)
+                ),
+                f"partial Factor horizon {horizon}",
+            )
+            value = partial_horizon.get("daily")
+            if not isinstance(value, list):
+                raise KernelRunError("Continuation rebuild Factor rows are invalid")
+            partial_daily = [dict(item) for item in value if isinstance(item, Mapping)]
+        prior_horizon = _mapping(
+            prior_horizons.get(str(horizon)),
+            f"prior Factor horizon {horizon}",
+        )
+        prior_daily = prior_horizon.get("daily")
+        if not isinstance(prior_daily, list):
+            raise KernelRunError("Continuation rebuild prior Factor rows are invalid")
+        by_session = {
+            str(item["session"]): dict(item)
+            for item in prior_daily
+            if isinstance(item, Mapping) and str(item.get("session")) in selected_set
+        }
+        by_session.update({str(item["session"]): item for item in partial_daily})
+        rolling_factor.extend(
+            {"horizon": horizon, **by_session[session]}
+            for session in calendar[-MAX_ROLLING_FACTOR_SESSIONS:]
+            if session in by_session
+        )
+    return {
+        "schema_version": "daily-track-working-state-v1",
+        "pending_alpha": [
+            alpha_by_session[session]
+            for session in calendar[-MAX_PENDING_ALPHA_SESSIONS:]
+            if session in alpha_by_session
+        ],
         "rolling_factor": rolling_factor,
     }
 
@@ -181,9 +311,9 @@ def _with_continuation(
     rolling = continuation.get("rolling_factor")
     if (
         not isinstance(pending, list)
-        or len(pending) > 21
+        or len(pending) > MAX_PENDING_ALPHA_SESSIONS
         or not isinstance(rolling, list)
-        or len(rolling) > 1_512
+        or len(rolling) > len(HORIZONS) * MAX_ROLLING_FACTOR_SESSIONS
     ):
         raise KernelRunError("Advance continuation bound is invalid")
     restored = json.loads(canonical_json_bytes(prior_output))

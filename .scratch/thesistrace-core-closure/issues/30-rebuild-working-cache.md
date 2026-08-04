@@ -27,8 +27,10 @@ written:
 set -eu
 ./scripts/core-test-runtime reset
 ./scripts/core-test-runtime run uv run pytest -q \
+  tests/kernel/test_advance_contract.py \
   tests/architecture \
   tests/integration \
+  tests/acceptance/test_core_daily_track_advance.py \
   tests/acceptance/test_core_daily_track_cache_recovery.py
 ./scripts/core-test-runtime reset
 ./scripts/core-test-runtime run bun run --cwd web test:core
