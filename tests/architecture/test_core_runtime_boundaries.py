@@ -260,11 +260,15 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
 
 def test_daily_track_cache_rebuild_has_a_fixed_checkpoint_tail() -> None:
     service = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
+    checkpoint = (ROOT / "src" / "thesistrace" / "daily_track" / "checkpoint.py").read_text()
+    kernel = (ROOT / "src" / "thesistrace" / "research_kernel" / "__init__.py").read_text()
 
     assert "REBUILD_CHECKPOINT_LIMIT = 525" in service
     assert "LIMIT %s" in service
     assert "_rebuild_prior_state" not in service
     assert "advance_continuation(" in service
+    assert "daily-track-checkpoint-v1" in checkpoint
+    assert "project_tracking_checkpoint" not in kernel
 
 
 def test_research_run_owns_its_embedded_result_product_projection() -> None:

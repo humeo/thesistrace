@@ -14,6 +14,10 @@ from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track.cache import _DailyTrackWorkingCache
+from thesistrace.daily_track.checkpoint import (
+    project_tracking_checkpoint,
+    restore_tracking_checkpoint,
+)
 from thesistrace.daily_track.models import (
     DailyTrackList,
     DailyTrackSummary,
@@ -40,8 +44,6 @@ from thesistrace.research_kernel import (
     advance_continuation,
     continuation_snapshot,
     empty_continuation,
-    project_tracking_checkpoint,
-    restore_tracking_checkpoint,
     run,
 )
 from thesistrace.research_kernel.canonical_state import (
@@ -59,8 +61,8 @@ ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
 # 504 rolling signal sessions plus the 21-session maximum label maturity tail.
-# Every Checkpoint advances at least one Research Session, so this is a fixed
-# upper bound even when a Track has run indefinitely.
+# The query reads one extra predecessor Checkpoint; _select_rebuild_steps then
+# trims the selected Release suffix to this many actual Research Sessions.
 REBUILD_CHECKPOINT_LIMIT = 525
 
 
@@ -483,11 +485,11 @@ class DailyTrackService:
         ]
         if not appended_sessions:
             raise RuntimeError("Dataset Release successor has no appended sessions")
-        appended = slice_canonical_sessions(target_canonical, appended_sessions)
         state = self._advance_kernel(
             AdvanceInput(
                 prior_state=prior,
-                new_canonical_sessions=appended,
+                target_canonical_release=target_canonical,
+                appended_sessions=appended_sessions,
                 continuation=continuation,
             )
         )
@@ -610,7 +612,7 @@ class DailyTrackService:
             fetched = transaction.execute(
                 """
                 SELECT target_release_id, predecessor_release_id,
-                       manifest_sha256, provenance
+                       manifest_sha256, provenance, strategy_session
                 FROM daily_tracks.checkpoints
                 WHERE track_id = %s
                 ORDER BY strategy_session DESC, target_release_id DESC
@@ -618,37 +620,40 @@ class DailyTrackService:
                 """,
                 (claim.track_id, REBUILD_CHECKPOINT_LIMIT + 1),
             ).fetchall()
-        truncated = len(fetched) > REBUILD_CHECKPOINT_LIMIT
-        rows = list(reversed(fetched[:REBUILD_CHECKPOINT_LIMIT]))
-        if not rows:
+        if not fetched:
             raise RuntimeError("DailyTrack Checkpoint chain is missing")
-        if str(rows[-1]["target_release_id"]) != claim.current_release_id:
+        if str(fetched[0]["target_release_id"]) != claim.current_release_id:
             raise RuntimeError("DailyTrack Checkpoint chain does not reach its Head")
-        predecessor_release_id = str(rows[0]["predecessor_release_id"])
-        predecessor_canonical = self._load_canonical(predecessor_release_id)
-        predecessor_sessions = canonical_sessions(
-            predecessor_canonical,
-            "Checkpoint predecessor Dataset Release",
+        head_calendar = canonical_sessions(
+            head_state.canonical_snapshot(),
+            "DailyTrack Head Dataset Release",
         )
-        predecessor_boundary = predecessor_sessions[-1]
-        if truncated:
-            continuation: Mapping[str, object] = empty_continuation()
-        else:
-            if predecessor_release_id != claim.origin.seed_release_id:
-                raise RuntimeError("DailyTrack Checkpoint chain does not start at its Origin")
-            if len(predecessor_sessions) < 756:
+        selected_steps, use_seed_continuation = _select_rebuild_steps(
+            fetched,
+            head_calendar=head_calendar,
+            seed_release_id=claim.origin.seed_release_id,
+            seed_session=claim.origin.initial_strategy_state.session,
+        )
+        if use_seed_continuation:
+            seed = self._load_canonical(claim.origin.seed_release_id)
+            seed_sessions = canonical_sessions(seed, "Seed Dataset Release")
+            if len(seed_sessions) < 756:
                 raise RuntimeError("Seed Dataset Release has fewer than 756 sessions")
             seed_state = run(
                 _kernel_input(
                     claim.origin,
                     slice_canonical_sessions(
-                        predecessor_canonical,
-                        predecessor_sessions[-756:],
+                        seed,
+                        seed_sessions[-756:],
                     ),
                 )
             ).track_state
             continuation = continuation_snapshot(seed_state)
-        for row in rows:
+        else:
+            continuation = empty_continuation()
+        predecessor_release_id = str(selected_steps[0][0]["predecessor_release_id"])
+        processed_sessions = 0
+        for row, appended_sessions in selected_steps:
             target_release_id = str(row["target_release_id"])
             if str(row["predecessor_release_id"]) != predecessor_release_id:
                 raise RuntimeError("DailyTrack Checkpoint Release chain is invalid")
@@ -668,14 +673,16 @@ class DailyTrackService:
             checkpoint = KernelStateCheckpoint.model_validate(checkpoint_value)
             target_canonical = self._load_canonical(target_release_id)
             target_sessions = canonical_sessions(target_canonical, "Dataset Release")
-            appended_sessions = [
-                session for session in target_sessions if session > predecessor_boundary
-            ]
-            if not appended_sessions:
-                raise RuntimeError("DailyTrack Checkpoint Release has no appended sessions")
+            try:
+                target_boundary_index = head_calendar.index(checkpoint.boundary_session)
+            except ValueError as error:
+                raise RuntimeError(
+                    "DailyTrack Checkpoint boundary is outside its Head Release"
+                ) from error
             if (
                 checkpoint.session_count != len(target_sessions)
                 or checkpoint.boundary_session != target_sessions[-1]
+                or target_sessions != head_calendar[: target_boundary_index + 1]
             ):
                 raise RuntimeError(
                     "DailyTrack Checkpoint boundary does not match its Dataset Release"
@@ -686,8 +693,10 @@ class DailyTrackService:
                 target_canonical=target_canonical,
                 appended_sessions=appended_sessions,
             )
+            processed_sessions += len(appended_sessions)
             predecessor_release_id = target_release_id
-            predecessor_boundary = target_sessions[-1]
+        if processed_sessions > REBUILD_CHECKPOINT_LIMIT:
+            raise RuntimeError("DailyTrack continuation rebuild exceeded its session bound")
         return continuation
 
     def _publish_success(
@@ -916,6 +925,58 @@ def _kernel_input(origin: TrackingOrigin, canonical: dict[str, object]) -> RunIn
         commission_min_cny=str(costs["commission_min_cny"]),
         stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
+    )
+
+
+def _select_rebuild_steps(
+    fetched: list[Mapping[str, object]],
+    *,
+    head_calendar: list[str],
+    seed_release_id: str,
+    seed_session: str,
+) -> tuple[list[tuple[Mapping[str, object], list[str]]], bool]:
+    """Select an ordered Release suffix containing at most 525 actual sessions."""
+    calendar_index = {session: index for index, session in enumerate(head_calendar)}
+    selected_desc: list[tuple[Mapping[str, object], list[str]]] = []
+    selected_session_count = 0
+    reached_origin = False
+    for index, row in enumerate(fetched):
+        target_boundary = str(row["strategy_session"])
+        target_index = calendar_index.get(target_boundary)
+        if target_index is None:
+            raise RuntimeError("DailyTrack Checkpoint boundary is outside its Head Release")
+        if index + 1 < len(fetched):
+            predecessor_row = fetched[index + 1]
+            if str(row["predecessor_release_id"]) != str(predecessor_row["target_release_id"]):
+                raise RuntimeError("DailyTrack Checkpoint Release chain is invalid")
+            predecessor_boundary = str(predecessor_row["strategy_session"])
+        elif str(row["predecessor_release_id"]) == seed_release_id:
+            predecessor_boundary = seed_session
+            reached_origin = True
+        else:
+            raise RuntimeError("DailyTrack Checkpoint tail is too short to rebuild")
+        predecessor_index = calendar_index.get(predecessor_boundary)
+        if predecessor_index is None or predecessor_index >= target_index:
+            raise RuntimeError("DailyTrack Checkpoint session chain is invalid")
+        available = target_index - predecessor_index
+        selected_count = min(
+            available,
+            REBUILD_CHECKPOINT_LIMIT - selected_session_count,
+        )
+        selected_desc.append(
+            (
+                row,
+                head_calendar[target_index - selected_count + 1 : target_index + 1],
+            )
+        )
+        selected_session_count += selected_count
+        if selected_session_count == REBUILD_CHECKPOINT_LIMIT or reached_origin:
+            break
+    if selected_session_count < REBUILD_CHECKPOINT_LIMIT and not reached_origin:
+        raise RuntimeError("DailyTrack Checkpoint tail is too short to rebuild")
+    return (
+        list(reversed(selected_desc)),
+        selected_session_count < REBUILD_CHECKPOINT_LIMIT,
     )
 
 

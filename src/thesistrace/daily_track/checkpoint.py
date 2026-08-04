@@ -1,4 +1,4 @@
-"""Pure projection and restoration seams for immutable DailyTrack state."""
+"""DailyTrack-owned immutable Checkpoint projection and Kernel restoration."""
 
 from __future__ import annotations
 
@@ -104,13 +104,18 @@ def restore_tracking_checkpoint(
         "Strategy continuation observation",
     )
     positions = terminal.get("positions")
+    continuation_positions = terminal.get("continuation_positions")
     metric_state = _mapping(
         terminal.get("continuation_metric_state"),
         "Strategy metric continuation",
     )
     retained_delta = strategy_state.get("retained_delta")
     summary = _mapping(strategy_state.get("summary"), "Strategy summary")
-    if not isinstance(positions, list) or not isinstance(retained_delta, list):
+    if (
+        not isinstance(positions, list)
+        or not isinstance(continuation_positions, list)
+        or not isinstance(retained_delta, list)
+    ):
         raise KernelRunError("DailyTrack Strategy state is invalid")
     return KernelState(
         run_input=run_input,
@@ -143,7 +148,7 @@ def restore_tracking_checkpoint(
         },
         strategy_resume={
             "daily": [dict(resume_observation)],
-            "positions": copy.deepcopy(positions),
+            "positions": copy.deepcopy(continuation_positions),
             "report_session_count": int(terminal["continuation_report_session_count"]),
             "metric_state": dict(metric_state),
         },
@@ -180,6 +185,7 @@ def _strategy_state(
     retained_strategy_sessions: Sequence[str],
 ) -> dict[str, object]:
     daily = _rows(strategy.get("daily"), "Strategy daily observations")
+    finalized_positions = _rows(strategy.get("positions"), "Strategy positions")
     rejections = _rows(strategy.get("rejections"), "Strategy rejections")
     metrics = _mapping(strategy.get("metrics"), "Strategy metrics")
     resume = state.strategy_resume_snapshot()
@@ -227,7 +233,7 @@ def _strategy_state(
             "net_nav": str(finalized_terminal["net_nav"]),
             "benchmark_nav": str(finalized_terminal["benchmark_nav"]),
             "cumulative_transaction_cost": str(finalized_terminal["cumulative_transaction_cost"]),
-            "positions": [copy.deepcopy(dict(item)) for item in resume_positions],
+            "positions": [copy.deepcopy(dict(item)) for item in finalized_positions],
             "rebalance_phase": {
                 "origin_session": state.origin_session,
                 "report_session_count": final_report_count,
@@ -243,6 +249,7 @@ def _strategy_state(
                 else None
             ),
             "continuation_observation": _continuation_observation(continuation_terminal),
+            "continuation_positions": [copy.deepcopy(dict(item)) for item in resume_positions],
             "continuation_report_session_count": report_count,
             "continuation_metric_state": copy.deepcopy(dict(metric_state)),
         },

@@ -88,7 +88,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         original_advance = runtime.daily_tracks._advance_kernel
 
         def fail_middle(advance_input: object) -> object:
-            sessions = advance_input.new_canonical_snapshot()["research_calendar"]
+            sessions = advance_input.appended_sessions_snapshot()
             if sessions == [releases[1]["covered_session_range"]["end"]]:
                 raise KernelRunError("injected middle target failure")
             return original_advance(advance_input)

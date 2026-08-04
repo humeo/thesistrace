@@ -65,8 +65,7 @@ def test_active_track_advances_only_to_one_direct_successor(
         original_advance = runtime.daily_tracks._advance_kernel
 
         def stale_advance(advance_input: object) -> object:
-            snapshot = advance_input.new_canonical_snapshot()
-            observed_sessions.append(list(snapshot["research_calendar"]))
+            observed_sessions.append(advance_input.appended_sessions_snapshot())
             state = original_advance(advance_input)
             _increment_fence(settings, track_id)
             return state
@@ -79,8 +78,7 @@ def test_active_track_advances_only_to_one_direct_successor(
         _clear_injected_stale_claim(settings, track_id, successor_id)
 
         def observed_advance(advance_input: object) -> object:
-            snapshot = advance_input.new_canonical_snapshot()
-            observed_sessions.append(list(snapshot["research_calendar"]))
+            observed_sessions.append(advance_input.appended_sessions_snapshot())
             return original_advance(advance_input)
 
         runtime.daily_tracks._advance_kernel = observed_advance

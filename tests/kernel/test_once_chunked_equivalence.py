@@ -30,7 +30,8 @@ def test_one_batch_and_multi_advance_reach_exactly_the_same_kernel_state(
     one_batch = advance(
         AdvanceInput(
             prior_state=seed,
-            new_canonical_sessions=slice_canonical_sessions(complete, new_sessions),
+            target_canonical_release=complete,
+            appended_sessions=new_sessions,
         )
     )
     chunked = seed
@@ -38,11 +39,12 @@ def test_one_batch_and_multi_advance_reach_exactly_the_same_kernel_state(
         chunked = advance(
             AdvanceInput(
                 prior_state=chunked,
-                new_canonical_sessions=slice_canonical_sessions(complete, chunk),
+                target_canonical_release=_target_through(complete, chunk[-1]),
+                appended_sessions=chunk,
             )
         )
 
-    assert chunked == one_batch
+    assert first_divergence(_state_evidence(chunked), _state_evidence(one_batch)) == ""
     assert equivalence_bytes(_state_evidence(chunked)) == equivalence_bytes(
         _state_evidence(one_batch)
     )
@@ -72,7 +74,8 @@ def test_equivalence_evidence_reports_the_first_divergent_boundary(
     state = advance(
         AdvanceInput(
             prior_state=seed,
-            new_canonical_sessions=slice_canonical_sessions(complete, new_sessions),
+            target_canonical_release=complete,
+            appended_sessions=new_sessions,
         )
     )
     expected = _state_evidence(state)
@@ -100,6 +103,13 @@ def _state_evidence(state: KernelState) -> dict[str, object]:
         "output": state.output_snapshot(),
         "strategy_resume": state.strategy_resume_snapshot(),
     }
+
+
+def _target_through(complete: dict[str, object], boundary: str) -> dict[str, object]:
+    calendar = list(complete["research_calendar"])
+    if boundary == calendar[-1]:
+        return copy.deepcopy(complete)
+    return slice_canonical_sessions(complete, calendar[: calendar.index(boundary) + 1])
 
 
 def _run_input(canonical: dict[str, object], definition: dict[str, object]) -> RunInput:

@@ -17,10 +17,6 @@ if TYPE_CHECKING:
         RunOutput,
         run,
     )
-    from thesistrace.research_kernel.tracking_state import (
-        project_tracking_checkpoint,
-        restore_tracking_checkpoint,
-    )
 
 __all__ = [
     "AdvanceInput",
@@ -35,8 +31,6 @@ __all__ = [
     "equivalence_bytes",
     "first_divergence",
     "operator_catalog",
-    "project_tracking_checkpoint",
-    "restore_tracking_checkpoint",
     "run",
 ]
 
@@ -67,16 +61,6 @@ def __getattr__(name: str) -> object:
             "advance_continuation": advance_continuation,
             "continuation_snapshot": continuation_snapshot,
             "empty_continuation": empty_continuation,
-        }[name]
-    if name in {"project_tracking_checkpoint", "restore_tracking_checkpoint"}:
-        from thesistrace.research_kernel.tracking_state import (
-            project_tracking_checkpoint,
-            restore_tracking_checkpoint,
-        )
-
-        return {
-            "project_tracking_checkpoint": project_tracking_checkpoint,
-            "restore_tracking_checkpoint": restore_tracking_checkpoint,
         }[name]
     if name in {"equivalence_bytes", "first_divergence"}:
         from thesistrace.research_kernel.equivalence import (
