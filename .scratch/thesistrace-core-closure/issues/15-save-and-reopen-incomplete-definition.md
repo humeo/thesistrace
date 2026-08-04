@@ -22,9 +22,22 @@ product resource.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` against real
-  PostgreSQL, including a nameless and incomplete Save followed by restart.
-- Run `bun run --cwd web test:e2e` and confirm the saved Definition reopens at
-  the same URL with the same generated name and revision.
+From the repository root, run the complete ticket verification exactly as
+written:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/integration \
+  tests/acceptance/test_core_definition_save.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:core
+./scripts/core-test-runtime down
+```
+
+The backend test must save and reopen a nameless incomplete Definition through
+real PostgreSQL across independent HTTP and worker process restarts. The browser
+test must reopen its stable detail URL with the same generated name and revision.
 
 ## Comments

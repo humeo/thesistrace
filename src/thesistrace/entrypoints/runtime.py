@@ -11,6 +11,8 @@ from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.data import DataService
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
+from thesistrace.definition import DefinitionService
+from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
 from thesistrace.publication import Publication
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 
@@ -74,6 +76,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data: DataService
+    definitions: DefinitionService
     publication: Publication
 
 
@@ -84,6 +87,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
     try:
         apply_migrations(database, PUBLICATION_MIGRATIONS)
         apply_migrations(database, DATA_MIGRATIONS)
+        apply_migrations(database, DEFINITION_MIGRATIONS)
         s3 = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,
@@ -96,6 +100,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         yield CoreRuntime(
             database=database,
             data=DataService(database, publication, FixtureDataSource()),
+            definitions=DefinitionService(database),
             publication=publication,
         )
     finally:

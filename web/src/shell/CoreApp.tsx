@@ -1,4 +1,5 @@
 import { DataPage } from "../data/DataPage";
+import { DefinitionsPage } from "../definitions/DefinitionsPage";
 import { AppShell, type ResourceRoute } from "./AppShell";
 
 const routes = new Set<ResourceRoute>([
@@ -8,14 +9,24 @@ const routes = new Set<ResourceRoute>([
   "/daily-tracks",
 ]);
 
-export function isCoreRoute(pathname: string): pathname is ResourceRoute {
-  return routes.has(pathname as ResourceRoute);
+export function isCoreRoute(pathname: string): boolean {
+  return (
+    routes.has(pathname as ResourceRoute) ||
+    /^\/definitions\/def_[a-f0-9]+$/.test(pathname)
+  );
 }
 
-export function CoreApp({ currentPath }: { currentPath: ResourceRoute }) {
+export function CoreApp({ currentPath }: { currentPath: string }) {
+  const definitionMatch = currentPath.match(/^\/definitions\/(def_[a-f0-9]+)$/);
   return (
     <AppShell currentPath={currentPath}>
-      {currentPath === "/data" ? <DataPage /> : <div aria-label="Resource outlet" />}
+      {currentPath === "/data" ? <DataPage /> : null}
+      {currentPath === "/definitions" || definitionMatch ? (
+        <DefinitionsPage definitionId={definitionMatch?.[1]} />
+      ) : null}
+      {currentPath !== "/data" && !currentPath.startsWith("/definitions") ? (
+        <div aria-label="Resource outlet" />
+      ) : null}
     </AppShell>
   );
 }

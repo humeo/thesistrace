@@ -10,7 +10,7 @@ const resourceRoutes = [
 export type ResourceRoute = (typeof resourceRoutes)[number]["path"];
 
 type AppShellProps = {
-  currentPath: ResourceRoute;
+  currentPath: string;
   children: ReactNode;
 };
 
@@ -20,7 +20,11 @@ export function AppShell({ currentPath, children }: AppShellProps) {
       <nav aria-label="Product resources">
         {resourceRoutes.map((resource) => (
           <a
-            aria-current={currentPath === resource.path ? "page" : undefined}
+            aria-current={
+              currentPath === resource.path || currentPath.startsWith(`${resource.path}/`)
+                ? "page"
+                : undefined
+            }
             href={resource.path}
             key={resource.path}
           >

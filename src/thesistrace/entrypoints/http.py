@@ -16,6 +16,12 @@ from thesistrace.data import (
     UpdateAcceptance,
 )
 from thesistrace.data.service import DataUpdateConflict
+from thesistrace.definition import (
+    DefinitionConflict,
+    DefinitionDetail,
+    DefinitionList,
+    DefinitionSaveCommand,
+)
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
 
 
@@ -64,6 +70,50 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/definitions", response_model=DefinitionList)
+    def list_definitions(request: Request) -> DefinitionList:
+        return _runtime(request).definitions.list()
+
+    @app.get("/api/definitions/{definition_id}", response_model=DefinitionDetail)
+    def get_definition(request: Request, definition_id: str) -> DefinitionDetail:
+        definition = _runtime(request).definitions.get(definition_id)
+        if definition is None:
+            raise HTTPException(status_code=404, detail="Research Definition not found")
+        return definition
+
+    @app.post(
+        "/api/definitions",
+        response_model=DefinitionDetail,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_definition(
+        request: Request,
+        command: DefinitionSaveCommand,
+    ) -> DefinitionDetail:
+        try:
+            return _runtime(request).definitions.create(command)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.put("/api/definitions/{definition_id}", response_model=DefinitionDetail)
+    def save_definition(
+        request: Request,
+        definition_id: str,
+        command: DefinitionSaveCommand,
+    ) -> DefinitionDetail:
+        try:
+            definition = _runtime(request).definitions.save(definition_id, command)
+        except DefinitionConflict as error:
+            raise HTTPException(
+                status_code=409,
+                detail={"current_revision": error.current_revision},
+            ) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if definition is None:
+            raise HTTPException(status_code=404, detail="Research Definition not found")
+        return definition
 
     return app
 
