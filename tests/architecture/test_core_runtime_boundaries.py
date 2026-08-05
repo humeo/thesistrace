@@ -2,6 +2,7 @@ import ast
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
@@ -47,6 +48,41 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 
 def test_runtime_configuration_has_no_deployment_mode() -> None:
     assert "mode" not in CoreSettings.__dataclass_fields__
+
+
+def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    scripts = project["project"]["scripts"]
+
+    assert scripts["thesistrace-api"] == "thesistrace.entrypoints.http:main"
+    assert scripts["thesistrace-worker"] == "thesistrace.entrypoints.worker:main"
+
+    script = """
+import json
+import sys
+from thesistrace.entrypoints import http, worker
+del http, worker
+forbidden = {
+    name for name in sys.modules
+    if name in {
+        "sqlite3",
+        "temporalio",
+        "thesistrace.api",
+        "thesistrace.auth",
+        "thesistrace.runtime",
+        "thesistrace.worker",
+    }
+    or name.startswith("thesistrace.hosted")
+}
+print(json.dumps(sorted(forbidden)))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert json.loads(completed.stdout) == []
 
 
 def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:

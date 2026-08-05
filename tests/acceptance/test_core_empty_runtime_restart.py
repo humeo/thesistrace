@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import socket
 import subprocess
-import sys
 import time
 from pathlib import Path
 from urllib.request import urlopen
 
 import pytest
+from test_core_daily_track_activation import _drop_product_schemas
 
-from thesistrace.entrypoints.runtime import core_environment_is_configured
+from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,7 +41,12 @@ def _request_json(url: str) -> object:
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
 def test_http_and_worker_process_restarts_preserve_empty_data() -> None:
+    _drop_product_schemas(CoreSettings.from_environment())
     environment = {**os.environ, "THESISTRACE_LOG_LEVEL": "warning"}
+    api_command = shutil.which("thesistrace-api")
+    worker_command = shutil.which("thesistrace-worker")
+    assert api_command is not None
+    assert worker_command is not None
     expected_overview = {
         "status": "idle",
         "latest_release": None,
@@ -50,7 +56,7 @@ def test_http_and_worker_process_restarts_preserve_empty_data() -> None:
 
     for _ in range(2):
         worker = subprocess.run(
-            [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+            [worker_command, "--once"],
             cwd=ROOT,
             env=environment,
             capture_output=True,
@@ -63,9 +69,7 @@ def test_http_and_worker_process_restarts_preserve_empty_data() -> None:
         port = _free_port()
         http = subprocess.Popen(
             [
-                sys.executable,
-                "-m",
-                "thesistrace.entrypoints.http",
+                api_command,
                 "--host",
                 "127.0.0.1",
                 "--port",

@@ -20,9 +20,9 @@ dependencies = [
 [project.scripts]
 thesistrace-core-api = "thesistrace.entrypoints.http:main"
 thesistrace-core-worker = "thesistrace.entrypoints.worker:main"
-thesistrace-api = "thesistrace.api:main"
+thesistrace-api = "thesistrace.entrypoints.http:main"
 thesistrace-operator = "thesistrace.operator:main"
-thesistrace-worker = "thesistrace.worker:main"
+thesistrace-worker = "thesistrace.entrypoints.worker:main"
 thesistrace-execution-relay = "thesistrace.hosted.execution_relay:main"
 thesistrace-temporal-worker = "thesistrace.hosted.temporal_worker:main"
 thesistrace-data-worker = "thesistrace.hosted.data_worker:main"
