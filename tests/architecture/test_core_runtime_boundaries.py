@@ -194,9 +194,18 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
     for removed_path in removed_paths:
         assert not (ROOT / removed_path).exists()
 
-    inventory_files = [ROOT / "pyproject.toml", ROOT / "uv.lock", ROOT / "Makefile"]
+    inventory_files = [
+        ROOT / "pyproject.toml",
+        ROOT / "uv.lock",
+        ROOT / "Makefile",
+        ROOT / "src" / "thesistrace" / "config.py",
+        ROOT / "src" / "thesistrace" / "capacity.py",
+        ROOT / "src" / "thesistrace" / "launch.py",
+        ROOT / "scripts" / "hosted-stack",
+    ]
     for root in (
         ROOT / "src" / "thesistrace" / "hosted",
+        ROOT / "tests" / "hosted",
         ROOT / "scripts",
         ROOT / "deploy" / "hosted",
     ):
@@ -211,6 +220,10 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
         "execution-relay",
         "execution_outbox",
         "compute-worker",
+        "data-worker",
+        "thesistrace-recovery-probe",
+        "recovery-probe",
+        "dispatch-probe",
     )
     for path in inventory_files:
         source = path.read_text().lower()

@@ -14,9 +14,6 @@ class MigrationError(RuntimeError):
 
 SERVICE_ROLES = {
     "api": "thesistrace_api",
-    "relay": "thesistrace_relay",
-    "data": "thesistrace_data",
-    "compute": "thesistrace_compute",
     "health": "thesistrace_health",
 }
 
@@ -78,7 +75,7 @@ def provision_service_role_credentials(
 ) -> None:
     if set(credentials) != set(SERVICE_ROLES):
         raise MigrationError(
-            "api, relay, data, compute, and health database passwords are required"
+            "api and health database passwords are required"
         )
     if any(not password for password in credentials.values()):
         raise MigrationError("service database passwords cannot be empty")

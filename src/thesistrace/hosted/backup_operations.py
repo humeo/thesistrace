@@ -32,7 +32,6 @@ BACKUP_INTERVAL_SECONDS = 6 * 60 * 60
 BACKUP_RETENTION = timedelta(days=7)
 GCM_TAG_BYTES = 16
 HEADER_BYTES = len(BACKUP_MAGIC) + 16 + 12
-WORKFLOW_PROBE_ID = re.compile(r"recovery-probe-[0-9A-Za-z_-]{1,96}")
 SOURCE_LAYOUT = {
     "postgres-data": "volumes/postgres-data",
     "immutable-objects": "volumes/immutable-objects",
@@ -297,7 +296,6 @@ def perform_backup(
     passphrase: str,
     status_path: Path,
     now: datetime | None = None,
-    workflow_probe_id: str | None = None,
 ) -> RecoverySet:
     attempted_at = (now or datetime.now(UTC)).astimezone(UTC)
     previous = _read_status(status_path)
@@ -309,7 +307,6 @@ def perform_backup(
             release_bundle_id=release_bundle_id,
             passphrase=passphrase,
             now=attempted_at,
-            workflow_probe_id=workflow_probe_id,
         )
     except Exception:
         _write_status(
@@ -394,13 +391,10 @@ def create_recovery_set(
     release_bundle_id: str,
     passphrase: str,
     now: datetime | None = None,
-    workflow_probe_id: str | None = None,
 ) -> RecoverySet:
     source_paths = _require_sources(sources)
     if not release_bundle_id:
         raise BackupOperationError("release Bundle identity is required")
-    if workflow_probe_id and not WORKFLOW_PROBE_ID.fullmatch(workflow_probe_id):
-        raise BackupOperationError("Workflow recovery probe ID is invalid")
     _validate_coordinated_sources(source_paths, release_bundle_id)
     created_at = (now or datetime.now(UTC)).astimezone(UTC)
     target.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -436,7 +430,6 @@ def create_recovery_set(
                             "backup_id": backup_id,
                             "created_at": created_at.isoformat(),
                             "release_bundle_id": release_bundle_id,
-                            "workflow_probe_id": workflow_probe_id,
                         }
                     ),
                 )
@@ -463,7 +456,6 @@ def create_recovery_set(
             "artifact": artifact_path.name,
             "artifact_bytes": artifact_path.stat().st_size,
             "artifact_sha256": _file_sha256(artifact_path),
-            "workflow_probe_id": workflow_probe_id,
         }
         manifest_temporary = target / f".{backup_id}.json.{os.getpid()}.tmp"
         manifest_descriptor = os.open(
@@ -609,7 +601,6 @@ def verify_recovery_set(
         "backup_id",
         "created_at",
         "release_bundle_id",
-        "workflow_probe_id",
     )
     if any(
         authenticated_metadata.get(field) != manifest.get(field)
@@ -768,7 +759,6 @@ def authenticated_recovery_selection(
         incident = incident_at.astimezone(UTC)
         backup_id = str(manifest["backup_id"])
         release_bundle_id = str(manifest["release_bundle_id"])
-        workflow_probe_id = manifest.get("workflow_probe_id")
     except (KeyError, ValueError) as error:
         raise BackupOperationError("recovery selection metadata is invalid") from error
     if incident < created_at:
@@ -778,11 +768,6 @@ def authenticated_recovery_selection(
         raise BackupOperationError("selected recovery set exceeds the six-hour RPO")
     if re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None:
         raise BackupOperationError("recovery selection manifest identity is invalid")
-    if workflow_probe_id is not None and (
-        not isinstance(workflow_probe_id, str)
-        or WORKFLOW_PROBE_ID.fullmatch(workflow_probe_id) is None
-    ):
-        raise BackupOperationError("recovery selection Workflow probe is invalid")
     return {
         "format": RECOVERY_SELECTION_FORMAT,
         "backup_id": backup_id,
@@ -791,7 +776,6 @@ def authenticated_recovery_selection(
         "incident_at": incident.isoformat(),
         "committed_state_loss_bound_seconds": state_loss,
         "manifest_sha256": manifest_sha256,
-        "workflow_probe_id": workflow_probe_id,
         "authenticated": True,
     }
 
@@ -809,7 +793,6 @@ def verify_authenticated_recovery_selection(
         incident_at = datetime.fromisoformat(str(selection["incident_at"])).astimezone(UTC)
         state_loss = int(selection["committed_state_loss_bound_seconds"])
         release_bundle_id = str(selection["release_bundle_id"])
-        workflow_probe_id = selection.get("workflow_probe_id")
     except (KeyError, TypeError, ValueError) as error:
         raise RestoreVerificationError(
             "authenticated recovery selection is invalid"
@@ -822,13 +805,6 @@ def verify_authenticated_recovery_selection(
         or calculated_loss < 0
         or state_loss != calculated_loss
         or not release_bundle_id
-        or (
-            workflow_probe_id is not None
-            and (
-                not isinstance(workflow_probe_id, str)
-                or WORKFLOW_PROBE_ID.fullmatch(workflow_probe_id) is None
-            )
-        )
         or re.fullmatch(r"[0-9a-f]{64}", str(selection.get("manifest_sha256", "")))
         is None
     ):
@@ -840,7 +816,6 @@ def verify_authenticated_recovery_selection(
         "recovery_set_authenticated": True,
         "committed_state_loss_bound_seconds": state_loss,
         "release_bundle_id": release_bundle_id,
-        "workflow_probe_id": workflow_probe_id,
     }
 
 
@@ -1066,12 +1041,6 @@ def write_recovery_exercise(
         "recovery_execution_within_8h": execution <= 8 * 60 * 60,
         "public_origin_smoke": bool(public_origin_smoke),
     }
-    workflow_probe_id = verified_selection["workflow_probe_id"]
-    if workflow_probe_id is not None:
-        objectives["workflow_recovery"] = bool(
-            verification.get("workflow_recovery_verified") is True
-            and verification.get("workflow_probe_id") == workflow_probe_id
-        )
     evidence = {
         "format": "thesistrace-recovery-exercise-v1",
         "backup_id": verified_selection["backup_id"],
@@ -1086,11 +1055,6 @@ def write_recovery_exercise(
         "recovery_execution_seconds": execution,
         "latest_dataset_release_id": latest_release,
         "verified_objects": verified_objects,
-        **(
-            {"workflow_probe_id": workflow_probe_id}
-            if workflow_probe_id is not None
-            else {}
-        ),
         "objectives": objectives,
         "status": "passed" if all(objectives.values()) else "failed",
     }

@@ -64,7 +64,6 @@ def healthy_dependencies() -> dict[str, object]:
         "identity": True,
         "database": True,
         "object_store": True,
-        "temporal": True,
         "telemetry": True,
         "trace_export": True,
         "tushare": True,
@@ -77,14 +76,6 @@ def healthy_dependencies() -> dict[str, object]:
             "healthy": True,
             "last_attempt_succeeded": True,
             "last_success_age_seconds": 60.0,
-        },
-        "temporal_queues": {
-            "pollers_ready": True,
-            "task_queue_compute_workflow_backlog": 0,
-            "task_queue_compute_p1_backlog": 0,
-            "task_queue_compute_p3_backlog": 0,
-            "task_queue_data_workflow_backlog": 0,
-            "task_queue_data_activity_backlog": 0,
         },
     }
 
@@ -105,20 +96,20 @@ def complete_semantic_state() -> SemanticRegressionState:
 
 
 def test_process_probe_is_dependency_independent_and_role_specific() -> None:
-    state = ProcessProbeState(service="compute-worker", slot="p1-1")
+    state = ProcessProbeState(service="api", slot="api-1")
     with TestClient(create_probe_app(state)) as client:
         assert client.get("/live").status_code == 200
         assert client.get("/ready").status_code == 503
 
         state.mark_ready()
         assert client.get("/ready").json() == {
-            "service": "compute-worker",
-            "slot": "p1-1",
+            "service": "api",
+            "slot": "api-1",
             "status": "ready",
         }
         metrics = client.get("/metrics").text
-        assert 'service="compute-worker"' in metrics
-        assert 'slot="p1-1"' in metrics
+        assert 'service="api"' in metrics
+        assert 'slot="api-1"' in metrics
         assert "thesistrace_service_ready 1" in metrics
 
         state.mark_not_ready()
@@ -129,7 +120,7 @@ def test_process_probe_is_dependency_independent_and_role_specific() -> None:
 def test_role_readiness_fails_when_the_role_heartbeat_stalls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    state = ProcessProbeState(service="compute-worker", slot="p1-1")
+    state = ProcessProbeState(service="api", slot="api-1")
     state.mark_ready()
     _ready, heartbeat_at = state.snapshot()
     monkeypatch.setattr(
@@ -530,8 +521,8 @@ def test_structured_logs_redact_private_and_secret_values() -> None:
         (),
         None,
     )
-    payload = json.loads(JsonLogFormatter("compute-worker").format(record))
-    assert payload["service"] == "compute-worker"
+    payload = json.loads(JsonLogFormatter("api").format(record))
+    assert payload["service"] == "api"
     assert payload["level"] == "error"
     assert payload["event"] == sanitized
 

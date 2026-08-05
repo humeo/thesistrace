@@ -317,37 +317,3 @@ def test_audit_stage_fsyncs_file_and_directory(monkeypatch, tmp_path: Path) -> N
     )
 
     assert len(synced) >= 2
-
-
-def test_workflow_recovery_evidence_is_recorded_atomically(
-    monkeypatch,
-    capsys,
-    tmp_path: Path,
-) -> None:
-    verification = tmp_path / "restore-verification.json"
-    verification.write_text(
-        '{"latest_dataset_release_id":"dsr_latest","verified_objects":4}'
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "backup-cli",
-            "record-workflow-recovery",
-            "--verification",
-            str(verification),
-            "--workflow-id",
-            "recovery-probe-launch-exercise",
-        ],
-    )
-
-    backup_cli.main()
-
-    assert json.loads(verification.read_bytes()) == {
-        "latest_dataset_release_id": "dsr_latest",
-        "verified_objects": 4,
-        "workflow_probe_id": "recovery-probe-launch-exercise",
-        "workflow_recovery_verified": True,
-    }
-    assert not verification.with_suffix(".tmp").exists()
-    assert json.loads(capsys.readouterr().out)["status"] == "recorded"

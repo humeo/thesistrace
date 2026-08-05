@@ -555,7 +555,6 @@ def test_compatible_rollback_does_not_rerun_migration_jobs() -> None:
     )
     for migration_service in (
         "insforge-migrations",
-        "temporal-schema",
         "thesistrace-migrations",
         "release-gate",
     ):

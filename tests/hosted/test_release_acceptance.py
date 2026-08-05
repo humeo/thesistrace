@@ -73,7 +73,6 @@ def capacity_evidence(release_bundle_id: str) -> dict[str, object]:
             "result_bundle": True,
             "working_cache": True,
             "postgresql": True,
-            "temporal": True,
             "object_store": True,
         },
     }
@@ -84,13 +83,11 @@ def recovery_evidence(release_bundle_id: str) -> dict[str, object]:
         "format": "thesistrace-recovery-exercise-v1",
         "status": "passed",
         "release_bundle_id": release_bundle_id,
-        "workflow_probe_id": "probe-1",
         "objectives": {
             "committed_state_loss_within_6h": True,
             "detection_within_24h": True,
             "public_origin_smoke": True,
             "recovery_execution_within_8h": True,
-            "workflow_recovery": True,
         },
     }
 

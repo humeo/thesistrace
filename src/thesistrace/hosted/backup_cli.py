@@ -57,7 +57,6 @@ def parser() -> argparse.ArgumentParser:
     create.add_argument("--release-bundle-id", required=True)
     create.add_argument("--passphrase-file", type=Path, required=True)
     create.add_argument("--status-path", type=Path, required=True)
-    create.add_argument("--workflow-probe-id")
 
     restore = commands.add_parser("restore")
     restore.add_argument("--manifest", type=Path, required=True)
@@ -117,10 +116,6 @@ def parser() -> argparse.ArgumentParser:
     )
     lock_run.add_argument("--subject-id", required=True)
     lock_run.add_argument("argv", nargs=argparse.REMAINDER)
-
-    workflow_evidence = commands.add_parser("record-workflow-recovery")
-    workflow_evidence.add_argument("--verification", type=Path, required=True)
-    workflow_evidence.add_argument("--workflow-id", required=True)
 
     exercise = commands.add_parser("record-exercise")
     exercise.add_argument("--recovery-selection", type=Path, required=True)
@@ -208,7 +203,6 @@ def main() -> None:
             release_bundle_id=arguments.release_bundle_id,
             passphrase=_passphrase(arguments.passphrase_file),
             status_path=arguments.status_path,
-            workflow_probe_id=arguments.workflow_probe_id,
         )
         output = {
             "status": "complete",
@@ -329,21 +323,6 @@ def main() -> None:
         environment = dict(os.environ)
         environment["THESISTRACE_RECOVERY_LOCK_HELD"] = "1"
         os.execvpe(argv[0], argv, environment)
-    elif arguments.command == "record-workflow-recovery":
-        try:
-            verification = json.loads(arguments.verification.read_bytes())
-        except (OSError, json.JSONDecodeError) as error:
-            raise BackupOperationError(
-                "restore verification evidence is unavailable"
-            ) from error
-        if not isinstance(verification, dict):
-            raise BackupOperationError("restore verification evidence is invalid")
-        verification["workflow_recovery_verified"] = True
-        verification["workflow_probe_id"] = arguments.workflow_id
-        temporary = arguments.verification.with_suffix(".tmp")
-        temporary.write_bytes(canonical_json_bytes(verification))
-        temporary.replace(arguments.verification)
-        output = {"status": "recorded"}
     else:
         try:
             verification = json.loads(arguments.verification.read_bytes())

@@ -435,7 +435,6 @@ def passing_capacity_evidence() -> dict[str, object]:
             "result_bundle": True,
             "working_cache": True,
             "postgresql": True,
-            "temporal": True,
             "object_store": True,
         },
     }
@@ -462,7 +461,6 @@ def passing_launch_evidence() -> dict[str, object]:
             "source_authorization",
             "storage",
             "system_health",
-            "temporal_dispatch",
         )
     }
     return {

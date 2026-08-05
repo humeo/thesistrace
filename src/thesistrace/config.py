@@ -18,10 +18,6 @@ class Settings:
     insforge_jwks_url: str = "http://insforge:7130/.well-known/jwks.json"
     insforge_jwt_issuer: str = "insforge"
     insforge_jwt_audience: str = "thesistrace"
-    temporal_address: str = "temporal:7233"
-    temporal_namespace: str = "thesistrace"
-    compute_slot_preference: str = "p1"
-    compute_workflow_poller: bool = True
     object_store_url: str | None = None
     object_store_token: str | None = None
     api_rate_limit_window_seconds: int = 60
@@ -79,23 +75,6 @@ def settings_from_environment() -> Settings:
             "THESISTRACE_INSFORGE_JWT_AUDIENCE",
             "thesistrace",
         ),
-        temporal_address=os.environ.get(
-            "THESISTRACE_TEMPORAL_ADDRESS",
-            "temporal:7233",
-        ),
-        temporal_namespace=os.environ.get(
-            "THESISTRACE_TEMPORAL_NAMESPACE",
-            "thesistrace",
-        ),
-        compute_slot_preference=os.environ.get(
-            "THESISTRACE_COMPUTE_SLOT_PREFERENCE",
-            "p1",
-        ),
-        compute_workflow_poller=os.environ.get(
-            "THESISTRACE_COMPUTE_WORKFLOW_POLLER",
-            "true",
-        ).lower()
-        in {"1", "true", "yes"},
         object_store_url=os.environ.get(
             "THESISTRACE_OBJECT_STORE_URL"
         ),

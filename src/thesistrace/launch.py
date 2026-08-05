@@ -23,12 +23,9 @@ REQUIRED_LAUNCH_CHECKS = frozenset(
         "postgresql_rls",
         "public_origin",
         "quantitative_health",
-        "recovery_matrix",
-        "resource_exhaustion_matrix",
         "source_authorization",
         "storage",
         "system_health",
-        "temporal_dispatch",
     }
 )
 

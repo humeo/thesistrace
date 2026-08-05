@@ -131,7 +131,6 @@ def validate_recovery(
         "detection_within_24h",
         "public_origin_smoke",
         "recovery_execution_within_8h",
-        "workflow_recovery",
     }
     if (
         evidence.get("format") != "thesistrace-recovery-exercise-v1"
@@ -139,7 +138,6 @@ def validate_recovery(
         or evidence.get("release_bundle_id") != release_bundle_id
         or not isinstance(objectives, dict)
         or any(objectives.get(name) is not True for name in required)
-        or not evidence.get("workflow_probe_id")
     ):
         raise ReleaseAcceptanceError(
             "recovery evidence is incomplete or belongs to another Release"
@@ -190,39 +188,6 @@ def attest_launch_evidence(evidence: dict[str, object]) -> str:
             "launch attestation key is unavailable"
         ) from error
     return launch_attestation(evidence, key)
-
-
-def resource_exhaustion_commands() -> tuple[str, ...]:
-    return (
-        "tests/hosted/test_research_workflow.py::"
-        "test_resource_exhaustion_is_attempted_at_most_twice",
-        "tests/hosted/test_dataset_publication_workflow.py::"
-        "test_failure_and_repeated_resource_exhaustion_preserve_previous_truth",
-        "tests/hosted/test_tracking_workflow.py::"
-        "test_release_fanout_is_idempotent_and_advance_is_fenced_and_bounded",
-        "tests/hosted/test_tracking_operations_workflow.py::"
-        "test_equivalence_resource_exhaustion_publishes_no_result",
-        "tests/hosted/test_tracking_operations_workflow.py::"
-        "test_generation_rebuild_propagates_nested_resource_exhaustion",
-        "tests/hosted/test_tracking_operations_workflow.py::"
-        "test_tracking_operations_stop_after_two_resource_exhaustions",
-    )
-
-
-def recovery_matrix_commands() -> tuple[str, ...]:
-    return (
-        "tests/hosted/test_research_workflow.py::"
-        "tests/hosted/test_research_workflow.py::"
-        "test_relay_acknowledges_an_already_started_workflow",
-        "tests/hosted/test_research_workflow.py::"
-        "test_activity_redelivery_fences_the_abandoned_attempt",
-        "tests/hosted/test_dataset_publication_workflow.py::"
-        "test_cancellation_at_commit_fence_publishes_no_release_or_candidate",
-        "tests/hosted/test_release_operations.py::"
-        "test_real_maintenance_cli_drains_then_reports_nonterminal_timeout",
-        "tests/hosted/test_release_operations.py::"
-        "test_interrupted_deploy_recovery_waits_only_for_steady_dependencies",
-    )
 
 
 def main() -> None:
@@ -291,22 +256,6 @@ def main() -> None:
             "tests/hosted/test_object_store_boundary.py",
         ),
         environment=postgres_environment,
-    )
-    records["resource_exhaustion_matrix"] = run_command(
-        "resource_exhaustion_matrix",
-        (
-            str(ROOT / ".venv" / "bin" / "pytest"),
-            "-q",
-            *resource_exhaustion_commands(),
-        ),
-    )
-    records["recovery_matrix_unit"] = run_command(
-        "recovery_matrix_unit",
-        (
-            str(ROOT / ".venv" / "bin" / "pytest"),
-            "-q",
-            *recovery_matrix_commands(),
-        ),
     )
     records["postgresql_rls"] = run_command(
         "postgresql_rls",

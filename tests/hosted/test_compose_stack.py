@@ -6,9 +6,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE = ROOT / "deploy" / "hosted" / "compose.yaml"
-CREATE_TEMPORAL_NAMESPACE = (
-    ROOT / "deploy" / "hosted" / "temporal" / "create-namespace.sh"
-)
 
 
 def compose_model() -> dict[str, object]:
@@ -136,7 +133,6 @@ def test_operator_mounts_capacity_evidence_from_the_host_read_only() -> None:
     assert "RECOVERY_OPERATION_BUSY" in backup_cli
     assert "--recovery-selection" in launcher
     assert "--expected-backup-id" in launcher
-    assert "thesistrace-recovery-probe verify" in launcher
     assert "--health-url http://health-service:8020/health/recovery" in launcher
     restore_section = launcher.split("restore_backup()", 1)[1].split(
         "action=", 1
@@ -146,9 +142,6 @@ def test_operator_mounts_capacity_evidence_from_the_host_read_only() -> None:
     )
     assert restore_section.index("verify-runtime") < restore_section.index(
         "compose up --detach --wait --no-build edge"
-    )
-    assert restore_section.index("thesistrace-recovery-probe verify") < (
-        restore_section.index("compose up --detach --wait --no-build edge")
     )
     assert '--volume "$root:/workspace:ro"' not in restore_section
     assert launcher.index("compose stop --timeout 30 edge") < launcher.index(
@@ -253,7 +246,6 @@ def test_public_origin_smoke_uses_no_private_service_address() -> None:
         "api:8000",
         "postgres:5432",
         "insforge:7130",
-        "temporal:7233",
         "prometheus:9090",
         "grafana:3000",
     ):

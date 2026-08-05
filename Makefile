@@ -1,4 +1,4 @@
-.PHONY: dev check check-live-tushare hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-dispatch-probe hosted-recovery-probe-start hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore hosted-release-acceptance hosted-local-acceptance hosted-local-acceptance-final hosted-local-frontend
+.PHONY: dev check check-live-tushare hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore hosted-release-acceptance hosted-local-acceptance hosted-local-acceptance-final hosted-local-frontend
 
 HOSTED_LOCAL_EVIDENCE ?= .hosted/evidence/hosted-v2-local.json
 HOSTED_LOCAL_ARGS ?=
@@ -39,12 +39,6 @@ hosted-smtp-configure:
 
 hosted-config:
 	./scripts/hosted-stack config
-
-hosted-dispatch-probe:
-	./scripts/hosted-stack dispatch-probe
-
-hosted-recovery-probe-start:
-	./scripts/hosted-stack recovery-probe-start $(PROBE_ID)
 
 hosted-operator:
 	./scripts/hosted-stack operator $(ARGS)

@@ -1,7 +1,5 @@
 import os
-import subprocess
 from pathlib import Path
-from uuid import uuid4
 
 import pytest
 
@@ -116,72 +114,3 @@ def compose_command(project: str, *arguments: str) -> list[str]:
         str(COMPOSE),
         *arguments,
     ]
-
-
-def test_actual_worker_containers_enforce_declared_boundaries() -> None:
-    project = f"thesistrace-boundary-{uuid4().hex[:8]}"
-    try:
-        subprocess.run(
-            compose_command(
-                project,
-                "build",
-                "thesistrace-migrations",
-            ),
-            cwd=ROOT,
-            check=True,
-        )
-        subprocess.run(
-            compose_command(
-                project,
-                "run",
-                "--no-deps",
-                "--rm",
-                "volume-permissions",
-            ),
-            cwd=ROOT,
-            check=True,
-        )
-        subprocess.run(
-            compose_command(
-                project,
-                "up",
-                "--detach",
-                "--no-deps",
-                "--wait",
-                "tushare-egress",
-            ),
-            cwd=ROOT,
-            check=True,
-        )
-        for service, probe in (
-            ("compute-worker-1", COMPUTE_PROBE),
-            ("data-worker", DATA_PROBE),
-            ("object-store", STORAGE_PROBE),
-        ):
-            subprocess.run(
-                compose_command(
-                    project,
-                    "run",
-                    "--no-deps",
-                    "--rm",
-                    "--entrypoint",
-                    "python",
-                    service,
-                    "-c",
-                    probe,
-                ),
-                cwd=ROOT,
-                check=True,
-            )
-    finally:
-        subprocess.run(
-            compose_command(
-                project,
-                "down",
-                "--volumes",
-                "--remove-orphans",
-            ),
-            cwd=ROOT,
-            check=False,
-            capture_output=True,
-        )

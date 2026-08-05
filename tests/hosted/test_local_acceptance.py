@@ -1134,7 +1134,7 @@ def test_local_resource_sampler_records_per_phase_peaks_and_failures() -> None:
                 "oom_killed": False,
                 "health": "healthy",
             },
-            "compute-worker-1": {
+            "worker-1": {
                 "memory_bytes": 300,
                 "cpu_percent": 80.0,
                 "swap_peak_bytes": 0,
@@ -1165,7 +1165,7 @@ def test_local_resource_sampler_records_per_phase_peaks_and_failures() -> None:
     assert summary["unexpected_restart_containers"] == ["api"]
     assert summary["oom_killed_containers"] == ["api"]
     assert summary["unhealthy_containers"] == ["api"]
-    assert summary["container_peaks"]["compute-worker-1"]["memory_bytes"] == 300
+    assert summary["container_peaks"]["worker-1"]["memory_bytes"] == 300
 
 
 def test_local_resource_sampler_does_not_exec_when_swap_is_disabled_by_docker() -> None:
@@ -1219,7 +1219,7 @@ def test_local_acceptance_fails_closed_on_unsafe_runtime_observations(
             "peak_cpu_percent": 1.0,
             "peak_swap_bytes": 0,
             "unexpected_restart_containers": [],
-            "oom_killed_containers": ["compute-worker-1"]
+            "oom_killed_containers": ["worker-1"]
             if phase.name == "compute_recovery"
             else [],
             "unhealthy_containers": [],
@@ -1473,7 +1473,7 @@ def test_browser_preflight_keeps_the_product_core_online() -> None:
 
     assert "assert-idle" in action
     assert "grafana prometheus otel-collector" in action
-    for service in ("api", "caddy", "compute-worker-1", "data-worker"):
+    for service in ("api", "caddy"):
         assert f"stop --timeout 30 {service}" not in action
 
 

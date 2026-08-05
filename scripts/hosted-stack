@@ -140,9 +140,6 @@ prepare() {
     move_secret_to_file INSFORGE_ADMIN_PASSWORD insforge_admin_password
     move_secret_to_file GRAFANA_ADMIN_PASSWORD grafana_admin_password
     move_secret_to_file THESISTRACE_API_DATABASE_PASSWORD api_database_password
-    move_secret_to_file THESISTRACE_RELAY_DATABASE_PASSWORD relay_database_password
-    move_secret_to_file THESISTRACE_DATA_DATABASE_PASSWORD data_database_password
-    move_secret_to_file THESISTRACE_COMPUTE_DATABASE_PASSWORD compute_database_password
     move_secret_to_file THESISTRACE_HEALTH_DATABASE_PASSWORD health_database_password
     move_secret_to_file THESISTRACE_OBJECT_STORE_API_TOKEN object_store_api_token
     move_secret_to_file THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN object_store_compute_token
@@ -506,10 +503,6 @@ create_backup() {
         --release-bundle-id "$release_bundle_id" \
         --passphrase-file /run/secrets/backup_passphrase \
         --status-path /backup/status/backup-status.json
-    workflow_probe_id="${THESISTRACE_RECOVERY_PROBE_ID:-}"
-    if [ -n "$workflow_probe_id" ]; then
-        set -- "$@" --workflow-probe-id "$workflow_probe_id"
-    fi
     compose --profile operator run --rm --no-deps -T backup-tool \
         "$@" \
         || backup_result="$?"
@@ -564,7 +557,6 @@ restore_backup() {
         --recovery-passphrase-file /run/secrets/recovery_passphrase \
         --incident-at "$incident_at" \
         --selection-output /restore/status/selected-recovery-set.json
-    workflow_probe_id="$("$root/.venv/bin/python" -c 'import json, sys; print(json.load(open(sys.argv[1])).get("workflow_probe_id") or "")' "$backup_status_dir/selected-recovery-set.json")"
     "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
         restore-release-modes --release-state "$release_state"
     select_current_release
@@ -588,15 +580,6 @@ restore_backup() {
         python -m thesistrace.hosted.backup_cli verify-runtime \
         --api-url http://api:8000/api/v1/health \
         --health-url http://health-service:8020/health/recovery
-    if [ -n "$workflow_probe_id" ]; then
-        compose --profile operator run --rm --no-deps -T recovery-probe \
-            thesistrace-recovery-probe verify \
-            --probe-id "$workflow_probe_id"
-        "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
-            record-workflow-recovery \
-            --verification "$backup_status_dir/restore-verification.json" \
-            --workflow-id "$workflow_probe_id"
-    fi
     exit_maintenance
     compose up --detach --wait --no-build edge
     set -a
@@ -957,52 +940,6 @@ case "$action" in
             acceptance.service.interrupt succeeded "$acceptance_service"
         flush_recovery_audits
         ;;
-    acceptance-arm-publication-interruption)
-        prepare_acceptance "acceptance publication interruption setup is disabled"
-        compose pause data-worker
-        ;;
-    acceptance-interrupt-publication)
-        prepare_acceptance "acceptance publication interruption is disabled"
-        acceptance_publication_id="${2:?usage: scripts/hosted-stack acceptance-interrupt-publication PUBLICATION_ID}"
-        case "$acceptance_publication_id" in
-            dsp_*) ;;
-            *) echo "publication id is not path-safe" >&2; exit 2 ;;
-        esac
-        acceptance_publication_suffix="${acceptance_publication_id#dsp_}"
-        case "$acceptance_publication_suffix" in
-            ""|*[!0-9a-f]*) echo "publication id is not path-safe" >&2; exit 2 ;;
-        esac
-        compose unpause data-worker
-        acceptance_deadline=$(($(date +%s) + 120))
-        while [ "$(date +%s)" -lt "$acceptance_deadline" ]; do
-            acceptance_publication_status="$(compose exec -T postgres \
-                psql -U "${POSTGRES_USER:-postgres}" \
-                -d "${POSTGRES_DB:-insforge}" -Atc \
-                "SELECT status FROM thesistrace_product.dataset_publications WHERE id = '$acceptance_publication_id'")"
-            case "$acceptance_publication_status" in
-                running)
-                    acceptance_container_id="$(compose ps --quiet data-worker)"
-                    acceptance_container_status="$(docker inspect --format '{{.State.Status}}' "$acceptance_container_id")"
-                    recovery_audit_id="audit_acceptance_publication_kill_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-                    compose kill --signal SIGKILL data-worker
-                    stage_recovery_audit \
-                        acceptance.service.interrupt succeeded data-worker
-                    flush_recovery_audits
-                    printf '{"container_id":"%s","container_status":"%s","publication_id":"%s","service":"data-worker","status":"interrupted"}\n' \
-                        "$acceptance_container_id" "$acceptance_container_status" \
-                        "$acceptance_publication_id"
-                    exit 0
-                    ;;
-                succeeded|failed|cancelled)
-                    echo "Dataset Publication reached $acceptance_publication_status before interruption" >&2
-                    exit 1
-                    ;;
-            esac
-            sleep 0.05
-        done
-        echo "Dataset Publication was not claimed before interruption timeout" >&2
-        exit 1
-        ;;
     acceptance-restart-node)
         prepare_acceptance "acceptance node interruption is disabled"
         recovery_audit_id="audit_acceptance_node_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
@@ -1013,14 +950,6 @@ case "$action" in
         compose up --detach --wait --no-build
         stage_recovery_audit acceptance.node.restart succeeded node
         flush_recovery_audits
-        ;;
-    recovery-probe-start)
-        prepare
-        select_current_release
-        probe_id="${2:?usage: scripts/hosted-stack recovery-probe-start PROBE_ID}"
-        compose --profile operator run --rm --no-deps -T recovery-probe \
-            thesistrace-recovery-probe start \
-            --probe-id "$probe_id"
         ;;
     operator)
         prepare
@@ -1162,7 +1091,7 @@ case "$action" in
         exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-browser-ready|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-browser-ready|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

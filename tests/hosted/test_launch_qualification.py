@@ -33,7 +33,6 @@ REQUIRED_CHECKS = {
     "source_authorization",
     "storage",
     "system_health",
-    "temporal_dispatch",
 }
 ATTESTATION_KEY = b"test-launch-attestation-key-32-bytes"
 

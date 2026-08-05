@@ -42,7 +42,6 @@ PRIVATE_TABLES = (
     "research_definition_drafts",
     "research_definitions",
     "research_runs",
-    "execution_outbox",
     "user_compute_admissions",
     "research_run_idempotency",
     "research_run_attempts",
@@ -52,7 +51,6 @@ PRIVATE_TABLES = (
     "tracking_generations",
     "tracking_checkpoints",
     "tracking_advances",
-    "tracking_execution_outbox",
     "tracking_advance_attempts",
     "tracking_equivalence_requests",
     "tracking_generation_rebuilds",
@@ -109,7 +107,6 @@ def passing_capacity_evidence() -> dict[str, object]:
             "result_bundle": True,
             "working_cache": True,
             "postgresql": True,
-            "temporal": True,
             "object_store": True,
         },
     }
@@ -136,7 +133,6 @@ def passing_launch_evidence() -> dict[str, object]:
             "source_authorization",
             "storage",
             "system_health",
-            "temporal_dispatch",
         )
     }
     return {
@@ -216,7 +212,6 @@ def truncate_product_state() -> None:
                 thesistrace_product.research_definition_drafts,
                 thesistrace_product.research_definitions,
                 thesistrace_product.research_runs,
-                thesistrace_product.execution_outbox,
                 thesistrace_product.user_compute_admissions,
                 thesistrace_product.research_run_idempotency,
                 thesistrace_product.research_run_attempts,
@@ -226,7 +221,6 @@ def truncate_product_state() -> None:
                 thesistrace_product.tracking_generations,
                 thesistrace_product.tracking_checkpoints,
                 thesistrace_product.tracking_advances,
-                thesistrace_product.tracking_execution_outbox,
                 thesistrace_product.tracking_advance_attempts,
                 thesistrace_product.tracking_equivalence_requests,
                 thesistrace_product.tracking_generation_rebuilds,
@@ -581,7 +575,6 @@ def seed_private_table_graph(
         "research_definition_drafts": f"draft-{prefix}",
         "research_definitions": f"definition-{prefix}",
         "research_runs": f"run-{prefix}",
-        "execution_outbox": f"outbox-{prefix}",
         "user_compute_admissions": f"run-{prefix}",
         "research_run_idempotency": f"run-key-{prefix}",
         "research_run_attempts": f"attempt-{prefix}",
@@ -591,7 +584,6 @@ def seed_private_table_graph(
         "tracking_generations": f"generation-{prefix}",
         "tracking_checkpoints": f"checkpoint-{prefix}",
         "tracking_advances": f"advance-{prefix}",
-        "tracking_execution_outbox": f"tracking-outbox-{prefix}",
         "tracking_advance_attempts": f"advance-attempt-{prefix}",
         "tracking_equivalence_requests": f"equivalence-{prefix}",
         "tracking_generation_rebuilds": f"rebuild-{prefix}",
@@ -659,19 +651,6 @@ def seed_private_table_graph(
                 workspace_id,
                 ids["user_compute_admissions"],
                 now,
-                now,
-            ),
-        )
-        connection.execute(
-            """
-            INSERT INTO thesistrace_product.execution_outbox
-                (workspace_id, id, resource_kind, resource_id, status, created_at)
-            VALUES (%s, %s, 'research_run', %s, 'dispatched', %s)
-            """,
-            (
-                workspace_id,
-                ids["execution_outbox"],
-                ids["research_runs"],
                 now,
             ),
         )
@@ -790,20 +769,6 @@ def seed_private_table_graph(
         )
         connection.execute(
             """
-            INSERT INTO thesistrace_product.tracking_execution_outbox
-                (workspace_id, id, daily_track_id, advance_id, status, created_at)
-            VALUES (%s, %s, %s, %s, 'pending', %s)
-            """,
-            (
-                workspace_id,
-                ids["tracking_execution_outbox"],
-                ids["daily_tracks"],
-                ids["tracking_advances"],
-                now,
-            ),
-        )
-        connection.execute(
-            """
             INSERT INTO thesistrace_product.tracking_advance_attempts
                 (workspace_id, id, advance_id, ordinal, status, started_at)
             VALUES (%s, %s, %s, 1, 'succeeded', %s)
@@ -890,48 +855,6 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
     release = bootstrap_shared_release(tmp_path)
     ids_a = seed_private_table_graph(workspace_a, str(release["id"]), f"a-{suffix}")
     ids_b = seed_private_table_graph(workspace_b, str(release["id"]), f"b-{suffix}")
-
-    compute_store = PostgresControlMetadataStore(
-        TEST_DATABASE_URL,
-        database_role="compute",
-    )
-    with psycopg.connect(TEST_DATABASE_URL) as connection:
-        connection.execute(
-            """
-            DELETE FROM thesistrace_product.tracking_execution_outbox
-            WHERE workspace_id = %s AND advance_id = %s
-            """,
-            (workspace_a, ids_a["tracking_advances"]),
-        )
-    with workspace_execution(workspace_a):
-        with compute_store.connect() as connection:
-            for _delivery in range(2):
-                compute_store.enqueue_tracking_advance_execution(
-                    connection,
-                    track_id=ids_a["daily_tracks"],
-                    advance_id=ids_a["tracking_advances"],
-                    created_at=datetime.now(UTC).isoformat(),
-                )
-    expected_track_refs = sorted(
-        [
-            {"workspace_id": workspace_a, "track_id": ids_a["daily_tracks"]},
-            {"workspace_id": workspace_b, "track_id": ids_b["daily_tracks"]},
-        ],
-        key=lambda item: (item["workspace_id"], item["track_id"]),
-    )
-    assert compute_store.active_daily_track_refs() == expected_track_refs
-    assert compute_store.active_daily_track_scan_bound() == (
-        expected_track_refs[-1]
-    )
-    first_page = compute_store.active_daily_track_refs(limit=1)
-    assert first_page == expected_track_refs[:1]
-    assert compute_store.active_daily_track_refs(
-        after_workspace_id=first_page[0]["workspace_id"],
-        after_track_id=first_page[0]["track_id"],
-        through_workspace_id=expected_track_refs[-1]["workspace_id"],
-        through_track_id=expected_track_refs[-1]["track_id"],
-        limit=1,
-    ) == expected_track_refs[1:]
 
     with psycopg.connect(TEST_DATABASE_URL) as connection:
         roles = connection.execute(
@@ -1070,16 +993,10 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
                     f"SELECT count(*) FROM {table} WHERE {identifying_column} = ?",
                     (other_id,),
                 ).fetchone()[0]
-                if table == "tracking_execution_outbox":
-                    assert own == 0
-                    assert hidden == 0
-                    continue
                 assert own == 1
                 assert hidden == 0
                 if table not in {
-                    "execution_outbox",
                     "daily_track_activation_reservations",
-                    "tracking_execution_outbox",
                     "tracking_equivalence_requests",
                     "tracking_generation_rebuilds",
                 }:
@@ -1233,29 +1150,6 @@ def test_tracking_operations_share_quota_and_keep_rebuild_operator_only(
             (workspace_a,),
         ).fetchone()[0]
         assert active == 7
-        outbox_kinds = {
-            row[0]
-            for row in connection.execute(
-                """
-                SELECT resource_kind
-                FROM thesistrace_product.execution_outbox
-                WHERE workspace_id = %s
-                  AND resource_kind IN (
-                      'tracking_equivalence',
-                      'tracking_equivalence_cancel',
-                      'tracking_generation_rebuild',
-                      'tracking_generation_rebuild_cancel'
-                  )
-                """,
-                (workspace_a,),
-            ).fetchall()
-        }
-        assert outbox_kinds == {
-            "tracking_equivalence",
-            "tracking_equivalence_cancel",
-            "tracking_generation_rebuild",
-            "tracking_generation_rebuild_cancel",
-        }
 
 
 @pytest.mark.skipif(

@@ -60,7 +60,6 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
         release_bundle_id="bundle-1",
         passphrase="backup-passphrase-123",
         now=datetime(2026, 8, 1, 0, 0, tzinfo=UTC),
-        workflow_probe_id="recovery-probe-launch-exercise",
     )
 
     encrypted = created.artifact_path.read_bytes()
@@ -68,27 +67,6 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
     assert b"encrypted-secrets" not in encrypted
     assert created.manifest["status"] == "complete"
     assert created.manifest["release_bundle_id"] == "bundle-1"
-    assert created.manifest["workflow_probe_id"] == (
-        "recovery-probe-launch-exercise"
-    )
-
-    with pytest.raises(BackupOperationError, match="probe ID is invalid"):
-        create_recovery_set(
-            target=tmp_path / "off-node",
-            sources={
-                name: source / name
-                for name in (
-                    "postgres-data",
-                    "immutable-objects",
-                    "insforge-storage",
-                    "release-state",
-                    "secret-recovery",
-                )
-            },
-            release_bundle_id="bundle-1",
-            passphrase="backup-passphrase-123",
-            workflow_probe_id="unscoped-probe",
-        )
 
     restored = tmp_path / "restored"
     extract_recovery_set(
@@ -319,7 +297,6 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
         sources=sources,
         release_bundle_id="bundle-1",
         passphrase="correct-passphrase-123",
-        workflow_probe_id="recovery-probe-authenticated-metadata",
     )
     restore_root = tmp_path / "restore-root"
     for relative in (
@@ -344,22 +321,6 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
             working_cache=working_cache,
             passphrase="correct-passphrase-123",
             incident_at=datetime(2026, 8, 1, 6, 0, tzinfo=UTC),
-        )
-    assert (restore_root / "volumes/postgres-data/live").read_bytes() == (
-        b"preserve on rejected restore"
-    )
-    assert (working_cache / "live").read_bytes() == b"preserve"
-    created.manifest_path.write_bytes(original_manifest)
-
-    tampered_manifest = json.loads(original_manifest)
-    del tampered_manifest["workflow_probe_id"]
-    created.manifest_path.write_text(json.dumps(tampered_manifest))
-    with pytest.raises(BackupOperationError, match="authenticated metadata"):
-        restore_recovery_set(
-            manifest_path=created.manifest_path,
-            restore_root=restore_root,
-            working_cache=working_cache,
-            passphrase="correct-passphrase-123",
         )
     assert (restore_root / "volumes/postgres-data/live").read_bytes() == (
         b"preserve on rejected restore"
@@ -537,7 +498,6 @@ def test_restore_gate_requires_the_authenticated_selected_set_within_rpo() -> No
         "recovery_set_authenticated": True,
         "committed_state_loss_bound_seconds": 21_540,
         "release_bundle_id": "bundle-1",
-        "workflow_probe_id": None,
     }
 
     with pytest.raises(RestoreVerificationError, match="six-hour RPO"):
@@ -588,7 +548,6 @@ def test_recovery_exercise_records_rpo_detection_and_execution_objectives(
         '"incident_at":"2026-08-01T05:30:00+00:00",'
         '"committed_state_loss_bound_seconds":19800,'
         '"release_bundle_id":"bundle-1",'
-        '"workflow_probe_id":"recovery-probe-exercise",'
         '"manifest_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
         '"authenticated":true}'
     )
@@ -603,8 +562,6 @@ def test_recovery_exercise_records_rpo_detection_and_execution_objectives(
         verification={
             "latest_dataset_release_id": "dsr_latest",
             "verified_objects": 42,
-            "workflow_recovery_verified": True,
-            "workflow_probe_id": "recovery-probe-exercise",
         },
         public_origin_smoke=True,
     )
@@ -619,5 +576,4 @@ def test_recovery_exercise_records_rpo_detection_and_execution_objectives(
         "detection_within_24h": True,
         "recovery_execution_within_8h": True,
         "public_origin_smoke": True,
-        "workflow_recovery": True,
     }

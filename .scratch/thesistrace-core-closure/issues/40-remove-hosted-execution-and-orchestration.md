@@ -65,8 +65,10 @@ for removed_path in \
 done
 
 ! rg -n \
-  'temporal|thesistrace-execution-relay|execution-relay|execution_outbox|compute-worker' \
-  pyproject.toml uv.lock Makefile src/thesistrace/hosted scripts deploy/hosted
+  'temporal|thesistrace-execution-relay|execution-relay|execution_outbox|compute-worker|data-worker|thesistrace-recovery-probe|recovery-probe|dispatch-probe' \
+  pyproject.toml uv.lock Makefile src/thesistrace/config.py \
+  src/thesistrace/capacity.py src/thesistrace/launch.py \
+  src/thesistrace/hosted tests/hosted scripts deploy/hosted
 
 uv run pytest -q tests/architecture tests/kernel
 trap './scripts/core-test-runtime down' EXIT

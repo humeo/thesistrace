@@ -150,7 +150,6 @@ def qualification_failures(evidence: dict[str, object]) -> list[str]:
         "result_bundle",
         "working_cache",
         "postgresql",
-        "temporal",
         "object_store",
     }
     if not isinstance(paths, dict) or any(paths.get(key) is not True for key in required_paths):
