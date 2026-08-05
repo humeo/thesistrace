@@ -140,7 +140,6 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             load_canonical=data.load_canonical,
             publication=publication,
             activate_track=daily_tracks.activate,
-            resolve_track_activation=daily_tracks.resolve_activation,
         )
         yield CoreRuntime(
             database=database,

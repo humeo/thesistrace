@@ -212,6 +212,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     track_source = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
     track_migrations = (ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py").read_text()
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
     data_source = (ROOT / "src" / "thesistrace" / "data" / "service.py").read_text()
     worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
@@ -225,13 +226,17 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "CREATE TABLE daily_tracks.retry_receipts" in track_migrations
     assert "CREATE TABLE daily_tracks.stop_receipts" in track_migrations
     assert "MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3" in track_source
+    assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
+    assert '"daily_tracks.activation.capacity"' in track_source
     assert "def _record_progression_failure(" in track_source
     assert "def reconcile_stopped_working_cache(" in track_source
     assert "def activate(" in track_source
-    assert "def resolve_activation(" in track_source
+    assert "def resolve_activation(" not in track_source
     assert "origin" in track_source
     assert "activate_track" in run_source
-    assert "resolve_track_activation" in run_source
+    assert "resolve_track_activation" not in run_source
+    assert "CREATE TABLE research_runs.start_tracking_receipts" in run_migrations
+    assert "daily_tracks.activation_receipts" not in track_source
     assert "read_in_transaction" in run_source
     assert "TrackingOrigin(" in run_source
     assert "daily_tracks." not in run_source

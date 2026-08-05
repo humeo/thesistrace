@@ -355,7 +355,7 @@ def _counts(settings: CoreSettings) -> dict[str, int]:
                 "SELECT count(*) AS count FROM daily_tracks.tracks"
             ).fetchone()
             receipts = transaction.execute(
-                "SELECT count(*) AS count FROM daily_tracks.activation_receipts"
+                "SELECT count(*) AS count FROM research_runs.start_tracking_receipts"
             ).fetchone()
             assert tracks is not None and receipts is not None
             return {

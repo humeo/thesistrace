@@ -75,12 +75,8 @@ LoadCanonical = Callable[[str], dict[str, object]]
 ExecuteKernel = Callable[[RunInput], RunOutput]
 Progress = Callable[[str, str], None]
 ActivateTrack = Callable[
-    [PostgresTransaction, TrackingOrigin, str],
+    [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
-]
-ResolveTrackActivation = Callable[
-    [PostgresTransaction, str, str],
-    DailyTrackSummary | None,
 ]
 
 
@@ -93,6 +89,10 @@ class ResearchRunCancelConflict(RuntimeError):
 
 
 class ResearchRunRerunConflict(RuntimeError):
+    pass
+
+
+class ResearchRunStartTrackingConflict(RuntimeError):
     pass
 
 
@@ -136,7 +136,6 @@ class ResearchRunService:
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         activate_track: ActivateTrack | None = None,
-        resolve_track_activation: ResolveTrackActivation | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -148,7 +147,6 @@ class ResearchRunService:
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._activate_track = activate_track
-        self._resolve_track_activation = resolve_track_activation
 
     def admit(
         self,
@@ -381,21 +379,32 @@ class ResearchRunService:
         run_id: str,
         command: StartTrackingCommand,
     ) -> DailyTrackSummary | None:
-        if (
-            self._activate_track is None
-            or self._resolve_track_activation is None
-            or self._publication is None
-        ):
+        if self._activate_track is None or self._publication is None:
             raise RuntimeError("DailyTrack activation dependencies are not configured")
+        request_id = command.request_id.strip()
+        if not request_id:
+            raise ValueError("Start Tracking request_id is required")
+        fingerprint = _start_tracking_fingerprint(run_id)
         try:
             with self._database.transaction() as transaction:
-                replay = self._resolve_track_activation(
-                    transaction,
-                    command.request_id,
-                    run_id,
-                )
-                if replay is not None:
-                    return replay
+                transaction.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"research_runs.start_tracking:{request_id}",),
+                ).fetchone()
+                receipt = transaction.execute(
+                    """
+                    SELECT request_fingerprint, outcome
+                    FROM research_runs.start_tracking_receipts
+                    WHERE request_id = %s
+                    """,
+                    (request_id,),
+                ).fetchone()
+                if receipt is not None:
+                    if receipt["request_fingerprint"] != fingerprint:
+                        raise ResearchRunStartTrackingConflict(
+                            "Start Tracking request_id conflicts"
+                        )
+                    return DailyTrackSummary.model_validate(receipt["outcome"])
                 row = transaction.execute(
                     """
                     SELECT id, status, definition_id, definition_revision,
@@ -432,7 +441,23 @@ class ResearchRunService:
                     raise ResearchRunTrackingUnavailable(
                         "Start Tracking requires a complete verified Result"
                     ) from error
-                return self._activate_track(transaction, origin, command.request_id)
+                outcome = self._activate_track(transaction, origin)
+                transaction.execute(
+                    """
+                    INSERT INTO research_runs.start_tracking_receipts (
+                        request_id, request_fingerprint, seed_run_id,
+                        track_id, outcome
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        request_id,
+                        fingerprint,
+                        run_id,
+                        outcome.id,
+                        Jsonb(outcome.model_dump(mode="json")),
+                    ),
+                )
+                return outcome
         except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
             logger.warning(
                 "Start Tracking infrastructure is temporarily unavailable",
@@ -1004,6 +1029,12 @@ def _cancel_fingerprint(run_id: str) -> str:
 
 def _rerun_fingerprint(run_id: str) -> str:
     value = {"action": "research-runs.rerun/v1", "run_id": run_id}
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _start_tracking_fingerprint(run_id: str) -> str:
+    value = {"action": "research-runs.start-tracking/v1", "run_id": run_id}
     serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(serialized).hexdigest()
 

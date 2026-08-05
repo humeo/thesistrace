@@ -97,5 +97,18 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0006_start_tracking_receipts",
+            statement="""
+                CREATE TABLE research_runs.start_tracking_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    seed_run_id text NOT NULL,
+                    track_id text NOT NULL,
+                    outcome jsonb NOT NULL CHECK (jsonb_typeof(outcome) = 'object'),
+                    created_at timestamptz NOT NULL DEFAULT now()
+                );
+            """,
+        ),
     ),
 )

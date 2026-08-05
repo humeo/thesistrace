@@ -481,6 +481,86 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
   await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });
 
+test("handles Start Tracking replay and active limit", async ({ page }) => {
+  const replayRun = {
+    id: "run_a11ce001",
+    status: "succeeded",
+    definition_id: "def_a11ce001",
+    definition_revision: 1,
+    dataset_release_id: "release_tracking_replay",
+  };
+  const limitRun = {
+    ...replayRun,
+    id: "run_b11ce002",
+    definition_id: "def_b11ce002",
+  };
+  const acceptedTrack = {
+    id: "track_a11ce001",
+    status: "active",
+    seed_run_id: replayRun.id,
+    seed_release_id: replayRun.dataset_release_id,
+    current_release_id: replayRun.dataset_release_id,
+    definition_id: replayRun.definition_id,
+    definition_revision: replayRun.definition_revision,
+    result_checksum_sha256: "e".repeat(64),
+    strategy_session: "2025-12-31",
+  };
+  let acceptedRequestId: string | null = null;
+  let replayRequests = 0;
+  await page.route(`**/api/research-runs/${replayRun.id}`, (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(replayRun) }),
+  );
+  await page.route(`**/api/research-runs/${limitRun.id}`, (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(limitRun) }),
+  );
+  await page.route(`**/api/research-runs/${replayRun.id}/daily-tracks`, async (route) => {
+    const body = route.request().postDataJSON() as { request_id: string };
+    expect(Object.keys(body)).toEqual(["request_id"]);
+    replayRequests += 1;
+    if (replayRequests === 1) {
+      acceptedRequestId = body.request_id;
+      await route.abort("failed");
+      return;
+    }
+    expect(body.request_id).toBe(acceptedRequestId);
+    await route.fulfill({
+      status: 201,
+      contentType: "application/json",
+      body: JSON.stringify(acceptedTrack),
+    });
+  });
+  await page.route(`**/api/research-runs/${limitRun.id}/daily-tracks`, (route) =>
+    route.fulfill({
+      status: 409,
+      contentType: "application/json",
+      body: JSON.stringify({ detail: "Active DailyTrack limit of 10 reached" }),
+    }),
+  );
+
+  await page.goto(`/research-runs/${replayRun.id}`);
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText("Start Tracking failed");
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Start Tracking", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page).toHaveURL(`/daily-tracks/${acceptedTrack.id}`);
+  expect(replayRequests).toBe(2);
+
+  await page.goto(`/research-runs/${limitRun.id}`);
+  const stableLimitUrl = page.url();
+  await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "10 active or blocked DailyTracks already exist. Stop one before starting another.",
+  );
+  await expect(page).toHaveURL(stableLimitUrl);
+  await expect(
+    page.getByText(
+      /(?:^|[^A-Za-z])(?:transaction|receipt|unique constraint|lock|quota profile)(?:$|[^A-Za-z])/i,
+    ),
+  ).toHaveCount(0);
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
+});
+
 test("shows recent and cumulative DailyTrack analysis", async ({ page }) => {
   const observations = Array.from({ length: 504 }, (_, index) => ({
     session: new Date(Date.UTC(2024, 0, index + 1)).toISOString().slice(0, 10),

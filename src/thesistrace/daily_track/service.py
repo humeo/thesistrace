@@ -66,6 +66,7 @@ ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
 MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3
+ACTIVE_DAILY_TRACK_LIMIT = 10
 PUBLIC_BLOCKED_REASON = "DailyTrack could not process this Dataset Release."
 # 504 rolling signal sessions plus the 21-session maximum label maturity tail.
 # The query reads one extra predecessor Checkpoint; _select_rebuild_steps then
@@ -73,11 +74,11 @@ PUBLIC_BLOCKED_REASON = "DailyTrack could not process this Dataset Release."
 REBUILD_CHECKPOINT_LIMIT = 525
 
 
-class DailyTrackActivationConflict(RuntimeError):
+class DailyTrackFenced(RuntimeError):
     pass
 
 
-class DailyTrackFenced(RuntimeError):
+class DailyTrackActivationLimitReached(RuntimeError):
     pass
 
 
@@ -164,18 +165,11 @@ class DailyTrackService:
         self,
         transaction: PostgresTransaction,
         origin: TrackingOrigin,
-        request_id: str,
     ) -> DailyTrackSummary:
-        selected_request_id = request_id.strip()
-        replay = self.resolve_activation(
-            transaction,
-            selected_request_id,
-            origin.seed_run_id,
-        )
-        if replay is not None:
-            return replay
-        fingerprint = _activation_fingerprint(origin.seed_run_id)
-
+        transaction.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            ("daily_tracks.activation.capacity",),
+        ).fetchone()
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             (f"daily_tracks.activation.seed:{origin.seed_run_id}",),
@@ -188,6 +182,16 @@ class DailyTrackService:
             (origin.seed_run_id,),
         ).fetchone()
         if row is None:
+            capacity = transaction.execute(
+                """
+                SELECT count(*) AS count
+                FROM daily_tracks.tracks
+                WHERE status IN ('active', 'blocked')
+                """
+            ).fetchone()
+            assert capacity is not None
+            if int(capacity["count"]) >= ACTIVE_DAILY_TRACK_LIMIT:
+                raise DailyTrackActivationLimitReached("Active DailyTrack limit of 10 reached")
             row = transaction.execute(
                 """
                 INSERT INTO daily_tracks.tracks (
@@ -206,49 +210,7 @@ class DailyTrackService:
                 ),
             ).fetchone()
             assert row is not None
-        outcome = _summary(row)
-        transaction.execute(
-            """
-            INSERT INTO daily_tracks.activation_receipts (
-                request_id, request_fingerprint, track_id, outcome
-            ) VALUES (%s, %s, %s, %s)
-            """,
-            (
-                selected_request_id,
-                fingerprint,
-                outcome.id,
-                Jsonb(outcome.model_dump(mode="json")),
-            ),
-        )
-        return outcome
-
-    def resolve_activation(
-        self,
-        transaction: PostgresTransaction,
-        request_id: str,
-        seed_run_id: str,
-    ) -> DailyTrackSummary | None:
-        selected_request_id = request_id.strip()
-        if not selected_request_id:
-            raise ValueError("Start Tracking request_id is required")
-        fingerprint = _activation_fingerprint(seed_run_id)
-        transaction.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-            (f"daily_tracks.activation.request:{selected_request_id}",),
-        ).fetchone()
-        receipt = transaction.execute(
-            """
-            SELECT request_fingerprint, outcome
-            FROM daily_tracks.activation_receipts
-            WHERE request_id = %s
-            """,
-            (selected_request_id,),
-        ).fetchone()
-        if receipt is None:
-            return None
-        if receipt["request_fingerprint"] != fingerprint:
-            raise DailyTrackActivationConflict("Start Tracking request_id conflicts")
-        return DailyTrackSummary.model_validate(receipt["outcome"])
+        return _summary(row)
 
     def process_next(self) -> bool:
         self._require_progression_dependencies()
@@ -1612,15 +1574,6 @@ SELECT track.id, track.status, track.origin, track.current_release_id,
        track.current_strategy_session
 FROM daily_tracks.tracks AS track
 """
-
-
-def _activation_fingerprint(seed_run_id: str) -> str:
-    value = {
-        "action": "research-runs.start-tracking/v1",
-        "seed_run_id": seed_run_id,
-    }
-    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(serialized).hexdigest()
 
 
 def _retry_fingerprint(track_id: str) -> str:

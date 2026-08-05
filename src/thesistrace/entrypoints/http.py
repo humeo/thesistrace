@@ -10,7 +10,7 @@ from fastapi import Body, FastAPI, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from thesistrace.daily_track import (
-    DailyTrackActivationConflict,
+    DailyTrackActivationLimitReached,
     DailyTrackDetail,
     DailyTrackDetailUnavailable,
     DailyTrackList,
@@ -49,6 +49,7 @@ from thesistrace.research_run import (
     ResearchRunRerunCommand,
     ResearchRunRerunConflict,
     ResearchRunResultUnavailable,
+    ResearchRunStartTrackingConflict,
     ResearchRunSummary,
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
@@ -208,7 +209,9 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     ) -> DailyTrackSummary:
         try:
             track = _runtime(request).research_runs.start_tracking(run_id, command)
-        except DailyTrackActivationConflict as error:
+        except DailyTrackActivationLimitReached as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ResearchRunStartTrackingConflict as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         except ResearchRunTrackingUnavailable as error:
             raise HTTPException(status_code=409, detail=str(error)) from error

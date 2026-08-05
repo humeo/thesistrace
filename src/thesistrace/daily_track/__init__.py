@@ -8,7 +8,7 @@ from thesistrace.daily_track.models import (
     TrackingOrigin,
 )
 from thesistrace.daily_track.service import (
-    DailyTrackActivationConflict,
+    DailyTrackActivationLimitReached,
     DailyTrackDetailUnavailable,
     DailyTrackProgressionFailed,
     DailyTrackRetryConflict,
@@ -19,7 +19,7 @@ from thesistrace.daily_track.service import (
 )
 
 __all__ = [
-    "DailyTrackActivationConflict",
+    "DailyTrackActivationLimitReached",
     "DailyTrackDetail",
     "DailyTrackDetailUnavailable",
     "DailyTrackProgressionFailed",

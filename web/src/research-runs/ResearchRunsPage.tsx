@@ -86,6 +86,9 @@ type ResearchRun = {
 type ResearchRunList = { items: ResearchRun[]; next_cursor: string | null };
 type LoadState = "loading" | "refreshing" | null;
 const FACTOR_HORIZONS = ["1", "5", "20"] as const;
+const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached";
+const ACTIVE_TRACK_LIMIT_MESSAGE =
+  "10 active or blocked DailyTracks already exist. Stop one before starting another.";
 
 export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [run, setRun] = useState<ResearchRun | null>(null);
@@ -273,7 +276,15 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         body: JSON.stringify({ request_id: requestId }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error("Start Tracking failed");
+      if (!response.ok) {
+        if (response.status === 409) {
+          const body = (await response.json()) as { detail?: unknown };
+          if (body.detail === ACTIVE_TRACK_LIMIT_DETAIL) {
+            throw new Error(ACTIVE_TRACK_LIMIT_MESSAGE);
+          }
+        }
+        throw new Error("Start Tracking failed");
+      }
       const track = (await response.json()) as { id: string };
       if (generation !== trackingGeneration.current) return;
       trackingRequest.current = null;
@@ -281,7 +292,11 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;
       if (generation !== trackingGeneration.current) return;
-      setError("Start Tracking failed");
+      setError(
+        reason instanceof Error && reason.message === ACTIVE_TRACK_LIMIT_MESSAGE
+          ? ACTIVE_TRACK_LIMIT_MESSAGE
+          : "Start Tracking failed",
+      );
     } finally {
       if (generation === trackingGeneration.current) {
         trackingController.current = null;
