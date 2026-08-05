@@ -34,6 +34,12 @@ PUBLIC_ROUTES = {
     ("POST", "/api/daily-tracks/{track_id}/retry"),
     ("POST", "/api/daily-tracks/{track_id}/stop"),
 }
+FASTAPI_FRAMEWORK_ROUTES = {
+    "/docs",
+    "/docs/oauth2-redirect",
+    "/openapi.json",
+    "/redoc",
+}
 
 
 @pytest.mark.skipif(
@@ -113,7 +119,7 @@ def _public_routes(client: TestClient) -> set[tuple[str, str]]:
     return {
         (method, route.path)
         for route in client.app.routes
-        if route.path.startswith("/api/")
+        if route.path not in FASTAPI_FRAMEWORK_ROUTES
         for method in route.methods
     }
 
@@ -124,10 +130,20 @@ def _resource_snapshot(
     run_id: object,
     track_id: object,
 ) -> dict[str, object]:
+    release_history = client.get("/api/data/releases").json()
+    definitions = client.get("/api/definitions").json()
     return {
         "data": client.get("/api/data").json(),
-        "releases": client.get("/api/data/releases").json(),
-        "definitions": client.get("/api/definitions").json(),
+        "releases": release_history,
+        "release_details": [
+            client.get(f"/api/data/releases/{release['id']}").json()
+            for release in release_history["items"]
+        ],
+        "definitions": definitions,
+        "definition_details": [
+            client.get(f"/api/definitions/{definition['id']}").json()
+            for definition in definitions["items"]
+        ],
         "research_runs": client.get("/api/research-runs").json(),
         "research_run": client.get(f"/api/research-runs/{run_id}").json(),
         "daily_tracks": client.get("/api/daily-tracks").json(),
@@ -145,6 +161,13 @@ def _authoritative_snapshot(settings: CoreSettings) -> dict[str, object]:
             ).fetchall()
             objects = transaction.execute(
                 "SELECT sha256, byte_size FROM publication.objects ORDER BY sha256"
+            ).fetchall()
+            manifest_objects = transaction.execute(
+                """
+                SELECT manifest_sha256, ordinal, logical_name, object_sha256
+                FROM publication.manifest_objects
+                ORDER BY manifest_sha256, ordinal
+                """
             ).fetchall()
             releases = transaction.execute(
                 """
@@ -177,6 +200,7 @@ def _authoritative_snapshot(settings: CoreSettings) -> dict[str, object]:
         return {
             "publication_manifests": manifests,
             "publication_objects": objects,
+            "publication_manifest_objects": manifest_objects,
             "data_releases": releases,
             "research_runs": runs,
             "daily_tracks": tracks,
