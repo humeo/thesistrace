@@ -25,12 +25,6 @@ ROOT = Path(__file__).resolve().parents[2]
 TEST_DATABASE_URL = os.environ.get("THESISTRACE_TEST_DATABASE_URL")
 
 
-class OneTrackMetadataStore(MetadataStore):
-    def active_daily_track_limit(self, connection) -> int:
-        del connection
-        return 1
-
-
 class CommitAckLossConnection:
     def __init__(
         self,
@@ -132,16 +126,13 @@ def definition() -> dict[str, object]:
     }
 
 
-def test_activation_uses_effective_quota_and_stop_fences_all_later_work(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_activation_and_stop_fence_all_later_work(tmp_path: Path) -> None:
     settings = Settings(
         metadata_path=tmp_path / "metadata.sqlite3",
         object_root=tmp_path / "objects",
         working_cache_root=tmp_path / "working-cache",
     )
-    metadata = OneTrackMetadataStore(settings.metadata_path)
+    metadata = MetadataStore(settings.metadata_path)
     metadata.initialize()
     objects = ImmutableObjectStore(settings.object_root)
     cache = WorkingCacheStore(settings.working_cache_root)
@@ -185,50 +176,10 @@ def test_activation_uses_effective_quota_and_stop_fences_all_later_work(
             f"/api/v1/research-runs/{run['id']}/daily-tracks",
             headers={"Idempotency-Key": "track-first"},
         )
-        immutable_paths_before_rejection = {
-            path.relative_to(objects.root)
-            for directory in ("sha256", "manifests")
-            for path in (objects.root / directory).rglob("*")
-            if path.is_file()
-        }
-
-        def fail_cache_calculation(*_args, **_kwargs) -> None:
-            raise AssertionError(
-                "quota preflight must precede cache calculation"
-            )
-
-        with monkeypatch.context() as patch:
-            patch.setattr(
-                DailyTrackingService,
-                "_commit_activation_cache",
-                fail_cache_calculation,
-            )
-            rejected = client.post(
-                f"/api/v1/research-runs/{run['id']}/daily-tracks",
-                headers={"Idempotency-Key": "track-over-limit"},
-            )
-        immutable_paths_after_rejection = {
-            path.relative_to(objects.root)
-            for directory in ("sha256", "manifests")
-            for path in (objects.root / directory).rglob("*")
-            if path.is_file()
-        }
-
         assert activated.status_code == 201
         track = activated.json()
         assert replay.status_code == 200
         assert replay.json()["id"] == track["id"]
-        assert rejected.status_code == 409
-        assert rejected.json()["detail"] == {
-            "reason_code": "QUOTA_EXCEEDED",
-            "message": "Personal Workspace DailyTrack quota is full",
-            "dimension": "max_active_daily_tracks",
-            "limit": 1,
-        }
-        assert (
-            immutable_paths_after_rejection
-            == immutable_paths_before_rejection
-        )
         assert track["seed_run_id"] == run["id"]
         assert track["definition_version_id"] == run["definition_version_id"]
         assert track["activation_release_id"] == release["id"]

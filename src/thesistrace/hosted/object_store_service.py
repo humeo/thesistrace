@@ -1,11 +1,9 @@
 import fcntl
 import hmac
 import json
-import logging
 import os
 import shutil
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
@@ -14,28 +12,18 @@ from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import Response
 
 from thesistrace.config import environment_value
-from thesistrace.hosted.observability import configure_observability, instrument_http
 from thesistrace.objects import (
     ImmutableObjectStore,
     ParquetContractError,
     StagedObjectStore,
     canonical_json_bytes,
 )
-from thesistrace.storage_admission import (
-    DEFAULT_ALL_WRITE_REJECTION_PERCENT,
-    DEFAULT_DISK_WARNING_PERCENT,
-    DEFAULT_PERSISTENT_DISK_BYTES,
-    DEFAULT_PRIVATE_WRITE_REJECTION_PERCENT,
-    DiskPressurePolicy,
-    StorageAdmissionError,
-)
 
-MAINTENANCE_ROLES = {"api"}
+API_ROLES = {"api"}
 LEASE_SECONDS = 30.0
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -54,9 +42,7 @@ class GuardRegistry:
         self.leases: dict[str, FileLease] = {}
 
     def acquire(self, run_id: str, role: str) -> tuple[str, int]:
-        bucket = __import__("hashlib").sha256(
-            run_id.encode("utf-8")
-        ).hexdigest()[:2]
+        bucket = __import__("hashlib").sha256(run_id.encode("utf-8")).hexdigest()[:2]
         path = self.root / "staging" / f".run-{bucket}.lock"
         path.parent.mkdir(parents=True, exist_ok=True)
         with self.lock:
@@ -98,11 +84,7 @@ class GuardRegistry:
 
     def _reap_expired_locked(self) -> None:
         now = time.monotonic()
-        expired = [
-            token
-            for token, lease in self.leases.items()
-            if lease.expires_at <= now
-        ]
+        expired = [token for token, lease in self.leases.items() if lease.expires_at <= now]
         for token in expired:
             self._close(self.leases.pop(token))
 
@@ -181,18 +163,11 @@ class StageRegistry:
     def has_active_run(self, run_id: str) -> bool:
         with self.lock:
             self._reap_expired_locked()
-            return any(
-                lease.run_id == run_id
-                for lease in self.leases.values()
-            )
+            return any(lease.run_id == run_id for lease in self.leases.values())
 
     def _reap_expired_locked(self) -> None:
         now = time.monotonic()
-        expired = [
-            token
-            for token, lease in self.leases.items()
-            if lease.expires_at <= now
-        ]
+        expired = [token for token, lease in self.leases.items() if lease.expires_at <= now]
         for token in expired:
             GuardRegistry._close(self.leases.pop(token))
 
@@ -200,75 +175,13 @@ class StageRegistry:
 def create_object_store_app(
     root: Path,
     role_tokens: dict[str, str],
-    *,
-    disk_capacity_bytes: int = DEFAULT_PERSISTENT_DISK_BYTES,
-    disk_warning_percent: int = DEFAULT_DISK_WARNING_PERCENT,
-    private_write_rejection_percent: int = (
-        DEFAULT_PRIVATE_WRITE_REJECTION_PERCENT
-    ),
-    all_write_rejection_percent: int = (
-        DEFAULT_ALL_WRITE_REJECTION_PERCENT
-    ),
-    disk_used_bytes: Callable[[], int] | None = None,
 ) -> FastAPI:
-    if set(role_tokens) != {"api"} or any(
-        not token for token in role_tokens.values()
-    ):
+    if set(role_tokens) != {"api"} or any(not token for token in role_tokens.values()):
         raise ValueError("ObjectStore requires one API token")
     store = ImmutableObjectStore(root)
-    disk_policy = DiskPressurePolicy(
-        disk_capacity_bytes,
-        warning_percent=disk_warning_percent,
-        private_write_rejection_percent=private_write_rejection_percent,
-        all_write_rejection_percent=all_write_rejection_percent,
-    )
-    if disk_used_bytes is None:
-        def current_disk_usage() -> int:
-            return shutil.disk_usage(
-                root if root.exists() else root.parent
-            ).used
-
-        disk_used_bytes = current_disk_usage
     guards = GuardRegistry(root)
     stages = StageRegistry()
     app = FastAPI(title="ThesisTrace Private ObjectStore")
-    instrument_http(app)
-
-    def admit_growth(role: str, candidate_bytes: int) -> None:
-        decision = disk_policy.evaluate(
-            used_bytes=int(disk_used_bytes()),
-            candidate_bytes=candidate_bytes,
-            private_growth=True,
-        )
-        if decision.warning:
-            logger.warning(
-                "persistent disk warning threshold reached "
-                "projected_percent=%.2f role=%s",
-                decision.projected_percent,
-                role,
-            )
-
-    def admit_object_payload(
-        role: str,
-        writer: ImmutableObjectStore,
-        payload: bytes,
-        *,
-        suffix: str,
-    ) -> None:
-        digest = __import__("hashlib").sha256(payload).hexdigest()
-        destination = (
-            writer.root / "sha256" / digest[:2] / f"{digest}{suffix}"
-        )
-        admit_growth(role, 0 if destination.exists() else len(payload))
-
-    def admit_manifest_payload(
-        role: str,
-        writer: ImmutableObjectStore,
-        resource_id: str,
-        payload: bytes,
-    ) -> None:
-        destination = writer.root / "manifests" / f"{resource_id}.json"
-        admit_growth(role, 0 if destination.exists() else len(payload))
 
     def require_role(
         request: Request,
@@ -276,9 +189,7 @@ def create_object_store_app(
     ) -> str:
         authorization = request.headers.get("Authorization", "")
         supplied = (
-            authorization.removeprefix("Bearer ")
-            if authorization.startswith("Bearer ")
-            else ""
+            authorization.removeprefix("Bearer ") if authorization.startswith("Bearer ") else ""
         )
         for role, token in role_tokens.items():
             if hmac.compare_digest(supplied, token):
@@ -313,9 +224,7 @@ def create_object_store_app(
         if not metadata_path.exists():
             raise HTTPException(status_code=404)
         metadata = read_object(metadata_path)
-        stage.cleanup_uncommitted_payloads = bool(
-            metadata["cleanup_uncommitted_payloads"]
-        )
+        stage.cleanup_uncommitted_payloads = bool(metadata["cleanup_uncommitted_payloads"])
         if metadata.get("owner_role") != role:
             raise HTTPException(status_code=403)
         return stage, token
@@ -333,14 +242,8 @@ def create_object_store_app(
             **write_prefixes,
             "api": ("track_", "run_", "advance_", "dsp_"),
         }
-        prefixes = (
-            recover_prefixes
-            if operation == "recover"
-            else write_prefixes
-        )
-        if not path_identity(run_id).startswith(
-            prefixes.get(role, ())
-        ):
+        prefixes = recover_prefixes if operation == "recover" else write_prefixes
+        if not path_identity(run_id).startswith(prefixes.get(role, ())):
             raise HTTPException(status_code=403)
 
     def require_manifest_role(
@@ -350,9 +253,7 @@ def create_object_store_app(
         allowed_prefixes = {
             "api": ("result_", "checkpoint_", "dsr_"),
         }
-        if not path_identity(resource_id).startswith(
-            allowed_prefixes.get(role, ())
-        ):
+        if not path_identity(resource_id).startswith(allowed_prefixes.get(role, ())):
             raise HTTPException(status_code=403)
 
     @app.exception_handler(ParquetContractError)
@@ -361,23 +262,6 @@ def create_object_store_app(
         _error: ParquetContractError,
     ) -> Response:
         return Response(status_code=422)
-
-    @app.exception_handler(StorageAdmissionError)
-    async def storage_admission_error(
-        _request: Request,
-        error: StorageAdmissionError,
-    ) -> JSONResponse:
-        return JSONResponse(
-            status_code=507,
-            content={
-                "detail": {
-                    "reason_code": error.reason_code,
-                    "message": str(error),
-                    "dimension": error.dimension,
-                    "limit": error.limit,
-                }
-            },
-        )
 
     @app.get("/health")
     def health() -> dict[str, str]:
@@ -396,25 +280,9 @@ def create_object_store_app(
             raise HTTPException(status_code=503)
         return {"status": "ready"}
 
-    @app.get("/metrics", response_class=PlainTextResponse)
-    def metrics() -> str:
-        used_bytes = int(disk_used_bytes())
-        used_ratio = used_bytes / disk_capacity_bytes
-        return (
-            "# HELP thesistrace_storage_used_bytes Persistent disk bytes used.\n"
-            "# TYPE thesistrace_storage_used_bytes gauge\n"
-            f"thesistrace_storage_used_bytes {used_bytes}\n"
-            "# HELP thesistrace_storage_capacity_bytes Persistent disk capacity.\n"
-            "# TYPE thesistrace_storage_capacity_bytes gauge\n"
-            f"thesistrace_storage_capacity_bytes {disk_capacity_bytes}\n"
-            "# HELP thesistrace_storage_used_ratio Persistent disk used ratio.\n"
-            "# TYPE thesistrace_storage_used_ratio gauge\n"
-            f"thesistrace_storage_used_ratio {used_ratio:.9f}\n"
-        )
-
     @app.post("/v1/probe")
     def probe(request: Request) -> dict[str, str]:
-        require_role(request, MAINTENANCE_ROLES)
+        require_role(request, API_ROLES)
         if not store.probe():
             raise HTTPException(status_code=503)
         return {"status": "available"}
@@ -423,14 +291,14 @@ def create_object_store_app(
     async def put_json(request: Request) -> dict[str, object]:
         role = require_role(request, {"api"})
         payload = await request.body()
-        admit_object_payload(role, store, payload, suffix=".json")
+        del role
         return store.put_canonical_json_bytes(payload)
 
     @app.put("/v1/objects/parquet")
     async def put_parquet(request: Request) -> dict[str, object]:
         role = require_role(request, {"api"})
         payload = await request.body()
-        admit_object_payload(role, store, payload, suffix=".parquet")
+        del role
         return store.put_parquet_bytes(payload)
 
     @app.put("/v1/manifests/{resource_id}")
@@ -443,18 +311,12 @@ def create_object_store_app(
         payload = await request.body()
         value = decode_canonical_json(payload)
         normalized_resource_id = path_identity(resource_id)
-        admit_manifest_payload(
-            role,
-            store,
-            normalized_resource_id,
-            payload,
-        )
         store.put_manifest(normalized_resource_id, value)
         return {"status": "stored"}
 
     @app.get("/v1/objects/{digest}/json")
     def read_json(digest: str, request: Request) -> Response:
-        require_role(request, MAINTENANCE_ROLES)
+        require_role(request, API_ROLES)
         try:
             value = store.read_json(digest_identity(digest))
         except FileNotFoundError as error:
@@ -466,11 +328,9 @@ def create_object_store_app(
 
     @app.get("/v1/objects/{digest}/parquet")
     def read_parquet(digest: str, request: Request) -> Response:
-        require_role(request, MAINTENANCE_ROLES)
+        require_role(request, API_ROLES)
         try:
-            payload = store.read_parquet_bytes(
-                digest_identity(digest)
-            )
+            payload = store.read_parquet_bytes(digest_identity(digest))
         except FileNotFoundError as error:
             raise HTTPException(status_code=404) from error
         return Response(
@@ -495,7 +355,7 @@ def create_object_store_app(
         attempt_id: str,
         request: Request,
     ) -> dict[str, object]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         require_stage_role(role, run_id)
         body = await request.json()
         cleanup = bool(body.get("cleanup_uncommitted_payloads"))
@@ -536,17 +396,14 @@ def create_object_store_app(
             "lease_seconds": lease_seconds,
         }
 
-    @app.put(
-        "/v1/stages/{run_id}/attempts/{attempt_id}/"
-        "objects/{object_format}"
-    )
+    @app.put("/v1/stages/{run_id}/attempts/{attempt_id}/objects/{object_format}")
     async def put_stage_object(
         run_id: str,
         attempt_id: str,
         object_format: str,
         request: Request,
     ) -> dict[str, object]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         stage, _token = stage_store(
             run_id,
             attempt_id,
@@ -555,34 +412,19 @@ def create_object_store_app(
         )
         payload = await request.body()
         if object_format == "json":
-            admit_object_payload(
-                role,
-                stage.writer,
-                payload,
-                suffix=".json",
-            )
             return stage.writer.put_canonical_json_bytes(payload)
         if object_format == "parquet":
-            admit_object_payload(
-                role,
-                stage.writer,
-                payload,
-                suffix=".parquet",
-            )
             return stage.writer.put_parquet_bytes(payload)
         raise HTTPException(status_code=404)
 
-    @app.put(
-        "/v1/stages/{run_id}/attempts/{attempt_id}/"
-        "manifests/{resource_id}"
-    )
+    @app.put("/v1/stages/{run_id}/attempts/{attempt_id}/manifests/{resource_id}")
     async def put_stage_manifest(
         run_id: str,
         attempt_id: str,
         resource_id: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         require_manifest_role(role, resource_id)
         stage, _token = stage_store(
             run_id,
@@ -593,24 +435,16 @@ def create_object_store_app(
         payload = await request.body()
         value = decode_canonical_json(payload)
         normalized_resource_id = path_identity(resource_id)
-        admit_manifest_payload(
-            role,
-            stage.writer,
-            normalized_resource_id,
-            payload,
-        )
         stage.put_manifest(normalized_resource_id, value)
         return {"status": "stored"}
 
-    @app.post(
-        "/v1/stages/{run_id}/attempts/{attempt_id}/promote"
-    )
+    @app.post("/v1/stages/{run_id}/attempts/{attempt_id}/promote")
     async def promote_stage(
         run_id: str,
         attempt_id: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         body = await request.json()
         stage, _token = stage_store(
             run_id,
@@ -618,23 +452,16 @@ def create_object_store_app(
             request,
             role,
         )
-        stage.promote(
-            manifest_sha256=digest_identity(
-                str(body["manifest_sha256"])
-            ),
-            before_move=lambda: admit_growth(role, 0),
-        )
+        stage.promote(manifest_sha256=digest_identity(str(body["manifest_sha256"])))
         return {"status": "promoted"}
 
-    @app.post(
-        "/v1/stages/{run_id}/attempts/{attempt_id}/resolve"
-    )
+    @app.post("/v1/stages/{run_id}/attempts/{attempt_id}/resolve")
     def resolve_stage(
         run_id: str,
         attempt_id: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         stage, token = stage_store(
             run_id,
             attempt_id,
@@ -654,7 +481,7 @@ def create_object_store_app(
         attempt_id: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         stage, token = stage_store(
             run_id,
             attempt_id,
@@ -668,37 +495,35 @@ def create_object_store_app(
         stages.close(token)
         return {"status": "discarded"}
 
-    @app.post(
-        "/v1/stages/{run_id}/attempts/{attempt_id}/lease"
-    )
+    @app.post("/v1/stages/{run_id}/attempts/{attempt_id}/lease")
     def renew_stage(
         run_id: str,
         attempt_id: str,
         request: Request,
     ) -> dict[str, int]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         _stage, token = stage_store(
             run_id,
             attempt_id,
             request,
             role,
         )
-        return {"lease_seconds": stages.authorize(
-            token,
-            run_id=path_identity(run_id),
-            attempt_id=path_identity(attempt_id),
-            role=role,
-        )}
+        return {
+            "lease_seconds": stages.authorize(
+                token,
+                run_id=path_identity(run_id),
+                attempt_id=path_identity(attempt_id),
+                role=role,
+            )
+        }
 
-    @app.post(
-        "/v1/stages/{run_id}/attempts/{attempt_id}/release"
-    )
+    @app.post("/v1/stages/{run_id}/attempts/{attempt_id}/release")
     def release_stage(
         run_id: str,
         attempt_id: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         _stage, token = stage_store(
             run_id,
             attempt_id,
@@ -713,7 +538,7 @@ def create_object_store_app(
         run_id: str,
         request: Request,
     ) -> dict[str, bool]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         require_stage_role(role, run_id, operation="recover")
         stages.reap_expired()
         body = await request.json()
@@ -732,25 +557,20 @@ def create_object_store_app(
         prefix: str,
         request: Request,
     ) -> dict[str, list[str]]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         require_stage_role(role, prefix)
-        return {
-            "ids": store.staged_publication_ids(
-                prefix=path_identity(prefix)
-            )
-        }
+        return {"ids": store.staged_publication_ids(prefix=path_identity(prefix))}
 
     @app.post("/v1/stages/{run_id}/wait")
     def wait_for_stage(
         run_id: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         normalized_run_id = path_identity(run_id)
         require_stage_role(role, normalized_run_id)
-        if (
-            stages.has_active_run(normalized_run_id)
-            or store.staged_publication_active(normalized_run_id)
+        if stages.has_active_run(normalized_run_id) or store.staged_publication_active(
+            normalized_run_id
         ):
             raise HTTPException(status_code=409)
         return {"status": "complete"}
@@ -760,7 +580,7 @@ def create_object_store_app(
         run_id: str,
         request: Request,
     ) -> dict[str, object]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         require_stage_role(role, run_id, operation="recover")
         try:
             token, lease_seconds = guards.acquire(
@@ -779,7 +599,7 @@ def create_object_store_app(
         token: str,
         request: Request,
     ) -> dict[str, int]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         try:
             lease_seconds = guards.renew(
                 path_identity(token),
@@ -794,7 +614,7 @@ def create_object_store_app(
         token: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, MAINTENANCE_ROLES)
+        role = require_role(request, API_ROLES)
         normalized_token = path_identity(token)
         try:
             guards.renew(normalized_token, role)
@@ -813,10 +633,7 @@ def path_identity(value: str) -> str:
 
 
 def digest_identity(value: str) -> str:
-    if len(value) != 64 or any(
-        character not in "0123456789abcdef"
-        for character in value
-    ):
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise HTTPException(status_code=404)
     return value
 
@@ -825,13 +642,9 @@ def decode_canonical_json(payload: bytes) -> object:
     try:
         value = json.loads(payload)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise ParquetContractError(
-            "JSON object payload is invalid"
-        ) from error
+        raise ParquetContractError("JSON object payload is invalid") from error
     if canonical_json_bytes(value) != payload:
-        raise ParquetContractError(
-            "JSON object payload is not canonical"
-        )
+        raise ParquetContractError("JSON object payload is not canonical")
     return value
 
 
@@ -847,9 +660,7 @@ def write_object(path: Path, value: object) -> None:
 def read_object(path: Path) -> dict[str, object]:
     value = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
-        raise ParquetContractError(
-            "remote stage metadata is invalid"
-        )
+        raise ParquetContractError("remote stage metadata is invalid")
     return value
 
 
@@ -861,7 +672,6 @@ def remove_empty_parent(path: Path) -> None:
 
 
 def main() -> None:
-    configure_observability("object-store")
     root = Path(
         os.environ.get(
             "THESISTRACE_OBJECT_STORE_ROOT",
@@ -870,41 +680,13 @@ def main() -> None:
     )
     raw_tokens = environment_value("THESISTRACE_OBJECT_STORE_TOKENS")
     if not raw_tokens:
-        raise RuntimeError(
-            "THESISTRACE_OBJECT_STORE_TOKENS is required"
-        )
+        raise RuntimeError("THESISTRACE_OBJECT_STORE_TOKENS is required")
     tokens = json.loads(raw_tokens)
     if not isinstance(tokens, dict):
-        raise RuntimeError(
-            "THESISTRACE_OBJECT_STORE_TOKENS must be a JSON object"
-        )
+        raise RuntimeError("THESISTRACE_OBJECT_STORE_TOKENS must be a JSON object")
     app = create_object_store_app(
         root,
         {str(role): str(token) for role, token in tokens.items()},
-        disk_capacity_bytes=int(
-            os.environ.get(
-                "THESISTRACE_PERSISTENT_DISK_BYTES",
-                str(DEFAULT_PERSISTENT_DISK_BYTES),
-            )
-        ),
-        disk_warning_percent=int(
-            os.environ.get(
-                "THESISTRACE_DISK_WARNING_PERCENT",
-                str(DEFAULT_DISK_WARNING_PERCENT),
-            )
-        ),
-        private_write_rejection_percent=int(
-            os.environ.get(
-                "THESISTRACE_PRIVATE_WRITE_REJECTION_PERCENT",
-                str(DEFAULT_PRIVATE_WRITE_REJECTION_PERCENT),
-            )
-        ),
-        all_write_rejection_percent=int(
-            os.environ.get(
-                "THESISTRACE_ALL_WRITE_REJECTION_PERCENT",
-                str(DEFAULT_ALL_WRITE_REJECTION_PERCENT),
-            )
-        ),
     )
     uvicorn.run(app, host="0.0.0.0", port=8010, log_config=None)
 

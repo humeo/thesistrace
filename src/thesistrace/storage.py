@@ -71,32 +71,6 @@ class MetadataStore:
                         REFERENCES management_audit_events(id)
                 );
 
-                CREATE TABLE IF NOT EXISTS capacity_qualifications (
-                    id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL CHECK (status IN ('passed', 'failed')),
-                    release_bundle_id TEXT NOT NULL,
-                    evidence_sha256 TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL,
-                    failures_json TEXT NOT NULL,
-                    recorded_by TEXT NOT NULL,
-                    measured_at TEXT NOT NULL,
-                    audit_event_id TEXT NOT NULL UNIQUE
-                        REFERENCES management_audit_events(id)
-                );
-
-                CREATE TABLE IF NOT EXISTS launch_qualifications (
-                    id TEXT PRIMARY KEY,
-                    status TEXT NOT NULL CHECK (status IN ('passed', 'failed')),
-                    release_bundle_id TEXT NOT NULL,
-                    evidence_sha256 TEXT NOT NULL,
-                    evidence_json TEXT NOT NULL,
-                    failures_json TEXT NOT NULL,
-                    recorded_by TEXT NOT NULL,
-                    measured_at TEXT NOT NULL,
-                    audit_event_id TEXT NOT NULL UNIQUE
-                        REFERENCES management_audit_events(id)
-                );
-
                 CREATE TRIGGER IF NOT EXISTS management_audit_events_no_update
                 BEFORE UPDATE ON management_audit_events
                 BEGIN
@@ -119,30 +93,6 @@ class MetadataStore:
                 BEFORE DELETE ON source_authorization_declarations
                 BEGIN
                     SELECT RAISE(ABORT, 'source authorization declarations are non-deletable');
-                END;
-
-                CREATE TRIGGER IF NOT EXISTS capacity_qualifications_no_update
-                BEFORE UPDATE ON capacity_qualifications
-                BEGIN
-                    SELECT RAISE(ABORT, 'capacity qualifications are immutable');
-                END;
-
-                CREATE TRIGGER IF NOT EXISTS capacity_qualifications_no_delete
-                BEFORE DELETE ON capacity_qualifications
-                BEGIN
-                    SELECT RAISE(ABORT, 'capacity qualifications are immutable');
-                END;
-
-                CREATE TRIGGER IF NOT EXISTS launch_qualifications_no_update
-                BEFORE UPDATE ON launch_qualifications
-                BEGIN
-                    SELECT RAISE(ABORT, 'launch qualifications are immutable');
-                END;
-
-                CREATE TRIGGER IF NOT EXISTS launch_qualifications_no_delete
-                BEFORE DELETE ON launch_qualifications
-                BEGIN
-                    SELECT RAISE(ABORT, 'launch qualifications are immutable');
                 END;
 
                 CREATE TABLE IF NOT EXISTS dataset_releases (
@@ -506,10 +456,6 @@ class MetadataStore:
     ) -> None:
         del connection
 
-    def active_daily_track_limit(self, connection) -> int:
-        del connection
-        return 10
-
     def lock_daily_track(self, connection, track_id: str) -> None:
         del connection, track_id
 
@@ -700,118 +646,6 @@ class MetadataStore:
             and declaration.get("scope") == "hosted-shared-dataset-releases"
         )
 
-    def record_capacity_qualification(
-        self,
-        qualification: dict[str, object],
-        audit_event: dict[str, object],
-    ) -> None:
-        with self.connect() as connection:
-            self._insert_management_audit_event(connection, audit_event)
-            connection.execute(
-                """
-                INSERT INTO capacity_qualifications (
-                    id, status, release_bundle_id, evidence_sha256,
-                    evidence_json, failures_json, recorded_by, measured_at,
-                    audit_event_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    qualification["id"],
-                    qualification["status"],
-                    qualification["release_bundle_id"],
-                    qualification["evidence_sha256"],
-                    json.dumps(
-                        qualification["evidence"],
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    json.dumps(
-                        qualification["failures"],
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    qualification["recorded_by"],
-                    qualification["measured_at"],
-                    qualification["audit_event_id"],
-                ),
-            )
-
-    def latest_capacity_qualification(self) -> dict[str, object] | None:
-        with self.connect() as connection:
-            row = connection.execute(
-                """
-                SELECT id, status, release_bundle_id, evidence_sha256,
-                       evidence_json, failures_json, recorded_by, measured_at,
-                       audit_event_id
-                FROM capacity_qualifications
-                ORDER BY measured_at DESC, id DESC
-                LIMIT 1
-                """
-            ).fetchone()
-        if row is None:
-            return None
-        result = dict(row)
-        result["evidence"] = json.loads(str(result.pop("evidence_json")))
-        result["failures"] = json.loads(str(result.pop("failures_json")))
-        return result
-
-    def record_launch_qualification(
-        self,
-        qualification: dict[str, object],
-        audit_event: dict[str, object],
-    ) -> None:
-        with self.connect() as connection:
-            self._insert_management_audit_event(connection, audit_event)
-            connection.execute(
-                """
-                INSERT INTO launch_qualifications (
-                    id, status, release_bundle_id, evidence_sha256,
-                    evidence_json, failures_json, recorded_by, measured_at,
-                    audit_event_id
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    qualification["id"],
-                    qualification["status"],
-                    qualification["release_bundle_id"],
-                    qualification["evidence_sha256"],
-                    json.dumps(
-                        qualification["evidence"],
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    json.dumps(
-                        qualification["failures"],
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    qualification["recorded_by"],
-                    qualification["measured_at"],
-                    qualification["audit_event_id"],
-                ),
-            )
-
-    def latest_launch_qualification(self) -> dict[str, object] | None:
-        with self.connect() as connection:
-            row = connection.execute(
-                """
-                SELECT id, status, release_bundle_id, evidence_sha256,
-                       evidence_json, failures_json, recorded_by, measured_at,
-                       audit_event_id
-                FROM launch_qualifications
-                ORDER BY measured_at DESC, id DESC
-                LIMIT 1
-                """
-            ).fetchone()
-        if row is None:
-            return None
-        result = dict(row)
-        result["evidence"] = json.loads(str(result.pop("evidence_json")))
-        result["failures"] = json.loads(str(result.pop("failures_json")))
-        return result
-
     def list_management_audit_events(self) -> list[dict[str, object]]:
         with self.connect() as connection:
             rows = connection.execute(
@@ -976,11 +810,7 @@ class MetadataStore:
                 """,
                 (idempotency_key,),
             ).fetchone()
-            return (
-                None
-                if row is None
-                else self._dataset_publication(connection, str(row["id"]))
-            )
+            return None if row is None else self._dataset_publication(connection, str(row["id"]))
 
     def dataset_publication(
         self,
@@ -1017,16 +847,19 @@ class MetadataStore:
             ).fetchone()
             if running is not None:
                 return None
-            ordinal = int(
-                connection.execute(
-                    """
+            ordinal = (
+                int(
+                    connection.execute(
+                        """
                     SELECT count(*)
                     FROM dataset_publication_attempts
                     WHERE publication_id = ?
                     """,
-                    (publication_id,),
-                ).fetchone()[0]
-            ) + 1
+                        (publication_id,),
+                    ).fetchone()[0]
+                )
+                + 1
+            )
             attempt_id = f"dpa_{uuid4().hex[:20]}"
             connection.execute(
                 """
@@ -1611,9 +1444,7 @@ class MetadataStore:
         ).fetchall()
         return {
             **dict(row),
-            "parameters": MetadataStore._decode_json(
-                row["parameters_json"]
-            ),
+            "parameters": MetadataStore._decode_json(row["parameters_json"]),
             "diagnostic": (
                 None
                 if row["diagnostic_json"] is None
@@ -1625,9 +1456,7 @@ class MetadataStore:
                     "diagnostic": (
                         None
                         if attempt["diagnostic_json"] is None
-                        else MetadataStore._decode_json(
-                            attempt["diagnostic_json"]
-                        )
+                        else MetadataStore._decode_json(attempt["diagnostic_json"])
                     ),
                 }
                 for attempt in attempts
@@ -1800,9 +1629,7 @@ class MetadataStore:
         current_release_id = None if pointer is None else str(pointer["release_id"])
         expected_predecessor = release.get("predecessor_id")
         if current_release_id != expected_predecessor:
-            raise DatasetPublicationConflict(
-                "latest Dataset Release changed during publication"
-            )
+            raise DatasetPublicationConflict("latest Dataset Release changed during publication")
         release_id = str(release["id"])
         manifest_json = json.dumps(
             release,
@@ -2006,12 +1833,6 @@ class MetadataStore:
                 """,
                 (run_id, frozen_id, dataset_release_id, now, now),
             )
-            self._admit_user_compute(
-                connection,
-                resource_kind="research_run",
-                resource_id=run_id,
-                admitted_at=now,
-            )
             connection.execute(
                 """
                 INSERT INTO research_run_idempotency (idempotency_key, run_id)
@@ -2111,20 +1932,7 @@ class MetadataStore:
             ),
         )
         if updated.rowcount != 1:
-            raise RuntimeError(
-                "Tracking Generation rebuild binding was fenced"
-            )
-
-    def _admit_user_compute(
-        self,
-        connection,
-        *,
-        resource_kind: str,
-        resource_id: str,
-        admitted_at: str,
-    ) -> None:
-        """Hosted stores override this transaction hook to enforce Compute quota."""
-        del connection, resource_kind, resource_id, admitted_at
+            raise RuntimeError("Tracking Generation rebuild binding was fenced")
 
     def commit_private_storage_references(
         self,
@@ -2213,9 +2021,7 @@ class MetadataStore:
                 or int(stored["compressed_bytes"]) != int(value["bytes"])
                 or stored["object_kind"] != value["kind"]
             ):
-                raise RuntimeError(
-                    "Stored object identity conflicts with byte accounting"
-                )
+                raise RuntimeError("Stored object identity conflicts with byte accounting")
             connection.execute(
                 """
                 INSERT INTO storage_references (
@@ -2609,17 +2415,6 @@ class MetadataStore:
         """Hosted stores override this transaction hook to serialize request retries."""
         del connection, operation, idempotency_key
 
-    def _complete_user_compute(
-        self,
-        connection,
-        *,
-        resource_kind: str,
-        resource_id: str,
-        completed_at: str,
-    ) -> None:
-        """Hosted stores override this transaction hook to release Compute quota."""
-        del connection, resource_kind, resource_id, completed_at
-
     @staticmethod
     def _lock_research_run(connection, run_id: str):
         lock_research_run = getattr(connection, "lock_research_run", None)
@@ -2695,13 +2490,6 @@ class MetadataStore:
         )
         if updated.rowcount != 1:
             raise RuntimeError("ResearchRun transition fence failed")
-        if next_status in {"succeeded", "failed", "cancelled"}:
-            self._complete_user_compute(
-                connection,
-                resource_kind="research_run",
-                resource_id=run_id,
-                completed_at=now,
-            )
         return True
 
     def frozen_research_definition(self, version_id: str) -> dict[str, object] | None:
@@ -3035,12 +2823,6 @@ class MetadataStore:
             )
             if attempt_update.rowcount != 1:
                 raise RuntimeError("ResearchRun Attempt publication fence failed")
-            self._complete_user_compute(
-                connection,
-                resource_kind="research_run",
-                resource_id=run_id,
-                completed_at=now,
-            )
         return True
 
     def cancel_research_run(self, run_id: str) -> dict[str, object] | None:
@@ -3153,12 +2935,6 @@ class MetadataStore:
                     now,
                     now,
                 ),
-            )
-            self._admit_user_compute(
-                connection,
-                resource_kind="research_run",
-                resource_id=run_id,
-                admitted_at=now,
             )
             connection.execute(
                 """

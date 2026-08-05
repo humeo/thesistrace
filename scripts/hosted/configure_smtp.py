@@ -5,14 +5,6 @@ import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
-
-from thesistrace.config import database_url_from_environment
-from thesistrace.hosted.operator_audit import (
-    OperatorAuditError,
-    flush_operator_audits,
-    stage_operator_audit,
-)
 
 
 class SmtpConfigurationError(RuntimeError):
@@ -146,76 +138,23 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--admin-password-file", type=Path, required=True)
     result.add_argument("--admin-username", default="admin")
     result.add_argument("--origin", default="http://insforge:7130")
-    result.add_argument("--actor", required=True)
-    result.add_argument("--audit-outbox", type=Path, required=True)
     return result
 
 
 def main() -> None:
     arguments = parser().parse_args()
-    database_url = database_url_from_environment()
-    if not database_url:
-        raise SmtpConfigurationError(
-            "management audit database credentials are required"
-        )
-    event_id = f"audit_operator_smtp_{uuid4().hex}"
-    record_smtp_audit(
-        outbox=arguments.audit_outbox,
-        event_id=event_id,
-        actor=arguments.actor,
-        outcome="rejected",
-        reason_code="OPERATION_INTERRUPTED",
+    result = configure_smtp(
+        config_path=arguments.config,
+        smtp_password_path=arguments.smtp_password_file,
+        admin_password_path=arguments.admin_password_file,
+        admin_username=arguments.admin_username,
+        origin=arguments.origin,
     )
-    try:
-        result = configure_smtp(
-            config_path=arguments.config,
-            smtp_password_path=arguments.smtp_password_file,
-            admin_password_path=arguments.admin_password_file,
-            admin_username=arguments.admin_username,
-            origin=arguments.origin,
-        )
-    except SmtpConfigurationError:
-        record_smtp_audit(
-            outbox=arguments.audit_outbox,
-            event_id=event_id,
-            actor=arguments.actor,
-            outcome="rejected",
-            reason_code="SMTP_CONFIGURATION_REJECTED",
-        )
-        flush_operator_audits(arguments.audit_outbox, database_url)
-        raise
-    record_smtp_audit(
-        outbox=arguments.audit_outbox,
-        event_id=event_id,
-        actor=arguments.actor,
-        outcome="succeeded",
-        reason_code=None,
-    )
-    flush_operator_audits(arguments.audit_outbox, database_url)
     print(json.dumps(result, sort_keys=True))
-
-
-def record_smtp_audit(
-    *,
-    outbox: Path,
-    event_id: str,
-    actor: str,
-    outcome: str,
-    reason_code: str | None,
-) -> None:
-    stage_operator_audit(
-        outbox,
-        event_id=event_id,
-        actor=actor,
-        action="smtp.configure",
-        outcome=outcome,
-        reason_code=reason_code,
-        subject_id="insforge",
-    )
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (OperatorAuditError, SmtpConfigurationError) as error:
+    except SmtpConfigurationError as error:
         raise SystemExit(str(error)) from error

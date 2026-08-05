@@ -18,11 +18,6 @@ from thesistrace.auth import (
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
-from thesistrace.hosted.observability import configure_observability, instrument_http
-from thesistrace.hosted.release_operations import (
-    MaintenanceGate,
-    PostgresMaintenanceGate,
-)
 from thesistrace.management import SourceAuthorizationService, build_management_store
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.provisioning import (
@@ -30,7 +25,6 @@ from thesistrace.provisioning import (
     RegistrationService,
     build_registration_service,
 )
-from thesistrace.quota import QuotaExceededError
 from thesistrace.rate_limits import ApiRateLimiter, RateLimitRejection
 from thesistrace.research_runs import (
     ResearchRunService,
@@ -42,7 +36,6 @@ from thesistrace.resource_deletion import (
 )
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
-from thesistrace.storage_admission import StorageAdmissionError
 from thesistrace.tenancy import authenticated_subject, verified_subject
 from thesistrace.tracking import (
     DailyTrackingError,
@@ -89,20 +82,6 @@ def error_detail(reason_code: str, message: str) -> dict[str, str]:
     return {"reason_code": reason_code, "message": message}
 
 
-def quota_error_detail(error: QuotaExceededError) -> dict[str, object]:
-    noun = {
-        "max_active_daily_tracks": "DailyTrack",
-        "max_nonterminal_user_compute_jobs": "Compute",
-        "max_private_storage_bytes": "Storage",
-    }.get(error.dimension, "Resource")
-    return {
-        "reason_code": error.reason_code,
-        "message": f"Personal Workspace {noun} quota is full",
-        "dimension": error.dimension,
-        "limit": error.limit,
-    }
-
-
 def deletion_response(tombstone: dict[str, object]) -> JSONResponse:
     return JSONResponse(
         status_code=202,
@@ -132,11 +111,7 @@ def rate_limit_response(rejection: RateLimitRejection) -> JSONResponse:
 
 def public_dataset_release_view(release: dict[str, object]) -> dict[str, object]:
     correction_change_set = release.get("correction_change_set")
-    corrections = (
-        len(correction_change_set)
-        if isinstance(correction_change_set, list)
-        else 0
-    )
+    corrections = len(correction_change_set) if isinstance(correction_change_set, list) else 0
     return {
         key: release[key]
         for key in (
@@ -168,37 +143,6 @@ def public_research_run_view(run: dict[str, object]) -> dict[str, object]:
     view = copy.deepcopy(run)
     view.pop("result_manifest_sha256", None)
     return view
-
-
-def is_heavy_work_request(method: str, path: str) -> bool:
-    if method.upper() != "POST":
-        return False
-    exact_paths = {
-        "/api/v1/dataset-releases/bootstrap",
-        "/api/v1/dataset-releases/bootstrap-live",
-        "/api/v1/dataset-releases/publish-fixture",
-        "/api/v1/dataset-releases/publish-live",
-    }
-    if path in exact_paths:
-        return True
-    parts = path.strip("/").split("/")
-    if len(parts) < 4 or parts[:2] != ["api", "v1"]:
-        return False
-    return (
-        parts[2] == "research-definitions" and parts[-1] == "runs"
-    ) or (
-        parts[2] == "research-runs"
-        and parts[-1] in {"rerun", "daily-tracks"}
-    ) or (
-        parts[2] == "daily-tracks"
-        and parts[-1]
-        in {
-            "equivalence-requests",
-            "kernel-upgrade",
-            "verify-equivalence",
-            "rebuild-generation",
-        }
-    )
 
 
 def public_result_view(
@@ -245,9 +189,7 @@ def public_result_view(
     if isinstance(terminal, dict):
         positions = terminal.get("positions")
         if isinstance(positions, list):
-            terminal["positions"] = positions[
-                position_offset : position_offset + position_limit
-            ]
+            terminal["positions"] = positions[position_offset : position_offset + position_limit]
             terminal["positions_page"] = {
                 "offset": position_offset,
                 "limit": position_limit,
@@ -263,7 +205,6 @@ def create_app(
     runtime_ports: RuntimePorts | None = None,
     identity_verifier: IdentityVerifier | None = None,
     registration_service: RegistrationService | None = None,
-    maintenance_gate: MaintenanceGate | None = None,
 ) -> FastAPI:
     runtime = runtime_ports or build_runtime(settings)
     store = runtime.control_metadata
@@ -286,12 +227,9 @@ def create_app(
         runtime.working_cache,
     )
     resource_deletion.reconcile_pending()
-    source_authorization = SourceAuthorizationService(
-        build_management_store(settings, store)
-    )
+    source_authorization = SourceAuthorizationService(build_management_store(settings, store))
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
-    instrument_http(app)
     verifier = identity_verifier
     if settings.auth_mode == "insforge" and verifier is None:
         verifier = build_identity_verifier(
@@ -312,39 +250,9 @@ def create_app(
         workspace_request_limit=settings.api_workspace_request_limit,
         mutation_request_limit=settings.api_mutation_request_limit,
     )
-    effective_maintenance_gate = maintenance_gate
-    if (
-        effective_maintenance_gate is None
-        and settings.runtime_mode == "hosted"
-        and settings.database_url
-    ):
-        effective_maintenance_gate = PostgresMaintenanceGate(
-            settings.database_url
-        )
 
     @app.middleware("http")
     async def authenticate_product_request(request: Request, call_next):
-        if (
-            effective_maintenance_gate is not None
-            and is_heavy_work_request(request.method, request.url.path)
-        ):
-            try:
-                maintenance_enabled = await run_in_threadpool(
-                    effective_maintenance_gate.is_enabled
-                )
-            except Exception:
-                maintenance_enabled = True
-            if maintenance_enabled:
-                return JSONResponse(
-                    status_code=503,
-                    content={
-                        "detail": error_detail(
-                            "MAINTENANCE_MODE",
-                            "new compute and data work is paused for maintenance",
-                        )
-                    },
-                    headers={"Retry-After": "60"},
-                )
         if settings.runtime_mode == "hosted":
             hidden_hosted_paths = {
                 "/api/v1/dataset-releases/bootstrap",
@@ -386,8 +294,7 @@ def create_app(
                 )
         if (
             settings.auth_mode != "insforge"
-            or request.url.path
-            in {"/api/v1/health", "/api/v1/live", "/api/v1/ready"}
+            or request.url.path in {"/api/v1/health", "/api/v1/live", "/api/v1/ready"}
             or not request.url.path.startswith("/api/v1/")
         ):
             return await call_next(request)
@@ -408,9 +315,7 @@ def create_app(
                 content={
                     "detail": error_detail(error.reason_code, message),
                 },
-                headers={"WWW-Authenticate": "Bearer"}
-                if error.status_code == 401
-                else None,
+                headers={"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None,
             )
         assert registration is not None
         request.state.product_identity = await run_in_threadpool(
@@ -420,11 +325,7 @@ def create_app(
         product_identity = request.state.product_identity
         rejection = rate_limiter.check(
             subject=request.state.identity.subject,
-            workspace_id=(
-                None
-                if product_identity is None
-                else product_identity.workspace_id
-            ),
+            workspace_id=(None if product_identity is None else product_identity.workspace_id),
             state_changing=request.method not in {"GET", "HEAD", "OPTIONS"},
         )
         if rejection is not None:
@@ -534,9 +435,7 @@ def create_app(
             result = registration.provision(request.state.identity)
         except ProvisioningError as error:
             raise HTTPException(
-                status_code=403
-                if error.reason_code == "INVITATION_NOT_ELIGIBLE"
-                else 409,
+                status_code=403 if error.reason_code == "INVITATION_NOT_ELIGIBLE" else 409,
                 detail=error_detail(
                     error.reason_code,
                     "product provisioning is not available",
@@ -609,11 +508,6 @@ def create_app(
             ) from error
         except DefinitionValidationError as error:
             raise HTTPException(status_code=422, detail={"errors": error.errors}) from error
-        except QuotaExceededError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=quota_error_detail(error),
-            ) from error
         if created:
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(
@@ -621,9 +515,7 @@ def create_app(
             content={
                 "frozen_definition": frozen,
                 "run": (
-                    public_research_run_view(run)
-                    if settings.runtime_mode == "hosted"
-                    else run
+                    public_research_run_view(run) if settings.runtime_mode == "hosted" else run
                 ),
             },
         )
@@ -666,11 +558,7 @@ def create_app(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
             )
-        return (
-            public_research_run_view(run)
-            if settings.runtime_mode == "hosted"
-            else run
-        )
+        return public_research_run_view(run) if settings.runtime_mode == "hosted" else run
 
     @app.get("/api/v1/research-runs/{run_id}/attempts/{ordinal}")
     def get_research_run_attempt(run_id: str, ordinal: int) -> dict[str, object]:
@@ -738,11 +626,7 @@ def create_app(
             )
         if run["status"] == "cancelled":
             run = recover_staged_research_run(store, objects, run_id)
-        return (
-            public_research_run_view(run)
-            if settings.runtime_mode == "hosted"
-            else run
-        )
+        return public_research_run_view(run) if settings.runtime_mode == "hosted" else run
 
     @app.delete("/api/v1/research-runs/{run_id}")
     def delete_research_run(run_id: str) -> JSONResponse:
@@ -753,9 +637,7 @@ def create_app(
             )
         except ResourceDeletionError as error:
             raise HTTPException(
-                status_code=(
-                    404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409
-                ),
+                status_code=(404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409),
                 detail=error_detail(error.reason_code, str(error)),
             ) from error
         return deletion_response(tombstone)
@@ -772,20 +654,11 @@ def create_app(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
             ) from error
-        except QuotaExceededError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=quota_error_detail(error),
-            ) from error
         if created:
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(
             status_code=202 if created else 200,
-            content=(
-                public_research_run_view(run)
-                if settings.runtime_mode == "hosted"
-                else run
-            ),
+            content=(public_research_run_view(run) if settings.runtime_mode == "hosted" else run),
         )
 
     @app.post("/api/v1/research-runs/{run_id}/daily-tracks")
@@ -800,21 +673,6 @@ def create_app(
             )
         try:
             track, created = tracking.activate(run_id, idempotency_key)
-        except QuotaExceededError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=quota_error_detail(error),
-            ) from error
-        except StorageAdmissionError as error:
-            raise HTTPException(
-                status_code=507,
-                detail={
-                    "reason_code": error.reason_code,
-                    "message": str(error),
-                    "dimension": error.dimension,
-                    "limit": error.limit,
-                },
-            ) from error
         except DailyTrackingError as error:
             raise HTTPException(
                 status_code=409,
@@ -941,9 +799,7 @@ def create_app(
             )
         except ResourceDeletionError as error:
             raise HTTPException(
-                status_code=(
-                    404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409
-                ),
+                status_code=(404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409),
                 detail=error_detail(error.reason_code, str(error)),
             ) from error
         return deletion_response(tombstone)
@@ -1033,28 +889,18 @@ def create_app(
                     "DailyTrack not found",
                 ),
             ) from error
-        except QuotaExceededError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=quota_error_detail(error),
-            ) from error
         return JSONResponse(
             status_code=202 if created else 200,
             content=request,
         )
 
-    @app.get(
-        "/api/v1/daily-tracks/{track_id}/equivalence-requests/{request_id}"
-    )
+    @app.get("/api/v1/daily-tracks/{track_id}/equivalence-requests/{request_id}")
     def get_daily_track_equivalence(
         track_id: str,
         request_id: str,
     ) -> dict[str, object]:
         request = tracking_operations.equivalence_request(request_id)
-        if (
-            request is None
-            or request["daily_track_id"] != track_id
-        ):
+        if request is None or request["daily_track_id"] != track_id:
             raise HTTPException(
                 status_code=404,
                 detail=error_detail(
@@ -1064,19 +910,13 @@ def create_app(
             )
         return request
 
-    @app.post(
-        "/api/v1/daily-tracks/{track_id}/equivalence-requests/"
-        "{request_id}/cancel"
-    )
+    @app.post("/api/v1/daily-tracks/{track_id}/equivalence-requests/{request_id}/cancel")
     def cancel_daily_track_equivalence(
         track_id: str,
         request_id: str,
     ) -> dict[str, object]:
         request = tracking_operations.equivalence_request(request_id)
-        if (
-            request is None
-            or request["daily_track_id"] != track_id
-        ):
+        if request is None or request["daily_track_id"] != track_id:
             raise HTTPException(
                 status_code=404,
                 detail=error_detail(
@@ -1086,9 +926,7 @@ def create_app(
             )
         return tracking_operations.cancel_equivalence(
             request_id,
-            enqueue_workflow_cancellation=(
-                settings.runtime_mode == "hosted"
-            ),
+            enqueue_workflow_cancellation=(settings.runtime_mode == "hosted"),
         )
 
     @app.get("/api/v1/health")
@@ -1316,8 +1154,7 @@ def create_app(
             )
         schemas = predecessor.get("schemas")
         if not isinstance(schemas, list) or not any(
-            isinstance(item, dict) and item.get("family") == "source_tushare"
-            for item in schemas
+            isinstance(item, dict) and item.get("family") == "source_tushare" for item in schemas
         ):
             raise HTTPException(
                 status_code=409,
@@ -1327,11 +1164,7 @@ def create_app(
             canonical = publisher.materialize_canonical_tail(predecessor, 20)
             instruments = canonical.get("instruments")
             calendar = canonical.get("research_calendar")
-            if (
-                not isinstance(instruments, list)
-                or not isinstance(calendar, list)
-                or not calendar
-            ):
+            if not isinstance(instruments, list) or not isinstance(calendar, list) or not calendar:
                 raise InvalidFixtureError("predecessor canonical data is incomplete")
             adapter = TushareAdapter(
                 token=settings.tushare_token,
@@ -1340,9 +1173,7 @@ def create_app(
             snapshot = adapter.collect_incremental_snapshot(
                 last_session=str(calendar[-1]),
                 known_ts_codes={
-                    str(item["ts_code"])
-                    for item in instruments
-                    if isinstance(item, dict)
+                    str(item["ts_code"]) for item in instruments if isinstance(item, dict)
                 },
                 as_of=request.as_of,
             )
@@ -1427,10 +1258,7 @@ def create_app(
 
     @app.get("/api/v1/objects/{digest}")
     def get_object(digest: str) -> FileResponse:
-        if (
-            settings.runtime_mode == "hosted"
-            or not isinstance(objects, ImmutableObjectStore)
-        ):
+        if settings.runtime_mode == "hosted" or not isinstance(objects, ImmutableObjectStore):
             raise HTTPException(
                 status_code=404,
                 detail=error_detail(
@@ -1481,7 +1309,6 @@ def reject_client_workspace_identity(content: dict[str, object]) -> None:
 
 
 def main() -> None:
-    configure_observability("api")
     uvicorn.run(
         create_app(settings_from_environment()),
         host=os.environ.get("THESISTRACE_API_HOST", "127.0.0.1"),

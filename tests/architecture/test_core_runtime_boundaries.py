@@ -209,8 +209,6 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
         ROOT / "uv.lock",
         ROOT / "Makefile",
         ROOT / "src" / "thesistrace" / "config.py",
-        ROOT / "src" / "thesistrace" / "capacity.py",
-        ROOT / "src" / "thesistrace" / "launch.py",
         ROOT / "scripts" / "hosted-stack",
     ]
     for root in (
@@ -223,8 +221,7 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
             for path in root.rglob("*")
             if path.is_file()
             and ROOT / "deploy" / "hosted" / "migrations" not in path.parents
-            and path.suffix
-            in {".app", ".json", ".py", ".sh", ".toml", ".yaml", ".yml"}
+            and path.suffix in {".app", ".json", ".py", ".sh", ".toml", ".yaml", ".yml"}
         )
     forbidden = (
         "temporal",
@@ -258,9 +255,7 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
 
     historical_migrations = [
         path
-        for path in sorted(
-            (ROOT / "deploy" / "hosted" / "migrations").glob("*.sql")
-        )
+        for path in sorted((ROOT / "deploy" / "hosted" / "migrations").glob("*.sql"))
         if path.name < "0027_"
     ]
     assert historical_migrations
@@ -273,14 +268,72 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
         ).stdout
         assert path.read_bytes() == archived
     contraction = (
-        ROOT
-        / "deploy"
-        / "hosted"
-        / "migrations"
-        / "0027_remove_hosted_execution.sql"
+        ROOT / "deploy" / "hosted" / "migrations" / "0027_remove_hosted_execution.sql"
     ).read_text()
     assert "NOLOGIN" in contraction
     assert "DROP TABLE thesistrace_product.execution_outbox" in contraction
+
+
+def test_hosted_operations_and_observability_are_absent_from_the_active_tree() -> None:
+    removed_paths = (
+        "src/thesistrace/capacity.py",
+        "src/thesistrace/launch.py",
+        "src/thesistrace/qualification.py",
+        "src/thesistrace/quota.py",
+        "src/thesistrace/storage_admission.py",
+        "src/thesistrace/hosted/backup_cli.py",
+        "src/thesistrace/hosted/backup_operations.py",
+        "src/thesistrace/hosted/capacity_corpus.py",
+        "src/thesistrace/hosted/health_service.py",
+        "src/thesistrace/hosted/observability.py",
+        "src/thesistrace/hosted/operator_audit.py",
+        "src/thesistrace/hosted/probes.py",
+        "src/thesistrace/hosted/release_cli.py",
+        "src/thesistrace/hosted/release_gate.py",
+        "src/thesistrace/hosted/release_operations.py",
+        "deploy/hosted/" + "otel" + "-collector.yaml",
+        "deploy/hosted/" + "prom" + "etheus.yaml",
+        "deploy/hosted/" + "gra" + "fana",
+        "deploy/hosted/release.json",
+        "deploy/hosted/systemd/thesistrace-backup.service",
+        "deploy/hosted/systemd/thesistrace-backup.timer",
+    )
+    for removed_path in removed_paths:
+        assert not (ROOT / removed_path).exists()
+
+    active_files = [ROOT / "pyproject.toml", ROOT / "uv.lock", ROOT / "Makefile"]
+    for root in (ROOT / "src", ROOT / "scripts", ROOT / "deploy" / "hosted"):
+        active_files.extend(
+            path
+            for path in root.rglob("*")
+            if path.is_file()
+            and ROOT / "deploy" / "hosted" / "migrations" not in path.parents
+            and "__pycache__" not in path.parts
+        )
+    retired_tokens = (
+        "health" + "-service",
+        "backup" + "-tool",
+        "restore" + "-tool",
+        "restore" + "-gate",
+        "otel" + "-collector",
+        "open" + "telemetry",
+        "prom" + "etheus",
+        "gra" + "fana",
+        "maintenance" + "-enter",
+        "maintenance" + "-exit",
+    )
+    for path in active_files:
+        source = path.read_text(errors="ignore").lower()
+        for token in retired_tokens:
+            assert token not in source, f"{token} remains in {path.relative_to(ROOT)}"
+
+    for path in (
+        ROOT / "docs" / "runbook" / "hosted-health.md",
+        ROOT / "docs" / "runbook" / "v1-operations.md",
+    ):
+        source = path.read_text().lower()
+        assert "archived" in source
+        assert "outside the active core" in source
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:

@@ -20,22 +20,6 @@ class ManagementStore(Protocol):
 
     def list_management_audit_events(self) -> list[dict[str, object]]: ...
 
-    def record_capacity_qualification(
-        self,
-        qualification: dict[str, object],
-        audit_event: dict[str, object],
-    ) -> None: ...
-
-    def latest_capacity_qualification(self) -> dict[str, object] | None: ...
-
-    def record_launch_qualification(
-        self,
-        qualification: dict[str, object],
-        audit_event: dict[str, object],
-    ) -> None: ...
-
-    def latest_launch_qualification(self) -> dict[str, object] | None: ...
-
 
 class SourceAuthorizationError(RuntimeError):
     def __init__(self, reason_code: str, message: str):

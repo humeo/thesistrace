@@ -1,5 +1,9 @@
 # ThesisTrace V1 operator runbook
 
+> **Archived — outside the active Core.** This runbook preserves the retired V1
+> operating model only; it is not a startup, backup, or release procedure for
+> the active ThesisTrace Core.
+
 This runbook operates one single-node, single-operator ThesisTrace Workspace.
 Access control belongs to the deployment boundary. The application does not
 provide users, tenants, RBAC, broker execution, intraday signals, alerts, or an

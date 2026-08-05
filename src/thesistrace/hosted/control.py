@@ -7,10 +7,6 @@ from uuid import uuid4
 import psycopg
 from psycopg import sql
 
-from thesistrace.quota import (
-    QuotaExceededError,
-    daily_track_activation_lock_key,
-)
 from thesistrace.storage import MetadataStore
 from thesistrace.tenancy import verified_subject
 
@@ -145,9 +141,7 @@ class PostgresControlMetadataStore(MetadataStore):
             connection.execute("BEGIN")
             role = HOSTED_DATABASE_ROLES[self.database_role]
             connection.execute(sql.SQL("SET LOCAL ROLE {}").format(sql.Identifier(role)))
-            connection.execute(
-                "SET LOCAL search_path = thesistrace_product, public"
-            )
+            connection.execute("SET LOCAL search_path = thesistrace_product, public")
             if self.database_role == "api":
                 subject = verified_subject()
                 if subject is not None:
@@ -157,61 +151,6 @@ class PostgresControlMetadataStore(MetadataStore):
                     )
             yield PostgresConnectionAdapter(connection)
 
-    def _admit_user_compute(
-        self,
-        connection: PostgresConnectionAdapter,
-        *,
-        resource_kind: str,
-        resource_id: str,
-        admitted_at: str,
-    ) -> None:
-        workspace = connection.execute(
-            "SELECT thesistrace_control.current_workspace_id() AS workspace_id"
-        ).fetchone()
-        if workspace is None or workspace["workspace_id"] is None:
-            raise RuntimeError("Personal Workspace context is missing")
-        workspace_id = str(workspace["workspace_id"])
-        connection.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
-            (workspace_id,),
-        )
-        profile = connection.execute(
-            """
-            SELECT max_nonterminal_user_compute_jobs
-            FROM thesistrace_control.workspace_quota_profiles
-            WHERE workspace_id = ?
-            """,
-            (workspace_id,),
-        ).fetchone()
-        if profile is None:
-            raise RuntimeError("Personal Workspace Quota Profile is missing")
-        limit = int(profile["max_nonterminal_user_compute_jobs"])
-        active = int(
-            connection.execute(
-                """
-                SELECT count(*)
-                FROM user_compute_admissions
-                WHERE completed_at IS NULL
-                """
-            ).fetchone()[0]
-        )
-        if active >= limit:
-            raise QuotaExceededError(
-                dimension="max_nonterminal_user_compute_jobs",
-                limit=limit,
-            )
-        connection.execute(
-            """
-            INSERT INTO user_compute_admissions (
-                resource_kind,
-                resource_id,
-                admitted_at
-            )
-            VALUES (?, ?, ?)
-            """,
-            (resource_kind, resource_id, admitted_at),
-        )
-
     def commit_private_storage_references(
         self,
         connection: PostgresConnectionAdapter,
@@ -220,31 +159,12 @@ class PostgresControlMetadataStore(MetadataStore):
         resource_id: str,
         objects: list[dict[str, object]],
     ) -> int:
-        row = connection.execute(
-            """
-            SELECT accepted, used_bytes, limit_bytes
-            FROM thesistrace_control.commit_workspace_storage_references(
-                ?, ?, ?::jsonb
-            )
-            """,
-            (
-                resource_kind,
-                resource_id,
-                json.dumps(
-                    objects,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ),
-            ),
-        ).fetchone()
-        if row is None:
-            raise RuntimeError("private storage admission returned no result")
-        if not bool(row["accepted"]):
-            raise QuotaExceededError(
-                dimension="max_private_storage_bytes",
-                limit=int(row["limit_bytes"]),
-            )
-        return int(row["used_bytes"])
+        return self.commit_platform_storage_references(
+            connection,
+            resource_kind=resource_kind,
+            resource_id=resource_id,
+            objects=objects,
+        )
 
     def commit_platform_storage_references(
         self,
@@ -382,31 +302,10 @@ class PostgresControlMetadataStore(MetadataStore):
         ).fetchone()
         if workspace is None or workspace["workspace_id"] is None:
             raise RuntimeError("Personal Workspace context is missing")
-        lock_identity = (
-            f"{workspace['workspace_id']}:{operation}:{idempotency_key}"
-        )
+        lock_identity = f"{workspace['workspace_id']}:{operation}:{idempotency_key}"
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
             (lock_identity,),
-        )
-
-    def _complete_user_compute(
-        self,
-        connection: PostgresConnectionAdapter,
-        *,
-        resource_kind: str,
-        resource_id: str,
-        completed_at: str,
-    ) -> None:
-        connection.execute(
-            """
-            UPDATE user_compute_admissions
-            SET completed_at = COALESCE(completed_at, ?)
-            WHERE resource_kind = ?
-              AND resource_id = ?
-              AND completed_at IS NULL
-            """,
-            (completed_at, resource_kind, resource_id),
         )
 
     def _lock_dataset_publication_slot(
@@ -432,27 +331,8 @@ class PostgresControlMetadataStore(MetadataStore):
             raise RuntimeError("Personal Workspace context is missing")
         connection.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(?, 0))",
-            (
-                daily_track_activation_lock_key(
-                    str(workspace["workspace_id"])
-                ),
-            ),
+            (f"{workspace['workspace_id']}:daily-track-activation",),
         )
-
-    def active_daily_track_limit(
-        self,
-        connection: PostgresConnectionAdapter,
-    ) -> int:
-        row = connection.execute(
-            """
-            SELECT max_active_daily_tracks
-            FROM thesistrace_control.workspace_quota_profiles
-            WHERE workspace_id = thesistrace_control.current_workspace_id()
-            """
-        ).fetchone()
-        if row is None:
-            raise RuntimeError("Personal Workspace Quota Profile is missing")
-        return int(row["max_active_daily_tracks"])
 
     def lock_daily_track(
         self,
@@ -644,9 +524,7 @@ class PostgresControlMetadataStore(MetadataStore):
         audit_event: dict[str, object] | None,
     ) -> tuple[dict[str, object], bool]:
         if audit_event is not None or record.get("trigger_kind") != "schedule":
-            raise PermissionError(
-                "Data role can only request validated scheduled publications"
-            )
+            raise PermissionError("Data role can only request validated scheduled publications")
         with self.connect() as connection:
             row = connection.execute(
                 """

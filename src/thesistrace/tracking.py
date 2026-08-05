@@ -30,7 +30,7 @@ from thesistrace.ports import (
     ObjectWriterPort,
     WorkingCachePort,
 )
-from thesistrace.quota import QuotaExceededError
+from thesistrace.publication_object_index import publication_storage_objects
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 from thesistrace.research_runs import RUNTIME_BUILD
 from thesistrace.result_objects import (
@@ -56,10 +56,6 @@ from thesistrace.result_objects import (
 )
 from thesistrace.result_objects import (
     terminal_strategy_state as compact_terminal_strategy_state,
-)
-from thesistrace.storage_admission import (
-    StorageAdmissionError,
-    publication_storage_objects,
 )
 from thesistrace.strategy import (
     advance_strategy_metric_state,
@@ -148,32 +144,6 @@ class DailyTrackingService:
             ).fetchone()
             if existing is None and reservation is not None:
                 pending_track_id = str(reservation["track_id"])
-            if existing is None and pending_track_id is None:
-                active_count = int(
-                    connection.execute(
-                        """
-                        SELECT
-                            (
-                                SELECT COUNT(*)
-                                FROM daily_tracks
-                                WHERE status = 'active'
-                            )
-                            +
-                            (
-                                SELECT COUNT(*)
-                                FROM daily_track_activation_reservations
-                            )
-                        """
-                    ).fetchone()[0]
-                )
-                active_limit = self.metadata.active_daily_track_limit(
-                    connection
-                )
-                if active_count >= active_limit:
-                    raise QuotaExceededError(
-                        dimension="max_active_daily_tracks",
-                        limit=active_limit,
-                    )
         if existing is not None:
             track = self.get_track(str(existing["daily_track_id"]))
             if track is None:
@@ -311,36 +281,6 @@ class DailyTrackingService:
                             )
                             connection.rollback()
                         else:
-                            active_count = int(
-                                connection.execute(
-                                    """
-                                    SELECT
-                                        (
-                                            SELECT COUNT(*)
-                                            FROM daily_tracks
-                                            WHERE status = 'active'
-                                        )
-                                        +
-                                        (
-                                            SELECT COUNT(*)
-                                            FROM
-                                                daily_track_activation_reservations
-                                        )
-                                    """
-                                ).fetchone()[0]
-                            )
-                            active_limit = (
-                                self.metadata.active_daily_track_limit(
-                                    connection
-                                )
-                            )
-                            if active_count >= active_limit:
-                                raise QuotaExceededError(
-                                    dimension=(
-                                        "max_active_daily_tracks"
-                                    ),
-                                    limit=active_limit,
-                                )
                             connection.execute(
                                 """
                                 INSERT INTO
@@ -2129,18 +2069,12 @@ class DailyTrackingService:
             current = self._recover_staged_advance(advance_id)
             if current["status"] == "succeeded":
                 return current
-            quota_exceeded = isinstance(error, QuotaExceededError)
-            storage_rejected = isinstance(error, StorageAdmissionError)
             resource_exhausted = is_resource_exhaustion(error)
             session_limit_exceeded = isinstance(
                 error,
                 TrackingAdvanceLimitError,
             )
-            if quota_exceeded:
-                reason_code = error.reason_code
-            elif storage_rejected:
-                reason_code = error.reason_code
-            elif resource_exhausted:
+            if resource_exhausted:
                 reason_code = "RESOURCE_EXHAUSTED"
             elif session_limit_exceeded:
                 reason_code = "TRACKING_ADVANCE_SESSION_LIMIT"
@@ -2157,14 +2091,6 @@ class DailyTrackingService:
                         "accepted Compute Worker resource envelope was exhausted"
                         if resource_exhausted
                         else str(error)
-                    ),
-                    **(
-                        {
-                            "dimension": error.dimension,
-                            "limit": error.limit,
-                        }
-                        if quota_exceeded or storage_rejected
-                        else {}
                     ),
                 },
                 terminal=(

@@ -10,7 +10,6 @@ from thesistrace.api import create_app
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
-from thesistrace.quota import QuotaExceededError
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.storage import MetadataStore
 from thesistrace.tracking import DailyTrackingService
@@ -19,22 +18,6 @@ from thesistrace.working_cache import (
     WorkingCacheStore,
     ensure_shared_directory,
 )
-
-
-class RejectingCheckpointStorageStore(MetadataStore):
-    def commit_private_storage_references(
-        self,
-        connection,
-        *,
-        resource_kind: str,
-        resource_id: str,
-        objects: list[dict[str, object]],
-    ) -> int:
-        del connection, resource_kind, resource_id, objects
-        raise QuotaExceededError(
-            dimension="max_private_storage_bytes",
-            limit=10,
-        )
 
 
 def test_shared_working_cache_artifacts_are_group_writable(tmp_path: Path) -> None:
@@ -288,41 +271,7 @@ def test_top3000_seed_shape_stays_below_the_cache_byte_limit(tmp_path: Path) -> 
     )
 
 
-def test_activation_storage_quota_failure_publishes_no_checkpoint_or_cache(
-    tmp_path: Path,
-) -> None:
-    settings = Settings(
-        metadata_path=tmp_path / "metadata.sqlite3",
-        object_root=tmp_path / "objects",
-        working_cache_root=tmp_path / "working-cache",
-    )
-    with TestClient(create_app(settings)) as client:
-        run_id = create_succeeded_run(client, settings)
-    metadata = RejectingCheckpointStorageStore(settings.metadata_path)
-    objects = ImmutableObjectStore(settings.object_root)
-    tracking = DailyTrackingService(
-        metadata,
-        DatasetPublisher(metadata, objects),
-        objects,
-        WorkingCacheStore(settings.working_cache_root),
-    )
-
-    with pytest.raises(QuotaExceededError) as rejected:
-        tracking.activate(run_id, "reject-checkpoint-storage")
-
-    assert rejected.value.dimension == "max_private_storage_bytes"
-    with metadata.connect() as connection:
-        assert connection.execute(
-            "SELECT count(*) FROM daily_tracks"
-        ).fetchone()[0] == 0
-    assert WorkingCacheStore(settings.working_cache_root).list_track_ids() == []
-    assert not list(
-        (settings.object_root / "manifests").glob("checkpoint_*.json")
-    )
-    assert metadata.daily_track_activation_reservation_ids() == []
-
-
-def test_concurrent_activation_atomically_enforces_ten_active_tracks(
+def test_concurrent_activation_has_no_hosted_profile_cap(
     tmp_path: Path,
 ) -> None:
     settings = Settings(
@@ -376,19 +325,16 @@ def test_concurrent_activation_atomically_enforces_ten_active_tracks(
         except Exception as error:
             errors.append(error)
 
-    assert len(successes) == 1
-    assert len(errors) == 1
-    assert isinstance(errors[0], QuotaExceededError)
-    assert errors[0].dimension == "max_active_daily_tracks"
-    assert errors[0].limit == 10
+    assert len(successes) == 2
+    assert errors == []
     with metadata.connect() as connection:
         active_count = connection.execute(
             "SELECT COUNT(*) FROM daily_tracks WHERE status = 'active'"
         ).fetchone()[0]
-    assert active_count == 10
-    assert WorkingCacheStore(settings.working_cache_root).list_track_ids() == [
-        successes[0]["id"]
-    ]
+    assert active_count == 11
+    assert WorkingCacheStore(settings.working_cache_root).list_track_ids() == sorted(
+        track["id"] for track in successes
+    )
 
 
 def test_concurrent_same_key_waits_for_and_replays_the_activation(

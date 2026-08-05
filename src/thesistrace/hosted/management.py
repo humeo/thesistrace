@@ -3,8 +3,6 @@ import json
 import psycopg
 from psycopg.rows import dict_row
 
-from thesistrace.quota import daily_track_activation_lock_key
-
 
 class PostgresManagementStore:
     def __init__(self, database_url: str) -> None:
@@ -103,113 +101,8 @@ class PostgresManagementStore:
         return bool(
             declaration
             and declaration.get("source") == "tushare"
-            and declaration.get("scope")
-            == "hosted-shared-dataset-releases"
+            and declaration.get("scope") == "hosted-shared-dataset-releases"
         )
-
-    def record_capacity_qualification(
-        self,
-        qualification: dict[str, object],
-        audit_event: dict[str, object],
-    ) -> None:
-        with psycopg.connect(self.database_url) as connection:
-            with connection.transaction():
-                self._insert_audit_event(connection, audit_event)
-                connection.execute(
-                    """
-                    INSERT INTO thesistrace_control.capacity_qualifications (
-                        id, status, release_bundle_id, evidence_sha256,
-                        evidence_json, failures_json, recorded_by, measured_at,
-                        audit_event_id
-                    )
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
-                    """,
-                    (
-                        qualification["id"],
-                        qualification["status"],
-                        qualification["release_bundle_id"],
-                        qualification["evidence_sha256"],
-                        json.dumps(
-                            qualification["evidence"],
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                        json.dumps(
-                            qualification["failures"],
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                        qualification["recorded_by"],
-                        qualification["measured_at"],
-                        qualification["audit_event_id"],
-                    ),
-                )
-
-    def latest_capacity_qualification(self) -> dict[str, object] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            row = connection.execute(
-                """
-                SELECT id, status, release_bundle_id, evidence_sha256,
-                       evidence_json AS evidence, failures_json AS failures,
-                       recorded_by, measured_at, audit_event_id
-                FROM thesistrace_control.capacity_qualifications
-                ORDER BY measured_at DESC, id DESC
-                LIMIT 1
-                """
-            ).fetchone()
-        return self._serialize_row(row)
-
-    def record_launch_qualification(
-        self,
-        qualification: dict[str, object],
-        audit_event: dict[str, object],
-    ) -> None:
-        with psycopg.connect(self.database_url) as connection:
-            with connection.transaction():
-                self._insert_audit_event(connection, audit_event)
-                connection.execute(
-                    """
-                    INSERT INTO thesistrace_control.launch_qualifications (
-                        id, status, release_bundle_id, evidence_sha256,
-                        evidence_json, failures_json, recorded_by, measured_at,
-                        audit_event_id
-                    )
-                    VALUES (%s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s, %s)
-                    """,
-                    (
-                        qualification["id"],
-                        qualification["status"],
-                        qualification["release_bundle_id"],
-                        qualification["evidence_sha256"],
-                        json.dumps(
-                            qualification["evidence"],
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                        json.dumps(
-                            qualification["failures"],
-                            sort_keys=True,
-                            separators=(",", ":"),
-                        ),
-                        qualification["recorded_by"],
-                        qualification["measured_at"],
-                        qualification["audit_event_id"],
-                    ),
-                )
-
-    def latest_launch_qualification(self) -> dict[str, object] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            row = connection.execute(
-                """
-                SELECT id, status, release_bundle_id, evidence_sha256,
-                       evidence_json AS evidence, failures_json AS failures,
-                       recorded_by, measured_at, audit_event_id
-                FROM thesistrace_control.launch_qualifications
-                ORDER BY measured_at DESC, id DESC
-                LIMIT 1
-                """
-            ).fetchone()
-        return self._serialize_row(row)
 
     def list_management_audit_events(self) -> list[dict[str, object]]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
@@ -230,80 +123,6 @@ class PostgresManagementStore:
                 """
             ).fetchall()
         return [self._serialize_row(row) for row in rows if row is not None]
-
-    def quota_profile(self, workspace_id: str) -> dict[str, int] | None:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            row = connection.execute(
-                """
-                SELECT
-                    max_active_daily_tracks,
-                    max_nonterminal_user_compute_jobs,
-                    max_private_storage_bytes
-                FROM thesistrace_control.workspace_quota_profiles
-                WHERE workspace_id = %s
-                """,
-                (workspace_id,),
-            ).fetchone()
-        if row is None:
-            return None
-        return {key: int(value) for key, value in row.items()}
-
-    def update_quota_profile(
-        self,
-        *,
-        workspace_id: str,
-        overrides: dict[str, int],
-        audit_event: dict[str, object],
-    ) -> dict[str, int]:
-        with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
-            with connection.transaction():
-                connection.execute(
-                    """
-                    SELECT pg_advisory_xact_lock(
-                        hashtextextended(%s, 0)
-                    )
-                    """,
-                    (daily_track_activation_lock_key(workspace_id),),
-                )
-                current = connection.execute(
-                    """
-                    SELECT
-                        max_active_daily_tracks,
-                        max_nonterminal_user_compute_jobs,
-                        max_private_storage_bytes
-                    FROM thesistrace_control.workspace_quota_profiles
-                    WHERE workspace_id = %s
-                    FOR UPDATE
-                    """,
-                    (workspace_id,),
-                ).fetchone()
-                if current is None:
-                    raise KeyError(workspace_id)
-                profile = {key: int(value) for key, value in current.items()}
-                profile.update(overrides)
-                updated = connection.execute(
-                    """
-                    UPDATE thesistrace_control.workspace_quota_profiles
-                    SET max_active_daily_tracks = %s,
-                        max_nonterminal_user_compute_jobs = %s,
-                        max_private_storage_bytes = %s,
-                        updated_at = %s,
-                        updated_by = %s
-                    WHERE workspace_id = %s
-                    """,
-                    (
-                        profile["max_active_daily_tracks"],
-                        profile["max_nonterminal_user_compute_jobs"],
-                        profile["max_private_storage_bytes"],
-                        audit_event["occurred_at"],
-                        audit_event["actor"],
-                        workspace_id,
-                    ),
-                )
-                if updated.rowcount != 1:
-                    raise KeyError(workspace_id)
-                self._insert_audit_event(connection, audit_event)
-        return profile
 
     def request_dataset_publication(
         self,
@@ -429,9 +248,7 @@ class PostgresManagementStore:
         }
         parameters = value.get("parameters_json")
         value["parameters"] = (
-            dict(parameters)
-            if isinstance(parameters, dict)
-            else json.loads(str(parameters))
+            dict(parameters) if isinstance(parameters, dict) else json.loads(str(parameters))
         )
         value["attempts"] = []
         value["diagnostic"] = value.get("diagnostic_json")

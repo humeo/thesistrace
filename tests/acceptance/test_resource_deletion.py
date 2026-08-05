@@ -8,12 +8,12 @@ from thesistrace.api import create_app
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
+from thesistrace.publication_object_index import publication_storage_objects
 from thesistrace.resource_deletion import (
     ResourceDeletionError,
     ResourceDeletionService,
 )
 from thesistrace.storage import MetadataStore
-from thesistrace.storage_admission import publication_storage_objects
 from thesistrace.working_cache import WorkingCacheStore
 
 

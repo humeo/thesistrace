@@ -28,7 +28,7 @@ from thesistrace.fixture import (
 )
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import ControlMetadataPort, ObjectStorePort
-from thesistrace.storage_admission import publication_storage_objects
+from thesistrace.publication_object_index import publication_storage_objects
 
 
 class InvalidFixtureError(ValueError):

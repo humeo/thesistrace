@@ -2,9 +2,6 @@ import select
 import socket
 import socketserver
 
-from thesistrace.hosted.observability import configure_observability
-from thesistrace.hosted.probes import ProcessProbeServer, ProcessProbeState
-
 ALLOWED_HOST = "api.tushare.pro"
 ALLOWED_PORT = 443
 MAX_HEADER_BYTES = 16_384
@@ -21,9 +18,7 @@ class TushareConnectHandler(socketserver.StreamRequestHandler):
             ALLOWED_PORT,
         ):
             self.connection.sendall(
-                b"HTTP/1.1 403 Forbidden\r\n"
-                b"Content-Length: 0\r\n"
-                b"Connection: close\r\n\r\n"
+                b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             )
             return
         try:
@@ -33,15 +28,11 @@ class TushareConnectHandler(socketserver.StreamRequestHandler):
             )
         except OSError:
             self.connection.sendall(
-                b"HTTP/1.1 502 Bad Gateway\r\n"
-                b"Content-Length: 0\r\n"
-                b"Connection: close\r\n\r\n"
+                b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
             )
             return
         with upstream:
-            self.connection.sendall(
-                b"HTTP/1.1 200 Connection Established\r\n\r\n"
-            )
+            self.connection.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             self.connection.settimeout(30)
             upstream.settimeout(30)
             self._relay(upstream)
@@ -67,22 +58,13 @@ class TushareConnectHandler(socketserver.StreamRequestHandler):
                 payload = source.recv(65_536)
                 if not payload:
                     return
-                destination = (
-                    upstream
-                    if source is self.connection
-                    else self.connection
-                )
+                destination = upstream if source is self.connection else self.connection
                 destination.sendall(payload)
 
 
 class TushareEgressServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
-
-    def service_actions(self) -> None:
-        state = getattr(self, "probe_state", None)
-        if isinstance(state, ProcessProbeState):
-            state.heartbeat()
 
 
 def connect_authority(
@@ -104,17 +86,10 @@ def connect_authority(
 
 
 def main() -> None:
-    configure_observability("tushare-egress")
-    state = ProcessProbeState(service="tushare-egress", slot="egress-1")
-    with (
-        ProcessProbeServer(state),
-        TushareEgressServer(
-            ("0.0.0.0", 8080),
-            TushareConnectHandler,
-        ) as server,
-    ):
-        server.probe_state = state
-        state.mark_ready()
+    with TushareEgressServer(
+        ("0.0.0.0", 8080),
+        TushareConnectHandler,
+    ) as server:
         server.serve_forever()
 
 

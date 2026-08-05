@@ -1,4 +1,4 @@
-.PHONY: dev check check-live-tushare hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore
+.PHONY: dev check check-live-tushare hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-smtp-configure hosted-config hosted-operator
 
 dev:
 	bun run --cwd web dev
@@ -28,9 +28,6 @@ hosted-restart:
 hosted-smoke:
 	./scripts/hosted-stack smoke
 
-hosted-health-check:
-	./scripts/hosted-stack health-check
-
 hosted-smtp-configure:
 	./scripts/hosted-stack smtp-configure $(CONFIG) $(PASSWORD_FILE) $(ACTOR)
 
@@ -39,21 +36,3 @@ hosted-config:
 
 hosted-operator:
 	./scripts/hosted-stack operator $(ARGS)
-
-hosted-maintenance-enter:
-	./scripts/hosted-stack maintenance-enter
-
-hosted-maintenance-exit:
-	./scripts/hosted-stack maintenance-exit
-
-hosted-rollback:
-	./scripts/hosted-stack rollback
-
-hosted-backup-target-init:
-	./scripts/hosted-stack backup-target-init $(TARGET)
-
-hosted-backup:
-	./scripts/hosted-stack backup
-
-hosted-restore:
-	./scripts/hosted-stack restore $(BACKUP_ID)

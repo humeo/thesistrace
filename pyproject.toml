@@ -11,8 +11,6 @@ dependencies = [
   "PyJWT[crypto]>=2.10.1,<3",
   "pyarrow==25.0.0",
   "uvicorn[standard]>=0.35.0,<1",
-  "opentelemetry-sdk>=1.38.0,<2",
-  "opentelemetry-exporter-otlp-proto-grpc>=1.38.0,<2",
   "boto3>=1.40,<2",
 ]
 
@@ -24,8 +22,6 @@ thesistrace-operator = "thesistrace.operator:main"
 thesistrace-worker = "thesistrace.entrypoints.worker:main"
 thesistrace-object-store = "thesistrace.hosted.object_store_service:main"
 thesistrace-tushare-egress = "thesistrace.hosted.tushare_egress:main"
-thesistrace-health-service = "thesistrace.hosted.health_service:main"
-thesistrace-release = "thesistrace.hosted.release_cli:main"
 
 [dependency-groups]
 dev = [

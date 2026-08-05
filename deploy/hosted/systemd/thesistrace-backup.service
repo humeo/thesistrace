@@ -1,9 +1,0 @@
-[Unit]
-Description=Create one coordinated encrypted ThesisTrace recovery set
-After=docker.service
-Requires=docker.service
-
-[Service]
-Type=oneshot
-WorkingDirectory=/opt/thesistrace
-ExecStart=/opt/thesistrace/scripts/hosted-stack backup

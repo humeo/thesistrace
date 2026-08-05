@@ -3,15 +3,9 @@ import json
 import sys
 from collections.abc import Sequence
 from datetime import datetime
-from pathlib import Path
 from typing import cast
 
-from thesistrace.capacity import (
-    CapacityQualificationError,
-    CapacityQualificationService,
-)
 from thesistrace.config import Settings, settings_from_environment
-from thesistrace.launch import LaunchQualificationService
 from thesistrace.management import (
     HOSTED_TUSHARE_SCOPE,
     SourceAuthorizationError,
@@ -27,11 +21,6 @@ from thesistrace.provisioning import (
     ProvisioningError,
     RegistrationService,
     build_registration_service,
-)
-from thesistrace.quota import (
-    QuotaProfileError,
-    QuotaProfileService,
-    QuotaProfileStore,
 )
 from thesistrace.storage import MetadataStore
 
@@ -52,18 +41,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     commands.add_parser("inspect")
 
-    capacity = resources.add_parser("capacity-qualification")
-    capacity_commands = capacity.add_subparsers(dest="command", required=True)
-    capacity_record = capacity_commands.add_parser("record")
-    capacity_record.add_argument("--actor", required=True)
-    capacity_record.add_argument("--release-bundle-id", required=True)
-    capacity_record.add_argument("--evidence", type=Path, required=True)
-    capacity_commands.add_parser("inspect")
-
-    launch = resources.add_parser("launch-qualification")
-    launch_commands = launch.add_subparsers(dest="command", required=True)
-    launch_commands.add_parser("inspect")
-
     invitations = resources.add_parser("invitation")
     invitation_commands = invitations.add_subparsers(dest="command", required=True)
 
@@ -78,22 +55,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     inspect = invitation_commands.add_parser("inspect")
     inspect.add_argument("--invitation-id", required=True)
-
-    quotas = resources.add_parser("quota")
-    quota_commands = quotas.add_subparsers(dest="command", required=True)
-
-    quota_inspect = quota_commands.add_parser("inspect")
-    quota_inspect.add_argument("--workspace-id", required=True)
-
-    quota_override = quota_commands.add_parser("override")
-    quota_override.add_argument("--actor", required=True)
-    quota_override.add_argument("--workspace-id", required=True)
-    quota_override.add_argument("--max-active-daily-tracks", type=int)
-    quota_override.add_argument(
-        "--max-nonterminal-user-compute-jobs",
-        type=int,
-    )
-    quota_override.add_argument("--max-private-storage-bytes", type=int)
 
     publications = resources.add_parser("dataset-publication")
     publication_commands = publications.add_subparsers(
@@ -130,7 +91,6 @@ def run(
     *,
     settings: Settings | None = None,
     registration_service: RegistrationService | None = None,
-    quota_service: QuotaProfileService | None = None,
     publication_request_service: DatasetPublicationRequestService | None = None,
 ) -> int:
     arguments = build_parser().parse_args(argv)
@@ -141,65 +101,10 @@ def run(
     management_store = build_management_store(active_settings, local_store)
     service = SourceAuthorizationService(management_store)
 
-    if arguments.resource == "capacity-qualification":
-        capacity_service = CapacityQualificationService(management_store)
-        if arguments.command == "inspect":
-            print(
-                json.dumps(
-                    capacity_service.inspect(),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                )
-            )
-            return 0
-        try:
-            evidence = json.loads(arguments.evidence.read_text(encoding="utf-8"))
-            if not isinstance(evidence, dict):
-                raise ValueError("capacity evidence must be a JSON object")
-            qualification = capacity_service.record(
-                actor=arguments.actor,
-                release_bundle_id=arguments.release_bundle_id,
-                evidence=evidence,
-            )
-        except (OSError, ValueError, CapacityQualificationError) as error:
-            print(
-                json.dumps(
-                    {
-                        "reason_code": getattr(
-                            error,
-                            "reason_code",
-                            "CAPACITY_QUALIFICATION_INVALID",
-                        ),
-                        "message": str(error),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                file=sys.stderr,
-            )
-            return 2
-        print(json.dumps(qualification, ensure_ascii=False, sort_keys=True))
-        return 0
-
-    if arguments.resource == "launch-qualification":
-        launch_service = LaunchQualificationService(management_store)
-        print(
-            json.dumps(
-                launch_service.inspect(),
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-        return 0
-
-
     if arguments.resource == "dataset-publication":
-        publications = (
-            publication_request_service
-            or DatasetPublicationRequestService(
-                cast(DatasetPublicationRequestStore, management_store),
-                service,
-            )
+        publications = publication_request_service or DatasetPublicationRequestService(
+            cast(DatasetPublicationRequestStore, management_store),
+            service,
         )
         try:
             parameters = _publication_parameters(arguments)
@@ -237,62 +142,6 @@ def run(
                     "publication": publication,
                 },
                 default=_json_default,
-                ensure_ascii=False,
-                sort_keys=True,
-            )
-        )
-        return 0
-
-    if arguments.resource == "quota":
-        if quota_service is None and not active_settings.database_url:
-            print(
-                json.dumps(
-                    {
-                        "reason_code": "HOSTED_DATABASE_REQUIRED",
-                        "message": "Quota Profiles require the hosted database",
-                    },
-                    sort_keys=True,
-                ),
-                file=sys.stderr,
-            )
-            return 2
-        quotas = quota_service or QuotaProfileService(
-            cast(QuotaProfileStore, management_store)
-        )
-        try:
-            if arguments.command == "inspect":
-                profile = quotas.inspect(arguments.workspace_id)
-            else:
-                profile = quotas.override(
-                    actor=arguments.actor,
-                    workspace_id=arguments.workspace_id,
-                    max_active_daily_tracks=arguments.max_active_daily_tracks,
-                    max_nonterminal_user_compute_jobs=(
-                        arguments.max_nonterminal_user_compute_jobs
-                    ),
-                    max_private_storage_bytes=(
-                        arguments.max_private_storage_bytes
-                    ),
-                )
-        except QuotaProfileError as error:
-            print(
-                json.dumps(
-                    {
-                        "reason_code": error.reason_code,
-                        "message": str(error),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                file=sys.stderr,
-            )
-            return 2
-        print(
-            json.dumps(
-                {
-                    "workspace_id": arguments.workspace_id,
-                    "profile": profile,
-                },
                 ensure_ascii=False,
                 sort_keys=True,
             )

@@ -10,7 +10,6 @@ from thesistrace.api import create_app
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
-from thesistrace.quota import QuotaExceededError
 from thesistrace.research_runs import (
     MAX_RESULT_BUNDLE_BYTES,
     ResearchRunService,
@@ -398,49 +397,6 @@ def test_commit_response_loss_keeps_the_committed_result_bundle(
     assert runner.result_view(requested["run"]["id"]) is not None
     assert not (
         settings.object_root / "staging" / requested["run"]["id"]
-    ).exists()
-
-
-def test_private_storage_quota_failure_has_distinct_diagnostic_and_no_result(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = Settings(
-        metadata_path=tmp_path / "metadata.sqlite3",
-        object_root=tmp_path / "objects",
-    )
-    with TestClient(create_app(settings)) as client:
-        requested = setup_run(client, key="private-storage-quota")
-    runner = service(settings)
-
-    def reject_private_storage(*_args, **_kwargs) -> int:
-        raise QuotaExceededError(
-            dimension="max_private_storage_bytes",
-            limit=10,
-        )
-
-    monkeypatch.setattr(
-        runner.metadata,
-        "commit_private_storage_references",
-        reject_private_storage,
-    )
-
-    completed = runner.execute(str(requested["run"]["id"]))
-
-    assert completed["status"] == "failed"
-    assert completed["result_bundle_id"] is None
-    assert completed["attempts"][-1]["diagnostic"] == {
-        "reason_code": "QUOTA_EXCEEDED",
-        "message": "Personal Workspace private storage quota is full",
-        "correlation_id": completed["attempts"][-1]["id"],
-        "dimension": "max_private_storage_bytes",
-        "limit": 10,
-    }
-    assert not list(
-        (settings.object_root / "manifests").glob("result_*.json")
-    )
-    assert not (
-        settings.object_root / "staging" / str(requested["run"]["id"])
     ).exists()
 
 

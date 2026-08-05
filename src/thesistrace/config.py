@@ -24,7 +24,6 @@ class Settings:
     api_user_request_limit: int = 120
     api_workspace_request_limit: int = 240
     api_mutation_request_limit: int = 30
-    release_bundle_id: str | None = None
 
 
 def environment_value(name: str) -> str | None:
@@ -100,5 +99,4 @@ def settings_from_environment() -> Settings:
                 "30",
             )
         ),
-        release_bundle_id=os.environ.get("THESISTRACE_RELEASE_BUNDLE_ID"),
     )

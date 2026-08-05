@@ -18,17 +18,13 @@ from thesistrace.data.fields import authorable_field_bindings_from_snapshot
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import canonical_json_bytes
 from thesistrace.ports import ControlMetadataPort, ObjectStorePort, ObjectWriterPort
-from thesistrace.quota import QuotaExceededError
+from thesistrace.publication_object_index import publication_storage_objects
 from thesistrace.research_kernel import RunInput
 from thesistrace.research_kernel import run as run_kernel
 from thesistrace.result_objects import (
     CompactResultError,
     publish_compact_result_objects,
     reconstruct_result_view,
-)
-from thesistrace.storage_admission import (
-    StorageAdmissionError,
-    publication_storage_objects,
 )
 
 RUNTIME_BUILD = {"package": "thesistrace", "version": "0.1.0"}
@@ -207,16 +203,8 @@ class ResearchRunService:
             latest = self.metadata.research_run(run_id)
             if latest is not None and latest["status"] == "succeeded":
                 return self._recover_staged_for_run(run_id)
-            quota_exceeded = isinstance(error, QuotaExceededError)
-            storage_rejected = isinstance(error, StorageAdmissionError)
             resource_exhausted = is_resource_exhaustion(error)
-            if quota_exceeded:
-                reason_code = error.reason_code
-                message = "Personal Workspace private storage quota is full"
-            elif storage_rejected:
-                reason_code = error.reason_code
-                message = str(error)
-            elif resource_exhausted:
+            if resource_exhausted:
                 reason_code = "RESOURCE_EXHAUSTED"
                 message = "accepted activity resource envelope was exhausted"
             else:
@@ -235,9 +223,6 @@ class ResearchRunService:
                 "message": message,
                 "correlation_id": attempt_id,
             }
-            if quota_exceeded or storage_rejected:
-                diagnostic["dimension"] = error.dimension
-                diagnostic["limit"] = error.limit
             self.metadata.finish_research_run_attempt(
                 run_id=run_id,
                 attempt_id=attempt_id,

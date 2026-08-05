@@ -1,5 +1,9 @@
 # Hosted health operations
 
+> **Archived — outside the active Core.** This runbook preserves Hosted V2
+> operator history only. None of the services or procedures below is part of
+> the active ThesisTrace runtime or its verification gate.
+
 Hosted V2 has three private Grafana views. They are operator evidence, not a
 User API, and Grafana is not published through the public Origin.
 

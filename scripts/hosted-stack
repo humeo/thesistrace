@@ -5,43 +5,24 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 state_dir="${THESISTRACE_HOST_STATE_DIR:-$root/.hosted}"
 env_file="$state_dir/hosted.env"
 secret_dir="$state_dir/secrets"
-insforge_dir="${INSFORGE_SOURCE_DIR:-$state_dir/insforge-v2.2.9}"
-insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
-insforge_patch="$root/deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch"
 compose_file="$root/deploy/hosted/compose.yaml"
-release_config_root="$root/deploy/hosted"
-release_manifest="$root/deploy/hosted/release.json"
-release_state="$state_dir/releases"
-backup_status_dir="$state_dir/backup-health"
-operator_audit_outbox="$backup_status_dir/operator-audit-outbox"
-recovery_dir="$state_dir/recovery"
 compose_project="${THESISTRACE_COMPOSE_PROJECT_NAME:-thesistrace-hosted}"
 
 random_secret() {
     openssl rand -hex 32
 }
 
-append_secret_if_missing() {
+environment_value() {
     name="$1"
-    if ! grep -q "^${name}=" "$env_file"; then
-        echo "${name}=$(random_secret)" >>"$env_file"
-    fi
-}
-
-append_value_if_missing() {
-    name="$1"
-    value="$2"
-    if ! grep -q "^${name}=" "$env_file"; then
-        echo "${name}=${value}" >>"$env_file"
-    fi
+    sed -n "s/^${name}=//p" "$env_file" | tail -n 1
 }
 
 move_secret_to_file() {
     name="$1"
     file_name="$2"
-    value="$(environment_value "$name")"
     path="$secret_dir/$file_name"
     if [ ! -f "$path" ]; then
+        value="$(environment_value "$name")"
         if [ -z "$value" ]; then
             value="$(random_secret)"
         fi
@@ -55,54 +36,9 @@ move_secret_to_file() {
     mv "$temporary" "$env_file"
 }
 
-environment_value() {
-    name="$1"
-    sed -n "s/^${name}=//p" "$env_file" | tail -n 1
-}
-
-set_environment_value() {
-    name="$1"
-    value="$2"
-    temporary="$env_file.value.$$"
-    sed "/^${name}=/d" "$env_file" >"$temporary"
-    printf '%s=%s\n' "$name" "$value" >>"$temporary"
-    chmod 600 "$temporary"
-    mv "$temporary" "$env_file"
-}
-
-validate_public_edge() {
-    site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
-    tls_dir="$(environment_value THESISTRACE_ORIGIN_TLS_DIR)"
-    if [ -z "$tls_dir" ]; then
-        tls_dir="$state_dir/origin-tls"
-    elif [ "${tls_dir#/}" = "$tls_dir" ]; then
-        tls_dir="$root/$tls_dir"
-    fi
-    sh "$root/scripts/validate-cloudflare-edge" \
-        "$site_address" \
-        "$(environment_value THESISTRACE_EDGE_TRUSTED_PROXIES)" \
-        "$(environment_value THESISTRACE_ORIGIN_TLS)" \
-        "$tls_dir" \
-        "$release_config_root/cloudflare-proxy-ranges.txt"
-}
-
 prepare() {
-    mkdir -p "$state_dir"
-    if [ ! -d "$insforge_dir/.git" ]; then
-        git clone --filter=blob:none https://github.com/InsForge/InsForge.git "$insforge_dir"
-        git -C "$insforge_dir" checkout --detach "$insforge_commit"
-    fi
-    actual_commit="$(git -C "$insforge_dir" rev-parse HEAD)"
-    if [ "$actual_commit" != "$insforge_commit" ]; then
-        echo "InsForge source is not the pinned v2.2.9 commit" >&2
-        exit 1
-    fi
-    if git -C "$insforge_dir" apply --check "$insforge_patch" >/dev/null 2>&1; then
-        git -C "$insforge_dir" apply "$insforge_patch"
-    elif ! git -C "$insforge_dir" apply --reverse --check "$insforge_patch" >/dev/null 2>&1; then
-        echo "InsForge JWT contract patch does not match the pinned source" >&2
-        exit 1
-    fi
+    mkdir -p "$state_dir" "$secret_dir"
+    chmod 700 "$secret_dir"
     if [ ! -f "$env_file" ]; then
         umask 077
         {
@@ -110,811 +46,83 @@ prepare() {
             echo "THESISTRACE_SITE_ADDRESS=https://localhost"
             echo "THESISTRACE_HOSTED_ORIGIN=https://localhost"
             echo "THESISTRACE_SMOKE_INSECURE_TLS=1"
-            echo "INSFORGE_SOURCE_DIR=$insforge_dir"
             echo "POSTGRES_PASSWORD=$(random_secret)"
             echo "INSFORGE_JWT_SECRET=$(random_secret)"
             echo "INSFORGE_ENCRYPTION_KEY=$(random_secret)"
             echo "INSFORGE_ADMIN_PASSWORD=$(random_secret)"
-            echo "GRAFANA_ADMIN_PASSWORD=$(random_secret)"
+            echo "THESISTRACE_API_DATABASE_PASSWORD=$(random_secret)"
+            echo "THESISTRACE_OBJECT_STORE_API_TOKEN=$(random_secret)"
         } >"$env_file"
     fi
-    umask 077
-    mkdir -p "$secret_dir" "$recovery_dir" "$backup_status_dir"
-    chmod 700 "$secret_dir" "$recovery_dir"
-    chmod 755 "$backup_status_dir"
-    mkdir -p "$state_dir/origin-tls"
-    append_value_if_missing THESISTRACE_EDGE_TRUSTED_PROXIES private_ranges
-    append_value_if_missing THESISTRACE_ORIGIN_TLS internal
-    append_secret_if_missing THESISTRACE_API_DATABASE_PASSWORD
-    append_secret_if_missing THESISTRACE_HEALTH_DATABASE_PASSWORD
-    append_secret_if_missing THESISTRACE_OBJECT_STORE_API_TOKEN
+    chmod 600 "$env_file"
     move_secret_to_file POSTGRES_PASSWORD postgres_password
     move_secret_to_file INSFORGE_JWT_SECRET insforge_jwt_secret
     move_secret_to_file INSFORGE_ENCRYPTION_KEY insforge_encryption_key
     move_secret_to_file INSFORGE_ADMIN_PASSWORD insforge_admin_password
-    move_secret_to_file GRAFANA_ADMIN_PASSWORD grafana_admin_password
     move_secret_to_file THESISTRACE_API_DATABASE_PASSWORD api_database_password
-    move_secret_to_file THESISTRACE_HEALTH_DATABASE_PASSWORD health_database_password
     move_secret_to_file THESISTRACE_OBJECT_STORE_API_TOKEN object_store_api_token
     move_secret_to_file TUSHARE_TOKEN tushare_token
     printf '{"api":"%s"}' \
         "$(sed -n '1p' "$secret_dir/object_store_api_token")" \
         >"$secret_dir/object_store_tokens"
     chmod 600 "$secret_dir/object_store_tokens"
-    postgres_user="${POSTGRES_USER:-$(environment_value POSTGRES_USER)}"
-    postgres_database="${POSTGRES_DB:-$(environment_value POSTGRES_DB)}"
-    printf 'postgresql://%s:%s@postgres:5432/%s' \
-        "${postgres_user:-postgres}" \
-        "$(sed -n '1p' "$secret_dir/postgres_password")" \
-        "${postgres_database:-insforge}" \
-        >"$secret_dir/insforge_database_url"
-    chmod 600 "$secret_dir/insforge_database_url"
-    recovery_passphrase="${THESISTRACE_RECOVERY_PASSPHRASE_FILE:-$state_dir/recovery-passphrase}"
-    if [ ! -f "$recovery_passphrase" ]; then
-        umask 077
-        mkdir -p "$(dirname -- "$recovery_passphrase")"
-        random_secret >"$recovery_passphrase"
-    fi
-    chmod 600 "$recovery_passphrase"
-    backup_passphrase="${THESISTRACE_BACKUP_PASSPHRASE_FILE:-$state_dir/backup-passphrase}"
-    if [ ! -f "$backup_passphrase" ]; then
-        umask 077
-        mkdir -p "$(dirname -- "$backup_passphrase")"
-        random_secret >"$backup_passphrase"
-    fi
-    chmod 600 "$backup_passphrase"
-    if [ ! -x "$root/.venv/bin/python" ]; then
-        echo "run 'uv sync --frozen' before operating the Hosted stack" >&2
-        exit 1
-    fi
-    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli seal-recovery \
-        --secret-root "$secret_dir" \
-        --output "$recovery_dir/current.recovery" \
-        --passphrase-file "$recovery_passphrase" >/dev/null
-}
-
-configured_backup_target() {
-    target="${THESISTRACE_OFF_NODE_BACKUP_DIR:-$(environment_value THESISTRACE_OFF_NODE_BACKUP_DIR)}"
-    if [ -z "$target" ]; then
-        echo "THESISTRACE_OFF_NODE_BACKUP_DIR is required" >&2
-        return 1
-    fi
-    case "$target" in
-        /*) ;;
-        *)
-            echo "THESISTRACE_OFF_NODE_BACKUP_DIR must be absolute" >&2
-            return 1
-            ;;
-    esac
-    THESISTRACE_OFF_NODE_BACKUP_DIR="$target"
-    export THESISTRACE_OFF_NODE_BACKUP_DIR
-    printf '%s\n' "$target"
-}
-
-stage_recovery_audit() {
-    audit_action="$1"
-    audit_outcome="$2"
-    audit_subject_id="$3"
-    audit_reason_code="${4:-}"
-    set -- "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
-        audit-stage \
-        --outbox "$operator_audit_outbox" \
-        --event-id "$recovery_audit_id" \
-        --action "$audit_action" \
-        --outcome "$audit_outcome" \
-        --subject-id "$audit_subject_id"
-    if [ -n "$audit_reason_code" ]; then
-        set -- "$@" --reason-code "$audit_reason_code"
-    fi
-    "$@" >/dev/null
-}
-
-flush_recovery_audits() {
-    compose --profile operator run --rm --no-deps -T restore-gate \
-        python -m thesistrace.hosted.backup_cli audit-flush \
-        --outbox /run/thesistrace-backup/operator-audit-outbox
-}
-
-lock_recovery_action() {
-    if [ "${THESISTRACE_RECOVERY_LOCK_HELD:-0}" = "1" ]; then
-        return
-    fi
-    requested_action="$1"
-    requested_argument="${2:-}"
-    case "$requested_action" in
-        backup-target-init) audit_action="backup.target.initialize" ;;
-        backup) audit_action="backup.create" ;;
-        restore) audit_action="backup.restore" ;;
-        *)
-            echo "unsupported recovery lock action" >&2
-            exit 2
-            ;;
-    esac
-    busy_event_id="audit_recovery_busy_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-    set -- "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
-        lock-run \
-        --lock "$backup_status_dir/recovery-operation.lock" \
-        --outbox "$operator_audit_outbox" \
-        --event-id "$busy_event_id" \
-        --action "$audit_action" \
-        --subject-id recovery-operation \
-        -- "$root/scripts/hosted-stack" "$requested_action"
-    if [ -n "$requested_argument" ]; then
-        set -- "$@" "$requested_argument"
-    fi
-    exec "$@"
-}
-
-prepare_acceptance() {
-    disabled_message="$1"
-    if [ "${THESISTRACE_ACCEPTANCE_MODE:-0}" != "1" ]; then
-        echo "$disabled_message" >&2
-        exit 1
-    fi
-    prepare
-    select_current_release
-}
-
-require_acceptance_service() {
-    case "$1" in
-        api) ;;
-        *) echo "service is not an accepted interruption boundary" >&2; exit 2 ;;
-    esac
-}
-
-select_release() {
-    pointer_name="$1"
-    pointer_path="$release_state/$pointer_name.json"
-    if [ ! -f "$pointer_path" ]; then
-        echo "no $pointer_name Release Bundle is available" >&2
-        exit 1
-    fi
-    THESISTRACE_RELEASE_STATE="$release_state"
-    THESISTRACE_RELEASE_POINTER="$pointer_name"
-    export THESISTRACE_RELEASE_STATE
-    export THESISTRACE_RELEASE_POINTER
-    release_bundle_id="$(sed -n 's/.*"bundle_id":"\([^"]*\)".*/\1/p' "$pointer_path")"
-    release_version="$("$root/.venv/bin/python" -c 'import json, os; from pathlib import Path; root=Path(os.environ["THESISTRACE_RELEASE_STATE"]); pointer=json.loads((root / f"{os.environ['"'"'THESISTRACE_RELEASE_POINTER'"'"']}.json").read_text()); bundle=json.loads((root / "bundles" / pointer["bundle_id"] / "bundle.json").read_text()); print(bundle["version"])')"
-    release_image_tag="$("$root/.venv/bin/python" -c 'import json, os; from pathlib import Path; root=Path(os.environ["THESISTRACE_RELEASE_STATE"]); pointer=json.loads((root / f"{os.environ['"'"'THESISTRACE_RELEASE_POINTER'"'"']}.json").read_text()); bundle=json.loads((root / "bundles" / pointer["bundle_id"] / "bundle.json").read_text()); print(bundle.get("image_tag", bundle["bundle_id"]))')"
-    release_image_repositories="$("$root/.venv/bin/python" -c 'import json, os; from pathlib import Path; root=Path(os.environ["THESISTRACE_RELEASE_STATE"]); pointer=json.loads((root / f"{os.environ['"'"'THESISTRACE_RELEASE_POINTER'"'"']}.json").read_text()); bundle=json.loads((root / "bundles" / pointer["bundle_id"] / "bundle.json").read_text()); print("\n".join(image.rpartition(":")[0] for image in bundle["custom_images"]))')"
-    if [ -z "$release_bundle_id" ] || [ -z "$release_version" ] || [ -z "$release_image_tag" ] || [ -z "$release_image_repositories" ]; then
-        echo "installed Release Bundle has no identity" >&2
-        exit 1
-    fi
-    release_config_root="$release_state/bundles/$release_bundle_id/configuration/deploy/hosted"
-    compose_file="$release_config_root/compose.yaml"
-    if [ ! -f "$compose_file" ]; then
-        echo "installed Release Bundle has no configuration snapshot" >&2
-        exit 1
-    fi
-    set_environment_value THESISTRACE_RELEASE_VERSION "$release_version"
-    set_environment_value THESISTRACE_RELEASE_BUNDLE_ID "$release_bundle_id"
-    set_environment_value THESISTRACE_RELEASE_IMAGE_TAG "$release_image_tag"
-}
-
-select_current_release() {
-    select_release current
-}
-
-stage_release() {
-    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli stage-bundle \
-        --repository-root "$root" \
-        --state-root "$release_state" \
-        --manifest "$release_manifest" >/dev/null
-    select_release candidate
-}
-
-release_images() {
-    operation="$1"
-    set -- "$operation" \
-        --state-root "$release_state" \
-        --bundle-id "$release_bundle_id"
-    for repository in $release_image_repositories
-    do
-        image="$repository:$release_image_tag"
-        image_id="$(docker image inspect --format '{{.Id}}' "$image")"
-        set -- "$@" --image "$image=$image_id"
-    done
-    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli "$@" >/dev/null
-}
-
-build_candidate_images() {
-    image_lock="$release_state/bundles/$release_bundle_id/image-lock.json"
-    if [ -f "$image_lock" ]; then
-        release_images verify-images
-    else
-        source_image_tag="$release_image_tag"
-        compose build
-        release_images lock-images
-        select_release candidate
-        for repository in $release_image_repositories
-        do
-            docker image tag \
-                "$repository:$source_image_tag" \
-                "$repository:$release_image_tag"
-        done
-        release_images verify-images
-    fi
-}
-
-activate_candidate() {
-    "$root/.venv/bin/python" -m thesistrace.hosted.release_cli \
-        activate-candidate --state-root "$release_state" >/dev/null
-    select_current_release
-}
-
-ensure_release() {
-    if [ -f "$release_state/current.json" ]; then
-        select_current_release
-    else
-        echo "no current Release Bundle is installed" >&2
-        exit 1
-    fi
 }
 
 compose() {
-    THESISTRACE_SECRET_DIR="$secret_dir"
-    THESISTRACE_RELEASE_BUNDLE_DIR="$release_state"
-    THESISTRACE_RELEASE_CONFIG_ROOT="$release_config_root"
-    THESISTRACE_RECOVERY_DIR="$recovery_dir"
-    THESISTRACE_BACKUP_STATUS_DIR="$backup_status_dir"
-    THESISTRACE_BACKUP_PASSPHRASE_FILE="${THESISTRACE_BACKUP_PASSPHRASE_FILE:-$state_dir/backup-passphrase}"
-    THESISTRACE_RECOVERY_PASSPHRASE_FILE="${THESISTRACE_RECOVERY_PASSPHRASE_FILE:-$state_dir/recovery-passphrase}"
-    export THESISTRACE_SECRET_DIR THESISTRACE_RELEASE_BUNDLE_DIR
-    export THESISTRACE_RELEASE_CONFIG_ROOT
-    export THESISTRACE_RECOVERY_DIR THESISTRACE_BACKUP_STATUS_DIR
-    export THESISTRACE_BACKUP_PASSPHRASE_FILE
-    export THESISTRACE_RECOVERY_PASSPHRASE_FILE
-    site_address="$(environment_value THESISTRACE_SITE_ADDRESS)"
-    case "$site_address" in
-        https://localhost*)
-            https_port="${THESISTRACE_HTTPS_PORT:-$(environment_value THESISTRACE_HTTPS_PORT)}"
-            health_origin="${THESISTRACE_HEALTH_PUBLIC_ORIGIN:-$(environment_value THESISTRACE_HEALTH_PUBLIC_ORIGIN)}"
-            health_host="${THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST:-$(environment_value THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST)}"
-            health_insecure="${THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE:-$(environment_value THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE)}"
-            THESISTRACE_HEALTH_PUBLIC_ORIGIN="${health_origin:-https://host.docker.internal:${https_port:-443}}"
-            THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST="${health_host:-localhost}"
-            THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE="${health_insecure:-true}"
-            export THESISTRACE_HEALTH_PUBLIC_ORIGIN
-            export THESISTRACE_HEALTH_PUBLIC_ORIGIN_HOST
-            export THESISTRACE_HEALTH_PUBLIC_ORIGIN_INSECURE
-            ;;
-    esac
+    prepare
+    set -a
+    # shellcheck disable=SC1090
+    . "$env_file"
+    set +a
     docker compose \
         --project-name "$compose_project" \
-        --project-directory "$root" \
-        --env-file "$env_file" \
         --file "$compose_file" \
         "$@"
 }
 
-enter_maintenance() {
-    compose run --rm --no-deps -T thesistrace-migrations \
-        python -m thesistrace.hosted.release_cli maintenance-enter \
-        --max-drain-seconds 900
-}
-
-ensure_maintenance_runtime() {
-    compose up --detach --wait --no-build \
-        postgres
-}
-
-start_workers() {
-    :
-}
-
-exit_maintenance() {
-    start_workers
-    compose run --rm --no-deps -T thesistrace-migrations \
-        python -m thesistrace.hosted.release_cli maintenance-exit
-}
-
-recreate_steady_services() {
-    compose up --detach --wait --force-recreate --no-build --no-deps \
-        postgres
-    compose up --detach --wait --force-recreate --no-build --no-deps \
-        postgrest deno insforge object-store tushare-egress \
-        otel-collector prometheus grafana
-    compose up --detach --wait --force-recreate --no-build --no-deps \
-        api health-service edge
-}
-
-stop_for_cold_snapshot() {
-    compose stop --timeout 30 edge
-    compose stop --timeout 30 \
-        api health-service insforge deno postgrest object-store \
-        tushare-egress otel-collector prometheus grafana \
-        postgres
-}
-
-restart_after_cold_snapshot() {
-    compose up --detach --wait --no-build
-    exit_maintenance
-}
-
-create_backup() {
-    configured_backup_target >/dev/null
-    backup_target="$THESISTRACE_OFF_NODE_BACKUP_DIR"
-    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-check \
-        --target "$backup_target" \
-        --repository-root "$root" \
-        --state-root "$state_dir" >/dev/null
-    enter_maintenance
-    stop_for_cold_snapshot
-    backup_result=0
-    set -- python -m thesistrace.hosted.backup_cli create \
-        --target /backup/off-node \
-        --source-root /backup/source \
-        --release-bundle-id "$release_bundle_id" \
-        --passphrase-file /run/secrets/backup_passphrase \
-        --status-path /backup/status/backup-status.json
-    compose --profile operator run --rm --no-deps -T backup-tool \
-        "$@" \
-        || backup_result="$?"
-    restart_result=0
-    restart_after_cold_snapshot || restart_result="$?"
-    if [ "$backup_result" -ne 0 ]; then
-        return "$backup_result"
+smoke() {
+    origin="$(environment_value THESISTRACE_HOSTED_ORIGIN)"
+    curl_options="--fail --silent --show-error"
+    if [ "$(environment_value THESISTRACE_SMOKE_INSECURE_TLS)" = "1" ]; then
+        curl_options="$curl_options --insecure"
     fi
-    if [ "$restart_result" -ne 0 ]; then
-        return "$restart_result"
-    fi
+    # shellcheck disable=SC2086
+    curl $curl_options "$origin/api/health" >/dev/null
 }
 
-restore_backup() {
-    backup_id="$1"
-    restore_started_at="$(date -u '+%Y-%m-%dT%H:%M:%S+00:00')"
-    incident_at="${THESISTRACE_RECOVERY_INCIDENT_AT:-$restore_started_at}"
-    detected_at="${THESISTRACE_RECOVERY_DETECTED_AT:-$restore_started_at}"
-    case "$backup_id" in
-        backup_?*) ;;
-        *)
-            echo "backup ID is invalid" >&2
-            return 2
-            ;;
-    esac
-    case "$backup_id" in
-        *[!0-9A-Za-z_]*)
-            echo "backup ID is invalid" >&2
-            return 2
-            ;;
-    esac
-    configured_backup_target >/dev/null
-    backup_target="$THESISTRACE_OFF_NODE_BACKUP_DIR"
-    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-check \
-        --target "$backup_target" \
-        --repository-root "$root" \
-        --state-root "$state_dir" >/dev/null
-    manifest="$backup_target/$backup_id.json"
-    if [ ! -f "$manifest" ]; then
-        echo "complete recovery set is unavailable: $backup_id" >&2
-        return 1
-    fi
-    enter_maintenance
-    stop_for_cold_snapshot
-    compose --profile operator run --rm --no-deps -T restore-tool \
-        python -m thesistrace.hosted.backup_cli restore \
-        --manifest "/backup/off-node/$backup_id.json" \
-        --restore-root /restore \
-        --working-cache /restore/working-cache \
-        --secret-root /restore/secret-files \
-        --backup-passphrase-file /run/secrets/backup_passphrase \
-        --recovery-passphrase-file /run/secrets/recovery_passphrase \
-        --incident-at "$incident_at" \
-        --selection-output /restore/status/selected-recovery-set.json
-    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli \
-        restore-release-modes --release-state "$release_state"
-    select_current_release
-    release_images verify-images
-    validate_public_edge
-    compose up --detach --wait --no-build postgres
-    compose up --detach --wait --no-build \
-        insforge-migrations \
-        thesistrace-migrations release-gate
-    compose up --detach --wait --no-build \
-        postgrest deno insforge object-store tushare-egress \
-        otel-collector prometheus grafana
-    compose up --detach --wait --no-build api health-service
-    compose --profile operator run --rm --no-deps -T restore-gate \
-        python -m thesistrace.hosted.backup_cli verify-restore \
-        --output /run/thesistrace-backup/restore-verification.json \
-        --recovery-selection /run/thesistrace-backup/selected-recovery-set.json \
-        --expected-backup-id "$backup_id"
-    start_workers
-    compose --profile operator run --rm --no-deps -T restore-gate \
-        python -m thesistrace.hosted.backup_cli verify-runtime \
-        --api-url http://api:8000/api/v1/health \
-        --health-url http://health-service:8020/health/recovery
-    exit_maintenance
-    compose up --detach --wait --no-build edge
-    set -a
-    . "$env_file"
-    set +a
-    "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
-    restore_completed_at="$(date -u '+%Y-%m-%dT%H:%M:%S+00:00')"
-    "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli record-exercise \
-        --recovery-selection "$backup_status_dir/selected-recovery-set.json" \
-        --verification "$backup_status_dir/restore-verification.json" \
-        --evidence-dir "$backup_status_dir/recovery-exercises" \
-        --incident-at "$incident_at" \
-        --detected-at "$detected_at" \
-        --restore-started-at "$restore_started_at" \
-        --restore-completed-at "$restore_completed_at" \
-        --public-origin-smoke
-}
-
-action="${1:-up}"
-case "$action" in
-    init)
+case "${1:-}" in
+    init|config)
         prepare
+        printf '%s\n' "$env_file"
         ;;
-    config)
-        prepare
-        ensure_release
-        compose config
-        ;;
-    deploy)
-        if [ ! -f "$env_file" ]; then
-            echo "run 'scripts/hosted-stack up' for the clean installation" >&2
-            exit 1
-        fi
-        prepare
-        select_current_release
-        ensure_maintenance_runtime
-        enter_maintenance
-        stage_release
-        validate_public_edge
-        build_candidate_images
-        compose up --detach --wait --no-build \
-            insforge-migrations \
-            thesistrace-migrations release-gate
-        recreate_steady_services
-        activate_candidate
-        exit_maintenance
-        ;;
-    up)
-        prepare
-        if [ -f "$release_state/current.json" ]; then
-            ensure_release
-            release_images verify-images
-            validate_public_edge
-            compose up --detach --wait --no-build
-        else
-            stage_release
-            validate_public_edge
-            build_candidate_images
-            activate_candidate
-            compose up --detach --wait --no-build
-        fi
+    deploy|up)
+        compose up --detach --build --wait
         ;;
     down)
-        prepare
-        ensure_release
         compose down
         ;;
     restart)
-        prepare
-        ensure_release
-        release_images verify-images
-        validate_public_edge
-        compose down
-        compose up --detach --wait --no-build
+        compose restart
         ;;
     smoke)
         prepare
-        select_current_release
-        set -a
-        . "$env_file"
-        set +a
-        exec "$root/.venv/bin/python" "$root/scripts/hosted-smoke.py"
-        ;;
-    health-check)
-        prepare
-        select_current_release
-        compose exec -T health-service python -c \
-            'import json, urllib.request; paths=("system","data","quantitative"); views={name:json.load(urllib.request.urlopen("http://127.0.0.1:8020/health/"+name, timeout=10)) for name in paths}; assert all(view.get("status")=="available" for view in views.values()), views; print(json.dumps(views, sort_keys=True))'
+        smoke
         ;;
     smtp-configure)
-        prepare
-        select_current_release
-        smtp_config="${2:?usage: scripts/hosted-stack smtp-configure /absolute/smtp.json /absolute/smtp-password}"
-        smtp_password="${3:?usage: scripts/hosted-stack smtp-configure /absolute/smtp.json /absolute/smtp-password}"
-        smtp_actor="${4:?usage: scripts/hosted-stack smtp-configure /absolute/smtp.json /absolute/smtp-password ACTOR}"
-        case "$smtp_config" in
-            /*) ;;
-            *) echo "SMTP configuration path must be absolute" >&2; exit 2 ;;
-        esac
-        case "$smtp_password" in
-            /*) ;;
-            *) echo "SMTP password path must be absolute" >&2; exit 2 ;;
-        esac
-        if [ ! -f "$smtp_config" ] || [ ! -f "$smtp_password" ]; then
-            echo "SMTP configuration and password files must exist" >&2
-            exit 2
-        fi
-        admin_username="$(environment_value INSFORGE_ADMIN_USERNAME)"
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --volume "$smtp_config:/run/operator/smtp.json:ro" \
-            --volume "$smtp_password:/run/operator/smtp_password:ro" \
-            --volume "$secret_dir/insforge_admin_password:/run/operator/admin_password:ro" \
-            --volume "$operator_audit_outbox:/run/operator/audit-outbox" \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/configure_smtp.py \
-            --config /run/operator/smtp.json \
-            --smtp-password-file /run/operator/smtp_password \
-            --admin-password-file /run/operator/admin_password \
-            --admin-username "${admin_username:-admin}" \
-            --actor "$smtp_actor" \
-            --audit-outbox /run/operator/audit-outbox
-        ;;
-    acceptance-seed-invitation)
-        prepare_acceptance "acceptance state seeding is disabled"
-        acceptance_email="${2:?usage: scripts/hosted-stack acceptance-seed-invitation EMAIL}"
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/seed_acceptance_state.py \
-            invitation --email "$acceptance_email"
-        ;;
-    acceptance-assert-clean)
-        prepare_acceptance "acceptance state inspection is disabled"
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/seed_acceptance_state.py assert-clean
-        ;;
-    acceptance-seed-otp)
-        prepare_acceptance "acceptance state seeding is disabled"
-        acceptance_email="${2:?usage: scripts/hosted-stack acceptance-seed-otp EMAIL PURPOSE CODE}"
-        acceptance_purpose="${3:?usage: scripts/hosted-stack acceptance-seed-otp EMAIL PURPOSE CODE}"
-        acceptance_code="${4:?usage: scripts/hosted-stack acceptance-seed-otp EMAIL PURPOSE CODE}"
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/seed_acceptance_state.py \
-            otp --email "$acceptance_email" \
-            --purpose "$acceptance_purpose" --code "$acceptance_code"
-        ;;
-    acceptance-publication-status)
-        prepare_acceptance "acceptance state inspection is disabled"
-        acceptance_publication_id="${2:?usage: scripts/hosted-stack acceptance-publication-status PUBLICATION_ID}"
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/seed_acceptance_state.py \
-            publication-status --publication-id "$acceptance_publication_id"
-        ;;
-    acceptance-storage-status)
-        prepare_acceptance "acceptance storage inspection is disabled"
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/seed_acceptance_state.py \
-            storage-status
-        ;;
-    acceptance-object-status)
-        prepare_acceptance "acceptance object inspection is disabled"
-        compose exec -T object-store python -c \
-            'import json; from pathlib import Path; root=Path("/var/lib/thesistrace/objects"); objects=list((root / "sha256").glob("*/*"))+list((root / "manifests").glob("*.json")); stages=[str(path.relative_to(root)) for path in (root / "staging").glob("*/*") if path.is_dir()]; print(json.dumps({"physical_object_count": len(objects), "staged_publications": stages}, sort_keys=True))'
-        ;;
-    acceptance-stop-service)
-        prepare_acceptance "acceptance service interruption is disabled"
-        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-stop-service SERVICE}"
-        require_acceptance_service "$acceptance_service"
-        recovery_audit_id="audit_acceptance_stop_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-        stage_recovery_audit \
-            acceptance.service.interrupt rejected "$acceptance_service" \
-            OPERATION_INTERRUPTED
-        compose stop --timeout 0 "$acceptance_service"
-        stage_recovery_audit \
-            acceptance.service.interrupt succeeded "$acceptance_service"
-        flush_recovery_audits
-        ;;
-    acceptance-start-service)
-        prepare_acceptance "acceptance service recovery is disabled"
-        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-start-service SERVICE}"
-        require_acceptance_service "$acceptance_service"
-        recovery_audit_id="audit_acceptance_start_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-        stage_recovery_audit \
-            acceptance.service.recover rejected "$acceptance_service" \
-            OPERATION_INTERRUPTED
-        compose up --detach --wait --no-build --no-deps "$acceptance_service"
-        stage_recovery_audit \
-            acceptance.service.recover succeeded "$acceptance_service"
-        flush_recovery_audits
-        ;;
-    acceptance-start-interruption)
-        prepare_acceptance "acceptance interruption setup is disabled"
-        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-start-interruption SERVICE}"
-        require_acceptance_service "$acceptance_service"
-        compose up --detach --no-build --no-deps "$acceptance_service"
-        ;;
-    acceptance-service-state)
-        prepare_acceptance "acceptance service inspection is disabled"
-        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-service-state SERVICE}"
-        require_acceptance_service "$acceptance_service"
-        acceptance_container_id="$(compose ps --quiet "$acceptance_service")"
-        if [ -z "$acceptance_container_id" ]; then
-            echo "acceptance service has no container: $acceptance_service" >&2
-            exit 1
-        fi
-        acceptance_container_status="$(docker inspect --format '{{.State.Status}}' "$acceptance_container_id")"
-        printf '{"container_id":"%s","service":"%s","status":"%s"}\n' \
-            "$acceptance_container_id" "$acceptance_service" "$acceptance_container_status"
-        ;;
-    acceptance-kill-service)
-        prepare_acceptance "acceptance abrupt interruption is disabled"
-        acceptance_service="${2:?usage: scripts/hosted-stack acceptance-kill-service SERVICE}"
-        require_acceptance_service "$acceptance_service"
-        recovery_audit_id="audit_acceptance_kill_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-        compose kill --signal SIGKILL "$acceptance_service"
-        stage_recovery_audit \
-            acceptance.service.interrupt succeeded "$acceptance_service"
-        flush_recovery_audits
-        ;;
-    acceptance-restart-node)
-        prepare_acceptance "acceptance node interruption is disabled"
-        recovery_audit_id="audit_acceptance_node_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-        stage_recovery_audit \
-            acceptance.node.restart rejected node OPERATION_INTERRUPTED
-        compose kill --signal SIGKILL
-        compose stop --timeout 0
-        compose up --detach --wait --no-build
-        stage_recovery_audit acceptance.node.restart succeeded node
-        flush_recovery_audits
+        config_path="${2:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE ACTOR}"
+        password_path="${3:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE ACTOR}"
+        : "${4:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE ACTOR}"
+        compose exec -T api python scripts/hosted/configure_smtp.py \
+            --config "$config_path" \
+            --smtp-password-file "$password_path" \
+            --admin-password-file /run/secrets/insforge_admin_password
         ;;
     operator)
-        prepare
-        select_current_release
         shift
-        case "${1:-}:${2:-}" in
-            capacity-qualification:record)
-                operator_evidence_path=""
-                operator_previous_argument=""
-                for operator_argument in "$@"; do
-                    if [ "$operator_previous_argument" = "--evidence" ]; then
-                        operator_evidence_path="$operator_argument"
-                        break
-                    fi
-                    operator_previous_argument="$operator_argument"
-                done
-                case "$operator_evidence_path" in
-                    /*) ;;
-                    *) echo "capacity evidence path must be absolute" >&2; exit 2 ;;
-                esac
-                if [ ! -f "$operator_evidence_path" ]; then
-                    echo "capacity evidence file does not exist" >&2
-                    exit 2
-                fi
-                compose run --rm --no-deps -T \
-                    --volume "$operator_evidence_path:$operator_evidence_path:ro" \
-                    thesistrace-migrations thesistrace-operator "$@"
-                ;;
-            *)
-                compose run --rm --no-deps -T \
-                    thesistrace-migrations thesistrace-operator "$@"
-                ;;
-        esac
-        ;;
-    maintenance-enter)
-        prepare
-        select_current_release
-        enter_maintenance
-        ;;
-    maintenance-exit)
-        prepare
-        select_current_release
-        exit_maintenance
-        ;;
-    rollback)
-        prepare
-        select_current_release
-        enter_maintenance
-        "$root/.venv/bin/python" -m thesistrace.hosted.release_cli \
-            check-previous --state-root "$release_state"
-        select_release previous
-        release_images verify-images
-        select_current_release
-        "$root/.venv/bin/python" -m thesistrace.hosted.release_cli \
-            activate-previous --state-root "$release_state"
-        select_current_release
-        validate_public_edge
-        recreate_steady_services
-        exit_maintenance
-        ;;
-    backup-target-init)
-        lock_recovery_action "$@"
-        target="${2:?usage: scripts/hosted-stack backup-target-init /absolute/off-node/path}"
-        recovery_audit_id="audit_recovery_target_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-        stage_recovery_audit \
-            backup.target.initialize rejected backup-target \
-            OPERATION_INTERRUPTED
-        prepare
-        ensure_release
-        flush_recovery_audits >/dev/null 2>&1 || true
-        target_result=0
-        "$root/.venv/bin/python" -m thesistrace.hosted.backup_cli target-init \
-            --target "$target" \
-            --repository-root "$root" \
-            --state-root "$state_dir" \
-            || target_result="$?"
-        if [ "$target_result" -eq 0 ]; then
-            set_environment_value THESISTRACE_OFF_NODE_BACKUP_DIR "$target"
-            stage_recovery_audit \
-                backup.target.initialize succeeded backup-target
-        else
-            stage_recovery_audit \
-                backup.target.initialize rejected backup-target \
-                TARGET_INITIALIZATION_FAILED
-        fi
-        audit_result=0
-        flush_recovery_audits || audit_result="$?"
-        if [ "$target_result" -ne 0 ]; then
-            exit "$target_result"
-        fi
-        exit "$audit_result"
-        ;;
-    backup)
-        lock_recovery_action "$@"
-        backup_attempt_id="backup-attempt-$(date -u '+%Y%m%dT%H%M%SZ')"
-        recovery_audit_id="audit_recovery_backup_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-        stage_recovery_audit \
-            backup.create rejected "$backup_attempt_id" OPERATION_INTERRUPTED
-        prepare
-        ensure_release
-        flush_recovery_audits >/dev/null 2>&1 || true
-        backup_result=0
-        create_backup || backup_result="$?"
-        if [ "$backup_result" -eq 0 ]; then
-            stage_recovery_audit backup.create succeeded "$backup_attempt_id"
-        else
-            stage_recovery_audit \
-                backup.create rejected "$backup_attempt_id" BACKUP_FAILED
-        fi
-        audit_result=0
-        flush_recovery_audits || audit_result="$?"
-        if [ "$backup_result" -ne 0 ]; then
-            exit "$backup_result"
-        fi
-        exit "$audit_result"
-        ;;
-    restore)
-        lock_recovery_action "$@"
-        backup_id="${2:?usage: scripts/hosted-stack restore BACKUP_ID}"
-        recovery_audit_id="audit_recovery_restore_$(date -u '+%Y%m%dT%H%M%SZ')_$$"
-        stage_recovery_audit \
-            backup.restore rejected "$backup_id" OPERATION_INTERRUPTED
-        prepare
-        ensure_release
-        flush_recovery_audits >/dev/null 2>&1 || true
-        restore_result=0
-        restore_backup "$backup_id" || restore_result="$?"
-        if [ "$restore_result" -eq 0 ]; then
-            stage_recovery_audit backup.restore succeeded "$backup_id"
-        else
-            stage_recovery_audit \
-                backup.restore rejected "$backup_id" RESTORE_FAILED
-        fi
-        audit_result=0
-        flush_recovery_audits || audit_result="$?"
-        if [ "$restore_result" -ne 0 ]; then
-            exit "$restore_result"
-        fi
-        exit "$audit_result"
+        compose exec -T api thesistrace-operator "$@"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|health-check|smtp-configure|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|smtp-configure|operator}" >&2
         exit 2
         ;;
 esac

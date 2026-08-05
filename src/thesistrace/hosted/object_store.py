@@ -17,7 +17,6 @@ from thesistrace.objects import (
     parquet_bytes,
     require_pinned_writer_runtime,
 )
-from thesistrace.storage_admission import StorageAdmissionError
 
 READ_TRANSPORT_ATTEMPTS = 32
 READ_TRANSPORT_MAX_BACKOFF_SECONDS = 2.0
@@ -64,9 +63,7 @@ class RemoteObjectStore:
         client: httpx.Client | None = None,
     ) -> None:
         if not base_url or not token:
-            raise ValueError(
-                "private ObjectStore URL and token are required"
-            )
+            raise ValueError("private ObjectStore URL and token are required")
         self.token = token
         self.client = client or httpx.Client(
             base_url=base_url.rstrip("/"),
@@ -125,9 +122,7 @@ class RemoteObjectStore:
             self,
             run_id=run_id,
             attempt_id=attempt_id,
-            cleanup_uncommitted_payloads=(
-                cleanup_uncommitted_payloads
-            ),
+            cleanup_uncommitted_payloads=(cleanup_uncommitted_payloads),
         )
 
     @contextmanager
@@ -177,11 +172,7 @@ class RemoteObjectStore:
         response = self._request(
             "POST",
             f"/v1/stages/{path_segment(run_id)}/recover",
-            json={
-                "committed_manifest_sha256": (
-                    committed_manifest_sha256
-                )
-            },
+            json={"committed_manifest_sha256": (committed_manifest_sha256)},
         )
         return bool(response.json()["recovered"])
 
@@ -193,9 +184,7 @@ class RemoteObjectStore:
         )
         value = response.json().get("ids")
         if not isinstance(value, list):
-            raise ParquetContractError(
-                "private ObjectStore returned invalid stage IDs"
-            )
+            raise ParquetContractError("private ObjectStore returned invalid stage IDs")
         return [str(item) for item in value]
 
     def wait_for_staged_publication(self, run_id: str) -> None:
@@ -211,19 +200,13 @@ class RemoteObjectStore:
             f"/v1/objects/{digest_segment(digest)}/json",
         ).content
         if hashlib.sha256(payload).hexdigest() != digest:
-            raise ParquetContractError(
-                "JSON object checksum does not match its identity"
-            )
+            raise ParquetContractError("JSON object checksum does not match its identity")
         try:
             value = json.loads(payload)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise ParquetContractError(
-                "JSON object payload is invalid"
-            ) from error
+            raise ParquetContractError("JSON object payload is invalid") from error
         if canonical_json_bytes(value) != payload:
-            raise ParquetContractError(
-                "JSON object payload is not canonical"
-            )
+            raise ParquetContractError("JSON object payload is not canonical")
         return value
 
     def read_parquet_bytes(self, digest: str) -> bytes:
@@ -232,9 +215,7 @@ class RemoteObjectStore:
             f"/v1/objects/{digest_segment(digest)}/parquet",
         ).content
         if hashlib.sha256(payload).hexdigest() != digest:
-            raise ParquetContractError(
-                "Parquet object checksum does not match its identity"
-            )
+            raise ParquetContractError("Parquet object checksum does not match its identity")
         return payload
 
     def read_parquet(
@@ -249,14 +230,10 @@ class RemoteObjectStore:
             contract.schema,
             check_metadata=True,
         ):
-            raise ParquetContractError(
-                "Parquet object schema does not match writer contract"
-            )
+            raise ParquetContractError("Parquet object schema does not match writer contract")
         metadata = pq.ParquetFile(pa.BufferReader(payload)).metadata
         if metadata.num_row_groups != 1:
-            raise ParquetContractError(
-                "Parquet object must contain exactly one row group"
-            )
+            raise ParquetContractError("Parquet object must contain exactly one row group")
         return table
 
     def delete_storage_object(self, object_key: str) -> bool:
@@ -282,9 +259,7 @@ class RemoteObjectStore:
     def _request(self, method: str, path: str, **options) -> httpx.Response:
         retry_conflict = bool(options.pop("retry_conflict", False))
         retry_deadline = time.monotonic() + 120
-        transport_attempts = (
-            READ_TRANSPORT_ATTEMPTS if method.upper() == "GET" else 1
-        )
+        transport_attempts = READ_TRANSPORT_ATTEMPTS if method.upper() == "GET" else 1
         transport_attempt = 0
         request_headers = dict(options.pop("headers", {}))
         try:
@@ -317,28 +292,10 @@ class RemoteObjectStore:
                     response.close()
                     time.sleep(0.05)
                     continue
-                if response.status_code == 507:
-                    detail = response.json().get("detail", {})
-                    raise StorageAdmissionError(
-                        str(detail.get("reason_code", "DISK_PRESSURE")),
-                        str(detail.get("message", "storage admission failed")),
-                        dimension=(
-                            str(detail["dimension"])
-                            if detail.get("dimension") is not None
-                            else None
-                        ),
-                        limit=(
-                            int(detail["limit"])
-                            if detail.get("limit") is not None
-                            else None
-                        ),
-                    )
                 response.raise_for_status()
                 return response
         except httpx.HTTPError as error:
-            raise ParquetContractError(
-                "private ObjectStore request failed"
-            ) from error
+            raise ParquetContractError("private ObjectStore request failed") from error
 
 
 class RemoteStagedObjectStore:
@@ -353,9 +310,7 @@ class RemoteStagedObjectStore:
         self.destination = destination
         self.run_id = run_id
         self.attempt_id = attempt_id
-        self.cleanup_uncommitted_payloads = (
-            cleanup_uncommitted_payloads
-        )
+        self.cleanup_uncommitted_payloads = cleanup_uncommitted_payloads
         self.promotion_started = False
         self.promotion_resolved = False
         self.stage_token: str | None = None
@@ -363,20 +318,13 @@ class RemoteStagedObjectStore:
 
     @property
     def path(self) -> str:
-        return (
-            f"/v1/stages/{path_segment(self.run_id)}/attempts/"
-            f"{path_segment(self.attempt_id)}"
-        )
+        return f"/v1/stages/{path_segment(self.run_id)}/attempts/{path_segment(self.attempt_id)}"
 
     def __enter__(self) -> "RemoteStagedObjectStore":
         response = self.destination._request(
             "POST",
             self.path,
-            json={
-                "cleanup_uncommitted_payloads": (
-                    self.cleanup_uncommitted_payloads
-                )
-            },
+            json={"cleanup_uncommitted_payloads": (self.cleanup_uncommitted_payloads)},
         )
         body = response.json()
         self.stage_token = str(body["stage_token"])
@@ -484,9 +432,7 @@ class RemoteStagedObjectStore:
 
     def _stage_headers(self) -> dict[str, str]:
         if self.stage_token is None:
-            raise ParquetContractError(
-                "private ObjectStore stage is not open"
-            )
+            raise ParquetContractError("private ObjectStore stage is not open")
         return {"X-Stage-Token": self.stage_token}
 
 
@@ -497,9 +443,6 @@ def path_segment(value: str) -> str:
 
 
 def digest_segment(value: str) -> str:
-    if len(value) != 64 or any(
-        character not in "0123456789abcdef"
-        for character in value
-    ):
+    if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
         raise ValueError("private ObjectStore digest is invalid")
     return value

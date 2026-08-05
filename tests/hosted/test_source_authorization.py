@@ -149,7 +149,7 @@ def test_recording_the_declaration_opens_only_the_policy_gate(tmp_path: Path) ->
     assert response.json()["detail"]["reason_code"] == "MISSING_PERMISSION"
 
 
-def test_hosted_release_contains_the_versioned_cli_and_postgres_schema() -> None:
+def test_source_policy_keeps_its_cli_and_historical_schema() -> None:
     project = (ROOT / "pyproject.toml").read_text()
     stack = (ROOT / "scripts" / "hosted-stack").read_text()
     migration = (
