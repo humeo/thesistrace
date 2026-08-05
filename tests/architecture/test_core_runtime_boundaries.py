@@ -5,8 +5,13 @@ import sys
 import tomllib
 from pathlib import Path
 
+from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
+from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
+from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
+from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_kernel import kernel_advance, kernel_run, strategy
+from thesistrace.research_run.migrations import MIGRATIONS as RESEARCH_RUN_MIGRATIONS
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = (
@@ -24,6 +29,20 @@ FORBIDDEN_IMPORTS = (
     "thesistrace.runtime",
     "temporalio",
 )
+PRODUCT_SCHEMAS = {
+    "data": "data",
+    "definition": "definitions",
+    "research_run": "research_runs",
+    "daily_track": "daily_tracks",
+    "publication": "publication",
+}
+MIGRATION_PLANS = {
+    "data": DATA_MIGRATIONS,
+    "definition": DEFINITION_MIGRATIONS,
+    "research_run": RESEARCH_RUN_MIGRATIONS,
+    "daily_track": DAILY_TRACK_MIGRATIONS,
+    "publication": PUBLICATION_MIGRATIONS,
+}
 
 
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
@@ -44,6 +63,111 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
                 for imported in imports
                 for forbidden in FORBIDDEN_IMPORTS
             ), f"{path} imports a forbidden runtime dependency"
+
+
+def test_internal_import_graph_is_layered_and_acyclic() -> None:
+    allowed = {
+        "_postgres": set(),
+        "publication": {"_postgres"},
+        "research_kernel": set(),
+        "data": {"_postgres", "publication"},
+        "daily_track": {"_postgres", "data", "publication", "research_kernel"},
+        "research_run": {"_postgres", "daily_track", "publication", "research_kernel"},
+        "definition": {"_postgres", "data", "research_kernel", "research_run"},
+        "adapters": {"data", "fixture"},
+        "entrypoints": {
+            "_postgres",
+            "adapters",
+            "daily_track",
+            "data",
+            "definition",
+            "publication",
+            "research_kernel",
+            "research_run",
+        },
+    }
+
+    for package, allowed_dependencies in allowed.items():
+        dependencies: set[str] = set()
+        for path in (ROOT / "src" / "thesistrace" / package).rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            imports = [
+                node.module or ""
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+            ]
+            imports.extend(
+                alias.name
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            )
+            dependencies.update(
+                imported.split(".")[1]
+                for imported in imports
+                if imported.startswith("thesistrace.")
+                and imported.split(".")[1] != package
+            )
+        assert dependencies <= allowed_dependencies, (
+            f"{package} imports outward dependencies: "
+            f"{sorted(dependencies - allowed_dependencies)}"
+        )
+
+
+def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
+    lifecycle_tables = {
+        "data": ("data.releases", "data.update_receipts", "data.update_attempts"),
+        "definition": ("definitions.records", "definitions.run_receipts"),
+        "research_run": (
+            "research_runs.runs",
+            "research_runs.attempts",
+            "research_runs.cancel_receipts",
+            "research_runs.rerun_receipts",
+            "research_runs.start_tracking_receipts",
+        ),
+        "daily_track": (
+            "daily_tracks.tracks",
+            "daily_tracks.progressions",
+            "daily_tracks.progression_attempts",
+            "daily_tracks.checkpoints",
+            "daily_tracks.retry_receipts",
+            "daily_tracks.stop_receipts",
+        ),
+        "publication": (
+            "publication.objects",
+            "publication.manifests",
+            "publication.manifest_objects",
+        ),
+    }
+
+    for module, owned_schema in PRODUCT_SCHEMAS.items():
+        service = ROOT / "src" / "thesistrace" / module / "service.py"
+        service_strings = _string_literals(service)
+        for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
+            assert f"{foreign_schema}." not in service_strings, (
+                f"{module} service contains cross-schema SQL for {foreign_schema}"
+            )
+
+        plan = MIGRATION_PLANS[module]
+        assert plan.schema == owned_schema
+        statements = "\n".join(migration.statement for migration in plan.migrations)
+        for table in lifecycle_tables[module]:
+            assert table in statements
+        for migration in plan.migrations:
+            if (
+                module == "research_run"
+                and migration.name == "0007_import_legacy_start_tracking_receipts"
+            ):
+                assert "daily_tracks.activation_receipts" in migration.statement
+                continue
+            statement = migration.statement
+            if module == "research_run" and migration.name == "0001_queued_research_runs":
+                assert statement.count("REFERENCES data.releases(id)") == 1
+                statement = statement.replace("REFERENCES data.releases(id)", "")
+            for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
+                assert f"{foreign_schema}." not in statement, (
+                    f"{module} migration {migration.name} owns {foreign_schema} SQL"
+                )
 
 
 def test_runtime_configuration_has_no_deployment_mode() -> None:
@@ -165,6 +289,56 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         "src/shell/main.tsx",
     ):
         assert not (ROOT / "web" / removed_path).exists()
+
+
+def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() -> None:
+    assert _http_routes() == {
+        ("get", "/api/data"),
+        ("get", "/api/data/releases"),
+        ("get", "/api/data/releases/{release_id}"),
+        ("post", "/api/data/update"),
+        ("get", "/api/definitions"),
+        ("get", "/api/definitions/authoring-options"),
+        ("get", "/api/definitions/{definition_id}"),
+        ("post", "/api/definitions"),
+        ("put", "/api/definitions/{definition_id}"),
+        ("post", "/api/definitions/run"),
+        ("post", "/api/definitions/{definition_id}/run"),
+        ("get", "/api/research-runs"),
+        ("get", "/api/research-runs/{run_id}"),
+        ("post", "/api/research-runs/{run_id}/cancel"),
+        ("post", "/api/research-runs/{run_id}/rerun"),
+        ("post", "/api/research-runs/{run_id}/daily-tracks"),
+        ("get", "/api/daily-tracks"),
+        ("get", "/api/daily-tracks/{track_id}"),
+        ("post", "/api/daily-tracks/{track_id}/retry"),
+        ("post", "/api/daily-tracks/{track_id}/stop"),
+    }
+
+
+def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
+    core_gate = _make_recipe("check")
+    live_gate = _make_recipe("check-live-tushare")
+
+    for command in (
+        "uv run ruff check src tests",
+        "uv run pytest -q tests/kernel tests/architecture tests/adapters",
+        "bun run --cwd web typecheck",
+        "bun run --cwd web build",
+        "uv run pytest -q tests/integration tests/acceptance",
+        "bun run --cwd web test:e2e",
+    ):
+        assert command in core_gate
+    for deferred in (
+        "hosted",
+        "login",
+        "deploy",
+        "sqlite",
+        "check-live-tushare",
+        "check_live_tushare",
+    ):
+        assert deferred not in core_gate.lower()
+    assert live_gate == "uv run python scripts/check_live_tushare.py"
 
 
 def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
@@ -591,20 +765,7 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
 
     assert not (package / "api.py").exists()
 
-    canonical_http = (package / "entrypoints" / "http.py").read_text()
-    tree = ast.parse(canonical_http)
-    routes = {
-        (decorator.func.attr, decorator.args[0].value)
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        for decorator in node.decorator_list
-        if isinstance(decorator, ast.Call)
-        and isinstance(decorator.func, ast.Attribute)
-        and decorator.func.attr in {"get", "post", "put", "delete"}
-        and decorator.args
-        and isinstance(decorator.args[0], ast.Constant)
-        and isinstance(decorator.args[0].value, str)
-    }
+    routes = _http_routes()
     assert ("post", "/api/definitions/run") in routes
     assert ("post", "/api/definitions/{definition_id}/run") in routes
     assert ("post", "/api/research-runs/{run_id}/rerun") in routes
@@ -642,3 +803,41 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
         "thesistrace." + "research_runs",
     ):
         assert forbidden not in advance_source
+
+
+def _string_literals(path: Path) -> str:
+    tree = ast.parse(path.read_text())
+    return "\n".join(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    )
+
+
+def _http_routes() -> set[tuple[str, str]]:
+    tree = ast.parse(
+        (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
+    )
+    return {
+        (decorator.func.attr, decorator.args[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr in {"get", "post", "put", "delete"}
+        and decorator.args
+        and isinstance(decorator.args[0], ast.Constant)
+        and isinstance(decorator.args[0].value, str)
+    }
+
+
+def _make_recipe(target: str) -> str:
+    lines = (ROOT / "Makefile").read_text().splitlines()
+    start = lines.index(f"{target}:") + 1
+    recipe: list[str] = []
+    for line in lines[start:]:
+        if not line.startswith("\t"):
+            break
+        recipe.append(line.strip())
+    return "\n".join(recipe)
