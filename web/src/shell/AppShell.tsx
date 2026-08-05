@@ -7,8 +7,6 @@ const resourceRoutes = [
   { path: "/daily-tracks", label: "Daily Tracks" },
 ] as const;
 
-export type ResourceRoute = (typeof resourceRoutes)[number]["path"];
-
 type AppShellProps = {
   currentPath: string;
   children: ReactNode;

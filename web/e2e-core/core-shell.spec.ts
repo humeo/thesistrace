@@ -28,6 +28,12 @@ test("uses the four-resource shell as the only active product", async ({ page })
       /研究工作台|login|hosted|workspace dashboard|operations ledger|raw json|download/i,
     ),
   ).toHaveCount(0);
+
+  await page.goto("/core.html");
+  await expect(page).toHaveURL(/\/data$/);
+  await expect(
+    page.getByRole("navigation", { name: "Product resources" }).getByRole("link"),
+  ).toHaveCount(4);
 });
 
 test("publishes the first Dataset Release through the real Core", async ({ page }) => {
@@ -1449,6 +1455,21 @@ test("runs valid content and shows its bounded ResearchRun result", async ({ pag
   await page.getByLabel("Hypothesis (optional)").fill(
     "Edited current content creates an independent ResearchRun.",
   );
+  const editedWrites: { method: string; pathname: string; body: object }[] = [];
+  const captureEditedWrites = (request: import("@playwright/test").Request) => {
+    const pathname = new URL(request.url()).pathname;
+    if (
+      ["POST", "PUT"].includes(request.method()) &&
+      pathname.startsWith("/api/definitions")
+    ) {
+      editedWrites.push({
+        method: request.method(),
+        pathname,
+        body: request.postDataJSON() as object,
+      });
+    }
+  };
+  page.on("request", captureEditedWrites);
   const editedRunRequest = page.waitForRequest((request) => {
     const pathname = new URL(request.url()).pathname;
     return (
@@ -1458,11 +1479,17 @@ test("runs valid content and shows its bounded ResearchRun result", async ({ pag
   });
   await page.getByRole("button", { name: "Run" }).click();
   const editedRequest = await editedRunRequest;
-  expect(editedRequest.postDataJSON()).toMatchObject({
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  page.off("request", captureEditedWrites);
+  expect(editedWrites).toHaveLength(1);
+  expect(editedWrites[0]).toMatchObject({
+    method: "POST",
+    pathname: new URL(editedRequest.url()).pathname,
+  });
+  expect(editedWrites[0].body).toMatchObject({
     expected_revision: 1,
     hypothesis: "Edited current content creates an independent ResearchRun.",
   });
-  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   const editedRunId = page.url().split("/").at(-1);
   expect(editedRunId).not.toBe(firstRunId);
   await expect(page.getByRole("link", { name: "Revision 2" })).toBeVisible();

@@ -120,6 +120,8 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     package = json.loads((ROOT / "web" / "package.json").read_text())
     browser = (ROOT / "web" / "playwright.core-shell.config.ts").read_text()
     vite = (ROOT / "web" / "vite.config.ts").read_text()
+    core_redirect = (ROOT / "web" / "core.html").read_text()
+    core_app = (ROOT / "web" / "src" / "shell" / "CoreApp.tsx").read_text()
     assert source.count("path:") == 4
     assert 'path: "/data"' in source
     assert 'path: "/definitions"' in source
@@ -140,6 +142,10 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     assert "thesistrace-core-worker" not in browser
     assert 'new URL("./index.html"' in vite
     assert 'new URL("./core.html"' not in vite
+    assert 'window.location.replace("/data")' in core_redirect
+    assert 'src="/src/shell/main.tsx"' not in core_redirect
+    assert "isCoreRoute" not in core_app
+    assert "ResourceRoute" not in core_app
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:

@@ -2,23 +2,7 @@ import { DataPage } from "../data/DataPage";
 import { DailyTracksPage } from "../daily-tracks/DailyTracksPage";
 import { DefinitionsPage } from "../definitions/DefinitionsPage";
 import { ResearchRunsPage } from "../research-runs/ResearchRunsPage";
-import { AppShell, type ResourceRoute } from "./AppShell";
-
-const routes = new Set<ResourceRoute>([
-  "/data",
-  "/definitions",
-  "/research-runs",
-  "/daily-tracks",
-]);
-
-export function isCoreRoute(pathname: string): boolean {
-  return (
-    routes.has(pathname as ResourceRoute) ||
-    /^\/definitions\/def_[a-f0-9]+$/.test(pathname) ||
-    /^\/research-runs\/run_[a-f0-9]+$/.test(pathname)
-    || /^\/daily-tracks\/track_[a-f0-9]+$/.test(pathname)
-  );
-}
+import { AppShell } from "./AppShell";
 
 export function CoreApp({ currentPath }: { currentPath: string }) {
   const definitionMatch = currentPath.match(/^\/definitions\/(def_[a-f0-9]+)$/);
