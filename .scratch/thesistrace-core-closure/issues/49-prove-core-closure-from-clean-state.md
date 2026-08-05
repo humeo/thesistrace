@@ -28,9 +28,18 @@ accepted.
 
 **How to verify:**
 
-- Run `make check` from the clean Core environment and retain its first-failure
-  evidence plus final successful result in Comments.
-- Confirm `make check-live-tushare` remains a separate optional gate and that no
-  live result is required to declare Core closure.
+```sh
+set -eu
+
+./scripts/core-test-runtime down
+make check
+
+if make -n check | rg 'check-live-tushare|check_live_tushare'; then
+  echo 'The optional live Tushare gate leaked into the Core closure gate' >&2
+  exit 1
+fi
+
+make -n check-live-tushare | rg 'scripts/check_live_tushare\.py'
+```
 
 ## Comments

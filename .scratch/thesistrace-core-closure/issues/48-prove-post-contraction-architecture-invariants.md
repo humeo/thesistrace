@@ -30,9 +30,16 @@ reimplementing product behavior in this ticket.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/architecture` and review every import, schema
-  ownership, route inventory, entrypoint, and forbidden-dependency assertion.
-- Run the integration and Web acceptance suites once after the invariant checks
-  to prove the assertions did not replace product behavior evidence.
+```sh
+set -eu
+
+uv run pytest -q tests/architecture
+
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run uv run pytest -q tests/integration tests/acceptance
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:e2e
+```
 
 ## Comments
