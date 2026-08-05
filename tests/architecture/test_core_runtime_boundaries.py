@@ -585,12 +585,24 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
     assert "/api/v1/research-" + "runs" not in legacy_http
 
     canonical_http = (package / "entrypoints" / "http.py").read_text()
-    assert '@app.post("/api/definitions/run"' in canonical_http
-    assert '"/api/definitions/{definition_id}/run"' in canonical_http
-    assert '"/api/research-runs/{run_id}/rerun"' in canonical_http
-    assert '@app.post("/api/research-runs"' not in canonical_http
-    assert '@app.put("/api/research-runs"' not in canonical_http
-    assert '@app.delete("/api/research-runs"' not in canonical_http
+    tree = ast.parse(canonical_http)
+    routes = {
+        (decorator.func.attr, decorator.args[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr in {"get", "post", "put", "delete"}
+        and decorator.args
+        and isinstance(decorator.args[0], ast.Constant)
+        and isinstance(decorator.args[0].value, str)
+    }
+    assert ("post", "/api/definitions/run") in routes
+    assert ("post", "/api/definitions/{definition_id}/run") in routes
+    assert ("post", "/api/research-runs/{run_id}/rerun") in routes
+    for method in ("post", "put", "delete"):
+        assert (method, "/api/research-runs") not in routes
 
 
 def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:

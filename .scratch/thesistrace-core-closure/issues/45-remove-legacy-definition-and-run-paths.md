@@ -59,19 +59,8 @@ test -f src/thesistrace/definition/service.py
 test -f src/thesistrace/research_run/service.py
 test -f src/thesistrace/research_kernel/kernel_run.py
 
-if rg -n '@app\.(post|put|delete)\("/api/research-runs"' \
-  src/thesistrace/entrypoints/http.py
-then
-  echo 'Generic ResearchRun mutation route remains' >&2
-  exit 1
-fi
-
-rg -n '@app\.post\("/api/definitions/run"' \
-  src/thesistrace/entrypoints/http.py
-rg -n '"/api/definitions/\{definition_id\}/run"' \
-  src/thesistrace/entrypoints/http.py
-rg -n '"/api/research-runs/\{run_id\}/rerun"' \
-  src/thesistrace/entrypoints/http.py
+uv run pytest -q tests/architecture/test_core_runtime_boundaries.py \
+  -k legacy_definition_and_research_run_modules_are_absent
 
 uv run pytest -q tests/kernel tests/architecture
 
