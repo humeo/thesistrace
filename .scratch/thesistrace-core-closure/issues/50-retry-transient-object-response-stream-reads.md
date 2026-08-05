@@ -6,19 +6,19 @@ content length, without weakening immutable-object verification.
 
 **Blocked by:** 48.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Publication retries transient response-stream failures at one shared
+- [x] Publication retries transient response-stream failures at one shared
   object-read boundary used by both existing-object verification and committed
   publication reads.
-- [ ] Retry is strictly bounded; exhaustion remains a typed
+- [x] Retry is strictly bounded; exhaustion remains a typed
   `PublicationUnavailableError` for the owning product workflow to handle.
-- [ ] Missing objects, non-transient S3 errors, wrong lengths, wrong checksums,
+- [x] Missing objects, non-transient S3 errors, wrong lengths, wrong checksums,
   and conflicting content-address bytes still fail immediately as verification
   errors.
-- [ ] Every acquired response body is closed, including a body whose read
+- [x] Every acquired response body is closed, including a body whose read
   raises a transient streaming exception.
-- [ ] Integration tests prove first-read recovery on both public paths and
+- [x] Integration tests prove first-read recovery on both public paths and
   bounded exhaustion without depending on a flaky RustFS response.
 
 **How to verify:**
@@ -48,3 +48,13 @@ trap './scripts/core-test-runtime down' EXIT
   once during cache recovery and once during equivalence setup. Botocore raised
   `ResponseStreamingError` from `IncompleteRead`; Publication classified it as
   transient but did not retry the response-body read.
+- Implementation: `81cb836`. Both existing-object verification and committed
+  reads now share a three-attempt object-body read boundary. Non-transient and
+  semantic verification failures remain immediate; every acquired body closes
+  in `finally`.
+- Independent review: Standards PASS / Spec PASS. The reviewer confirmed the
+  retry classification and bound, unchanged content-address verification, body
+  closure on success and failure, and coverage of both callers plus exhaustion.
+- Exact verification passed: Ruff; Publication integration `12 passed`; clean
+  DailyTrack cache-recovery and equivalence acceptance `6 passed` in `216.27s`
+  with one dependency deprecation warning.
