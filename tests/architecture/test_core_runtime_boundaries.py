@@ -226,6 +226,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "CREATE TABLE daily_tracks.stop_receipts" in track_migrations
     assert "MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3" in track_source
     assert "def _record_progression_failure(" in track_source
+    assert "def reconcile_stopped_working_cache(" in track_source
     assert "def activate(" in track_source
     assert "def resolve_activation(" in track_source
     assert "origin" in track_source
@@ -243,6 +244,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "AdvanceInput(" in track_source
     assert 'kind="daily-track.checkpoint"' in track_source
     assert "while runtime.daily_tracks.process_next()" in worker_source
+    assert "runtime.daily_tracks.reconcile_stopped_working_cache()" in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
     assert '"/api/daily-tracks/{track_id}/retry"' in http_source
     assert '"/api/daily-tracks/{track_id}/stop"' in http_source

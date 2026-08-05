@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from threading import Event
 
 import pytest
@@ -88,6 +89,8 @@ def test_active_and_blocked_tracks_stop_without_moving_their_heads(
         assert detail["strategy"] == detail_before["strategy"]
         assert _checkpoint_count(runtime.database, active["id"]) == checkpoint_count_before
 
+        cache.path(active["id"]).write_bytes(b"interrupted-cleanup")
+        assert cache.path(active["id"]).is_file()
         replay = client.post(
             f"/api/daily-tracks/{active['id']}/stop",
             json={"request_id": "ticket-35-stop-active"},
@@ -95,6 +98,7 @@ def test_active_and_blocked_tracks_stop_without_moving_their_heads(
         assert replay.json() == stopped.json()
         assert _fence(runtime.database, active["id"]) == fence_before + 1
         assert _stop_receipt_count(runtime.database) == 1
+        assert not cache.path(active["id"]).exists()
         assert (
             client.post(
                 f"/api/daily-tracks/{active['id']}/stop",
@@ -231,6 +235,98 @@ def test_stop_fences_a_worker_that_prepared_before_publication() -> None:
         assert _progression_status(runtime.database, track["id"]) == "cancelled"
         assert _attempt_status(runtime.database, track["id"]) == "cancelled"
         assert runtime.daily_tracks.process_next() is False
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_worker_reconciles_its_local_cache_after_http_stop(tmp_path: Path) -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        seed_run = _admit_and_execute(client)
+        track = _start_track(client, seed_run["id"], "ticket-35-worker-cache-track")
+        successor = _publish_successor(client, available_sessions=1)
+        worker = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            working_cache_root=tmp_path / "worker-local-cache",
+        )
+        assert worker.process_next() is True
+        cache = worker._working_cache
+        assert cache is not None and cache.path(track["id"]).is_file()
+
+        stopped = client.post(
+            f"/api/daily-tracks/{track['id']}/stop",
+            json={"request_id": "ticket-35-stop-worker-cache"},
+        )
+        assert stopped.status_code == 202
+        assert stopped.json()["current_release_id"] == successor["id"]
+        assert cache.path(track["id"]).is_file()
+
+        assert worker.reconcile_stopped_working_cache() == 1
+        assert not cache.path(track["id"]).exists()
+        assert worker.reconcile_stopped_working_cache() == 0
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_worker_cannot_restore_cache_after_stop_follows_publication(
+    tmp_path: Path,
+) -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+    published = Event()
+    release_worker = Event()
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        seed_run = _admit_and_execute(client)
+        track = _start_track(client, seed_run["id"], "ticket-35-published-track")
+        successor = _publish_successor(client, available_sessions=1)
+
+        def pause_after_publication(stage: str, track_id: str, _target_id: str) -> None:
+            if stage != "published" or track_id != track["id"]:
+                return
+            published.set()
+            if not release_worker.wait(timeout=30):
+                raise TimeoutError("published DailyTrack worker was not released")
+
+        worker = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            progress=pause_after_publication,
+            working_cache_root=tmp_path / "worker-local-cache",
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(worker.process_next)
+            assert published.wait(timeout=10)
+            try:
+                stopped = client.post(
+                    f"/api/daily-tracks/{track['id']}/stop",
+                    json={"request_id": "ticket-35-stop-after-publication"},
+                )
+                assert stopped.status_code == 202
+                assert stopped.json()["current_release_id"] == successor["id"]
+            finally:
+                release_worker.set()
+            assert future.result(timeout=30) is True
+
+        cache = worker._working_cache
+        assert cache is not None
+        assert not cache.path(track["id"]).exists()
+        detail = client.get(f"/api/daily-tracks/{track['id']}").json()
+        assert detail["status"] == "stopped"
+        assert detail["head_release_id"] == successor["id"]
 
 
 def _fence(database: PostgresDatabase, track_id: str) -> int:

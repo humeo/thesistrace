@@ -51,6 +51,13 @@ unchanged. The worker-local cache file must be absent after the action. The
 prepared late worker must be fenced: after it resumes, Publication count,
 Checkpoint count, Head, and stopped state remain unchanged.
 
+The acceptance test must also construct an independently rooted worker-local
+cache rather than treating the HTTP runtime's cache directory as the worker's
+disk. After HTTP Stop, ordinary worker reconciliation must delete that cache
+idempotently. A worker paused after durable Checkpoint publication but before
+cache installation must not restore a cache after Stop; after it resumes, its
+post-install status/fence check or the next reconciliation removes the entry.
+
 After Stop, publishing at least one later Dataset Release and running ordinary
 workers must not claim, Retry, reactivate, or move the stopped Track. Matching
 request replay, including after constructing a fresh Core runtime, must return

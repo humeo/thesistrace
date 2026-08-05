@@ -261,6 +261,7 @@ class DailyTrackService:
                 prepared, provenance, state = self._execute(claim)
                 self._progress("prepared", claim.track_id, claim.target.id)
                 published = self._publish_success(claim, prepared, provenance, state)
+                self._progress("published", claim.track_id, claim.target.id)
                 self._store_working_cache(claim, published, state)
                 self._progress("succeeded", claim.track_id, claim.target.id)
             except DailyTrackFenced:
@@ -395,7 +396,6 @@ class DailyTrackService:
         if not request_id:
             raise ValueError("DailyTrack Stop request_id is required")
         fingerprint = _stop_fingerprint(track_id)
-        replay = False
         with self._database.transaction() as transaction:
             transaction.execute(
                 "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
@@ -413,7 +413,6 @@ class DailyTrackService:
                 if receipt["request_fingerprint"] != fingerprint:
                     raise DailyTrackStopConflict("DailyTrack Stop request_id conflicts")
                 outcome = DailyTrackSummary.model_validate(receipt["outcome"])
-                replay = True
             else:
                 track = transaction.execute(
                     """
@@ -479,9 +478,32 @@ class DailyTrackService:
                         Jsonb(outcome.model_dump(mode="json")),
                     ),
                 )
-        if not replay and self._working_cache is not None:
+        if self._working_cache is not None:
             self._working_cache.delete(track_id)
         return outcome
+
+    def reconcile_stopped_working_cache(self) -> int:
+        if self._working_cache is None:
+            return 0
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                "SELECT id FROM daily_tracks.tracks WHERE status = 'stopped'"
+            ).fetchall()
+        removed = 0
+        for row in rows:
+            track_id = str(row["id"])
+            path = self._working_cache.path(track_id)
+            if not path.exists():
+                continue
+            self._working_cache.delete(track_id)
+            if path.exists():
+                logger.warning(
+                    "Stopped DailyTrack Working Cache cleanup remains pending",
+                    extra={"track_id": track_id},
+                )
+                continue
+            removed += 1
+        return removed
 
     def get(self, track_id: str) -> DailyTrackDetail | None:
         if self._publication is None or self._next_release is None:
@@ -618,8 +640,7 @@ class DailyTrackService:
         if len(recent_by_session) < 504:
             if (
                 checkpoint_rows
-                and str(checkpoint_rows[-1]["predecessor_release_id"])
-                != origin.seed_release_id
+                and str(checkpoint_rows[-1]["predecessor_release_id"]) != origin.seed_release_id
             ):
                 raise RuntimeError("DailyTrack Checkpoint chain is incomplete")
             for observation in reversed(seed_observations):
@@ -634,9 +655,7 @@ class DailyTrackService:
         if head_checkpoint is None:
             factor = _public_factor(seed_factor)
             strategy_summary = {
-                name: value
-                for name, value in seed_strategy_summary.items()
-                if name != "benchmark"
+                name: value for name, value in seed_strategy_summary.items() if name != "benchmark"
             }
         else:
             factor = _public_factor(
@@ -647,9 +666,7 @@ class DailyTrackService:
                 "Checkpoint Strategy state",
             )
             strategy_summary = {
-                "metrics": dict(
-                    _mapping_value(strategy_state.get("summary"), "Strategy summary")
-                )
+                "metrics": dict(_mapping_value(strategy_state.get("summary"), "Strategy summary"))
             }
         return DailyTrackDetail.model_validate(
             {
@@ -660,9 +677,7 @@ class DailyTrackService:
                     "seed_release_id": origin.seed_release_id,
                     "definition_id": origin.definition_id,
                     "definition_revision": origin.definition_revision,
-                    "result_checksum_sha256": (
-                        origin.verified_result.result_checksum_sha256
-                    ),
+                    "result_checksum_sha256": (origin.verified_result.result_checksum_sha256),
                     "strategy_session": origin.initial_strategy_state.session,
                 },
                 "head_release_id": str(row["current_release_id"]),
@@ -910,14 +925,9 @@ class DailyTrackService:
                         )
                         if failed.rowcount != 1:
                             continue
-                        if (
-                            int(latest_attempt["ordinal"])
-                            >= MAX_AUTOMATIC_PROGRESSION_ATTEMPTS
-                        ):
+                        if int(latest_attempt["ordinal"]) >= MAX_AUTOMATIC_PROGRESSION_ATTEMPTS:
                             if int(progression["fence"]) != int(row["execution_fence"]):
-                                raise RuntimeError(
-                                    "DailyTrack progression fence is inconsistent"
-                                )
+                                raise RuntimeError("DailyTrack progression fence is inconsistent")
                             self._block_progression(
                                 transaction,
                                 track_id=str(row["id"]),
@@ -1452,6 +1462,31 @@ class DailyTrackService:
                     "target_release_id": claim.target.id,
                 },
             )
+            return
+        if not self._working_cache_basis_is_current(claim, published):
+            self._working_cache.delete(claim.track_id)
+
+    def _working_cache_basis_is_current(
+        self,
+        claim: _ProgressionClaim,
+        published: PublishedRef,
+    ) -> bool:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT status, current_release_id, head_manifest_sha256,
+                       execution_fence
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                """,
+                (claim.track_id,),
+            ).fetchone()
+        return row == {
+            "status": "active",
+            "current_release_id": claim.target.id,
+            "head_manifest_sha256": published.manifest_sha256,
+            "execution_fence": claim.fence,
+        }
 
     def _record_progression_failure(
         self,

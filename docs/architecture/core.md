@@ -532,7 +532,11 @@ may run because PostgreSQL claims and fencing decide ownership.
 DailyTrack's Working Cache is a private, disposable implementation detail on
 the worker's local disk. PostgreSQL state and immutable S3 Checkpoints are the
 truth. A missing or corrupt cache is discarded and rebuilt from immutable
-state. No `WorkingCachePort` exists.
+state. Stop never depends on the HTTP process seeing that disk: every worker
+reconciles its own cache against terminally stopped Tracks, and a worker
+rechecks durable Track status and fence after installing a cache replacement.
+This makes cleanup idempotent across API/worker restarts and prevents late
+workers from restoring cache state after Stop. No `WorkingCachePort` exists.
 
 ## HTTP and Web adapters
 

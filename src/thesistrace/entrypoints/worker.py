@@ -35,6 +35,12 @@ def _process_once(runtime: CoreRuntime) -> None:
     _process_data(runtime)
     if runtime.research_runs.process_next():
         logger.info("Core worker processed ResearchRun")
+    removed_caches = runtime.daily_tracks.reconcile_stopped_working_cache()
+    if removed_caches:
+        logger.info(
+            "Core worker removed stopped DailyTrack Working Cache entries",
+            extra={"removed_cache_count": removed_caches},
+        )
     while True:
         try:
             while runtime.daily_tracks.process_next():

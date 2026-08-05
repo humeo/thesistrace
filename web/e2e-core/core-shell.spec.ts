@@ -919,6 +919,13 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
 test("stops a DailyTrack irreversibly", async ({ page }) => {
   const id = "track_570aaed";
   let stopped = false;
+  let laterReleasePublished = false;
+  const committedHeadRelease = {
+    id: "release_committed_head",
+    predecessor_id: "release_seed",
+    session_count: 757,
+    covered_session_range: { start: "2023-01-03", end: "2026-01-01" },
+  };
   const laterRelease = {
     id: "release_later_than_stopped_head",
     predecessor_id: "release_committed_head",
@@ -994,36 +1001,42 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
       }),
     });
   });
-  await page.route("**/api/data", (route) =>
-    route.fulfill({
+  await page.route("**/api/data", (route) => {
+    const latestRelease = laterReleasePublished ? laterRelease : committedHeadRelease;
+    return route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
         status: "idle",
-        latest_release: laterRelease,
+        latest_release: latestRelease,
         latest_update_outcome: "published",
       }),
-    }),
-  );
-  await page.route("**/api/data/releases", (route) =>
-    route.fulfill({
+    });
+  });
+  await page.route("**/api/data/releases", (route) => {
+    const releases = laterReleasePublished
+      ? [laterRelease, committedHeadRelease]
+      : [committedHeadRelease];
+    return route.fulfill({
       contentType: "application/json",
-      body: JSON.stringify({ items: [laterRelease], next_cursor: null }),
-    }),
-  );
+      body: JSON.stringify({ items: releases, next_cursor: null }),
+    });
+  });
 
   await page.goto(`/daily-tracks/${id}`);
+  const stableUrl = page.url();
   await expect(
     page.getByText("Stopping this DailyTrack is irreversible.", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Stop DailyTrack" }).click();
   await expect(page.getByRole("status")).toHaveText("DailyTrack stopped permanently.");
+  await expect(page).toHaveURL(stableUrl);
   await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
   await expect(
     page.getByText("Head Release release_committed_head", { exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop DailyTrack" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Retry blocked target" })).toHaveCount(0);
-  const stableUrl = page.url();
+  laterReleasePublished = true;
   await page.goto("/data");
   await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible();
   await expect(
