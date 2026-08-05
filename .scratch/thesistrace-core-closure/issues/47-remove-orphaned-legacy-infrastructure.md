@@ -5,18 +5,18 @@ temporary expression adapter only after every active caller has migrated.
 
 **Blocked by:** 46.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] SQLite Product State and its runtime assembly are removed.
-- [ ] Global metadata ports, repository-per-table interfaces, generic command
+- [x] SQLite Product State and its runtime assembly are removed.
+- [x] Global metadata ports, repository-per-table interfaces, generic command
   envelopes, no-op dispatch seams, and old lifecycle facades are removed.
-- [ ] The temporary string-expression compatibility boundary is removed after
+- [x] The temporary string-expression compatibility boundary is removed after
   every active caller uses the normalized tree.
-- [ ] Orphaned old HTTP, storage, tracking, worker, configuration, dependencies,
+- [x] Orphaned old HTTP, storage, tracking, worker, configuration, dependencies,
   scripts, and tests are deleted rather than wrapped.
-- [ ] One PostgreSQL and standard-S3 Core implementation remains; there is no
+- [x] One PostgreSQL and standard-S3 Core implementation remains; there is no
   runtime-mode selector or hidden fallback.
-- [ ] Current documentation and default targets describe only the active Core,
+- [x] Current documentation and default targets describe only the active Core,
   while ADR and archived history remain preserved.
 
 **How to verify:**
@@ -94,3 +94,31 @@ trap './scripts/core-test-runtime down' EXIT
 ```
 
 ## Comments
+
+- Implementation: `3fe1127`; review fixes: `a3ec033`, `f37a86d`, `23e9c12`.
+- The old SQLite/storage/ports/worker/facade cluster and the prototype that
+  exercised it were deleted. Hosted/V1 runbooks moved under `docs/archive/`;
+  current README, architecture, Make targets, and Tushare guide describe only
+  PostgreSQL, standard S3, Fixture development, and the optional live adapter
+  credential gate.
+- Alpha input is normalized-tree-only at validation, `RunInput` construction,
+  immutable snapshot, Kernel tests, and DailyTrack state. Exact tests freeze
+  every operator's values plus missing, non-finite, divide-by-zero, and
+  deterministic matrix behavior.
+- Independent review round 1 found the active legacy Start Tracking receipt
+  cutover, a residual string snapshot seam, an orphan field fallback, weakened
+  operator tests, two archive defects, and a fallible negative scan. All were
+  removed or corrected.
+- Review round 2 found rewritten published migration statements. Historical
+  DailyTrack migrations were restored byte-for-byte; append-only ResearchRun
+  and DailyTrack contraction migrations now transfer any old receipts and then
+  drop the old table without reintroducing startup/service compatibility code.
+- Review round 3 found that the upgrade test built its old ledger from the
+  current plan. The final test freezes SHA256 for all 12 published migrations,
+  then proves the old ledger forwards, preserves the receipt, and removes the
+  table on real PostgreSQL. This post-review correction was verified directly;
+  the three-round review cap was not extended.
+- Final exact verification: all removal and active-document scans passed;
+  Kernel/Architecture/Adapter `137 passed`; Web typecheck and production build
+  passed; isolated Integration/Acceptance `98 passed` in `1283.38s` with one
+  dependency deprecation warning; clean-reset Web E2E `18 passed` in `2.7m`.
