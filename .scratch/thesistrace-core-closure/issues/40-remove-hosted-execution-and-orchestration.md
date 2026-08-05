@@ -5,20 +5,20 @@ Hosted worker execution path while preserving canonical PostgreSQL workers.
 
 **Blocked by:** 01, 38.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] The Hosted archive ref is reverified before deletion.
-- [ ] Temporal workflows, activities, task queues, execution relay, dispatch
+- [x] The Hosted archive ref is reverified before deletion.
+- [x] Temporal workflows, activities, task queues, execution relay, dispatch
   queue, outbox, and Hosted compute workers are removed with their callers.
-- [ ] Hosted-only execution entrypoints, dependencies, targets, and tests are
+- [x] Hosted-only execution entrypoints, dependencies, targets, and tests are
   removed in the same contraction.
-- [ ] Remaining Hosted operations and deployment files no longer import or
+- [x] Remaining Hosted operations and deployment files no longer import or
   invoke the removed execution path, without deleting those files early.
-- [ ] Core ResearchRun and DailyTrack execution continue only through their
+- [x] Core ResearchRun and DailyTrack execution continue only through their
   PostgreSQL-owned processors.
-- [ ] No active source, configuration, or default gate imports or starts the
+- [x] No active source, configuration, or default gate imports or starts the
   removed orchestration path.
-- [ ] Accepted quantitative behavior and immutable publications remain
+- [x] Accepted quantitative behavior and immutable publications remain
   unchanged.
 
 **How to verify:**
@@ -32,8 +32,8 @@ set -eu
 archive_commit=2884f96ecd1f3aed1e16b00116d54a99c9def89a
 test "$(git show-ref --hash refs/archive/hosted-v2-pre-core-closure)" = \
   "$archive_commit"
-git cat-file -e "$archive_commit:src/thesistrace/hosted/temporal_worker.py"
-git cat-file -e "$archive_commit:src/thesistrace/hosted/execution_relay.py"
+git cat-file -e "${archive_commit}:src/thesistrace/hosted/temporal_worker.py"
+git cat-file -e "${archive_commit}:src/thesistrace/hosted/execution_relay.py"
 
 for removed_path in \
   deploy/hosted/temporal \
@@ -83,7 +83,7 @@ done
 
 git ls-tree -r --name-only "$archive_commit" deploy/hosted/migrations |
 while IFS= read -r migration_file; do
-  test "$(git show "$archive_commit:$migration_file" | shasum -a 256 | cut -d' ' -f1)" = \
+  test "$(git show "${archive_commit}:$migration_file" | shasum -a 256 | cut -d' ' -f1)" = \
     "$(shasum -a 256 "$migration_file" | cut -d' ' -f1)"
 done
 test -f deploy/hosted/migrations/0027_remove_hosted_execution.sql
@@ -110,3 +110,14 @@ the accepted quantitative calculations and immutable Publication references
 remain unchanged.
 
 ## Comments
+
+- Preserved migrations `0001`–`0026` byte-for-byte and added forward-only
+  migration `0027`; a fresh PostgreSQL migration smoke confirmed the retained
+  API/health credentials and retired-role `NOLOGIN` contraction.
+- Independent review findings were resolved by removing broken Hosted Local
+  and Launch acceptance entrypoints, the tracking rebuild operator caller,
+  worker identities/tests, and stale ObjectStore/Compose role configuration.
+- Final verification: static inventory and migration hashes passed; Hosted
+  tests `141 passed, 12 skipped`; architecture/Kernel `94 passed`; real isolated
+  Core PostgreSQL/RustFS acceptance `5 passed`; Compose parsing and shell syntax
+  passed. The runtime cleanup trap removed both test containers.
