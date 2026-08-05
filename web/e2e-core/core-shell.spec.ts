@@ -605,6 +605,16 @@ test("shows recent and cumulative DailyTrack analysis", async ({ page }) => {
     await expect(region).toContainText("504 signal sessions");
   }
   await expect(page.getByRole("heading", { name: "Cumulative Strategy" })).toBeVisible();
+  for (const [label, value] of [
+    ["Net cumulative", "17.00%"],
+    ["Benchmark cumulative", "11.00%"],
+    ["Annualized excess", "6.00%"],
+    ["Maximum drawdown", "-8.00%"],
+    ["Sharpe", "1.200"],
+    ["Transaction costs", "CN¥12,345"],
+  ]) {
+    await expect(page.getByText(label, { exact: true }).locator("..")).toContainText(value);
+  }
   await expect(page.getByText("Selected universe top1000", { exact: true })).toBeVisible();
   await expect(page.getByText("504 Research Sessions", { exact: true })).toBeVisible();
   await expect(page.getByRole("img", { name: "Strategy and benchmark NAV" })).toBeVisible();
