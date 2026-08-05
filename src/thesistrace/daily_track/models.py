@@ -13,6 +13,12 @@ class StartTrackingCommand(BaseModel):
     request_id: RequestId
 
 
+class RetryDailyTrackCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+
+
 class VerifiedResultOrigin(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

@@ -155,5 +155,18 @@ MIGRATIONS = MigrationPlan(
                         CHECK (status IN ('running', 'succeeded', 'blocked'));
             """,
         ),
+        Migration(
+            name="0005_blocked_retry_receipts",
+            statement="""
+                CREATE TABLE daily_tracks.retry_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    track_id text NOT NULL REFERENCES daily_tracks.tracks(id),
+                    target_release_id text NOT NULL,
+                    outcome jsonb NOT NULL CHECK (jsonb_typeof(outcome) = 'object'),
+                    created_at timestamptz NOT NULL DEFAULT now()
+                );
+            """,
+        ),
     ),
 )

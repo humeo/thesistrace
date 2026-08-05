@@ -763,6 +763,159 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
   await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });
 
+test("retries the same blocked DailyTrack target", async ({ page }) => {
+  const emptyHorizon = (horizon: 1 | 5 | 20) => ({
+    horizon,
+    summary: {
+      ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      rank_ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null },
+      top_bottom_return: null,
+    },
+    coverage: {
+      signal_session_count: 0,
+      ic_valid_session_count: 0,
+      rank_ic_valid_session_count: 0,
+      quantile_valid_session_count: 0,
+    },
+  });
+  const analysis = {
+    factor: {
+      horizons: {
+        "1": emptyHorizon(1),
+        "5": emptyHorizon(5),
+        "20": emptyHorizon(20),
+      },
+    },
+    strategy: {
+      summary: {
+        metrics: {
+          net_cumulative_return: 0,
+          benchmark_cumulative_return: 0,
+          annualized_excess_return: 0,
+          maximum_drawdown: { value: 0 },
+          sharpe: null,
+          transaction_costs: { cumulative_amount: 0 },
+        },
+      },
+      benchmark: {
+        universe: "top1000",
+        methodology: "selected_universe_equal_weight",
+      },
+      observations: [],
+    },
+  };
+  const origin = {
+    seed_run_id: "run_retry",
+    seed_release_id: "release_seed",
+    definition_id: "def_retry",
+    definition_revision: 3,
+    result_checksum_sha256: "c".repeat(64),
+    strategy_session: "2025-12-31",
+  };
+  const detail = (
+    id: string,
+    status: "active" | "blocked",
+    headRelease: string,
+  ) => ({
+    id,
+    status,
+    origin,
+    head_release_id: headRelease,
+    strategy_session: "2025-12-31",
+    lag_releases: headRelease === "release_latest" ? 0 : 2,
+    blocked_reason:
+      status === "blocked"
+        ? "DailyTrack could not process this Dataset Release."
+        : null,
+    ...analysis,
+  });
+  const summary = (id: string) => ({
+    id,
+    status: "active",
+    seed_run_id: origin.seed_run_id,
+    seed_release_id: origin.seed_release_id,
+    current_release_id: "release_seed",
+    definition_id: origin.definition_id,
+    definition_revision: origin.definition_revision,
+    result_checksum_sha256: origin.result_checksum_sha256,
+    strategy_session: origin.strategy_session,
+  });
+  let successfulPhase: "blocked" | "accepted" | "first-target" | "latest" = "blocked";
+  let repeatedPhase: "blocked" | "accepted" | "blocked-again" = "blocked";
+  const successfulId = "track_34acce55";
+  const repeatedId = "track_34fa11ed";
+
+  await page.route(`**/api/daily-tracks/${successfulId}`, (route) => {
+    const projected =
+      successfulPhase === "blocked"
+        ? detail(successfulId, "blocked", "release_seed")
+        : successfulPhase === "first-target"
+          ? detail(successfulId, "active", "release_failed_target")
+          : successfulPhase === "latest"
+            ? detail(successfulId, "active", "release_latest")
+            : detail(successfulId, "active", "release_seed");
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(projected) });
+  });
+  await page.route(`**/api/daily-tracks/${repeatedId}`, (route) => {
+    const projected =
+      repeatedPhase === "accepted"
+        ? detail(repeatedId, "active", "release_seed")
+        : detail(repeatedId, "blocked", "release_seed");
+    return route.fulfill({ contentType: "application/json", body: JSON.stringify(projected) });
+  });
+  await page.route(`**/api/daily-tracks/${successfulId}/retry`, async (route) => {
+    expect(Object.keys(route.request().postDataJSON())).toEqual(["request_id"]);
+    expect(route.request().postDataJSON().request_id).toMatch(/^retry_/);
+    successfulPhase = "accepted";
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify(summary(successfulId)),
+    });
+  });
+  await page.route(`**/api/daily-tracks/${repeatedId}/retry`, async (route) => {
+    expect(Object.keys(route.request().postDataJSON())).toEqual(["request_id"]);
+    repeatedPhase = "accepted";
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify(summary(repeatedId)),
+    });
+  });
+
+  await page.goto(`/daily-tracks/${successfulId}`);
+  await expect(page.getByText("Status blocked", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Retry blocked target" }).click();
+  await expect(page.getByRole("status")).toHaveText("Retry accepted for the blocked target.");
+  await expect(page.getByText("Status active", { exact: true })).toBeVisible();
+  await expect(page.getByText("Head Release release_seed", { exact: true })).toBeVisible();
+  successfulPhase = "first-target";
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(
+    page.getByText("Head Release release_failed_target", { exact: true }),
+  ).toBeVisible();
+  successfulPhase = "latest";
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("Head Release release_latest", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry blocked target" })).toHaveCount(0);
+
+  await page.goto(`/daily-tracks/${repeatedId}`);
+  await page.getByRole("button", { name: "Retry blocked target" }).click();
+  await expect(page.getByText("Status active", { exact: true })).toBeVisible();
+  repeatedPhase = "blocked-again";
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByText("Status blocked", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Blocked DailyTrack could not process this Dataset Release.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Retry blocked target" })).toBeVisible();
+  await expect(page.getByText(/private|exception|target_release_id/i)).toHaveCount(0);
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
+});
+
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
   await page.goto("/definitions");
 

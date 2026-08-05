@@ -38,6 +38,7 @@ type DailyTrackDetail = {
 
 type DailyTrackList = { items: DailyTrackSummary[]; next_cursor: string | null };
 type LoadState = "loading" | "refreshing" | null;
+type RetryState = "submitting" | "accepted" | null;
 
 export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [track, setTrack] = useState<DailyTrackDetail | null>(null);
@@ -45,7 +46,10 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [error, setError] = useState(false);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [retryState, setRetryState] = useState<RetryState>(null);
   const loadGeneration = useRef(0);
+
+  useEffect(() => setRetryState(null), [trackId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -84,8 +88,28 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   }, [refreshGeneration, trackId]);
 
   function refresh() {
+    setRetryState(null);
     setLoadState("refreshing");
     setRefreshGeneration((value) => value + 1);
+  }
+
+  async function retryBlockedTrack() {
+    if (!trackId) return;
+    setRetryState("submitting");
+    try {
+      const response = await fetch(`/api/daily-tracks/${trackId}/retry`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: `retry_${crypto.randomUUID()}` }),
+      });
+      if (!response.ok) throw new Error("DailyTrack Retry was not accepted");
+      await response.json();
+      setRetryState("accepted");
+      setRefreshGeneration((value) => value + 1);
+    } catch {
+      setRetryState(null);
+      setError(true);
+    }
   }
 
   if (error) {
@@ -116,9 +140,23 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             <h1>DailyTrack</h1>
           </div>
           <button disabled={loadState !== null} onClick={refresh}>Refresh</button>
+          {track.status === "blocked" ? (
+            <button
+              disabled={retryState === "submitting"}
+              onClick={() => void retryBlockedTrack()}
+            >
+              Retry blocked target
+            </button>
+          ) : null}
         </header>
         {loadState === "refreshing" ? (
           <p role="status">Refreshing DailyTrack…</p>
+        ) : null}
+        {retryState === "submitting" ? (
+          <p role="status">Retrying blocked DailyTrack…</p>
+        ) : null}
+        {retryState === "accepted" ? (
+          <p role="status">Retry accepted for the blocked target.</p>
         ) : null}
         <div className="research-run-facts">
           <p><strong>Status</strong> {track.status}</p>

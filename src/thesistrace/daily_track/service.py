@@ -23,6 +23,7 @@ from thesistrace.daily_track.models import (
     DailyTrackList,
     DailyTrackSummary,
     KernelStateCheckpoint,
+    RetryDailyTrackCommand,
     TrackingOrigin,
 )
 from thesistrace.data import NextRelease
@@ -88,6 +89,14 @@ class DailyTrackEquivalenceMismatch(RuntimeError):
 
 
 class DailyTrackDetailUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackRetryConflict(RuntimeError):
+    pass
+
+
+class DailyTrackRetryUnavailable(RuntimeError):
     pass
 
 
@@ -274,6 +283,99 @@ class DailyTrackService:
                 """
             ).fetchall()
         return DailyTrackList(items=[_summary(row) for row in rows], next_cursor=None)
+
+    def retry(
+        self,
+        track_id: str,
+        command: RetryDailyTrackCommand,
+    ) -> DailyTrackSummary | None:
+        request_id = command.request_id.strip()
+        if not request_id:
+            raise ValueError("DailyTrack Retry request_id is required")
+        fingerprint = _retry_fingerprint(track_id)
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"daily_tracks.retry:{request_id}",),
+            ).fetchone()
+            receipt = transaction.execute(
+                """
+                SELECT request_fingerprint, outcome
+                FROM daily_tracks.retry_receipts
+                WHERE request_id = %s
+                """,
+                (request_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise DailyTrackRetryConflict("DailyTrack Retry request_id conflicts")
+                return DailyTrackSummary.model_validate(receipt["outcome"])
+
+            track = transaction.execute(
+                f"""
+                {_TRACK_SELECT}
+                WHERE track.id = %s
+                FOR UPDATE OF track
+                """,
+                (track_id,),
+            ).fetchone()
+            if track is None:
+                return None
+            if track["status"] != "blocked":
+                raise DailyTrackRetryUnavailable("DailyTrack Retry requires blocked status")
+            blocked = transaction.execute(
+                """
+                SELECT blocked_target_release_id
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+            assert blocked is not None
+            target_release_id = str(blocked["blocked_target_release_id"])
+            progression = transaction.execute(
+                """
+                UPDATE daily_tracks.progressions
+                SET status = 'running', finished_at = NULL
+                WHERE track_id = %s AND target_release_id = %s
+                  AND status = 'blocked'
+                """,
+                (track_id, target_release_id),
+            )
+            activated = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET status = 'active', blocked_target_release_id = NULL,
+                    blocked_reason = NULL
+                WHERE id = %s AND status = 'blocked'
+                  AND blocked_target_release_id = %s
+                """,
+                (track_id, target_release_id),
+            )
+            if progression.rowcount != 1 or activated.rowcount != 1:
+                raise DailyTrackFenced
+            outcome = DailyTrackSummary(
+                **{
+                    **_summary(track).model_dump(mode="python"),
+                    "status": "active",
+                }
+            )
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.retry_receipts (
+                    request_id, request_fingerprint, track_id,
+                    target_release_id, outcome
+                ) VALUES (%s, %s, %s, %s, %s)
+                """,
+                (
+                    request_id,
+                    fingerprint,
+                    track_id,
+                    target_release_id,
+                    Jsonb(outcome.model_dump(mode="json")),
+                ),
+            )
+        return outcome
 
     def get(self, track_id: str) -> DailyTrackDetail | None:
         if self._publication is None or self._next_release is None:
@@ -1375,6 +1477,15 @@ def _activation_fingerprint(seed_run_id: str) -> str:
     value = {
         "action": "research-runs.start-tracking/v1",
         "seed_run_id": seed_run_id,
+    }
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _retry_fingerprint(track_id: str) -> str:
+    value = {
+        "action": "daily-tracks.retry/v1",
+        "track_id": track_id,
     }
     serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(serialized).hexdigest()

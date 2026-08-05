@@ -14,7 +14,10 @@ from thesistrace.daily_track import (
     DailyTrackDetail,
     DailyTrackDetailUnavailable,
     DailyTrackList,
+    DailyTrackRetryConflict,
+    DailyTrackRetryUnavailable,
     DailyTrackSummary,
+    RetryDailyTrackCommand,
     StartTrackingCommand,
 )
 from thesistrace.data import (
@@ -227,6 +230,28 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
                 status_code=503,
                 detail="DailyTrack detail is unavailable",
             ) from error
+        if track is None:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
+        return track
+
+    @app.post(
+        "/api/daily-tracks/{track_id}/retry",
+        response_model=DailyTrackSummary,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def retry_daily_track(
+        request: Request,
+        track_id: str,
+        command: RetryDailyTrackCommand,
+    ) -> DailyTrackSummary:
+        try:
+            track = _runtime(request).daily_tracks.retry(track_id, command)
+        except DailyTrackRetryConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except DailyTrackRetryUnavailable as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
         if track is None:
             raise HTTPException(status_code=404, detail="DailyTrack not found")
         return track
