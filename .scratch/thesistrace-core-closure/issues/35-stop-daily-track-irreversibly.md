@@ -3,11 +3,11 @@
 **What to build:** Let a user permanently stop an active or blocked DailyTrack,
 fence in-flight work, and retain its authoritative history.
 
-**Blocked by:** 33, 36.
+**Blocked by:** 33.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-**Implementation:** complete; final limit criterion awaits Ticket 36
+**Implementation:** complete
 
 - [x] Stop is accepted from `active` or `blocked` and records the terminal
   `stopped` state atomically.
@@ -15,7 +15,7 @@ fence in-flight work, and retain its authoritative history.
   Checkpoint or move Head.
 - [x] Disposable Working Cache is removed while Tracking Origin, committed
   Checkpoints, Head, and product history remain readable.
-- [ ] A stopped Track does not count toward the active-or-blocked limit.
+- [x] A stopped Track does not count toward the active-or-blocked limit.
 - [x] Stopped cannot Retry, reactivate, or advance again.
 - [x] Matching request replay returns stopped; different input conflicts; a
   malformed request creates no receipt.
@@ -96,7 +96,9 @@ manifest, object key, cache path, or worker controls.
   reported `533 passed, 111 skipped, 2 warnings in 631.96s`; Web typecheck and
   production build passed (`1591` modules in `1.27s`); narrow and desktop E2E
   each reported `1 passed in 31.9s`.
-- The one unchecked criterion is intentionally not claimed early: actual
-  active-or-blocked admission counting is Ticket 36. Ticket 35 has established
-  the terminal `stopped` state that Ticket 36 must exclude; close this ticket
-  only after the tenth/eleventh/stopped-capacity acceptance passes there.
+- The limit criterion was intentionally left unchecked until Ticket 36 owned
+  and proved the actual active-or-blocked admission count. Ticket 36 is now
+  complete: its real PostgreSQL acceptance stopped one of ten
+  active-or-blocked Tracks, observed the count fall to nine, admitted the
+  previously rejected seed as the new tenth Track, and kept the stopped Track
+  readable. This closes the final criterion without adding a second limit path.
