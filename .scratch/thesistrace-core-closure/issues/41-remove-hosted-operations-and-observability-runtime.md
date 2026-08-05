@@ -5,19 +5,19 @@ machinery so operational scope cannot block or leak into the Core product.
 
 **Blocked by:** 40.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] The Hosted archive ref is reverified before deletion.
-- [ ] Quota profiles, hosted admission policy, disk-pressure modes, maintenance,
+- [x] The Hosted archive ref is reverified before deletion.
+- [x] Quota profiles, hosted admission policy, disk-pressure modes, maintenance,
   backup, restore, rollback, and launch-qualification runtime code are removed.
-- [ ] Hosted health dashboards, alerting, release evidence, and operator
+- [x] Hosted health dashboards, alerting, release evidence, and operator
   telemetry services are removed with their callers, targets, dependencies, and
   tests.
-- [ ] Core product states and sanitized failure reasons remain available without
+- [x] Core product states and sanitized failure reasons remain available without
   an Operations Ledger or System Health product.
-- [ ] Historical operations ADRs and research remain recoverable but are marked
+- [x] Historical operations ADRs and research remain recoverable but are marked
   clearly outside the active Core.
-- [ ] The default Core gate requires no capacity or production-launch evidence.
+- [x] The default Core gate requires no capacity or production-launch evidence.
 
 **How to verify:**
 
@@ -100,3 +100,25 @@ trap './scripts/core-test-runtime down' EXIT
 ```
 
 ## Comments
+
+- Archive reverified at
+  `2884f96ecd1f3aed1e16b00116d54a99c9def89a`; both required archived blobs
+  resolve. The removed-path inventory, forbidden-token scan, archived runbook
+  assertions, launcher shell parse, and Compose config checks pass.
+- Implementation: `33a7001`; review fixes: `6c608ae`, `47bde56`, and `33c94ca`.
+  The forward `0028` and `0029` migrations remove the retired health,
+  maintenance, qualification, quota, and admission database state while
+  preserving the retained resource-deletion contract.
+- A fresh isolated Hosted PostgreSQL/InsForge schema applied migrations
+  `0001` through `0029` successfully. Direct database queries confirmed that
+  the retired role, tables, functions, triggers, and admission caller are gone;
+  the remaining one-shot management role has invitation read/insert/update but
+  no delete privilege. The isolated containers, network, and volumes were
+  removed afterward.
+- `uv run pytest -q tests/hosted`: `49 passed, 7 skipped, 1 warning`.
+- `uv run pytest -q tests/architecture tests/integration tests/acceptance`:
+  `97 passed, 96 skipped, 1 warning`.
+- The isolated PostgreSQL/RustFS Core command in **How to verify**:
+  `5 passed, 1 warning`; its cleanup trap removed both test containers.
+- Independent review round 3 over `950c61e..33c94ca`: Standards **PASS** and
+  Spec **PASS**, with no actionable P0-P3 findings.
