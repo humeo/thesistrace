@@ -1,27 +1,15 @@
 import math
 
 import pytest
+from contracts import FIELD_BINDINGS, field, literal, operation
 
-from thesistrace.alpha import (
-    AlphaValidationError,
+from thesistrace.fixture import build_fixture
+from thesistrace.research_kernel.alpha import (
     evaluate_alpha_matrix,
     evaluate_series,
     validate_alpha,
 )
-from thesistrace.fixture import build_fixture
-from thesistrace.research_kernel.alpha_expression import operator_catalog
-
-
-def field(field_id: str) -> dict[str, object]:
-    return {"field_id": field_id}
-
-
-def literal(value: int | float) -> dict[str, object]:
-    return {"literal": value}
-
-
-def operation(operator_id: str, *operands: dict[str, object]) -> dict[str, object]:
-    return {"operator_id": operator_id, "operands": list(operands)}
+from thesistrace.research_kernel.alpha_expression import AlphaValidationError, operator_catalog
 
 
 def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
@@ -78,7 +66,7 @@ def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
     }
 
 
-def test_normalized_and_legacy_inputs_share_one_accepted_semantics() -> None:
+def test_normalized_input_has_one_bounded_semantics() -> None:
     normalized = operation(
         "add",
         operation(
@@ -88,107 +76,61 @@ def test_normalized_and_legacy_inputs_share_one_accepted_semantics() -> None:
         ),
         operation("abs", field("market.volume.shares")),
     )
-    legacy = "ts_mean(pct_change($close_adj, 5), 20) + abs($volume_shares)"
     values = {
         "close_adj": [float(index + 1) for index in range(40)],
         "volume_shares": [10.0] * 40,
     }
 
-    normalized_parsed = validate_alpha(normalized)
-    legacy_parsed = validate_alpha(legacy)
-    assert (
-        normalized_parsed.field_names
-        == legacy_parsed.field_names
-        == (
-            "close_adj",
-            "volume_shares",
-        )
+    parsed = validate_alpha(normalized, field_bindings=FIELD_BINDINGS)
+    assert parsed.field_names == ("close_adj", "volume_shares")
+    assert parsed.field_ids == (
+        "market.volume.shares",
+        "price.close.adjusted",
     )
-    assert (
-        normalized_parsed.field_ids
-        == legacy_parsed.field_ids
-        == (
-            "market.volume.shares",
-            "price.close.adjusted",
-        )
-    )
-    assert normalized_parsed.effective_lookback == legacy_parsed.effective_lookback == 24
-    assert evaluate_series(normalized, values) == evaluate_series(legacy, values)
+    assert parsed.effective_lookback == 24
+    assert len(evaluate_series(normalized, values, field_bindings=FIELD_BINDINGS)) == 40
 
 
 @pytest.mark.parametrize(
-    ("normalized", "legacy"),
+    "normalized",
     [
-        (operation("add", field("price.close.adjusted"), literal(2)), "$close_adj + 2"),
-        (operation("subtract", field("price.close.adjusted"), literal(2)), "$close_adj - 2"),
-        (operation("multiply", field("price.close.adjusted"), literal(2)), "$close_adj * 2"),
-        (operation("divide", field("price.close.adjusted"), literal(2)), "$close_adj / 2"),
-        (operation("negate", field("price.close.adjusted")), "-$close_adj"),
-        (
-            operation("abs", operation("negate", field("price.close.adjusted"))),
-            "abs(-$close_adj)",
-        ),
-        (operation("log", field("price.close.adjusted")), "log($close_adj)"),
-        (operation("sign", field("price.close.adjusted")), "sign($close_adj)"),
-        (operation("lag", field("price.close.adjusted"), literal(2)), "lag($close_adj, 2)"),
-        (
-            operation("delta", field("price.close.adjusted"), literal(2)),
-            "delta($close_adj, 2)",
-        ),
-        (
-            operation("pct_change", field("price.close.adjusted"), literal(2)),
-            "pct_change($close_adj, 2)",
-        ),
-        (
-            operation("ts_mean", field("price.close.adjusted"), literal(2)),
-            "ts_mean($close_adj, 2)",
-        ),
-        (
-            operation("ts_sum", field("price.close.adjusted"), literal(2)),
-            "ts_sum($close_adj, 2)",
-        ),
-        (
-            operation("ts_std", field("price.close.adjusted"), literal(2)),
-            "ts_std($close_adj, 2)",
-        ),
-        (
-            operation("ts_min", field("price.close.adjusted"), literal(2)),
-            "ts_min($close_adj, 2)",
-        ),
-        (
-            operation("ts_max", field("price.close.adjusted"), literal(2)),
-            "ts_max($close_adj, 2)",
-        ),
+        operation("add", field("price.close.adjusted"), literal(2)),
+        operation("subtract", field("price.close.adjusted"), literal(2)),
+        operation("multiply", field("price.close.adjusted"), literal(2)),
+        operation("divide", field("price.close.adjusted"), literal(2)),
+        operation("negate", field("price.close.adjusted")),
+        operation("abs", operation("negate", field("price.close.adjusted"))),
+        operation("log", field("price.close.adjusted")),
+        operation("sign", field("price.close.adjusted")),
+        operation("lag", field("price.close.adjusted"), literal(2)),
+        operation("delta", field("price.close.adjusted"), literal(2)),
+        operation("pct_change", field("price.close.adjusted"), literal(2)),
+        operation("ts_mean", field("price.close.adjusted"), literal(2)),
+        operation("ts_sum", field("price.close.adjusted"), literal(2)),
+        operation("ts_std", field("price.close.adjusted"), literal(2)),
+        operation("ts_min", field("price.close.adjusted"), literal(2)),
+        operation("ts_max", field("price.close.adjusted"), literal(2)),
     ],
 )
-def test_every_normalized_operator_matches_legacy_behavior(
-    normalized: dict[str, object],
-    legacy: str,
-) -> None:
+def test_every_normalized_operator_executes(normalized: dict[str, object]) -> None:
     values = {"close_adj": [1.0, 2.0, 4.0, 8.0, 16.0]}
-    assert evaluate_series(normalized, values) == evaluate_series(legacy, values)
+    assert len(evaluate_series(normalized, values, field_bindings=FIELD_BINDINGS)) == 5
 
 
-def test_normalized_matrix_matches_characterized_legacy_matrix() -> None:
+def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
     _, canonical = build_fixture()
     normalized = operation("pct_change", field("price.close.adjusted"), literal(20))
-    legacy = "pct_change($close_adj, 20)"
-
-    normalized_matrix = evaluate_alpha_matrix(
+    matrix = evaluate_alpha_matrix(
         canonical,
         expression=normalized,
+        field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
     )
-    legacy_matrix = evaluate_alpha_matrix(
-        canonical,
-        expression=legacy,
-        universe_name="top300",
-        neutralization="none",
+    assert matrix["checksum"] == (
+        "c002b936f6e730c3a3e4a98161a4ec1f805beb9d509f96d053cf131c5927be6f"
     )
-    assert normalized_matrix["checksum"] == legacy_matrix["checksum"]
-    assert normalized_matrix["sessions"] == legacy_matrix["sessions"]
-    assert normalized_matrix["effective_lookback"] == legacy_matrix["effective_lookback"]
+    assert matrix["effective_lookback"] == 20
 
 
 @pytest.mark.parametrize(
@@ -232,5 +174,5 @@ def test_normalized_tree_rejects_invalid_nodes_deterministically(
     reason_code: str,
 ) -> None:
     with pytest.raises(AlphaValidationError) as captured:
-        validate_alpha(expression)
+        validate_alpha(expression, field_bindings=FIELD_BINDINGS)
     assert [issue.reason_code for issue in captured.value.issues] == [reason_code]

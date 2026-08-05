@@ -1,9 +1,10 @@
 import pytest
+from contracts import FIELD_BINDINGS, PCT_CHANGE_20
 
-from thesistrace.alpha import evaluate_alpha_matrix
-from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.fixture import build_fixture
-from thesistrace.strategy import run_strategy
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
+from thesistrace.research_kernel.strategy import run_strategy
 
 
 @pytest.fixture(scope="session")
@@ -11,7 +12,7 @@ def accepted_calculation_case() -> dict[str, object]:
     """Build inputs independently, then expose every accepted calculation seam."""
     _, canonical = build_fixture()
     definition = {
-        "alpha": {"expression": "pct_change($close_adj, 20)"},
+        "alpha": {"expression": PCT_CHANGE_20},
         "neutralization": "none",
         "universe": "top300",
         "strategy": {
@@ -28,7 +29,8 @@ def accepted_calculation_case() -> dict[str, object]:
     }
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression="pct_change($close_adj, 20)",
+        expression=PCT_CHANGE_20,
+        field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
     )

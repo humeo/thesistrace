@@ -1,22 +1,24 @@
 import math
 
 import pytest
+from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, PCT_CHANGE_20
 
-from thesistrace.alpha import evaluate_alpha_matrix
-from thesistrace.factor import (
+from thesistrace.fixture import build_fixture
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.factor import (
     FactorDataError,
     build_forward_labels,
     evaluate_factor,
     factor_day,
 )
-from thesistrace.fixture import build_fixture
 
 
 def test_forward_labels_use_next_open_timing_and_fixed_report_limits() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression="$close_adj",
+        expression=CLOSE_ADJUSTED,
+        field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
     )
@@ -151,7 +153,8 @@ def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression="pct_change($close_adj, 20)",
+        expression=PCT_CHANGE_20,
+        field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
     )

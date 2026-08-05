@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from thesistrace.numeric import (
+from thesistrace.research_kernel.numeric import (
     NUMERIC_CONTRACT_ID,
     NumericContractError,
     accounting_divide,
@@ -49,7 +49,7 @@ def test_binary64_encoding_is_big_endian_and_normalizes_negative_zero() -> None:
 
 def test_binary64_checksum_is_stable_across_processes() -> None:
     script = (
-        "from thesistrace.numeric import binary64_checksum;"
+        "from thesistrace.research_kernel.numeric import binary64_checksum;"
         "print(binary64_checksum([-0.0,1.5,-2.25]))"
     )
     first = subprocess.check_output([sys.executable, "-c", script], text=True).strip()

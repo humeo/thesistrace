@@ -180,7 +180,7 @@ class DailyTrackDetail(BaseModel):
 class KernelRunInputSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    alpha_expression: str | dict[str, object]
+    alpha_expression: dict[str, object]
     field_bindings: dict[str, str]
     universe: str
     neutralization: str

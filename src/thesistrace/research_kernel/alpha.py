@@ -1,7 +1,6 @@
 import ast
 import hashlib
 import math
-import re
 from collections import Counter
 from collections.abc import Mapping
 from typing import Any
@@ -9,14 +8,11 @@ from typing import Any
 from thesistrace.research_kernel.alpha_expression import (
     SCALAR_OPERATOR_IDS,
     AlphaExpression,
-    AlphaValidationError,
     AlphaValidationIssue,
     ParsedAlpha,
     validate_normalized_alpha,
 )
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes
-
-FIELD_PATTERN = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
 def validate_alpha(
@@ -24,156 +20,9 @@ def validate_alpha(
     *,
     field_bindings: Mapping[str, str],
 ) -> ParsedAlpha:
-    if isinstance(expression, str):
-        return validate_legacy_alpha(expression, field_bindings=field_bindings)
-    if isinstance(expression, Mapping):
-        return validate_normalized_alpha(
-            expression,
-            field_bindings=field_bindings,
-        )
-    raise AlphaValidationError(
-        [
-            AlphaValidationIssue(
-                reason_code="MALFORMED_NODE",
-                location="alpha.expression",
-                message="expression must be a normalized tree or legacy string",
-            )
-        ]
-    )
-
-
-def validate_legacy_alpha(
-    expression: str,
-    *,
-    field_bindings: Mapping[str, str],
-) -> ParsedAlpha:
-    """Temporary compatibility boundary for pre-normalized string expressions."""
-    selected_bindings = field_bindings
-    legacy_field_ids = {
-        evaluation_name: field_id for field_id, evaluation_name in selected_bindings.items()
-    }
-    rewritten = FIELD_PATTERN.sub(lambda match: f"f{match.group(1)}", expression)
-    if "$" in rewritten:
-        raise AlphaValidationError([issue("INVALID_FIELD_REFERENCE", 0, "invalid field reference")])
-    try:
-        tree = ast.parse(rewritten, mode="eval")
-    except SyntaxError as error:
-        raise AlphaValidationError(
-            [
-                AlphaValidationIssue(
-                    reason_code="INVALID_SYNTAX",
-                    location=f"alpha.expression:{error.offset or 0}",
-                    message="expression is not valid syntax",
-                )
-            ]
-        ) from error
-    conversion_issues: list[AlphaValidationIssue] = []
-    normalized = _legacy_node_to_normalized(
-        tree.body,
-        legacy_field_ids,
-        conversion_issues,
-    )
-    try:
-        parsed = validate_normalized_alpha(
-            normalized,
-            field_bindings=selected_bindings,
-        )
-    except AlphaValidationError as error:
-        translated = {
-            "UNKNOWN_OPERATOR": "FUNCTION_NOT_ALLOWED",
-            "INVALID_OPERAND": "WINDOW_NOT_INTEGER_LITERAL",
-        }
-        validation_issues = [
-            AlphaValidationIssue(
-                reason_code=translated.get(item.reason_code, item.reason_code),
-                location=item.location,
-                message=item.message,
-            )
-            for item in error.issues
-        ]
-        raise AlphaValidationError([*conversion_issues, *validation_issues]) from error
-    if conversion_issues:
-        raise AlphaValidationError(conversion_issues)
-    return ParsedAlpha(
-        expression=expression,
-        tree=parsed.tree,
-        field_names=parsed.field_names,
-        field_ids=parsed.field_ids,
-        effective_lookback=parsed.effective_lookback,
-    )
-
-
-def _legacy_node_to_normalized(
-    node: ast.AST,
-    legacy_field_ids: Mapping[str, str],
-    conversion_issues: list[AlphaValidationIssue],
-) -> dict[str, object]:
-    if isinstance(node, ast.Constant):
-        return {"literal": node.value}
-    if isinstance(node, ast.Name):
-        if node.id.startswith("f"):
-            field_name = node.id[1:]
-            field_id = legacy_field_ids.get(field_name)
-            if field_id is None:
-                conversion_issues.append(
-                    issue(
-                        "FIELD_NOT_AUTHORABLE",
-                        node.col_offset,
-                        f"{field_name} is not Alpha-authorable",
-                    )
-                )
-                field_id = next(iter(legacy_field_ids.values()), "__invalid_legacy_field__")
-            return {"field_id": field_id}
-        raise AlphaValidationError(
-            [issue("SYNTAX_NOT_ALLOWED", node.col_offset, "bare names are not allowed")]
-        )
-    binary_operators = {
-        ast.Add: "add",
-        ast.Sub: "subtract",
-        ast.Mult: "multiply",
-        ast.Div: "divide",
-    }
-    if isinstance(node, ast.BinOp) and type(node.op) in binary_operators:
-        return {
-            "operator_id": binary_operators[type(node.op)],
-            "operands": [
-                _legacy_node_to_normalized(node.left, legacy_field_ids, conversion_issues),
-                _legacy_node_to_normalized(node.right, legacy_field_ids, conversion_issues),
-            ],
-        }
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-        return {
-            "operator_id": "negate",
-            "operands": [
-                _legacy_node_to_normalized(node.operand, legacy_field_ids, conversion_issues)
-            ],
-        }
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-        if node.keywords:
-            raise AlphaValidationError(
-                [
-                    issue(
-                        "KEYWORDS_NOT_ALLOWED",
-                        node.col_offset,
-                        "keyword arguments are not allowed",
-                    )
-                ]
-            )
-        return {
-            "operator_id": node.func.id,
-            "operands": [
-                _legacy_node_to_normalized(argument, legacy_field_ids, conversion_issues)
-                for argument in node.args
-            ],
-        }
-    raise AlphaValidationError(
-        [
-            issue(
-                "SYNTAX_NOT_ALLOWED",
-                getattr(node, "col_offset", 0),
-                f"{type(node).__name__} is not allowed",
-            )
-        ]
+    return validate_normalized_alpha(
+        expression,
+        field_bindings=field_bindings,
     )
 
 

@@ -1,4 +1,4 @@
-# ThesisTrace V1 operator runbook
+# Archived ThesisTrace V1 operator runbook
 
 > **Archived — outside the active Core.** This runbook preserves the retired V1
 > operating model only; it is not a startup, backup, or release procedure for

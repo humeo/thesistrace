@@ -1,8 +1,6 @@
 # ThesisTrace Core Architecture
 
-> Status: accepted target architecture on 2026-08-03. The current source tree
-> does not yet implement this shape; migration is tracked under
-> `.scratch/thesistrace-core-closure/`.
+> Status: implemented Core architecture, accepted on 2026-08-05.
 
 ## Objective
 
@@ -63,9 +61,9 @@ They have no product URL or Web page.
 ```text
 src/thesistrace/
 ├── data/
-├── definitions/
-├── research_runs/
-├── daily_tracks/
+├── definition/
+├── research_run/
+├── daily_track/
 ├── research_kernel/
 ├── publication/
 ├── entrypoints/
@@ -613,10 +611,10 @@ active code is removed. A later hosted phase starts from this accepted Core and
 selectively adds deployment and identity adapters; it does not restore the old
 dependency graph wholesale.
 
-## Migration sequence
+## Completed migration
 
-Migration preserves validated quantitative behavior but replaces lifecycle and
-persistence implementation:
+The Core closure preserved validated quantitative behavior while replacing the
+old lifecycle and persistence implementation:
 
 1. Lock Alpha, Factor, Strategy, and numeric behavior with characterization
    tests and extract the pure Research Kernel.

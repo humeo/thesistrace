@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "THESISTRACE_API_PORT=8100 concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api --port 8100\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "dev": "THESISTRACE_API_PORT=8100 concurrently -k -n api,worker,web \"uv run --project .. thesistrace-api --port 8100\" \"uv run --project .. thesistrace-worker\" \"vite --host 127.0.0.1\"",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "test:shell": "bun test src/shell/AppShell.test.tsx",

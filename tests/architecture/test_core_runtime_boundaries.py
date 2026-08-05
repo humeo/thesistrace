@@ -243,9 +243,9 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
             assert token not in source, f"{token} remains in {path.relative_to(ROOT)}"
 
     for path in (
-        ROOT / "docs" / "runbook" / "hosted-compose.md",
-        ROOT / "docs" / "runbook" / "hosted-health.md",
-        ROOT / "docs" / "runbook" / "v1-operations.md",
+        ROOT / "docs" / "archive" / "hosted-compose.md",
+        ROOT / "docs" / "archive" / "hosted-health.md",
+        ROOT / "docs" / "archive" / "v1-operations.md",
     ):
         source = path.read_text()
         assert "Archived" in source
@@ -278,22 +278,20 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         assert "scope: archived - outside the active Core" in path.read_text()
 
 
-def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
-    facade_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
+def test_alpha_tree_has_only_normalized_input_and_no_dynamic_execution() -> None:
     alpha_source = (ROOT / "src" / "thesistrace" / "research_kernel" / "alpha.py").read_text()
     normalized_source = (
         ROOT / "src" / "thesistrace" / "research_kernel" / "alpha_expression.py"
     ).read_text()
-    assert alpha_source.count("ast.parse(") == 1
-    assert "def validate_legacy_alpha(" in alpha_source
-    assert "ast.parse(" not in facade_source
+    assert "ast.parse(" not in alpha_source
+    assert "isinstance(expression, str)" not in alpha_source
+    assert "type AlphaExpression = str" not in normalized_source
     for forbidden in ("eval(", "exec(", "importlib", "sql"):
         assert forbidden not in normalized_source.lower()
 
 
 def test_data_owns_the_single_authorable_field_binding_catalog() -> None:
     data_fields = (ROOT / "src" / "thesistrace" / "data" / "fields.py").read_text()
-    alpha_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
     fixture_source = (ROOT / "src" / "thesistrace" / "fixture.py").read_text()
 
     for field_id in (
@@ -305,7 +303,6 @@ def test_data_owns_the_single_authorable_field_binding_catalog() -> None:
         "market.turnover.cny",
     ):
         assert data_fields.count(field_id) == 1
-        assert field_id not in alpha_source
         assert field_id not in fixture_source
 
 
@@ -476,7 +473,6 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     source = "\n".join(path.read_text() for path in package.rglob("*.py"))
     exported = (package / "__init__.py").read_text()
     runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
-    legacy_ports = (ROOT / "src" / "thesistrace" / "ports.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
 
     assert "thesistrace." + "working_cache" not in source
@@ -485,7 +481,7 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     assert "working_cache_root" not in CoreSettings.__dataclass_fields__
     assert "TemporaryDirectory" in runtime_source
     assert "working_cache_root=Path(working_cache.name)" in runtime_source
-    assert "lock_daily_track" not in legacy_ports
+    assert not (ROOT / "src" / "thesistrace" / "ports.py").exists()
     assert "/api/working-cache" not in http_source
 
 
@@ -576,6 +572,18 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
         "bounded_research.py",
         "result_objects.py",
         "resource_deletion.py",
+        "config.py",
+        "runtime.py",
+        "storage.py",
+        "worker.py",
+        "objects.py",
+        "ports.py",
+        "management.py",
+        "activity_contract.py",
+        "alpha.py",
+        "factor.py",
+        "strategy.py",
+        "numeric.py",
     ):
         assert not (package / removed).exists()
 

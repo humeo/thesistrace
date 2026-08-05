@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-type AlphaExpression = str | Mapping[str, object]
+type AlphaExpression = Mapping[str, object]
 type OperandRule = Literal["numeric", "window"]
 
 

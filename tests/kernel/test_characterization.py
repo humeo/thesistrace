@@ -1,8 +1,8 @@
 from decimal import Decimal
 
-from thesistrace.factor import factor_day
-from thesistrace.numeric import canonical_binary64_bytes, canonical_decimal
-from thesistrace.strategy import equal_weight_benchmark_return
+from thesistrace.research_kernel.factor import factor_day
+from thesistrace.research_kernel.numeric import canonical_binary64_bytes, canonical_decimal
+from thesistrace.research_kernel.strategy import equal_weight_benchmark_return
 
 EXPECTED_CHECKSUMS = {
     "alpha": "c002b936f6e730c3a3e4a98161a4ec1f805beb9d509f96d053cf131c5927be6f",

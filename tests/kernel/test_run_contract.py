@@ -68,7 +68,7 @@ def test_kernel_run_input_snapshots_values_and_has_no_product_context(
         assert not isinstance(getattr(run_input, field_name), (dict, list, set))
 
     expression = run_input.alpha_expression_snapshot()
-    assert isinstance(expression, str)
+    assert isinstance(expression, dict)
 
 
 def test_kernel_run_input_does_not_expose_mutable_expression_state(

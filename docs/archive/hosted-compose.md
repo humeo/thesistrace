@@ -1,4 +1,4 @@
-# Archived Hosted Compose operations
+# Archived Hosted Compose operations (historical)
 
 > **Archived — outside the active Core.** This runbook is retained only as
 > historical deployment context.
