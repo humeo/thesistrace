@@ -478,8 +478,8 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
 
-    assert "thesistrace.working_cache" not in source
-    assert "WorkingCachePort" not in source
+    assert "thesistrace." + "working_cache" not in source
+    assert "WorkingCache" + "Port" not in source
     assert "_DailyTrackWorkingCache" not in exported
     assert "working_cache_root" not in CoreSettings.__dataclass_fields__
     assert "TemporaryDirectory" in runtime_source
@@ -609,5 +609,10 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
     assert "initial_state(" not in advance_source
     assert "affected_label_sessions(" in advance_source
     assert "- horizon - 1" not in advance_source
-    for forbidden in ("mode:", "mode =", "thesistrace.tracking", "thesistrace.research_runs"):
+    for forbidden in (
+        "mode:",
+        "mode =",
+        "thesistrace." + "tracking",
+        "thesistrace.research_runs",
+    ):
         assert forbidden not in advance_source

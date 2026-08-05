@@ -7,17 +7,14 @@ from thesistrace.ports import (
     ExecutionDispatchPort,
     LocalWorkerDispatch,
     ObjectStorePort,
-    WorkingCachePort,
 )
 from thesistrace.storage import MetadataStore
-from thesistrace.working_cache import WorkingCacheStore
 
 
 @dataclass(frozen=True)
 class RuntimePorts:
     control_metadata: ControlMetadataPort
     objects: ObjectStorePort
-    working_cache: WorkingCachePort
     execution_dispatch: ExecutionDispatchPort
 
 
@@ -27,8 +24,5 @@ def build_runtime(settings: Settings) -> RuntimePorts:
     return RuntimePorts(
         control_metadata=metadata,
         objects=ImmutableObjectStore(settings.object_root),
-        working_cache=WorkingCacheStore(
-            settings.working_cache_root or settings.metadata_path.parent / "working-cache"
-        ),
         execution_dispatch=LocalWorkerDispatch(),
     )

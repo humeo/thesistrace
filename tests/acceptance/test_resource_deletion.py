@@ -14,18 +14,16 @@ from thesistrace.resource_deletion import (
     ResourceDeletionService,
 )
 from thesistrace.storage import MetadataStore
-from thesistrace.working_cache import WorkingCacheStore
 
 
 def seeded_run(
     tmp_path: Path,
     *,
     status: str = "succeeded",
-) -> tuple[MetadataStore, ImmutableObjectStore, WorkingCacheStore, str]:
+) -> tuple[MetadataStore, ImmutableObjectStore, str]:
     store = MetadataStore(tmp_path / "metadata.sqlite3")
     store.initialize()
     objects = ImmutableObjectStore(tmp_path / "objects")
-    cache = WorkingCacheStore(tmp_path / "working-cache")
     run_id = "run_delete"
     manifest = {
         "id": "result_delete",
@@ -51,14 +49,14 @@ def seeded_run(
             resource_id=run_id,
             objects=publication_storage_objects(manifest),
         )
-    return store, objects, cache, run_id
+    return store, objects, run_id
 
 
 def test_terminal_research_run_is_unreadable_before_cleanup_completes(
     tmp_path: Path,
 ) -> None:
-    store, objects, cache, run_id = seeded_run(tmp_path)
-    service = ResourceDeletionService(store, objects, cache)
+    store, objects, run_id = seeded_run(tmp_path)
+    service = ResourceDeletionService(store, objects)
 
     tombstone = service.delete_research_run(run_id, actor="subject-1")
 
@@ -74,11 +72,11 @@ def test_terminal_research_run_is_unreadable_before_cleanup_completes(
 def test_nonterminal_or_retained_research_run_cannot_be_deleted(
     tmp_path: Path,
 ) -> None:
-    store, objects, cache, run_id = seeded_run(
+    store, objects, run_id = seeded_run(
         tmp_path,
         status="running",
     )
-    service = ResourceDeletionService(store, objects, cache)
+    service = ResourceDeletionService(store, objects)
 
     with pytest.raises(ResourceDeletionError) as nonterminal:
         service.delete_research_run(run_id, actor="subject-1")
@@ -106,77 +104,8 @@ def test_nonterminal_or_retained_research_run_cannot_be_deleted(
     assert store.research_run(run_id) is not None
 
 
-def test_stopped_daily_track_deletes_cache_and_complete_history(
-    tmp_path: Path,
-) -> None:
-    store, objects, cache, run_id = seeded_run(tmp_path)
-    track_id = "track_delete"
-    checkpoint_id = "checkpoint_delete"
-    checkpoint_manifest = {
-        "id": checkpoint_id,
-        "payload": objects.put_json({"checkpoint": 1}),
-    }
-    objects.put_manifest(checkpoint_id, checkpoint_manifest)
-    with store.connect() as connection:
-        connection.execute(
-            """
-            INSERT INTO daily_tracks (
-                id, seed_run_id, status, current_generation_id,
-                head_checkpoint_id, created_at, stopped_at, fencing_token
-            ) VALUES (?, ?, 'stopped', 'generation_delete', ?,
-                      '2026-07-31T00:00:00+00:00',
-                      '2026-07-31T00:01:00+00:00', 3)
-            """,
-            (track_id, run_id, checkpoint_id),
-        )
-        connection.execute(
-            """
-            INSERT INTO tracking_generations (
-                id, daily_track_id, ordinal, calculation_kernel,
-                numeric_execution_contract, basis_dataset_release_id,
-                reason, created_at
-            ) VALUES ('generation_delete', ?, 1, 'kernel-v1',
-                      'contract-v1', 'release-delete', 'activation',
-                      '2026-07-31T00:00:00+00:00')
-            """,
-            (track_id,),
-        )
-        connection.execute(
-            """
-            INSERT INTO tracking_checkpoints (
-                id, daily_track_id, generation_id,
-                target_dataset_release_id, manifest_sha256, created_at
-            ) VALUES (?, ?, 'generation_delete', 'release-delete', ?,
-                      '2026-07-31T00:00:00+00:00')
-            """,
-            (checkpoint_id, track_id, "b" * 64),
-        )
-        store.commit_private_storage_references(
-            connection,
-            resource_kind="tracking_checkpoint",
-            resource_id=checkpoint_id,
-            objects=publication_storage_objects(checkpoint_manifest),
-        )
-    cache_path = cache.root / "tracks" / track_id
-    cache_path.mkdir(parents=True)
-    (cache_path / "basis.json").write_text('{"fencing_token":3}')
-    service = ResourceDeletionService(store, objects, cache)
-
-    tombstone = service.delete_daily_track(track_id, actor="subject-1")
-
-    assert tombstone["resource_kind"] == "daily_track"
-    with store.connect() as connection:
-        assert connection.execute(
-            "SELECT 1 FROM daily_tracks WHERE id = ?",
-            (track_id,),
-        ).fetchone() is None
-    assert not cache_path.exists()
-    assert store.pending_resource_cleanups() == []
-    assert not (objects.root / "manifests" / f"{checkpoint_id}.json").exists()
-
-
 def test_cleanup_failure_is_durable_and_retryable(tmp_path: Path) -> None:
-    store, objects, cache, run_id = seeded_run(tmp_path)
+    store, objects, run_id = seeded_run(tmp_path)
     original_delete = objects.delete_storage_object
     failures = [True]
 
@@ -186,7 +115,7 @@ def test_cleanup_failure_is_durable_and_retryable(tmp_path: Path) -> None:
         return original_delete(object_key)
 
     objects.delete_storage_object = fail_once  # type: ignore[method-assign]
-    service = ResourceDeletionService(store, objects, cache)
+    service = ResourceDeletionService(store, objects)
 
     service.delete_research_run(run_id, actor="subject-1")
 
@@ -204,7 +133,7 @@ def test_cleanup_failure_is_durable_and_retryable(tmp_path: Path) -> None:
 def test_shared_content_remains_until_last_live_reference_is_deleted(
     tmp_path: Path,
 ) -> None:
-    store, objects, cache, first_run_id = seeded_run(tmp_path)
+    store, objects, first_run_id = seeded_run(tmp_path)
     shared = objects.put_json({"shared": True})
     first_manifest = {
         "id": "result_shared_first",
@@ -242,7 +171,7 @@ def test_shared_content_remains_until_last_live_reference_is_deleted(
             resource_id="run_shared_second",
             objects=publication_storage_objects(second_manifest),
         )
-    service = ResourceDeletionService(store, objects, cache)
+    service = ResourceDeletionService(store, objects)
 
     service.delete_research_run(first_run_id, actor="subject-1")
     assert objects.read_json(str(shared["sha256"])) == {"shared": True}
@@ -258,7 +187,6 @@ def test_dataset_publication_indexes_shared_content_before_run_cleanup(
     store = MetadataStore(tmp_path / "metadata.sqlite3")
     store.initialize()
     objects = ImmutableObjectStore(tmp_path / "objects")
-    cache = WorkingCacheStore(tmp_path / "working-cache")
     release, created = DatasetPublisher(store, objects).bootstrap(
         "bootstrap-shared",
         "v1",
@@ -291,7 +219,7 @@ def test_dataset_publication_indexes_shared_content_before_run_cleanup(
             objects=publication_storage_objects(run_manifest),
         )
 
-    ResourceDeletionService(store, objects, cache).delete_research_run(
+    ResourceDeletionService(store, objects).delete_research_run(
         "run_dataset_shared",
         actor="subject-1",
     )
@@ -306,7 +234,6 @@ def test_preindex_resource_is_not_deleted_until_storage_reconciliation(
     store = MetadataStore(tmp_path / "metadata.sqlite3")
     store.initialize()
     objects = ImmutableObjectStore(tmp_path / "objects")
-    cache = WorkingCacheStore(tmp_path / "working-cache")
     payload = objects.put_json({"legacy": True})
     manifest = {"id": "result_legacy", "payload": payload}
     objects.put_manifest("result_legacy", manifest)
@@ -324,7 +251,7 @@ def test_preindex_resource_is_not_deleted_until_storage_reconciliation(
             """,
             ("d" * 64,),
         )
-    service = ResourceDeletionService(store, objects, cache)
+    service = ResourceDeletionService(store, objects)
 
     with pytest.raises(ResourceDeletionError) as unindexed:
         service.delete_research_run("run_legacy", actor="subject-1")
@@ -338,7 +265,7 @@ def test_preindex_resource_is_not_deleted_until_storage_reconciliation(
 def test_publication_waits_for_cleanup_before_reusing_deleted_digest(
     tmp_path: Path,
 ) -> None:
-    store, objects, cache, run_id = seeded_run(tmp_path)
+    store, objects, run_id = seeded_run(tmp_path)
     shared_payload = objects.put_json({"value": 1})
     with store.connect() as connection:
         connection.execute(
@@ -368,7 +295,7 @@ def test_publication_waits_for_cleanup_before_reusing_deleted_digest(
         return original_delete(object_key)
 
     objects.delete_storage_object = blocked_delete  # type: ignore[method-assign]
-    service = ResourceDeletionService(store, objects, cache)
+    service = ResourceDeletionService(store, objects)
 
     def cleanup() -> None:
         try:
@@ -393,9 +320,7 @@ def test_publication_waits_for_cleanup_before_reusing_deleted_digest(
                         connection,
                         resource_kind="research_run",
                         resource_id="run_publication_race",
-                        objects=publication_storage_objects(
-                            republished_manifest
-                        ),
+                        objects=publication_storage_objects(republished_manifest),
                     )
             publication_completed.set()
         except BaseException as error:
@@ -422,7 +347,7 @@ def test_publication_waits_for_cleanup_before_reusing_deleted_digest(
 def test_concurrent_tombstone_cleanups_do_not_orphan_shared_content(
     tmp_path: Path,
 ) -> None:
-    store, objects, cache, first_run_id = seeded_run(tmp_path)
+    store, objects, first_run_id = seeded_run(tmp_path)
     shared = objects.put_json({"shared-race": True})
     first_manifest = {"id": "result_race_first", "payload": shared}
     second_manifest = {"id": "result_race_second", "payload": shared}
@@ -468,7 +393,7 @@ def test_concurrent_tombstone_cleanups_do_not_orphan_shared_content(
             deleted_at="2026-07-31T01:00:01+00:00",
         )
     assert first is not None and second is not None
-    service = ResourceDeletionService(store, objects, cache)
+    service = ResourceDeletionService(store, objects)
     start = Event()
     errors: list[BaseException] = []
 
@@ -495,9 +420,7 @@ def test_concurrent_tombstone_cleanups_do_not_orphan_shared_content(
     with pytest.raises(FileNotFoundError):
         objects.read_json(str(shared["sha256"]))
     with store.connect() as connection:
-        assert connection.execute(
-            "SELECT count(*) FROM storage_references"
-        ).fetchone()[0] == 0
+        assert connection.execute("SELECT count(*) FROM storage_references").fetchone()[0] == 0
 
 
 def test_delete_api_distinguishes_conflict_and_immediate_absence(
@@ -507,16 +430,14 @@ def test_delete_api_distinguishes_conflict_and_immediate_absence(
         metadata_path=tmp_path / "metadata.sqlite3",
         object_root=tmp_path / "objects",
     )
-    store, _objects, _cache, run_id = seeded_run(
+    store, _objects, run_id = seeded_run(
         tmp_path,
         status="running",
     )
     with TestClient(create_app(settings)) as client:
         conflict = client.delete(f"/api/v1/research-runs/{run_id}")
         assert conflict.status_code == 409
-        assert conflict.json()["detail"]["reason_code"] == (
-            "RESOURCE_NOT_TERMINAL"
-        )
+        assert conflict.json()["detail"]["reason_code"] == ("RESOURCE_NOT_TERMINAL")
 
         with store.connect() as connection:
             connection.execute(

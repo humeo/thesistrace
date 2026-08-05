@@ -2,7 +2,6 @@ import copy
 
 from fixture_sessions import extend_fixture_sessions
 
-import thesistrace.tracking as tracking
 from thesistrace.research_kernel import AdvanceInput, KernelState, RunInput, advance, run
 from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
@@ -87,11 +86,6 @@ def test_equivalence_evidence_reports_the_first_divergent_boundary(
     assert first_divergence(expected, mismatched) == (
         f"$.output.strategy_backtest.daily[{divergent_index}].benchmark_nav"
     )
-
-
-def test_tracking_uses_the_kernel_owned_equivalence_implementation() -> None:
-    assert tracking.equivalence_bytes is equivalence_bytes
-    assert tracking.first_divergence is first_divergence
 
 
 def _state_evidence(state: KernelState) -> dict[str, object]:

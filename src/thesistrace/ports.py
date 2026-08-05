@@ -19,40 +19,6 @@ class ControlMetadataPort(Protocol):
 
     def lock_daily_track(self, connection, track_id: str) -> None: ...
 
-    def daily_track_head_manifest_sha256(
-        self,
-        track_id: str,
-    ) -> str | None: ...
-
-    def daily_track_activation_reservation_ids(self) -> list[str]: ...
-
-    def delete_daily_track_activation_reservation(
-        self,
-        track_id: str,
-    ) -> bool: ...
-
-    def daily_track_cache_states(
-        self,
-        track_ids: list[str],
-    ) -> dict[str, tuple[str, int]]: ...
-
-    def pending_working_cache_deletions(
-        self,
-        track_id: str | None = None,
-    ) -> list[dict[str, object]]: ...
-
-    def fail_working_cache_deletion(
-        self,
-        track_id: str,
-        error: str,
-    ) -> None: ...
-
-    def complete_working_cache_deletion(
-        self,
-        track_id: str,
-        completed_at: str,
-    ) -> None: ...
-
     def storage_mutation_fence(
         self,
     ) -> AbstractContextManager[None]: ...
@@ -80,48 +46,6 @@ class ControlMetadataPort(Protocol):
         self,
         tombstone_id: str,
         error: str,
-    ) -> None: ...
-
-    def active_daily_track_refs(
-        self,
-        *,
-        after_workspace_id: str | None = None,
-        after_track_id: str | None = None,
-        through_workspace_id: str | None = None,
-        through_track_id: str | None = None,
-        limit: int = 101,
-    ) -> list[dict[str, str]]: ...
-
-    def active_daily_track_scan_bound(
-        self,
-    ) -> dict[str, str] | None: ...
-
-    def next_dataset_release_on_path(
-        self,
-        ancestor_id: str,
-        descendant_id: str,
-    ) -> dict[str, object] | None: ...
-
-    def enqueue_tracking_advance_execution(
-        self,
-        connection,
-        *,
-        track_id: str,
-        advance_id: str,
-        created_at: str,
-    ) -> None: ...
-
-    def bind_tracking_generation_rebuild(
-        self,
-        connection,
-        *,
-        rebuild_id: str,
-        track_id: str,
-        basis_generation_id: str,
-        basis_head_checkpoint_id: str,
-        generation_id: str,
-        advance_id: str,
-        updated_at: str,
     ) -> None: ...
 
     def commit_private_storage_references(
@@ -215,26 +139,6 @@ class ObjectStorePort(ObjectWriterPort, Protocol):
         digest: str,
         contract: ParquetWriterContract,
     ) -> pa.Table: ...
-
-
-class WorkingCachePort(Protocol):
-    def list_track_ids(self) -> list[str]: ...
-
-    def delete(self, track_id: str) -> None: ...
-
-    def delete_if_not_newer(
-        self,
-        track_id: str,
-        fencing_token: int,
-    ) -> None: ...
-
-    def advance_fence(
-        self,
-        track_id: str,
-        fencing_token: int,
-        *,
-        stopped: bool,
-    ) -> dict[str, object]: ...
 
 
 class ExecutionDispatchPort(Protocol):

@@ -22,12 +22,6 @@ from thesistrace.resource_deletion import (
 )
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
-from thesistrace.tracking import (
-    DailyTrackingError,
-    DailyTrackingService,
-    EquivalenceError,
-)
-from thesistrace.tracking_operations import TrackingOperationService
 from thesistrace.tushare_source import (
     HttpTushareTransport,
     TushareAdapter,
@@ -56,11 +50,6 @@ class PriceCorrection(BaseModel):
 class FixtureIncrementRequest(BaseModel):
     new_sessions: int
     corrections: list[PriceCorrection]
-
-
-class KernelUpgradeRequest(BaseModel):
-    calculation_kernel: str
-    numeric_execution_contract: str
 
 
 def error_detail(reason_code: str, message: str) -> dict[str, str]:
@@ -101,19 +90,9 @@ def create_app(
     publisher = DatasetPublisher(store, objects)
     definitions = ResearchDefinitionService(store, publisher)
     research_runs = ResearchRunService(store, publisher, objects)
-    tracking = DailyTrackingService(
-        store,
-        publisher,
-        objects,
-        runtime.working_cache,
-    )
-    tracking_operations = TrackingOperationService(store, tracking)
-    tracking.reconcile_activation_staging()
-    tracking.reconcile_cache_deletions()
     resource_deletion = ResourceDeletionService(
         store,
         objects,
-        runtime.working_cache,
     )
     resource_deletion.reconcile_pending()
     source_transport = tushare_transport or HttpTushareTransport()
@@ -353,258 +332,6 @@ def create_app(
             content=run,
         )
 
-    @app.post("/api/v1/research-runs/{run_id}/daily-tracks")
-    def activate_daily_track(
-        run_id: str,
-        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
-    ) -> JSONResponse:
-        if store.research_run(run_id) is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
-            )
-        try:
-            track, created = tracking.activate(run_id, idempotency_key)
-        except DailyTrackingError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
-            ) from error
-        if created:
-            runtime.execution_dispatch.dispatch("daily_track", str(track["id"]))
-        view = tracking.bounded_track_view(str(track["id"]))
-        if view is None:
-            raise RuntimeError("activated DailyTrack disappeared")
-        return JSONResponse(
-            status_code=201 if created else 200,
-            content=view,
-        )
-
-    @app.get("/api/v1/daily-tracks")
-    def list_daily_tracks(
-        offset: int = Query(0, ge=0),
-        limit: int = Query(10, ge=1, le=10),
-    ) -> dict[str, object]:
-        return tracking.list_track_views(offset=offset, limit=limit)
-
-    @app.get("/api/v1/daily-tracks/{track_id}")
-    def get_daily_track(track_id: str) -> dict[str, object]:
-        track = tracking.bounded_track_view(track_id)
-        if track is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
-            )
-        return track
-
-    def require_track_child(
-        child: dict[str, object] | None,
-        reason_code: str,
-        label: str,
-    ) -> dict[str, object]:
-        if child is not None:
-            return child
-        raise HTTPException(
-            status_code=404,
-            detail=error_detail(reason_code, f"{label} not found"),
-        )
-
-    @app.get("/api/v1/daily-tracks/{track_id}/generations/{generation_id}")
-    def get_daily_track_generation(track_id: str, generation_id: str) -> dict[str, object]:
-        return require_track_child(
-            tracking.tracking_generation(track_id, generation_id),
-            "TRACKING_GENERATION_NOT_FOUND",
-            "Tracking Generation",
-        )
-
-    @app.get("/api/v1/daily-tracks/{track_id}/advances/{advance_id}")
-    def get_daily_track_advance(track_id: str, advance_id: str) -> dict[str, object]:
-        return require_track_child(
-            tracking.tracking_advance(track_id, advance_id),
-            "TRACKING_ADVANCE_NOT_FOUND",
-            "Tracking Advance",
-        )
-
-    @app.get("/api/v1/daily-tracks/{track_id}/checkpoints/{checkpoint_id}")
-    def get_daily_track_checkpoint(
-        track_id: str,
-        checkpoint_id: str,
-        limit: int = Query(252, ge=1, le=252),
-    ) -> dict[str, object]:
-        try:
-            return tracking.checkpoint_product_view(
-                track_id,
-                checkpoint_id,
-                limit=limit,
-            )
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "TRACKING_CHECKPOINT_NOT_FOUND",
-                    "Tracking Checkpoint not found",
-                ),
-            ) from error
-        except DailyTrackingError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
-            ) from error
-
-    @app.get("/api/v1/daily-tracks/{track_id}/current")
-    def get_daily_track_current_view(
-        track_id: str,
-        limit: int = Query(252, ge=1, le=252),
-    ) -> dict[str, object]:
-        try:
-            return tracking.current_view(track_id, limit=limit)
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
-            ) from error
-        except DailyTrackingError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
-            ) from error
-
-    @app.post("/api/v1/daily-tracks/{track_id}/stop")
-    def stop_daily_track(track_id: str) -> dict[str, object]:
-        track = tracking.stop(track_id)
-        if track is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
-            )
-        view = tracking.bounded_track_view(track_id)
-        if view is None:
-            raise RuntimeError("stopped DailyTrack disappeared")
-        return view
-
-    @app.delete("/api/v1/daily-tracks/{track_id}")
-    def delete_daily_track(track_id: str) -> JSONResponse:
-        try:
-            tombstone = resource_deletion.delete_daily_track(
-                track_id,
-                actor="local-user",
-            )
-        except ResourceDeletionError as error:
-            raise HTTPException(
-                status_code=(404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409),
-                detail=error_detail(error.reason_code, str(error)),
-            ) from error
-        return deletion_response(tombstone)
-
-    @app.post("/api/v1/daily-tracks/{track_id}/kernel-upgrade")
-    def upgrade_daily_track_kernel(
-        track_id: str,
-        request: KernelUpgradeRequest,
-    ) -> dict[str, object]:
-        try:
-            track = tracking.upgrade_kernel(
-                track_id,
-                calculation_kernel=request.calculation_kernel,
-                numeric_execution_contract=request.numeric_execution_contract,
-            )
-            view = tracking.bounded_track_view(str(track["id"]))
-            if view is None:
-                raise KeyError(track_id)
-            return view
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
-            ) from error
-        except DailyTrackingError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
-            ) from error
-
-    @app.post("/api/v1/daily-tracks/{track_id}/verify-equivalence")
-    def verify_daily_track(track_id: str) -> dict[str, object]:
-        try:
-            return tracking.verify_equivalence(track_id)
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("DAILY_TRACK_NOT_FOUND", "DailyTrack not found"),
-            ) from error
-        except EquivalenceError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail("EQUIVALENCE_MISMATCH", str(error)),
-            ) from error
-        except DailyTrackingError as error:
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail("DAILY_TRACK_CONFLICT", str(error)),
-            ) from error
-
-    @app.post(
-        "/api/v1/daily-tracks/{track_id}/equivalence-requests",
-    )
-    def request_daily_track_equivalence(
-        track_id: str,
-        idempotency_key: str = Header(
-            min_length=1,
-            alias="Idempotency-Key",
-        ),
-    ) -> JSONResponse:
-        try:
-            request, created = tracking_operations.request_equivalence(
-                track_id,
-                idempotency_key,
-            )
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "DAILY_TRACK_NOT_FOUND",
-                    "DailyTrack not found",
-                ),
-            ) from error
-        return JSONResponse(
-            status_code=202 if created else 200,
-            content=request,
-        )
-
-    @app.get("/api/v1/daily-tracks/{track_id}/equivalence-requests/{request_id}")
-    def get_daily_track_equivalence(
-        track_id: str,
-        request_id: str,
-    ) -> dict[str, object]:
-        request = tracking_operations.equivalence_request(request_id)
-        if request is None or request["daily_track_id"] != track_id:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "EQUIVALENCE_REQUEST_NOT_FOUND",
-                    "Equivalence request not found",
-                ),
-            )
-        return request
-
-    @app.post("/api/v1/daily-tracks/{track_id}/equivalence-requests/{request_id}/cancel")
-    def cancel_daily_track_equivalence(
-        track_id: str,
-        request_id: str,
-    ) -> dict[str, object]:
-        request = tracking_operations.equivalence_request(request_id)
-        if request is None or request["daily_track_id"] != track_id:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "EQUIVALENCE_REQUEST_NOT_FOUND",
-                    "Equivalence request not found",
-                ),
-            )
-        return tracking_operations.cancel_equivalence(
-            request_id,
-            enqueue_workflow_cancellation=False,
-        )
-
     @app.get("/api/v1/health")
     def get_health() -> dict[str, object]:
         heartbeat = store.last_worker_heartbeat()
@@ -757,23 +484,9 @@ def create_app(
                 status_code=422,
                 detail=error_detail("DATASET_VALIDATION_FAILED", str(error)),
             ) from error
-        try:
-            enqueue_failures = tracking.enqueue_active_tracks(str(release["id"]))
-        except Exception:
-            enqueue_failures = [
-                {
-                    "track_id": "*",
-                    "reason_code": "TRACK_ENQUEUE_FAILED",
-                    "message": "tracking reconciliation will retry",
-                }
-            ]
         return JSONResponse(
             status_code=201 if created else 200,
-            content={
-                "status": "succeeded",
-                "release": release,
-                "tracking_enqueue_failures": enqueue_failures,
-            },
+            content={"status": "succeeded", "release": release},
         )
 
     @app.post("/api/v1/dataset-releases/publish-live")
@@ -783,23 +496,9 @@ def create_app(
     ) -> JSONResponse:
         existing = store.dataset_release_for_idempotency_key(idempotency_key)
         if existing is not None:
-            try:
-                enqueue_failures = tracking.enqueue_active_tracks(str(existing["id"]))
-            except Exception:
-                enqueue_failures = [
-                    {
-                        "track_id": "*",
-                        "reason_code": "TRACK_ENQUEUE_FAILED",
-                        "message": "tracking reconciliation will retry",
-                    }
-                ]
             return JSONResponse(
                 status_code=200,
-                content={
-                    "status": "succeeded",
-                    "release": existing,
-                    "tracking_enqueue_failures": enqueue_failures,
-                },
+                content={"status": "succeeded", "release": existing},
             )
         if not settings.tushare_token:
             raise HTTPException(
@@ -859,23 +558,9 @@ def create_app(
                 status_code=422,
                 detail=error_detail("DATASET_VALIDATION_FAILED", str(error)),
             ) from error
-        try:
-            enqueue_failures = tracking.enqueue_active_tracks(str(release["id"]))
-        except Exception:
-            enqueue_failures = [
-                {
-                    "track_id": "*",
-                    "reason_code": "TRACK_ENQUEUE_FAILED",
-                    "message": "tracking reconciliation will retry",
-                }
-            ]
         return JSONResponse(
             status_code=201 if created else 200,
-            content={
-                "status": "succeeded",
-                "release": release,
-                "tracking_enqueue_failures": enqueue_failures,
-            },
+            content={"status": "succeeded", "release": release},
         )
 
     @app.get("/api/v1/dataset-releases")

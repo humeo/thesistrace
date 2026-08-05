@@ -1,6 +1,5 @@
 from pathlib import Path
 
-import pytest
 from fastapi.testclient import TestClient
 
 from thesistrace.api import create_app
@@ -10,7 +9,6 @@ from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import MetadataStore
-from thesistrace.tracking import DailyTrackingService
 
 
 class RecordingDispatch:
@@ -25,14 +23,12 @@ def test_local_runtime_ports_preserve_the_v1_application(tmp_path: Path) -> None
     settings = Settings(
         metadata_path=tmp_path / "metadata.sqlite3",
         object_root=tmp_path / "objects",
-        working_cache_root=tmp_path / "working-cache",
     )
     runtime = build_runtime(settings)
     dispatch = RecordingDispatch()
     runtime = RuntimePorts(
         control_metadata=runtime.control_metadata,
         objects=runtime.objects,
-        working_cache=runtime.working_cache,
         execution_dispatch=dispatch,
     )
 
@@ -75,25 +71,9 @@ def test_local_runtime_ports_preserve_the_v1_application(tmp_path: Path) -> None
         assert dispatch.events == [("research_run", requested["run"]["id"])]
 
 
-def test_services_accept_explicit_structural_ports(tmp_path: Path) -> None:
+def test_research_run_service_accepts_explicit_structural_ports(tmp_path: Path) -> None:
     metadata = MetadataStore(tmp_path / "metadata.sqlite3")
     metadata.initialize()
     objects = ImmutableObjectStore(tmp_path / "objects")
     datasets = DatasetPublisher(metadata, objects)
-    runtime = build_runtime(
-        Settings(
-            metadata_path=tmp_path / "runtime.sqlite3",
-            object_root=tmp_path / "runtime-objects",
-            working_cache_root=tmp_path / "working-cache",
-        )
-    )
-
     ResearchRunService(metadata, datasets, objects)
-    DailyTrackingService(
-        metadata,
-        datasets,
-        objects,
-        runtime.working_cache,
-    )
-    with pytest.raises(TypeError):
-        DailyTrackingService(metadata, datasets, objects)
