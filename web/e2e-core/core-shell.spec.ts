@@ -1433,10 +1433,45 @@ test("runs valid content and shows its bounded ResearchRun result", async ({ pag
   await expect(page.getByText("Selected universe top1000", { exact: true })).toBeVisible();
   await expect(page.getByRole("img", { name: "Strategy and benchmark NAV" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Provenance" })).toBeVisible();
+  const firstRunId = page.url().split("/").at(-1);
+  const definitionHref = await page
+    .getByRole("link", { name: "Revision 1" })
+    .getAttribute("href");
+  expect(firstRunId).toMatch(/^run_[a-f0-9]+$/);
+  expect(definitionHref).toMatch(/^\/definitions\/def_[a-f0-9]+$/);
   await expect(
     page.getByText(/\b(?:attempt|claim|lease|heartbeat|fence|manifest|object)\b/i),
   ).toHaveCount(0);
   await expect(page.getByText(/download|compare|comparison|continuation/i)).toHaveCount(0);
+
+  await page.goto(definitionHref!);
+  await expect(page.getByText("Revision 1", { exact: true })).toBeVisible();
+  await page.getByLabel("Hypothesis (optional)").fill(
+    "Edited current content creates an independent ResearchRun.",
+  );
+  const editedRunRequest = page.waitForRequest((request) => {
+    const pathname = new URL(request.url()).pathname;
+    return (
+      request.method() === "POST" &&
+      /^\/api\/definitions\/def_[a-f0-9]+\/run$/.test(pathname)
+    );
+  });
+  await page.getByRole("button", { name: "Run" }).click();
+  const editedRequest = await editedRunRequest;
+  expect(editedRequest.postDataJSON()).toMatchObject({
+    expected_revision: 1,
+    hypothesis: "Edited current content creates an independent ResearchRun.",
+  });
+  await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+  const editedRunId = page.url().split("/").at(-1);
+  expect(editedRunId).not.toBe(firstRunId);
+  await expect(page.getByRole("link", { name: "Revision 2" })).toBeVisible();
+  await expect(page.getByText("Status succeeded", { exact: true })).toBeVisible({
+    timeout: 90_000,
+  });
+
+  await page.goto(`/research-runs/${firstRunId}`);
+  await expect(page.getByRole("heading", { name: "Factor Evaluation" })).toBeVisible();
 
   await page.route("**/api/research-runs/*", async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 1_500));

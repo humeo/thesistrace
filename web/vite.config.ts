@@ -10,7 +10,6 @@ export default defineConfig({
   build: {
     rollupOptions: {
       input: {
-        core: fileURLToPath(new URL("./core.html", import.meta.url)),
         product: fileURLToPath(new URL("./index.html", import.meta.url)),
       },
     },
