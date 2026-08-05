@@ -1,5 +1,6 @@
 ---
 status: accepted
+scope: archived - outside the active Core
 ---
 
 # Separate InsForge identity from ThesisTrace Auth Sessions

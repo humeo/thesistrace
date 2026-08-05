@@ -1,5 +1,8 @@
 # Archived Hosted Compose operations
 
+> **Archived — outside the active Core.** This runbook is retained only as
+> historical deployment context.
+
 > **Deferred:** this runbook describes the archived Hosted v2 deployment and
 > is not an active product or verification contract. Hosted Local Acceptance,
 > Launch Qualification, execution orchestration, and their Make targets were

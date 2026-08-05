@@ -163,164 +163,84 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         assert not (ROOT / "web" / removed_path).exists()
 
 
-def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None:
+def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
     removed_paths = (
-        "deploy/hosted/temporal",
-        "deploy/hosted/compose.local.yaml",
-        "scripts/hosted/capacity_qualification.py",
-        "scripts/hosted/local_acceptance.py",
-        "scripts/hosted/local_boundary_acceptance.py",
-        "scripts/hosted/local_frontend_acceptance.py",
-        "scripts/hosted/local_ops_probe.py",
-        "scripts/hosted/local_postgres_acceptance.py",
-        "scripts/hosted/local_recovery_acceptance.py",
-        "scripts/hosted/temporal_dispatch_probe.py",
-        "scripts/hosted/local_workflow_acceptance.py",
-        "scripts/hosted/record_launch_qualification.py",
-        "scripts/hosted/release_acceptance.py",
-        "src/thesistrace/hosted/activity_heartbeat.py",
-        "src/thesistrace/hosted/activity_policy.py",
-        "src/thesistrace/hosted/capacity_probe.py",
-        "src/thesistrace/hosted/capacity_workflow.py",
-        "src/thesistrace/hosted/compute_dispatch.py",
-        "src/thesistrace/hosted/data_worker.py",
-        "src/thesistrace/hosted/dataset_publication_workflow.py",
-        "src/thesistrace/hosted/execution_outbox.py",
-        "src/thesistrace/hosted/execution_relay.py",
-        "src/thesistrace/hosted/research_workflow.py",
-        "src/thesistrace/hosted/temporal_recovery_probe.py",
-        "src/thesistrace/hosted/temporal_worker.py",
-        "src/thesistrace/hosted/tracking_operations_workflow.py",
-        "src/thesistrace/hosted/tracking_workflow.py",
-        "tests/hosted/test_capacity_qualification.py",
-        "tests/hosted/test_compute_dispatch.py",
-        "tests/hosted/test_dataset_publication_workflow.py",
-        "tests/hosted/test_research_workflow.py",
-        "tests/hosted/test_temporal_worker_heartbeat.py",
-        "tests/hosted/test_tracking_operations_workflow.py",
-        "tests/hosted/test_tracking_workflow.py",
-        "tests/hosted/test_local_acceptance.py",
+        "deploy/hosted",
+        "scripts/hosted-stack",
+        "scripts/hosted-auth-smoke.py",
+        "scripts/hosted-release-smoke.py",
+        "scripts/hosted-" + "smoke.py",
+        "scripts/hosted/configure_smtp.py",
+        "scripts/hosted/seed_acceptance_state.py",
+        "src/thesistrace/auth.py",
+        "src/thesistrace/operator.py",
+        "src/thesistrace/provisioning.py",
+        "src/thesistrace/rate_limits.py",
+        "src/thesistrace/tenancy.py",
+        "src/thesistrace/hosted/control.py",
+        "src/thesistrace/hosted/management.py",
+        "src/thesistrace/hosted/migrations.py",
+        "src/thesistrace/hosted/provisioning.py",
+        "src/thesistrace/hosted/runtime.py",
+        "tests/hosted/test_compose_stack.py",
+        "tests/hosted/test_container_boundaries.py",
+        "tests/hosted/test_daily_track_lifecycle.py",
+        "tests/hosted/test_edge_policy.py",
+        "tests/hosted/test_edge_rate_limits.py",
+        "tests/hosted/test_ins" + "forge_auth.py",
+        "tests/hosted/test_registration_provisioning.py",
+        "tests/hosted/test_source_authorization.py",
+        "tests/hosted/test_workspace_isolation.py",
     )
     for removed_path in removed_paths:
         assert not (ROOT / removed_path).exists()
 
-    inventory_files = [
+    archive_ref = "refs/archive/hosted-v2-pre-core-closure"
+    archived_commit = subprocess.run(
+        ["git", "show-ref", "--hash", archive_ref],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert archived_commit == "2884f96ecd1f3aed1e16b00116d54a99c9def89a"
+    for archived_path in (
+        "src/thesistrace/auth.py",
+        "deploy/hosted/compose.yaml",
+    ):
+        subprocess.run(
+            ["git", "cat-file", "-e", f"{archive_ref}:{archived_path}"],
+            cwd=ROOT,
+            check=True,
+        )
+
+    active_files = [
         ROOT / "pyproject.toml",
         ROOT / "uv.lock",
         ROOT / "Makefile",
-        ROOT / "src" / "thesistrace" / "config.py",
-        ROOT / "scripts" / "hosted-stack",
     ]
-    for root in (
-        ROOT / "src" / "thesistrace" / "hosted",
-        ROOT / "scripts",
-        ROOT / "deploy" / "hosted",
-    ):
-        inventory_files.extend(
-            path
-            for path in root.rglob("*")
-            if path.is_file()
-            and ROOT / "deploy" / "hosted" / "migrations" not in path.parents
-            and path.suffix in {".app", ".json", ".py", ".sh", ".toml", ".yaml", ".yml"}
-        )
-    forbidden = (
-        "temporal",
-        "thesistrace-execution-relay",
-        "execution-relay",
-        "execution_outbox",
-        "execution_relay",
-        "compute-worker",
-        "data-worker",
-        "thesistrace-recovery-probe",
-        "recovery-probe",
-        "dispatch-probe",
-        "dispatch_probe",
-        "hosted-local-smoke",
-        "hosted-local-acceptance",
-        "hosted-release-acceptance",
-        "acceptance-record-launch",
-        "local_workflow_acceptance",
-        "thesistrace_relay",
-        "workflow_capacity",
-        "workflow_running",
-        "tracking-generation-rebuild",
-        "object_store_compute_token",
-        "object_store_data_token",
-        "compute_workers",
-    )
-    for path in inventory_files:
-        source = path.read_text().lower()
-        for token in forbidden:
-            assert token not in source, f"{token} remains in {path.relative_to(ROOT)}"
-
-    historical_migrations = [
-        path
-        for path in sorted((ROOT / "deploy" / "hosted" / "migrations").glob("*.sql"))
-        if path.name < "0027_"
-    ]
-    assert historical_migrations
-    for path in historical_migrations:
-        archived = subprocess.run(
-            ["git", "show", f"91780a6:{path.relative_to(ROOT)}"],
-            cwd=ROOT,
-            check=True,
-            capture_output=True,
-        ).stdout
-        assert path.read_bytes() == archived
-    contraction = (
-        ROOT / "deploy" / "hosted" / "migrations" / "0027_remove_hosted_execution.sql"
-    ).read_text()
-    assert "NOLOGIN" in contraction
-    assert "DROP TABLE thesistrace_product.execution_outbox" in contraction
-
-
-def test_hosted_operations_and_observability_are_absent_from_the_active_tree() -> None:
-    removed_paths = (
-        "src/thesistrace/capacity.py",
-        "src/thesistrace/launch.py",
-        "src/thesistrace/qualification.py",
-        "src/thesistrace/quota.py",
-        "src/thesistrace/storage_admission.py",
-        "src/thesistrace/hosted/backup_cli.py",
-        "src/thesistrace/hosted/backup_operations.py",
-        "src/thesistrace/hosted/capacity_corpus.py",
-        "src/thesistrace/hosted/health_service.py",
-        "src/thesistrace/hosted/observability.py",
-        "src/thesistrace/hosted/operator_audit.py",
-        "src/thesistrace/hosted/probes.py",
-        "src/thesistrace/hosted/release_cli.py",
-        "src/thesistrace/hosted/release_gate.py",
-        "src/thesistrace/hosted/release_operations.py",
-        "deploy/hosted/" + "otel" + "-collector.yaml",
-        "deploy/hosted/" + "prom" + "etheus.yaml",
-        "deploy/hosted/" + "gra" + "fana",
-        "deploy/hosted/release.json",
-        "deploy/hosted/systemd/thesistrace-backup.service",
-        "deploy/hosted/systemd/thesistrace-backup.timer",
-    )
-    for removed_path in removed_paths:
-        assert not (ROOT / removed_path).exists()
-
-    active_files = [ROOT / "pyproject.toml", ROOT / "uv.lock", ROOT / "Makefile"]
-    for root in (ROOT / "src", ROOT / "scripts", ROOT / "deploy" / "hosted"):
+    for active_root in (ROOT / "src", ROOT / "scripts", ROOT / "tests", ROOT / "web"):
         active_files.extend(
             path
-            for path in root.rglob("*")
+            for path in active_root.rglob("*")
             if path.is_file()
-            and ROOT / "deploy" / "hosted" / "migrations" not in path.parents
             and "__pycache__" not in path.parts
+            and path.suffix in {".json", ".py", ".sh", ".toml", ".ts", ".tsx", ".yaml", ".yml"}
         )
     retired_tokens = (
-        "health" + "-service",
-        "backup" + "-tool",
-        "restore" + "-tool",
-        "restore" + "-gate",
-        "otel" + "-collector",
-        "open" + "telemetry",
-        "prom" + "etheus",
-        "gra" + "fana",
-        "maintenance" + "-enter",
-        "maintenance" + "-exit",
+        "ins" + "forge",
+        "personal " + "workspace",
+        "thesistrace_auth_" + "mode",
+        "auth_" + "mode",
+        "thesistrace-" + "operator",
+        "hosted-" + "up",
+        "hosted-" + "deploy",
+        "hosted-" + "down",
+        "hosted-" + "restart",
+        "hosted-" + "smoke",
+        "hosted-smtp-" + "configure",
+        "hosted-" + "config",
+        "hosted-" + "operator",
     )
     for path in active_files:
         source = path.read_text(errors="ignore").lower()
@@ -328,49 +248,36 @@ def test_hosted_operations_and_observability_are_absent_from_the_active_tree() -
             assert token not in source, f"{token} remains in {path.relative_to(ROOT)}"
 
     for path in (
+        ROOT / "docs" / "runbook" / "hosted-compose.md",
         ROOT / "docs" / "runbook" / "hosted-health.md",
         ROOT / "docs" / "runbook" / "v1-operations.md",
     ):
-        source = path.read_text().lower()
-        assert "archived" in source
-        assert "outside the active core" in source
+        source = path.read_text()
+        assert "Archived" in source
+        assert "outside the active Core" in source
 
     for path in (
-        ROOT / "docs" / "adr" / "0117-use-one-default-quota-profile-with-workspace-overrides.md",
-        ROOT / "docs" / "adr" / "0119-protect-the-single-node-with-three-disk-pressure-levels.md",
-        ROOT / "docs" / "adr" / "0120-separate-operator-telemetry-from-user-task-status.md",
-        ROOT / "docs" / "adr" / "0130-bound-the-first-compose-node-with-a-resource-envelope.md",
-        ROOT / "docs" / "adr" / "0136-pause-admission-and-drain-activities-during-maintenance.md",
-        ROOT / "docs" / "adr" / "0138-separate-liveness-readiness-and-system-health.md",
-        ROOT / "docs" / "adr" / "0139-defer-alert-delivery-and-inspect-dashboards-daily.md",
-        ROOT / "docs" / "adr" / "0149-separate-local-acceptance-from-launch-qualification.md",
+        ROOT
+        / "docs"
+        / "adr"
+        / ("0110-make-personal-" + "workspace-the-first-hosted-tenant-boundary.md"),
+        ROOT / "docs" / "adr" / "0112-deploy-hosted-platform-v2-on-one-compose-node-first.md",
+        ROOT / "docs" / "adr" / "0128-expose-only-caddy-at-the-public-network-edge.md",
+        ROOT / "docs" / "adr" / "0133-serve-the-production-web-build-directly-from-caddy.md",
+        ROOT / "docs" / "adr" / "0134-run-version-pinned-migrations-before-steady-services.md",
+        ROOT / "docs" / "adr" / "0137-keep-launch-secrets-in-host-mounted-files.md",
+        ROOT / "docs" / "adr" / "0141-enforce-workspace-isolation-in-the-api-and-postgresql-rls.md",
+        ROOT
+        / "docs"
+        / "adr"
+        / "0142-operate-the-first-release-through-one-audited-cli-operator.md",
+        ROOT / "docs" / "adr" / "0143-route-public-http-through-cloudflare-before-caddy.md",
+        ROOT
+        / "docs"
+        / "adr"
+        / ("0150-separate-ins" + "forge-identity-from-thesistrace-auth-sessions.md"),
     ):
         assert "scope: archived - outside the active Core" in path.read_text()
-
-    contraction = (
-        ROOT / "deploy" / "hosted" / "migrations" / "0028_remove_hosted_operations.sql"
-    ).read_text()
-    for retired_object in (
-        "operator_health_snapshot",
-        "platform_maintenance",
-        "capacity_qualifications",
-        "launch_qualifications",
-        "workspace_quota_profiles",
-        "thesistrace_health",
-    ):
-        assert retired_object in contraction
-    assert "DROP ROLE thesistrace_health" in contraction
-    assert "DROP TRIGGER IF EXISTS personal_workspace_default_quota_profile" in contraction
-    assert "DROP TRIGGER IF EXISTS reject_dataset_publication_during_maintenance" in contraction
-
-    admission_contraction = (
-        ROOT / "deploy" / "hosted" / "migrations" / "0029_remove_hosted_admission.sql"
-    ).read_text()
-    assert "DROP TABLE thesistrace_product.user_compute_admissions" in admission_contraction
-    deletion_function = admission_contraction.split(
-        "DROP TABLE thesistrace_product.user_compute_admissions"
-    )[0]
-    assert "user_compute_admissions" not in deletion_function
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:

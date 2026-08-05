@@ -1,4 +1,3 @@
-import copy
 import os
 from datetime import UTC, date, datetime
 
@@ -7,25 +6,12 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
-from starlette.concurrency import run_in_threadpool
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from thesistrace.auth import (
-    AuthenticationFailure,
-    IdentityVerifier,
-    build_identity_verifier,
-)
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
 from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
-from thesistrace.management import SourceAuthorizationService, build_management_store
 from thesistrace.objects import ImmutableObjectStore
-from thesistrace.provisioning import (
-    ProvisioningError,
-    RegistrationService,
-    build_registration_service,
-)
-from thesistrace.rate_limits import ApiRateLimiter, RateLimitRejection
 from thesistrace.research_runs import (
     ResearchRunService,
     recover_staged_research_run,
@@ -36,7 +22,6 @@ from thesistrace.resource_deletion import (
 )
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
-from thesistrace.tenancy import authenticated_subject, verified_subject
 from thesistrace.tracking import (
     DailyTrackingError,
     DailyTrackingService,
@@ -94,41 +79,6 @@ def deletion_response(tombstone: dict[str, object]) -> JSONResponse:
     )
 
 
-def rate_limit_response(rejection: RateLimitRejection) -> JSONResponse:
-    return JSONResponse(
-        status_code=429,
-        content={
-            "detail": {
-                "reason_code": "REQUEST_RATE_LIMITED",
-                "message": "request rate limit exceeded",
-                "dimension": rejection.dimension,
-                "retry_after_seconds": rejection.retry_after_seconds,
-            }
-        },
-        headers={"Retry-After": str(rejection.retry_after_seconds)},
-    )
-
-
-def public_dataset_release_view(release: dict[str, object]) -> dict[str, object]:
-    correction_change_set = release.get("correction_change_set")
-    corrections = len(correction_change_set) if isinstance(correction_change_set, list) else 0
-    return {
-        key: release[key]
-        for key in (
-            "id",
-            "predecessor_id",
-            "created_at",
-            "appended_session_range",
-            "session_count",
-            "instrument_count",
-            "canonical_schema_version",
-            "canonical_tables",
-            "schemas",
-        )
-        if key in release
-    } | {"correction_count": corrections}
-
-
 def page(items: list[dict[str, object]], offset: int, limit: int) -> dict[str, object]:
     selected = items[offset : offset + limit]
     return {
@@ -139,72 +89,11 @@ def page(items: list[dict[str, object]], offset: int, limit: int) -> dict[str, o
     }
 
 
-def public_research_run_view(run: dict[str, object]) -> dict[str, object]:
-    view = copy.deepcopy(run)
-    view.pop("result_manifest_sha256", None)
-    return view
-
-
-def public_result_view(
-    result: dict[str, object],
-    *,
-    daily_offset: int,
-    daily_limit: int,
-    position_offset: int,
-    position_limit: int,
-) -> dict[str, object]:
-    view = copy.deepcopy(result)
-    manifest = view.get("manifest")
-    if isinstance(manifest, dict):
-        manifest.pop("objects", None)
-        manifest.pop("manifest_sha256", None)
-        release = manifest.get("dataset_release")
-        if isinstance(release, dict):
-            release.pop("manifest_sha256", None)
-
-    factor = view.get("factor_evaluation")
-    if isinstance(factor, dict):
-        horizons = factor.get("horizons")
-        if isinstance(horizons, dict):
-            for horizon in horizons.values():
-                if isinstance(horizon, dict):
-                    for key in ("alpha_checksum", "label_checksum", "source_checksum"):
-                        horizon.pop(key, None)
-
-    strategy = view.get("strategy_backtest")
-    if isinstance(strategy, dict):
-        strategy.pop("alpha_checksum", None)
-        strategy.pop("rebalance_aggregates", None)
-        strategy.pop("execution_aggregates", None)
-        daily = strategy.get("daily")
-        if isinstance(daily, list):
-            strategy["daily"] = daily[daily_offset : daily_offset + daily_limit]
-            strategy["daily_page"] = {
-                "offset": daily_offset,
-                "limit": daily_limit,
-                "has_more": daily_offset + len(strategy["daily"]) < len(daily),
-            }
-
-    terminal = view.get("terminal_strategy_state")
-    if isinstance(terminal, dict):
-        positions = terminal.get("positions")
-        if isinstance(positions, list):
-            terminal["positions"] = positions[position_offset : position_offset + position_limit]
-            terminal["positions_page"] = {
-                "offset": position_offset,
-                "limit": position_limit,
-                "has_more": position_offset + len(terminal["positions"]) < len(positions),
-            }
-    return view
-
-
 def create_app(
     settings: Settings,
     *,
     tushare_transport: TushareTransport | None = None,
     runtime_ports: RuntimePorts | None = None,
-    identity_verifier: IdentityVerifier | None = None,
-    registration_service: RegistrationService | None = None,
 ) -> FastAPI:
     runtime = runtime_ports or build_runtime(settings)
     store = runtime.control_metadata
@@ -227,124 +116,8 @@ def create_app(
         runtime.working_cache,
     )
     resource_deletion.reconcile_pending()
-    source_authorization = SourceAuthorizationService(build_management_store(settings, store))
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
-    verifier = identity_verifier
-    if settings.auth_mode == "insforge" and verifier is None:
-        verifier = build_identity_verifier(
-            database_url=settings.database_url,
-            jwks_url=settings.insforge_jwks_url,
-            issuer=settings.insforge_jwt_issuer,
-            audience=settings.insforge_jwt_audience,
-        )
-    registration = registration_service
-    if settings.auth_mode == "insforge" and registration is None:
-        registration = build_registration_service(
-            settings=settings,
-            source_authorization=source_authorization,
-        )
-    rate_limiter = ApiRateLimiter(
-        window_seconds=settings.api_rate_limit_window_seconds,
-        user_request_limit=settings.api_user_request_limit,
-        workspace_request_limit=settings.api_workspace_request_limit,
-        mutation_request_limit=settings.api_mutation_request_limit,
-    )
-
-    @app.middleware("http")
-    async def authenticate_product_request(request: Request, call_next):
-        if settings.runtime_mode == "hosted":
-            hidden_hosted_paths = {
-                "/api/v1/dataset-releases/bootstrap",
-                "/api/v1/dataset-releases/bootstrap-live",
-                "/api/v1/dataset-releases/publish-fixture",
-                "/api/v1/dataset-releases/publish-live",
-                "/api/v1/sources/tushare/preflight",
-            }
-            if (
-                request.url.path.startswith("/api/v1/objects/")
-                or request.url.path in hidden_hosted_paths
-            ):
-                return JSONResponse(
-                    status_code=404,
-                    content={
-                        "detail": error_detail(
-                            "ROUTE_NOT_FOUND",
-                            "route not found",
-                        )
-                    },
-                )
-            supplied_workspace_keys = {
-                "workspace_id",
-                "personal_workspace_id",
-            }
-            if (
-                supplied_workspace_keys.intersection(request.query_params)
-                or request.headers.get("X-Workspace-ID") is not None
-                or request.headers.get("X-Personal-Workspace-ID") is not None
-            ):
-                return JSONResponse(
-                    status_code=422,
-                    content={
-                        "detail": error_detail(
-                            "CLIENT_WORKSPACE_FORBIDDEN",
-                            "Personal Workspace is derived from the authenticated User",
-                        )
-                    },
-                )
-        if (
-            settings.auth_mode != "insforge"
-            or request.url.path in {"/api/v1/health", "/api/v1/live", "/api/v1/ready"}
-            or not request.url.path.startswith("/api/v1/")
-        ):
-            return await call_next(request)
-        assert verifier is not None
-        try:
-            request.state.identity = await run_in_threadpool(
-                verifier.verify,
-                request.headers.get("Authorization"),
-            )
-        except AuthenticationFailure as error:
-            message = (
-                "verified email required"
-                if error.reason_code == "AUTH_EMAIL_UNVERIFIED"
-                else "authentication required"
-            )
-            return JSONResponse(
-                status_code=error.status_code,
-                content={
-                    "detail": error_detail(error.reason_code, message),
-                },
-                headers={"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None,
-            )
-        assert registration is not None
-        request.state.product_identity = await run_in_threadpool(
-            registration.resolve_identity,
-            request.state.identity.subject,
-        )
-        product_identity = request.state.product_identity
-        rejection = rate_limiter.check(
-            subject=request.state.identity.subject,
-            workspace_id=(None if product_identity is None else product_identity.workspace_id),
-            state_changing=request.method not in {"GET", "HEAD", "OPTIONS"},
-        )
-        if rejection is not None:
-            return rate_limit_response(rejection)
-        if (
-            request.url.path not in {"/api/v1/session", "/api/v1/provision"}
-            and product_identity is None
-        ):
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "detail": error_detail(
-                        "PRODUCT_PROVISIONING_REQUIRED",
-                        "product provisioning is required",
-                    )
-                },
-            )
-        with authenticated_subject(request.state.identity.subject):
-            return await call_next(request)
 
     @app.exception_handler(RequestValidationError)
     async def request_validation_error(
@@ -391,67 +164,6 @@ def create_app(
             "latest_dataset_release": store.latest_dataset_release(),
         }
 
-    @app.get("/api/v1/session")
-    def get_product_session(request: Request) -> dict[str, object]:
-        if settings.auth_mode != "insforge":
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "AUTH_NOT_CONFIGURED",
-                    "hosted authentication is not configured",
-                ),
-            )
-        identity = request.state.identity
-        product_identity = request.state.product_identity
-        if product_identity is not None:
-            return {
-                "product_state": "provisioned",
-                "identity": {
-                    "subject": identity.subject,
-                    "email": identity.email,
-                },
-                "user_id": product_identity.user_id,
-                "workspace_id": product_identity.workspace_id,
-            }
-        return {
-            "product_state": "non_provisioned",
-            "identity": {
-                "subject": identity.subject,
-                "email": identity.email,
-            },
-        }
-
-    @app.post("/api/v1/provision")
-    def provision_product_identity(request: Request) -> JSONResponse:
-        if settings.auth_mode != "insforge" or registration is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "AUTH_NOT_CONFIGURED",
-                    "hosted authentication is not configured",
-                ),
-            )
-        try:
-            result = registration.provision(request.state.identity)
-        except ProvisioningError as error:
-            raise HTTPException(
-                status_code=403 if error.reason_code == "INVITATION_NOT_ELIGIBLE" else 409,
-                detail=error_detail(
-                    error.reason_code,
-                    "product provisioning is not available",
-                ),
-            ) from error
-        return JSONResponse(
-            status_code=201 if result.created else 200,
-            content={
-                "product_state": "provisioned",
-                "invitation_id": result.invitation_id,
-                "user_id": result.identity.user_id,
-                "workspace_id": result.identity.workspace_id,
-                "created": result.created,
-            },
-        )
-
     @app.get("/api/v1/research-definitions")
     def list_research_definitions(
         offset: int = Query(0, ge=0),
@@ -461,7 +173,6 @@ def create_app(
 
     @app.post("/api/v1/research-definitions")
     def create_research_definition(content: dict[str, object]) -> JSONResponse:
-        reject_client_workspace_identity(content)
         return JSONResponse(status_code=201, content=definitions.create_draft(content))
 
     @app.get("/api/v1/research-definitions/{draft_id}")
@@ -479,7 +190,6 @@ def create_app(
 
     @app.put("/api/v1/research-definitions/{draft_id}")
     def update_research_definition(draft_id: str, content: dict[str, object]) -> dict[str, object]:
-        reject_client_workspace_identity(content)
         draft = definitions.update_draft(draft_id, content)
         if draft is None:
             raise HTTPException(
@@ -512,12 +222,7 @@ def create_app(
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(
             status_code=202 if created else 200,
-            content={
-                "frozen_definition": frozen,
-                "run": (
-                    public_research_run_view(run) if settings.runtime_mode == "hosted" else run
-                ),
-            },
+            content={"frozen_definition": frozen, "run": run},
         )
 
     @app.get("/api/v1/research-definition-versions/{version_id}")
@@ -545,10 +250,7 @@ def create_app(
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=100),
     ) -> dict[str, object]:
-        runs = store.list_research_runs()
-        if settings.runtime_mode == "hosted":
-            runs = [public_research_run_view(run) for run in runs]
-        return page(runs, offset, limit)
+        return page(store.list_research_runs(), offset, limit)
 
     @app.get("/api/v1/research-runs/{run_id}")
     def get_research_run(run_id: str) -> dict[str, object]:
@@ -558,7 +260,7 @@ def create_app(
                 status_code=404,
                 detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
             )
-        return public_research_run_view(run) if settings.runtime_mode == "hosted" else run
+        return run
 
     @app.get("/api/v1/research-runs/{run_id}/attempts/{ordinal}")
     def get_research_run_attempt(run_id: str, ordinal: int) -> dict[str, object]:
@@ -604,17 +306,7 @@ def create_app(
                     "ResearchRun has no successful Result Bundle",
                 ),
             )
-        return (
-            public_result_view(
-                result,
-                daily_offset=daily_offset,
-                daily_limit=daily_limit,
-                position_offset=position_offset,
-                position_limit=position_limit,
-            )
-            if settings.runtime_mode == "hosted"
-            else result
-        )
+        return result
 
     @app.post("/api/v1/research-runs/{run_id}/cancel")
     def cancel_research_run(run_id: str) -> dict[str, object]:
@@ -626,14 +318,14 @@ def create_app(
             )
         if run["status"] == "cancelled":
             run = recover_staged_research_run(store, objects, run_id)
-        return public_research_run_view(run) if settings.runtime_mode == "hosted" else run
+        return run
 
     @app.delete("/api/v1/research-runs/{run_id}")
     def delete_research_run(run_id: str) -> JSONResponse:
         try:
             tombstone = resource_deletion.delete_research_run(
                 run_id,
-                actor=verified_subject() or "local-user",
+                actor="local-user",
             )
         except ResourceDeletionError as error:
             raise HTTPException(
@@ -658,7 +350,7 @@ def create_app(
             runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
         return JSONResponse(
             status_code=202 if created else 200,
-            content=(public_research_run_view(run) if settings.runtime_mode == "hosted" else run),
+            content=run,
         )
 
     @app.post("/api/v1/research-runs/{run_id}/daily-tracks")
@@ -795,7 +487,7 @@ def create_app(
         try:
             tombstone = resource_deletion.delete_daily_track(
                 track_id,
-                actor=verified_subject() or "local-user",
+                actor="local-user",
             )
         except ResourceDeletionError as error:
             raise HTTPException(
@@ -809,14 +501,6 @@ def create_app(
         track_id: str,
         request: KernelUpgradeRequest,
     ) -> dict[str, object]:
-        if settings.runtime_mode == "hosted":
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "DAILY_TRACK_NOT_FOUND",
-                    "DailyTrack not found",
-                ),
-            )
         try:
             track = tracking.upgrade_kernel(
                 track_id,
@@ -840,14 +524,6 @@ def create_app(
 
     @app.post("/api/v1/daily-tracks/{track_id}/verify-equivalence")
     def verify_daily_track(track_id: str) -> dict[str, object]:
-        if settings.runtime_mode == "hosted":
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "DAILY_TRACK_NOT_FOUND",
-                    "DailyTrack not found",
-                ),
-            )
         try:
             return tracking.verify_equivalence(track_id)
         except KeyError as error:
@@ -926,7 +602,7 @@ def create_app(
             )
         return tracking_operations.cancel_equivalence(
             request_id,
-            enqueue_workflow_cancellation=(settings.runtime_mode == "hosted"),
+            enqueue_workflow_cancellation=False,
         )
 
     @app.get("/api/v1/health")
@@ -1017,14 +693,6 @@ def create_app(
         request: LiveBootstrapRequest,
         idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
     ) -> JSONResponse:
-        if not source_authorization.is_authorized():
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail(
-                    "SOURCE_AUTHORIZATION_REQUIRED",
-                    "hosted shared Tushare use requires an accepted Operator declaration",
-                ),
-            )
         if not settings.tushare_token:
             raise HTTPException(
                 status_code=409,
@@ -1113,14 +781,6 @@ def create_app(
         request: LiveBootstrapRequest,
         idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
     ) -> JSONResponse:
-        if not source_authorization.is_authorized():
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail(
-                    "SOURCE_AUTHORIZATION_REQUIRED",
-                    "hosted shared Tushare use requires an accepted Operator declaration",
-                ),
-            )
         existing = store.dataset_release_for_idempotency_key(idempotency_key)
         if existing is not None:
             try:
@@ -1223,10 +883,7 @@ def create_app(
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=100),
     ) -> dict[str, object]:
-        releases = store.list_dataset_releases()
-        if settings.runtime_mode == "hosted":
-            releases = [public_dataset_release_view(release) for release in releases]
-        return page(releases, offset, limit)
+        return page(store.list_dataset_releases(), offset, limit)
 
     @app.get("/api/v1/dataset-releases/{release_id}")
     def get_dataset_release(release_id: str) -> dict[str, object]:
@@ -1236,8 +893,6 @@ def create_app(
                 status_code=404,
                 detail=error_detail("DATASET_RELEASE_NOT_FOUND", "dataset release not found"),
             )
-        if settings.runtime_mode == "hosted":
-            return public_dataset_release_view(release)
         return release
 
     @app.get("/api/v1/dataset-releases/{release_id}/data-contract")
@@ -1258,7 +913,7 @@ def create_app(
 
     @app.get("/api/v1/objects/{digest}")
     def get_object(digest: str) -> FileResponse:
-        if settings.runtime_mode == "hosted" or not isinstance(objects, ImmutableObjectStore):
+        if not isinstance(objects, ImmutableObjectStore):
             raise HTTPException(
                 status_code=404,
                 detail=error_detail(
@@ -1294,18 +949,6 @@ def create_app(
         )
 
     return app
-
-
-def reject_client_workspace_identity(content: dict[str, object]) -> None:
-    forbidden = {"workspace_id", "personal_workspace_id"}
-    if forbidden.intersection(content):
-        raise HTTPException(
-            status_code=422,
-            detail=error_detail(
-                "CLIENT_WORKSPACE_FORBIDDEN",
-                "Personal Workspace is derived from the authenticated User",
-            ),
-        )
 
 
 def main() -> None:

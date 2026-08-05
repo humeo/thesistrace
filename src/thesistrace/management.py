@@ -2,8 +2,6 @@ from datetime import UTC, datetime
 from typing import Protocol
 from uuid import uuid4
 
-from thesistrace.config import Settings
-
 HOSTED_TUSHARE_SCOPE = "hosted-shared-dataset-releases"
 
 
@@ -95,14 +93,3 @@ class SourceAuthorizationService:
             and declaration.get("source") == "tushare"
             and declaration.get("scope") == HOSTED_TUSHARE_SCOPE
         )
-
-
-def build_management_store(
-    settings: Settings,
-    fallback: ManagementStore,
-) -> ManagementStore:
-    if not settings.database_url:
-        return fallback
-    from thesistrace.hosted.management import PostgresManagementStore
-
-    return PostgresManagementStore(settings.database_url)

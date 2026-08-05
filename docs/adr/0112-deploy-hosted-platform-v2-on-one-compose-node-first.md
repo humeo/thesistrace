@@ -1,5 +1,6 @@
 ---
 status: superseded by ADR-0151
+scope: archived - outside the active Core
 ---
 
 # Deploy Hosted Platform V2 on one Compose node first

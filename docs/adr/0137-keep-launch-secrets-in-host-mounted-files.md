@@ -1,5 +1,6 @@
 ---
 status: superseded by ADR-0151
+scope: archived - outside the active Core
 ---
 
 # Keep launch secrets in host-mounted files

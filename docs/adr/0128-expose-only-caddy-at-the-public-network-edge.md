@@ -1,5 +1,6 @@
 ---
 status: superseded by ADR-0143
+scope: archived - outside the active Core
 ---
 
 # Expose only Caddy at the public network edge

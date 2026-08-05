@@ -1,5 +1,6 @@
 ---
 status: superseded by ADR-0151
+scope: archived - outside the active Core
 ---
 
 # Operate the first release through one audited CLI Operator
