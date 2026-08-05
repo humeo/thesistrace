@@ -1,4 +1,9 @@
-# Hosted Compose operations
+# Archived Hosted Compose operations
+
+> **Deferred:** this runbook describes the archived Hosted v2 deployment and
+> is not an active product or verification contract. Hosted Local Acceptance,
+> Launch Qualification, execution orchestration, and their Make targets were
+> removed during Core closure. Do not run the historical commands below.
 
 The first hosted deployment is one version-pinned Docker Compose release. It
 has one public container, `edge`, and exposes the Web application, the

@@ -1,7 +1,4 @@
-.PHONY: dev check check-live-tushare hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore hosted-release-acceptance hosted-local-acceptance hosted-local-acceptance-final hosted-local-frontend
-
-HOSTED_LOCAL_EVIDENCE ?= .hosted/evidence/hosted-v2-local.json
-HOSTED_LOCAL_ARGS ?=
+.PHONY: dev check check-live-tushare hosted-up hosted-deploy hosted-down hosted-restart hosted-smoke hosted-health-check hosted-smtp-configure hosted-config hosted-operator hosted-maintenance-enter hosted-maintenance-exit hosted-rollback hosted-backup-target-init hosted-backup hosted-restore
 
 dev:
 	bun run --cwd web dev
@@ -60,22 +57,3 @@ hosted-backup:
 
 hosted-restore:
 	./scripts/hosted-stack restore $(BACKUP_ID)
-
-hosted-release-acceptance:
-	.venv/bin/python scripts/hosted/release_acceptance.py \
-		--release-bundle-id "$(RELEASE_BUNDLE_ID)" \
-		--capacity-evidence "$(CAPACITY_EVIDENCE)" \
-		--recovery-evidence "$(RECOVERY_EVIDENCE)" \
-		--output "$(OUTPUT)"
-
-hosted-local-acceptance:
-	.venv/bin/python scripts/hosted/local_acceptance.py \
-		--output "$(HOSTED_LOCAL_EVIDENCE)" $(HOSTED_LOCAL_ARGS)
-
-hosted-local-acceptance-final:
-	.venv/bin/python scripts/hosted/local_acceptance.py \
-		--output "$(HOSTED_LOCAL_EVIDENCE)" \
-		--fresh --cleanup-policy on-success
-
-hosted-local-frontend:
-	.venv/bin/python scripts/hosted/local_frontend_acceptance.py

@@ -9,7 +9,6 @@ insforge_dir="${INSFORGE_SOURCE_DIR:-$state_dir/insforge-v2.2.9}"
 insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
 insforge_patch="$root/deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch"
 compose_file="$root/deploy/hosted/compose.yaml"
-local_compose_file="$root/deploy/hosted/compose.local.yaml"
 release_config_root="$root/deploy/hosted"
 release_manifest="$root/deploy/hosted/release.json"
 release_state="$state_dir/releases"
@@ -138,7 +137,6 @@ prepare() {
     move_secret_to_file THESISTRACE_HEALTH_DATABASE_PASSWORD health_database_password
     move_secret_to_file THESISTRACE_OBJECT_STORE_API_TOKEN object_store_api_token
     move_secret_to_file TUSHARE_TOKEN tushare_token
-    move_secret_to_file THESISTRACE_LAUNCH_QUALIFICATION_KEY launch_qualification_key
     printf '{"api":"%s"}' \
         "$(sed -n '1p' "$secret_dir/object_store_api_token")" \
         >"$secret_dir/object_store_tokens"
@@ -255,28 +253,6 @@ prepare_acceptance() {
     fi
     prepare
     select_current_release
-}
-
-prepare_local_acceptance() {
-    if [ "${THESISTRACE_LOCAL_ACCEPTANCE:-0}" != "1" ]; then
-        echo "Hosted Local Acceptance operations are disabled" >&2
-        exit 1
-    fi
-    prepare
-}
-
-reset_local_release_state() {
-    case "$release_state" in
-        "$state_dir"/releases) ;;
-        *) echo "local Release state escaped Hosted state" >&2; exit 2 ;;
-    esac
-    case "$state_dir" in
-        /|"$HOME"|"$root")
-            echo "unsafe Hosted Local Acceptance state directory" >&2
-            exit 2
-            ;;
-    esac
-    rm -rf -- "$release_state"
 }
 
 require_acceptance_service() {
@@ -410,28 +386,6 @@ compose() {
         --env-file "$env_file" \
         --file "$compose_file" \
         "$@"
-}
-
-local_compose() {
-    compose --file "$local_compose_file" "$@"
-}
-
-seed_local_source_authorization() {
-    local marker="$state_dir/local-source-authorization"
-    if [ -f "$marker" ] && [ "$(sed -n '1p' "$marker")" = "$release_bundle_id" ]; then
-        return
-    fi
-    local_compose run --rm --no-deps -T \
-        --volume "$root:/workspace:ro" \
-        --env PYTHONPATH=/workspace/src \
-        --env THESISTRACE_ACCEPTANCE_MODE=1 \
-        --env THESISTRACE_LOCAL_ACCEPTANCE=1 \
-        thesistrace-migrations \
-        python /workspace/scripts/hosted/seed_acceptance_state.py \
-        local-source-authorization
-    printf '%s\n' "$release_bundle_id" > "$marker.tmp"
-    chmod 600 "$marker.tmp"
-    mv "$marker.tmp" "$marker"
 }
 
 enter_maintenance() {
@@ -633,86 +587,6 @@ case "$action" in
             compose up --detach --wait --no-build
         fi
         ;;
-    local-reset)
-        prepare_local_acceptance
-        if [ -f "$release_state/current.json" ]; then
-            ensure_release
-        fi
-        local_compose --profile local-ops --profile launch-capacity \
-            down --volumes --remove-orphans
-        reset_local_release_state
-        rm -f -- "$state_dir/local-source-authorization"
-        printf '{"status":"passed"}\n'
-        ;;
-    local-up)
-        prepare_local_acceptance
-        if [ -f "$release_state/current.json" ]; then
-            ensure_release
-            release_images verify-images
-        else
-            stage_release
-            build_candidate_images
-            activate_candidate
-        fi
-        validate_public_edge
-        if ! local_compose up --detach --wait --no-build; then
-            echo "local core convergence failed once; retrying the same staged release" >&2
-            local_compose up --detach --wait --no-build
-        fi
-        seed_local_source_authorization >/dev/null
-        printf '{"release_bundle_id":"%s","status":"passed"}\n' \
-            "$release_bundle_id"
-        ;;
-    local-ops-check)
-        prepare_local_acceptance
-        ensure_release
-        trap 'local_compose stop --timeout 30 grafana prometheus otel-collector >/dev/null 2>&1 || true' 0
-        local_compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/seed_acceptance_state.py assert-idle \
-            >/dev/null
-        local_compose --profile local-ops up --detach --wait --no-build \
-            otel-collector prometheus grafana
-        local_compose exec -T health-service python - \
-            < "$root/scripts/hosted/local_ops_probe.py"
-        ;;
-    local-recovery-smoke)
-        prepare_local_acceptance
-        ensure_release
-        exec "$root/.venv/bin/python" \
-            "$root/scripts/hosted/local_recovery_acceptance.py"
-        ;;
-    local-browser-ready)
-        prepare_local_acceptance
-        ensure_release
-        local_compose --profile local-ops stop --timeout 30 \
-            grafana prometheus otel-collector >/dev/null 2>&1 || true
-        local_compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/seed_acceptance_state.py assert-idle
-        ;;
-    local-cold-stop)
-        prepare_local_acceptance
-        ensure_release
-        local_compose --profile local-ops --profile launch-capacity \
-            stop --timeout 30
-        printf '{"status":"passed"}\n'
-        ;;
-    local-down)
-        prepare_local_acceptance
-        if [ -f "$release_state/current.json" ]; then
-            ensure_release
-        fi
-        local_compose --profile local-ops --profile launch-capacity \
-            down --volumes --remove-orphans
-        printf '{"status":"passed"}\n'
-        ;;
     down)
         prepare
         ensure_release
@@ -807,48 +681,6 @@ case "$action" in
             python /workspace/scripts/hosted/seed_acceptance_state.py \
             otp --email "$acceptance_email" \
             --purpose "$acceptance_purpose" --code "$acceptance_code"
-        ;;
-    acceptance-record-launch)
-        prepare_acceptance "launch qualification recording is disabled"
-        shift
-        acceptance_actor=""
-        acceptance_release=""
-        acceptance_attestation=""
-        evidence_path=""
-        while [ "$#" -gt 0 ]; do
-            case "$1" in
-                --actor) acceptance_actor="${2:-}"; shift 2 ;;
-                --release-bundle-id) acceptance_release="${2:-}"; shift 2 ;;
-                --evidence) evidence_path="${2:-}"; shift 2 ;;
-                --attestation) acceptance_attestation="${2:-}"; shift 2 ;;
-                *) echo "unknown launch qualification argument: $1" >&2; exit 2 ;;
-            esac
-        done
-        if [ -z "$acceptance_actor" ] || [ -z "$acceptance_release" ] || [ -z "$acceptance_attestation" ]; then
-            echo "launch actor, Release Bundle ID, and attestation are required" >&2
-            exit 2
-        fi
-        case "$evidence_path" in
-            /*) ;;
-            *) echo "launch evidence path must be absolute" >&2; exit 2 ;;
-        esac
-        if [ ! -f "$evidence_path" ]; then
-            echo "launch evidence file does not exist" >&2
-            exit 2
-        fi
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --volume "$evidence_path:/run/acceptance/launch.json:ro" \
-            --volume "$secret_dir/launch_qualification_key:/run/acceptance/launch_qualification_key:ro" \
-            --env PYTHONPATH=/workspace/src \
-            --env THESISTRACE_ACCEPTANCE_MODE=1 \
-            thesistrace-migrations \
-            python /workspace/scripts/hosted/record_launch_qualification.py \
-            --actor "$acceptance_actor" \
-            --release-bundle-id "$acceptance_release" \
-            --evidence /run/acceptance/launch.json \
-            --attestation "$acceptance_attestation" \
-            --attestation-key-file /run/acceptance/launch_qualification_key
         ;;
     acceptance-publication-status)
         prepare_acceptance "acceptance state inspection is disabled"
@@ -1082,7 +914,7 @@ case "$action" in
         exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-browser-ready|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|health-check|smtp-configure|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

@@ -166,9 +166,18 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
 def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None:
     removed_paths = (
         "deploy/hosted/temporal",
+        "deploy/hosted/compose.local.yaml",
         "scripts/hosted/capacity_qualification.py",
+        "scripts/hosted/local_acceptance.py",
+        "scripts/hosted/local_boundary_acceptance.py",
+        "scripts/hosted/local_frontend_acceptance.py",
+        "scripts/hosted/local_ops_probe.py",
+        "scripts/hosted/local_postgres_acceptance.py",
+        "scripts/hosted/local_recovery_acceptance.py",
         "scripts/hosted/temporal_dispatch_probe.py",
         "scripts/hosted/local_workflow_acceptance.py",
+        "scripts/hosted/record_launch_qualification.py",
+        "scripts/hosted/release_acceptance.py",
         "src/thesistrace/hosted/activity_heartbeat.py",
         "src/thesistrace/hosted/activity_policy.py",
         "src/thesistrace/hosted/capacity_probe.py",
@@ -190,6 +199,7 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
         "tests/hosted/test_temporal_worker_heartbeat.py",
         "tests/hosted/test_tracking_operations_workflow.py",
         "tests/hosted/test_tracking_workflow.py",
+        "tests/hosted/test_local_acceptance.py",
     )
     for removed_path in removed_paths:
         assert not (ROOT / removed_path).exists()
@@ -229,10 +239,14 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
         "dispatch-probe",
         "dispatch_probe",
         "hosted-local-smoke",
+        "hosted-local-acceptance",
+        "hosted-release-acceptance",
+        "acceptance-record-launch",
         "local_workflow_acceptance",
         "thesistrace_relay",
         "workflow_capacity",
         "workflow_running",
+        "tracking-generation-rebuild",
     )
     for path in inventory_files:
         source = path.read_text().lower()

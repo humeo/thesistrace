@@ -12,14 +12,10 @@ from thesistrace.quota import (
     daily_track_activation_lock_key,
 )
 from thesistrace.storage import MetadataStore
-from thesistrace.tenancy import service_workspace, verified_subject
+from thesistrace.tenancy import verified_subject
 
 HOSTED_DATABASE_ROLES = {
     "api": "thesistrace_api",
-    # Retained adapter modes share the sole application database identity.
-    # Separate Hosted worker identities were disabled by migration 0027.
-    "compute": "thesistrace_api",
-    "data": "thesistrace_api",
 }
 
 
@@ -158,13 +154,6 @@ class PostgresControlMetadataStore(MetadataStore):
                     connection.execute(
                         "SELECT thesistrace_control.set_api_identity(%s)",
                         (subject,),
-                    )
-            elif self.database_role == "compute":
-                workspace_id = service_workspace()
-                if workspace_id is not None:
-                    connection.execute(
-                        "SELECT thesistrace_control.set_service_workspace(%s)",
-                        (workspace_id,),
                     )
             yield PostgresConnectionAdapter(connection)
 

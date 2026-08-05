@@ -37,9 +37,18 @@ git cat-file -e "$archive_commit:src/thesistrace/hosted/execution_relay.py"
 
 for removed_path in \
   deploy/hosted/temporal \
+  deploy/hosted/compose.local.yaml \
   scripts/hosted/capacity_qualification.py \
+  scripts/hosted/local_acceptance.py \
+  scripts/hosted/local_boundary_acceptance.py \
+  scripts/hosted/local_frontend_acceptance.py \
+  scripts/hosted/local_ops_probe.py \
+  scripts/hosted/local_postgres_acceptance.py \
+  scripts/hosted/local_recovery_acceptance.py \
   scripts/hosted/temporal_dispatch_probe.py \
   scripts/hosted/local_workflow_acceptance.py \
+  scripts/hosted/record_launch_qualification.py \
+  scripts/hosted/release_acceptance.py \
   src/thesistrace/hosted/activity_heartbeat.py \
   src/thesistrace/hosted/activity_policy.py \
   src/thesistrace/hosted/capacity_probe.py \
@@ -60,12 +69,13 @@ for removed_path in \
   tests/hosted/test_research_workflow.py \
   tests/hosted/test_temporal_worker_heartbeat.py \
   tests/hosted/test_tracking_operations_workflow.py \
-  tests/hosted/test_tracking_workflow.py; do
+  tests/hosted/test_tracking_workflow.py \
+  tests/hosted/test_local_acceptance.py; do
   test ! -e "$removed_path"
 done
 
 ! rg -n \
-  'temporal|thesistrace-execution-relay|execution-relay|execution_relay|execution_outbox|compute-worker|data-worker|thesistrace-recovery-probe|recovery-probe|recovery_probe|dispatch-probe|dispatch_probe|hosted-local-smoke|local_workflow_acceptance|thesistrace_relay|workflow_capacity|workflow_running' \
+  'temporal|thesistrace-execution-relay|execution-relay|execution_relay|execution_outbox|compute-worker|data-worker|thesistrace-recovery-probe|recovery-probe|recovery_probe|dispatch-probe|dispatch_probe|hosted-local-smoke|local_workflow_acceptance|thesistrace_relay|workflow_capacity|workflow_running|tracking-generation-rebuild|hosted-local-acceptance|hosted-release-acceptance|acceptance-record-launch' \
   pyproject.toml uv.lock Makefile src/thesistrace/config.py \
   src/thesistrace/capacity.py src/thesistrace/launch.py \
   src/thesistrace/hosted scripts deploy/hosted \

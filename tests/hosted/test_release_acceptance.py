@@ -1,6 +1,5 @@
 import importlib.util
 import json
-import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -10,13 +9,6 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def acceptance_module() -> ModuleType:
-    path = ROOT / "scripts" / "hosted" / "release_acceptance.py"
-    spec = importlib.util.spec_from_file_location("hosted_release_acceptance", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def smtp_module() -> ModuleType:
@@ -28,97 +20,14 @@ def smtp_module() -> ModuleType:
     return module
 
 
-def public_smoke_module() -> ModuleType:
-    path = ROOT / "scripts" / "hosted-release-smoke.py"
-    spec = importlib.util.spec_from_file_location("hosted_release_smoke", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
-def capacity_evidence(release_bundle_id: str) -> dict[str, object]:
-    return {
-        "schema_version": "capacity-qualification-v3",
-        "release_bundle_id": release_bundle_id,
-        "universe": "top3000",
-        "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
-        "runtime_capacity": {
-            "source": "docker-info",
-            "logical_cpu": 6,
-            "memory_bytes": 12 * 1024**3,
-        },
-        "swap_used": False,
-        "oom_kill": False,
-        "unexpected_restart": False,
-        "production_paths": {
-            "parquet": True,
-            "result_bundle": True,
-            "working_cache": True,
-            "postgresql": True,
-            "object_store": True,
-        },
-    }
 
 
-def recovery_evidence(release_bundle_id: str) -> dict[str, object]:
-    return {
-        "format": "thesistrace-recovery-exercise-v1",
-        "status": "passed",
-        "release_bundle_id": release_bundle_id,
-        "objectives": {
-            "committed_state_loss_within_6h": True,
-            "detection_within_24h": True,
-            "public_origin_smoke": True,
-            "recovery_execution_within_8h": True,
-        },
-    }
 
 
-def test_release_acceptance_rejects_stale_capacity_and_recovery_evidence(
-    tmp_path: Path,
-) -> None:
-    module = acceptance_module()
-    capacity = tmp_path / "capacity.json"
-    recovery = tmp_path / "recovery.json"
-    capacity.write_text(json.dumps(capacity_evidence("release-1")))
-    recovery.write_text(json.dumps(recovery_evidence("release-1")))
-
-    assert module.validate_capacity(capacity, "release-1")["status"] == "passed"
-    assert module.validate_recovery(recovery, "release-1")["status"] == "passed"
-    with pytest.raises(module.ReleaseAcceptanceError, match="another Release"):
-        module.validate_capacity(capacity, "release-2")
-    with pytest.raises(module.ReleaseAcceptanceError, match="another Release"):
-        module.validate_recovery(recovery, "release-2")
 
 
-def test_private_acceptance_seeding_requires_an_explicit_mode() -> None:
-    script = ROOT / "scripts" / "hosted" / "seed_acceptance_state.py"
-    completed = subprocess.run(
-        [sys.executable, str(script), "assert-clean"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode != 0
-    assert "disabled" in completed.stderr
-
-    launch_recorder = ROOT / "scripts" / "hosted" / "record_launch_qualification.py"
-    completed = subprocess.run(
-        [sys.executable, str(launch_recorder)],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode != 0
-    assert "acceptance-only" in completed.stderr
-
-    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
-    assert 'THESISTRACE_ACCEPTANCE_MODE:-0}" != "1"' in launcher
-    assert "acceptance-record-launch)" in launcher
-    assert 'THESISTRACE_COMPOSE_PROJECT_NAME:-thesistrace-hosted' in launcher
 
 
 def test_smtp_configuration_keeps_credentials_out_of_result(
@@ -265,23 +174,12 @@ def test_smtp_configuration_stages_a_durable_audit_before_remote_mutation(
     assert list(outbox.iterdir()) == []
 
 
-def test_release_acceptance_attests_evidence_with_the_host_secret(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    module = acceptance_module()
-    key_path = tmp_path / "secrets" / "launch_qualification_key"
-    key_path.parent.mkdir(parents=True)
-    key_path.write_bytes(b"release-acceptance-attestation-key")
-    monkeypatch.setenv("THESISTRACE_HOST_STATE_DIR", str(tmp_path))
-
-    attestation = module.attest_launch_evidence({"status": "passed"})
-
-    assert len(attestation) == 64
 
 
-def test_operator_runbook_covers_every_launch_operation() -> None:
+def test_operator_runbook_marks_hosted_launch_as_archived() -> None:
     runbook = (ROOT / "docs" / "runbook" / "hosted-compose.md").read_text()
+    assert "Archived Hosted Compose operations" in runbook
+    assert "not an active product or verification contract" in runbook
     for contract in (
         "hosted-smtp-configure",
         "source-authorization record",
@@ -305,6 +203,10 @@ def test_operator_runbook_covers_every_launch_operation() -> None:
     assert "no alert-delivery service" in health
 
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
+    makefile = (ROOT / "Makefile").read_text()
+    assert "hosted-release-acceptance:" not in makefile
+    assert "hosted-local-acceptance:" not in makefile
+    assert "acceptance-record-launch)" not in launcher
     assert "smtp-configure)" in launcher
     assert "/run/operator/smtp_password" in launcher
     assert "--smtp-password-file /run/operator/smtp_password" in launcher
