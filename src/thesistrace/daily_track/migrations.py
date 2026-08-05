@@ -168,5 +168,38 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0006_irreversible_stop",
+            statement="""
+                ALTER TABLE daily_tracks.tracks
+                    DROP CONSTRAINT tracks_status_check,
+                    DROP CONSTRAINT tracks_blocked_state_check,
+                    ADD CONSTRAINT tracks_status_check
+                        CHECK (status IN ('active', 'blocked', 'stopped')),
+                    ADD CONSTRAINT tracks_lifecycle_state_check CHECK (
+                        (status IN ('active', 'stopped')
+                            AND blocked_target_release_id IS NULL
+                            AND blocked_reason IS NULL)
+                        OR
+                        (status = 'blocked'
+                            AND blocked_target_release_id IS NOT NULL
+                            AND blocked_reason IS NOT NULL)
+                    );
+
+                ALTER TABLE daily_tracks.progressions
+                    DROP CONSTRAINT progressions_status_check,
+                    ADD CONSTRAINT progressions_status_check CHECK (
+                        status IN ('running', 'succeeded', 'blocked', 'cancelled')
+                    );
+
+                CREATE TABLE daily_tracks.stop_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    track_id text NOT NULL REFERENCES daily_tracks.tracks(id),
+                    outcome jsonb NOT NULL CHECK (jsonb_typeof(outcome) = 'object'),
+                    created_at timestamptz NOT NULL DEFAULT now()
+                );
+            """,
+        ),
     ),
 )

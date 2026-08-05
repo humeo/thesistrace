@@ -7,7 +7,7 @@ import {
 
 type DailyTrackSummary = {
   id: string;
-  status: "active" | "blocked";
+  status: "active" | "blocked" | "stopped";
   seed_run_id: string;
   seed_release_id: string;
   current_release_id: string;
@@ -19,7 +19,7 @@ type DailyTrackSummary = {
 
 type DailyTrackDetail = {
   id: string;
-  status: "active" | "blocked";
+  status: "active" | "blocked" | "stopped";
   origin: {
     seed_run_id: string;
     seed_release_id: string;
@@ -39,6 +39,7 @@ type DailyTrackDetail = {
 type DailyTrackList = { items: DailyTrackSummary[]; next_cursor: string | null };
 type LoadState = "loading" | "refreshing" | null;
 type RetryState = "submitting" | "accepted" | null;
+type StopState = "submitting" | "accepted" | null;
 
 export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [track, setTrack] = useState<DailyTrackDetail | null>(null);
@@ -47,9 +48,13 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [retryState, setRetryState] = useState<RetryState>(null);
+  const [stopState, setStopState] = useState<StopState>(null);
   const loadGeneration = useRef(0);
 
-  useEffect(() => setRetryState(null), [trackId]);
+  useEffect(() => {
+    setRetryState(null);
+    setStopState(null);
+  }, [trackId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -112,6 +117,25 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     }
   }
 
+  async function stopTrack() {
+    if (!trackId) return;
+    setStopState("submitting");
+    try {
+      const response = await fetch(`/api/daily-tracks/${trackId}/stop`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request_id: `stop_${crypto.randomUUID()}` }),
+      });
+      if (!response.ok) throw new Error("DailyTrack Stop was not accepted");
+      await response.json();
+      setStopState("accepted");
+      setRefreshGeneration((value) => value + 1);
+    } catch {
+      setStopState(null);
+      setError(true);
+    }
+  }
+
   if (error) {
     return (
       <section aria-label="Daily Tracks">
@@ -148,7 +172,18 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
               Retry blocked target
             </button>
           ) : null}
+          {track.status !== "stopped" ? (
+            <button
+              disabled={stopState === "submitting"}
+              onClick={() => void stopTrack()}
+            >
+              Stop DailyTrack
+            </button>
+          ) : null}
         </header>
+        {track.status !== "stopped" ? (
+          <p>Stopping this DailyTrack is irreversible.</p>
+        ) : null}
         {loadState === "refreshing" ? (
           <p role="status">Refreshing DailyTrack…</p>
         ) : null}
@@ -157,6 +192,12 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         ) : null}
         {retryState === "accepted" ? (
           <p role="status">Retry accepted for the blocked target.</p>
+        ) : null}
+        {stopState === "submitting" ? (
+          <p role="status">Stopping DailyTrack…</p>
+        ) : null}
+        {stopState === "accepted" ? (
+          <p role="status">DailyTrack stopped permanently.</p>
         ) : null}
         <div className="research-run-facts">
           <p><strong>Status</strong> {track.status}</p>

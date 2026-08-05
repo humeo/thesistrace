@@ -19,6 +19,12 @@ class RetryDailyTrackCommand(BaseModel):
     request_id: RequestId
 
 
+class StopDailyTrackCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+
+
 class VerifiedResultOrigin(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -65,7 +71,7 @@ class DailyTrackSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal["active", "blocked"]
+    status: Literal["active", "blocked", "stopped"]
     seed_run_id: str
     seed_release_id: str
     current_release_id: str
@@ -153,7 +159,7 @@ class DailyTrackDetail(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal["active", "blocked"]
+    status: Literal["active", "blocked", "stopped"]
     origin: DailyTrackOriginView
     head_release_id: str
     strategy_session: str

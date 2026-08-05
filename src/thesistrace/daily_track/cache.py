@@ -43,6 +43,9 @@ class _DailyTrackWorkingCache:
         digest = hashlib.sha256(str(track_id).encode()).hexdigest()
         return self.root / f"{digest}.json"
 
+    def delete(self, track_id: str) -> None:
+        _discard(self.path(track_id))
+
     def load(
         self,
         *,

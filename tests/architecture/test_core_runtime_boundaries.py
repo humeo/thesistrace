@@ -223,6 +223,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "0004_blocked_track_failure_isolation" in track_migrations
     assert "blocked_target_release_id" in track_migrations
     assert "CREATE TABLE daily_tracks.retry_receipts" in track_migrations
+    assert "CREATE TABLE daily_tracks.stop_receipts" in track_migrations
     assert "MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3" in track_source
     assert "def _record_progression_failure(" in track_source
     assert "def activate(" in track_source
@@ -244,6 +245,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "while runtime.daily_tracks.process_next()" in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
     assert '"/api/daily-tracks/{track_id}/retry"' in http_source
+    assert '"/api/daily-tracks/{track_id}/stop"' in http_source
     assert '@app.post("/api/daily-tracks"' not in http_source
     assert '@app.delete("/api/daily-tracks' not in http_source
 

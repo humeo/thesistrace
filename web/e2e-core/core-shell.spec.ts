@@ -916,6 +916,99 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
   await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });
 
+test("stops a DailyTrack irreversibly", async ({ page }) => {
+  const id = "track_570aaed";
+  let stopped = false;
+  const horizon = (value: 1 | 5 | 20) => ({
+    horizon: value,
+    summary: {
+      ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      rank_ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null },
+      top_bottom_return: null,
+    },
+    coverage: {
+      signal_session_count: 0,
+      ic_valid_session_count: 0,
+      rank_ic_valid_session_count: 0,
+      quantile_valid_session_count: 0,
+    },
+  });
+  const response = () => ({
+    id,
+    status: stopped ? "stopped" : "active",
+    origin: {
+      seed_run_id: "run_stop",
+      seed_release_id: "release_seed",
+      definition_id: "def_stop",
+      definition_revision: 1,
+      result_checksum_sha256: "d".repeat(64),
+      strategy_session: "2025-12-31",
+    },
+    head_release_id: "release_committed_head",
+    strategy_session: "2026-01-01",
+    lag_releases: stopped ? 1 : 0,
+    blocked_reason: null,
+    factor: { horizons: { "1": horizon(1), "5": horizon(5), "20": horizon(20) } },
+    strategy: {
+      summary: {
+        metrics: {
+          net_cumulative_return: 0,
+          benchmark_cumulative_return: 0,
+          annualized_excess_return: 0,
+          maximum_drawdown: { value: 0 },
+          sharpe: null,
+          transaction_costs: { cumulative_amount: 0 },
+        },
+      },
+      benchmark: { universe: "top1000", methodology: "selected_universe_equal_weight" },
+      observations: [],
+    },
+  });
+  await page.route(`**/api/daily-tracks/${id}`, (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(response()) }),
+  );
+  await page.route(`**/api/daily-tracks/${id}/stop`, async (route) => {
+    expect(Object.keys(route.request().postDataJSON())).toEqual(["request_id"]);
+    expect(route.request().postDataJSON().request_id).toMatch(/^stop_/);
+    stopped = true;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        id,
+        status: "stopped",
+        seed_run_id: "run_stop",
+        seed_release_id: "release_seed",
+        current_release_id: "release_committed_head",
+        definition_id: "def_stop",
+        definition_revision: 1,
+        result_checksum_sha256: "d".repeat(64),
+        strategy_session: "2026-01-01",
+      }),
+    });
+  });
+
+  await page.goto(`/daily-tracks/${id}`);
+  await expect(
+    page.getByText("Stopping this DailyTrack is irreversible.", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Stop DailyTrack" }).click();
+  await expect(page.getByRole("status")).toHaveText("DailyTrack stopped permanently.");
+  await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Head Release release_committed_head", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Stop DailyTrack" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry blocked target" })).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Head Release release_committed_head", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
+});
+
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
   await page.goto("/definitions");
 

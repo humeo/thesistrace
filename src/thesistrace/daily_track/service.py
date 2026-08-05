@@ -24,6 +24,7 @@ from thesistrace.daily_track.models import (
     DailyTrackSummary,
     KernelStateCheckpoint,
     RetryDailyTrackCommand,
+    StopDailyTrackCommand,
     TrackingOrigin,
 )
 from thesistrace.data import NextRelease
@@ -97,6 +98,14 @@ class DailyTrackRetryConflict(RuntimeError):
 
 
 class DailyTrackRetryUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackStopConflict(RuntimeError):
+    pass
+
+
+class DailyTrackStopUnavailable(RuntimeError):
     pass
 
 
@@ -375,6 +384,103 @@ class DailyTrackService:
                     Jsonb(outcome.model_dump(mode="json")),
                 ),
             )
+        return outcome
+
+    def stop(
+        self,
+        track_id: str,
+        command: StopDailyTrackCommand,
+    ) -> DailyTrackSummary | None:
+        request_id = command.request_id.strip()
+        if not request_id:
+            raise ValueError("DailyTrack Stop request_id is required")
+        fingerprint = _stop_fingerprint(track_id)
+        replay = False
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"daily_tracks.stop:{request_id}",),
+            ).fetchone()
+            receipt = transaction.execute(
+                """
+                SELECT request_fingerprint, outcome
+                FROM daily_tracks.stop_receipts
+                WHERE request_id = %s
+                """,
+                (request_id,),
+            ).fetchone()
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise DailyTrackStopConflict("DailyTrack Stop request_id conflicts")
+                outcome = DailyTrackSummary.model_validate(receipt["outcome"])
+                replay = True
+            else:
+                track = transaction.execute(
+                    """
+                    SELECT id, status, origin, current_release_id,
+                           current_strategy_session, execution_fence
+                    FROM daily_tracks.tracks
+                    WHERE id = %s
+                    FOR UPDATE
+                    """,
+                    (track_id,),
+                ).fetchone()
+                if track is None:
+                    return None
+                if track["status"] not in {"active", "blocked"}:
+                    raise DailyTrackStopUnavailable(
+                        "DailyTrack Stop requires active or blocked status"
+                    )
+                transaction.execute(
+                    """
+                    UPDATE daily_tracks.progression_attempts
+                    SET status = 'cancelled', heartbeat_at = now(),
+                        lease_expires_at = now(), finished_at = now(),
+                        failure_reason = 'UserStopped'
+                    WHERE track_id = %s AND status = 'running'
+                    """,
+                    (track_id,),
+                )
+                transaction.execute(
+                    """
+                    UPDATE daily_tracks.progressions
+                    SET status = 'cancelled', finished_at = now()
+                    WHERE track_id = %s AND status IN ('running', 'blocked')
+                    """,
+                    (track_id,),
+                )
+                stopped = transaction.execute(
+                    """
+                    UPDATE daily_tracks.tracks
+                    SET status = 'stopped', execution_fence = execution_fence + 1,
+                        blocked_target_release_id = NULL, blocked_reason = NULL
+                    WHERE id = %s AND status IN ('active', 'blocked')
+                    """,
+                    (track_id,),
+                )
+                if stopped.rowcount != 1:
+                    raise DailyTrackFenced
+                outcome = DailyTrackSummary(
+                    **{
+                        **_summary(track).model_dump(mode="python"),
+                        "status": "stopped",
+                    }
+                )
+                transaction.execute(
+                    """
+                    INSERT INTO daily_tracks.stop_receipts (
+                        request_id, request_fingerprint, track_id, outcome
+                    ) VALUES (%s, %s, %s, %s)
+                    """,
+                    (
+                        request_id,
+                        fingerprint,
+                        track_id,
+                        Jsonb(outcome.model_dump(mode="json")),
+                    ),
+                )
+        if not replay and self._working_cache is not None:
+            self._working_cache.delete(track_id)
         return outcome
 
     def get(self, track_id: str) -> DailyTrackDetail | None:
@@ -1485,6 +1591,15 @@ def _activation_fingerprint(seed_run_id: str) -> str:
 def _retry_fingerprint(track_id: str) -> str:
     value = {
         "action": "daily-tracks.retry/v1",
+        "track_id": track_id,
+    }
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
+def _stop_fingerprint(track_id: str) -> str:
+    value = {
+        "action": "daily-tracks.stop/v1",
         "track_id": track_id,
     }
     serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
