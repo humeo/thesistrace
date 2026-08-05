@@ -118,9 +118,8 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     source = (ROOT / "web" / "src" / "shell" / "AppShell.tsx").read_text()
     main = (ROOT / "web" / "src" / "main.tsx").read_text()
     package = json.loads((ROOT / "web" / "package.json").read_text())
-    browser = (ROOT / "web" / "playwright.core-shell.config.ts").read_text()
+    browser = (ROOT / "web" / "playwright.config.ts").read_text()
     vite = (ROOT / "web" / "vite.config.ts").read_text()
-    core_redirect = (ROOT / "web" / "core.html").read_text()
     core_app = (ROOT / "web" / "src" / "shell" / "CoreApp.tsx").read_text()
     assert source.count("path:") == 4
     assert 'path: "/data"' in source
@@ -133,19 +132,35 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     assert "history.replaceState" in main
     for inactive in ('from "./App"', "HostedAuthBoundary", "isCoreRoute"):
         assert inactive not in main
-    assert package["scripts"]["test:e2e"] == (
-        "playwright test --config=playwright.core-shell.config.ts --reporter=line"
-    )
+    assert package["scripts"]["test:e2e"] == "playwright test --reporter=line"
+    assert set(package["scripts"]) == {
+        "build",
+        "dev",
+        "test:e2e",
+        "test:shell",
+        "typecheck",
+    }
     assert "thesistrace-api --port 8101" in browser
     assert "thesistrace-worker" in browser
     assert "thesistrace-core-api" not in browser
     assert "thesistrace-core-worker" not in browser
     assert 'new URL("./index.html"' in vite
     assert 'new URL("./core.html"' not in vite
-    assert 'window.location.replace("/data")' in core_redirect
-    assert 'src="/src/shell/main.tsx"' not in core_redirect
+    assert 'pathname === "/core.html"' in vite
+    assert "response.statusCode = 404" in vite
     assert "isCoreRoute" not in core_app
     assert "ResourceRoute" not in core_app
+    for removed_path in (
+        "core.html",
+        "e2e",
+        "e2e-hosted",
+        "playwright.core-shell.config.ts",
+        "playwright.hosted.config.ts",
+        "src/App.tsx",
+        "src/hostedAuth.tsx",
+        "src/shell/main.tsx",
+    ):
+        assert not (ROOT / "web" / removed_path).exists()
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:

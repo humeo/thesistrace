@@ -36,7 +36,7 @@ for removed_path in \
   web/core.html \
   web/e2e \
   web/e2e-hosted \
-  web/playwright.config.ts \
+  web/playwright.core-shell.config.ts \
   web/playwright.hosted.config.ts \
   web/src/App.tsx \
   web/src/hostedAuth.tsx \
@@ -49,10 +49,10 @@ trap './scripts/core-test-runtime down' EXIT
 bun run --cwd web typecheck
 bun run --cwd web build
 bun run --cwd web test:shell
+./scripts/core-test-runtime run bun run --cwd web test:e2e
 ./scripts/core-test-runtime run uv run pytest -q \
   tests/architecture/test_core_runtime_boundaries.py \
   tests/acceptance/test_core_backend_cutover.py
-./scripts/core-test-runtime run bun run --cwd web test:e2e
 ```
 
 The active Web tree and `package.json` must contain no import, script, Vite

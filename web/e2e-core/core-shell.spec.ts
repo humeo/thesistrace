@@ -29,11 +29,8 @@ test("uses the four-resource shell as the only active product", async ({ page })
     ),
   ).toHaveCount(0);
 
-  await page.goto("/core.html");
-  await expect(page).toHaveURL(/\/data$/);
-  await expect(
-    page.getByRole("navigation", { name: "Product resources" }).getByRole("link"),
-  ).toHaveCount(4);
+  const removedEntry = await page.request.get("/core.html");
+  expect(removedEntry.status()).toBe(404);
 });
 
 test("publishes the first Dataset Release through the real Core", async ({ page }) => {

@@ -449,7 +449,7 @@ function ResearchResultView({ result }: { result: ResearchResult }) {
 
       <section className="research-result-section research-provenance">
         <div className="section-heading">
-          <p className="eyebrow">Frozen inputs and calculation contracts</p>
+          <p className="eyebrow">Run inputs and calculation contracts</p>
           <h2>Provenance</h2>
         </div>
         <dl>

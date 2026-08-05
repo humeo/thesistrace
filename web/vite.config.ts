@@ -6,7 +6,23 @@ const webPort = Number(process.env.THESISTRACE_WEB_PORT ?? "5173");
 const apiPort = Number(process.env.THESISTRACE_API_PORT ?? "8000");
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    {
+      name: "reject-removed-web-entries",
+      configureServer(server) {
+        server.middlewares.use((request, response, next) => {
+          const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/core.html") {
+            response.statusCode = 404;
+            response.end();
+            return;
+          }
+          next();
+        });
+      },
+    },
+  ],
   build: {
     rollupOptions: {
       input: {
