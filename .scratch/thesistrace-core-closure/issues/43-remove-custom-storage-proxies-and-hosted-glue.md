@@ -31,7 +31,7 @@ do
   test ! -e "$removed_path"
 done
 
-python - <<'PY'
+uv run python - <<'PY'
 import tomllib
 from pathlib import Path
 
