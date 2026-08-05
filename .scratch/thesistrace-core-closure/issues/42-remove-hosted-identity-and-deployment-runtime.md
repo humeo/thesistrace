@@ -37,9 +37,11 @@ for removed_path in \
   scripts/hosted-smoke.py \
   scripts/hosted/configure_smtp.py \
   scripts/hosted/seed_acceptance_state.py \
+  scripts/validate-cloudflare-edge \
   src/thesistrace/auth.py \
   src/thesistrace/operator.py \
   src/thesistrace/provisioning.py \
+  src/thesistrace/rate_limits.py \
   src/thesistrace/tenancy.py \
   src/thesistrace/hosted/control.py \
   src/thesistrace/hosted/management.py \
@@ -59,14 +61,20 @@ do
   test ! -e "$removed_path"
 done
 
-! rg -n \
+if rg -n \
   --glob '!docs/adr/*.md' \
   --glob '!docs/research/*.md' \
   --glob '!docs/archive/*.md' \
-  'InsForge|Personal Workspace|THESISTRACE_AUTH_MODE|auth_mode|insforge_|thesistrace-operator|hosted-(up|deploy|down|restart|smoke|smtp-configure|config|operator)' \
+  --glob '!web/node_modules/**' \
+  --glob '!web/dist/**' \
+  'InsForge|Personal Workspace|Cloudflare|Caddy|THESISTRACE_AUTH_MODE|auth_mode|insforge_|thesistrace-operator|hosted-(up|deploy|down|restart|smoke|smtp-configure|config|operator)' \
   pyproject.toml uv.lock Makefile src scripts tests web
+then
+  echo 'Hosted identity or deployment runtime remains in the active tree' >&2
+  exit 1
+fi
 
-! rg -n \
+if rg -n \
   'workspace_id|personal_workspace|user_id|auth_session|login|hosted' \
   src/thesistrace/data \
   src/thesistrace/definition \
@@ -75,6 +83,10 @@ done
   src/thesistrace/publication \
   src/thesistrace/entrypoints \
   web/src
+then
+  echo 'Identity or Hosted placeholders remain in Core resource modules' >&2
+  exit 1
+fi
 
 uv run pytest -q tests/architecture tests/integration tests/acceptance
 

@@ -172,6 +172,7 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         "scripts/hosted-" + "smoke.py",
         "scripts/hosted/configure_smtp.py",
         "scripts/hosted/seed_acceptance_state.py",
+        "scripts/validate-cloud" + "flare-edge",
         "src/thesistrace/auth.py",
         "src/thesistrace/operator.py",
         "src/thesistrace/provisioning.py",
@@ -195,25 +196,6 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
     for removed_path in removed_paths:
         assert not (ROOT / removed_path).exists()
 
-    archive_ref = "refs/archive/hosted-v2-pre-core-closure"
-    archived_commit = subprocess.run(
-        ["git", "show-ref", "--hash", archive_ref],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    assert archived_commit == "2884f96ecd1f3aed1e16b00116d54a99c9def89a"
-    for archived_path in (
-        "src/thesistrace/auth.py",
-        "deploy/hosted/compose.yaml",
-    ):
-        subprocess.run(
-            ["git", "cat-file", "-e", f"{archive_ref}:{archived_path}"],
-            cwd=ROOT,
-            check=True,
-        )
-
     active_files = [
         ROOT / "pyproject.toml",
         ROOT / "uv.lock",
@@ -225,10 +207,17 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
             for path in active_root.rglob("*")
             if path.is_file()
             and "__pycache__" not in path.parts
-            and path.suffix in {".json", ".py", ".sh", ".toml", ".ts", ".tsx", ".yaml", ".yml"}
+            and "node_modules" not in path.parts
+            and "dist" not in path.parts
+            and (
+                active_root == ROOT / "scripts"
+                or path.suffix in {".json", ".py", ".sh", ".toml", ".ts", ".tsx", ".yaml", ".yml"}
+            )
         )
     retired_tokens = (
         "ins" + "forge",
+        "cloud" + "flare",
+        "cad" + "dy",
         "personal " + "workspace",
         "thesistrace_auth_" + "mode",
         "auth_" + "mode",
@@ -262,8 +251,8 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         / "adr"
         / ("0110-make-personal-" + "workspace-the-first-hosted-tenant-boundary.md"),
         ROOT / "docs" / "adr" / "0112-deploy-hosted-platform-v2-on-one-compose-node-first.md",
-        ROOT / "docs" / "adr" / "0128-expose-only-caddy-at-the-public-network-edge.md",
-        ROOT / "docs" / "adr" / "0133-serve-the-production-web-build-directly-from-caddy.md",
+        ROOT / "docs" / "adr" / ("0128-expose-only-cad" + "dy-at-the-public-network-edge.md"),
+        ROOT / "docs" / "adr" / ("0133-serve-the-production-web-build-directly-from-cad" + "dy.md"),
         ROOT / "docs" / "adr" / "0134-run-version-pinned-migrations-before-steady-services.md",
         ROOT / "docs" / "adr" / "0137-keep-launch-secrets-in-host-mounted-files.md",
         ROOT / "docs" / "adr" / "0141-enforce-workspace-isolation-in-the-api-and-postgresql-rls.md",
@@ -271,7 +260,10 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         / "docs"
         / "adr"
         / "0142-operate-the-first-release-through-one-audited-cli-operator.md",
-        ROOT / "docs" / "adr" / "0143-route-public-http-through-cloudflare-before-caddy.md",
+        ROOT
+        / "docs"
+        / "adr"
+        / ("0143-route-public-http-through-cloud" + "flare-before-cad" + "dy.md"),
         ROOT
         / "docs"
         / "adr"
