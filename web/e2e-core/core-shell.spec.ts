@@ -483,7 +483,7 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
 
 test("shows recent and cumulative DailyTrack analysis", async ({ page }) => {
   const observations = Array.from({ length: 504 }, (_, index) => ({
-    session: `2026-${String(Math.floor(index / 28) + 1).padStart(2, "0")}-${String((index % 28) + 1).padStart(2, "0")}`,
+    session: new Date(Date.UTC(2024, 0, index + 1)).toISOString().slice(0, 10),
     gross_nav: String(1_000_000 + index * 1_100),
     net_nav: String(1_000_000 + index * 1_000),
     benchmark_nav: String(1_000_000 + index * 700),

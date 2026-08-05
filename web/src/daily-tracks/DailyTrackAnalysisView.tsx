@@ -8,7 +8,7 @@ type CorrelationSummary = {
   valid_session_count: number;
 };
 
-export type FactorHorizon = {
+export type DailyTrackFactorHorizon = {
   horizon: 1 | 5 | 20;
   summary: {
     ic: CorrelationSummary;
@@ -24,7 +24,7 @@ export type FactorHorizon = {
   };
 };
 
-export type StrategyObservation = {
+export type DailyTrackStrategyObservation = {
   session: string;
   gross_nav: string;
   net_nav: string;
@@ -38,51 +38,32 @@ export type StrategyObservation = {
   suspension_rejections: number;
 };
 
-type StrategyMetrics = {
-  net_cumulative_return: number;
-  benchmark_cumulative_return: number;
-  annualized_excess_return: number;
-  maximum_drawdown: { value: number | null };
-  sharpe: number | null;
-  transaction_costs: { cumulative_amount: number };
-};
-
-export type ResearchAnalysis = {
-  factor: { horizons: Record<"1" | "5" | "20", FactorHorizon> };
+export type DailyTrackAnalysis = {
+  factor: {
+    horizons: Record<"1" | "5" | "20", DailyTrackFactorHorizon>;
+  };
   strategy: {
     summary: {
-      alpha_checksum?: string;
-      initial_cash_cny?: string;
-      source_checksum?: string;
-      metrics: StrategyMetrics;
+      metrics: {
+        net_cumulative_return: number;
+        benchmark_cumulative_return: number;
+        annualized_excess_return: number;
+        maximum_drawdown: { value: number | null };
+        sharpe: number | null;
+        transaction_costs: { cumulative_amount: number };
+      };
     };
     benchmark: {
       universe: string;
       methodology: "selected_universe_equal_weight";
     };
-    observations: StrategyObservation[];
-  };
-  provenance?: {
-    schema_version: string;
-    research_run_id: string;
-    immutable_input_sha256: string;
-    dataset_release_id: string;
-    calculation_contracts: Record<string, unknown>;
-    semantic_versions: Record<string, string>;
+    observations: DailyTrackStrategyObservation[];
   };
 };
 
 const FACTOR_HORIZONS = ["1", "5", "20"] as const;
 
-export function ResearchAnalysisView({
-  analysis,
-  strategyHeading = "Strategy / Benchmark",
-  strategyEyebrow = "One fill path · net is primary",
-}: {
-  analysis: ResearchAnalysis;
-  strategyHeading?: string;
-  strategyEyebrow?: string;
-}) {
+export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnalysis }) {
   const metrics = analysis.strategy.summary.metrics;
   return (
     <div className="research-result">
@@ -100,8 +81,8 @@ export function ResearchAnalysisView({
 
       <section className="research-result-section">
         <div className="section-heading">
-          <p className="eyebrow">{strategyEyebrow}</p>
-          <h2>{strategyHeading}</h2>
+          <p className="eyebrow">Fixed origin · recent chart</p>
+          <h2>Cumulative Strategy</h2>
           <p>Selected universe {analysis.strategy.benchmark.universe}</p>
         </div>
         <div className="strategy-metrics">
@@ -126,32 +107,11 @@ export function ResearchAnalysisView({
         </div>
         <StrategyBenchmarkChart observations={analysis.strategy.observations} />
       </section>
-
-      {analysis.provenance ? (
-        <section className="research-result-section research-provenance">
-          <div className="section-heading">
-            <p className="eyebrow">Frozen inputs and calculation contracts</p>
-            <h2>Provenance</h2>
-          </div>
-          <dl>
-            <div>
-              <dt>Dataset Release</dt>
-              <dd>{analysis.provenance.dataset_release_id}</dd>
-            </div>
-            <div>
-              <dt>Input digest</dt>
-              <dd><code>{shortDigest(analysis.provenance.immutable_input_sha256)}</code></dd>
-            </div>
-            <div><dt>Result schema</dt><dd>{analysis.provenance.schema_version}</dd></div>
-            <div><dt>Kernel</dt><dd>{analysis.provenance.semantic_versions.kernel}</dd></div>
-          </dl>
-        </section>
-      ) : null}
     </div>
   );
 }
 
-function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
+function FactorHorizonView({ horizon }: { horizon: DailyTrackFactorHorizon }) {
   return (
     <section aria-label={`${horizon.horizon}-session Factor`}>
       <strong>{horizon.horizon}-session</strong>
@@ -177,7 +137,11 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StrategyBenchmarkChart({ observations }: { observations: StrategyObservation[] }) {
+function StrategyBenchmarkChart({
+  observations,
+}: {
+  observations: DailyTrackStrategyObservation[];
+}) {
   const lines = useMemo(() => chartLines(observations), [observations]);
   if (observations.length === 0) return <p>No recent Strategy observations.</p>;
   return (
@@ -202,7 +166,7 @@ function StrategyBenchmarkChart({ observations }: { observations: StrategyObserv
   );
 }
 
-function chartLines(observations: StrategyObservation[]) {
+function chartLines(observations: DailyTrackStrategyObservation[]) {
   if (observations.length === 0) return { strategy: "", benchmark: "" };
   const firstStrategy = Number(observations[0].net_nav);
   const firstBenchmark = Number(observations[0].benchmark_nav);
@@ -236,8 +200,4 @@ function formatCny(value: number) {
     currency: "CNY",
     maximumFractionDigits: 0,
   }).format(value);
-}
-
-function shortDigest(value: string) {
-  return `${value.slice(0, 12)}…${value.slice(-8)}`;
 }

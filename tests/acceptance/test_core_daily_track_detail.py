@@ -11,8 +11,24 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource, _append_session
 from thesistrace.data.source import CanonicalSourceBatch, CollectionPlan
 from thesistrace.entrypoints.http import create_app
-from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.runtime import (
+    CoreRuntime,
+    CoreSettings,
+    core_environment_is_configured,
+)
 from thesistrace.publication import PublishedRef
+from thesistrace.research_kernel import (
+    AdvanceInput,
+    KernelState,
+    RunInput,
+    advance,
+    continuation_snapshot,
+    run,
+)
+from thesistrace.research_kernel.canonical_state import (
+    canonical_sessions,
+    slice_canonical_sessions,
+)
 
 
 @pytest.mark.skipif(
@@ -67,12 +83,39 @@ def test_daily_track_detail_keeps_recent_windows_and_origin_metrics() -> None:
             "strategy_session": track["strategy_session"],
         }
 
+        origin = _stored_origin(runtime.database, track_id)
+        reference = _reference_track_state(
+            runtime,
+            origin=origin,
+            release_ids=[first_wide_release["id"], wide_release["id"]],
+        )
+        reference_output = reference.output_snapshot()
+        reference_factor = reference_output["factor_evaluation"]
+        target_calendar = canonical_sessions(
+            runtime.data.load_canonical(wide_release["id"]),
+            "Head Dataset Release",
+        )
         for horizon in ("1", "5", "20"):
             factor = detail["factor"]["horizons"][horizon]
+            expected = reference_factor["horizons"][horizon]
+            expected_daily = expected["daily"]
+            expected_sessions = [item["session"] for item in expected_daily]
+            assert expected_sessions == target_calendar[-504:]
             assert factor["horizon"] == int(horizon)
-            assert factor["coverage"]["signal_session_count"] == 504
+            assert factor["summary"] == expected["summary"]
+            assert factor["coverage"] == {
+                "signal_session_count": len(expected_daily),
+                "ic_valid_session_count": expected["summary"]["ic"][
+                    "valid_session_count"
+                ],
+                "rank_ic_valid_session_count": expected["summary"]["rank_ic"][
+                    "valid_session_count"
+                ],
+                "quantile_valid_session_count": sum(
+                    item["quantile_reason"] is None for item in expected_daily
+                ),
+            }
 
-        checkpoint = _head_checkpoint(runtime, track_id)
         retained = _recent_checkpoint_observations(runtime, track_id)
         observations = detail["strategy"]["observations"]
         assert len(retained) == 506
@@ -82,8 +125,31 @@ def test_daily_track_detail_keeps_recent_windows_and_origin_metrics() -> None:
         assert [item["session"] for item in observations] == sorted(
             item["session"] for item in observations
         )
-        assert detail["strategy"]["summary"]["metrics"] == checkpoint["strategy_state"][
-            "summary"
+        api_metrics = detail["strategy"]["summary"]["metrics"]
+        reference_metrics = reference_output["strategy_backtest"]["metrics"]
+        for metric in (
+            "net_cumulative_return",
+            "benchmark_cumulative_return",
+            "annualized_excess_return",
+            "sharpe",
+        ):
+            assert api_metrics[metric] == reference_metrics[metric]
+        assert api_metrics["maximum_drawdown"]["value"] == reference_metrics[
+            "maximum_drawdown"
+        ]["value"]
+        assert api_metrics["transaction_costs"]["cumulative_amount"] == reference_metrics[
+            "transaction_costs"
+        ]["cumulative_amount"]
+
+        recent_canonical = slice_canonical_sessions(
+            runtime.data.load_canonical(wide_release["id"]),
+            target_calendar[-756:],
+        )
+        recent_only = run(_run_input(origin, recent_canonical)).artifacts_snapshot()[
+            "strategy_backtest"
+        ]
+        assert api_metrics["net_cumulative_return"] != recent_only["metrics"][
+            "net_cumulative_return"
         ]
         assert detail["strategy"]["benchmark"] == {
             "universe": "top1000",
@@ -205,33 +271,10 @@ def _publish_successor(client: TestClient, *, request_id: str) -> dict[str, obje
     return latest
 
 
-def _head_checkpoint(runtime: object, track_id: str) -> Mapping[str, object]:
-    with runtime.database.transaction() as transaction:
-        row = transaction.execute(
-            """
-            SELECT checkpoint.manifest_sha256, checkpoint.provenance
-            FROM daily_tracks.tracks AS track
-            JOIN daily_tracks.checkpoints AS checkpoint
-              ON checkpoint.manifest_sha256 = track.head_manifest_sha256
-            WHERE track.id = %s
-            """,
-            (track_id,),
-        ).fetchone()
-    assert row is not None
-    bundle = runtime.publication.read(
-        PublishedRef(
-            manifest_sha256=str(row["manifest_sha256"]),
-            kind="daily-track.checkpoint",
-            provenance=dict(row["provenance"]),
-        )
-    )
-    payload = bundle.payloads["checkpoint"]
-    value = json.loads(payload.content)
-    assert isinstance(value, Mapping)
-    return value
-
-
-def _recent_checkpoint_observations(runtime: object, track_id: str) -> list[dict[str, object]]:
+def _recent_checkpoint_observations(
+    runtime: CoreRuntime,
+    track_id: str,
+) -> list[dict[str, object]]:
     with runtime.database.transaction() as transaction:
         rows = transaction.execute(
             """
@@ -255,6 +298,76 @@ def _recent_checkpoint_observations(runtime: object, track_id: str) -> list[dict
         for observation in value["strategy_state"]["retained_delta"]:
             by_session[str(observation["session"])] = dict(observation)
     return [by_session[session] for session in sorted(by_session)]
+
+
+def _stored_origin(database: PostgresDatabase, track_id: str) -> dict[str, object]:
+    with database.transaction() as transaction:
+        row = transaction.execute(
+            "SELECT origin FROM daily_tracks.tracks WHERE id = %s",
+            (track_id,),
+        ).fetchone()
+    assert row is not None
+    return dict(row["origin"])
+
+
+def _reference_track_state(
+    runtime: CoreRuntime,
+    *,
+    origin: dict[str, object],
+    release_ids: list[str],
+) -> KernelState:
+    seed = runtime.data.load_canonical(str(origin["seed_release_id"]))
+    seed_sessions = canonical_sessions(seed, "Seed Dataset Release")
+    state = run(
+        _run_input(
+            origin,
+            slice_canonical_sessions(seed, seed_sessions[-756:]),
+        )
+    ).track_state
+    for release_id in release_ids:
+        target = runtime.data.load_canonical(release_id)
+        prior_sessions = canonical_sessions(state.canonical_snapshot(), "Reference state")
+        target_sessions = canonical_sessions(target, "Target Dataset Release")
+        assert target_sessions[: len(prior_sessions)] == prior_sessions
+        appended_sessions = target_sessions[len(prior_sessions) :]
+        state = advance(
+            AdvanceInput(
+                prior_state=state,
+                target_canonical_release=target,
+                appended_sessions=appended_sessions,
+                continuation=continuation_snapshot(state),
+            )
+        )
+    return state
+
+
+def _run_input(origin: dict[str, object], canonical: dict[str, object]) -> RunInput:
+    immutable_input = origin["immutable_input"]
+    assert isinstance(immutable_input, Mapping)
+    definition = immutable_input["definition"]
+    strategy = immutable_input["strategy"]
+    costs = immutable_input["costs"]
+    field_bindings = immutable_input["field_bindings"]
+    assert isinstance(definition, Mapping)
+    assert isinstance(strategy, Mapping)
+    assert isinstance(costs, Mapping)
+    assert isinstance(field_bindings, Mapping)
+    content = definition["content"]
+    assert isinstance(content, Mapping)
+    return RunInput(
+        canonical_data=canonical,
+        alpha_expression=content["alpha"],
+        field_bindings={str(key): str(value) for key, value in field_bindings.items()},
+        universe=str(content["universe"]),
+        neutralization=str(content["neutralization"]),
+        holdings_count=int(strategy["holdings_count"]),
+        rebalance_interval=int(strategy["rebalance_every_sessions"]),
+        initial_cash_cny=str(strategy["initial_cash_cny"]),
+        commission_rate_all_in=str(costs["commission_rate_all_in"]),
+        commission_min_cny=str(costs["commission_min_cny"]),
+        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+        transfer_fee_rate=str(costs["transfer_fee_rate"]),
+    )
 
 
 def _drop_product_schemas(settings: CoreSettings) -> None:

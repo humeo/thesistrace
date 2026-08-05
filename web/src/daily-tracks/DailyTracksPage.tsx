@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import {
-  ResearchAnalysisView,
-  type ResearchAnalysis,
-} from "../analysis/ResearchAnalysisView";
+  DailyTrackAnalysisView,
+  type DailyTrackAnalysis,
+} from "./DailyTrackAnalysisView";
 
 type DailyTrackSummary = {
   id: string;
@@ -32,8 +32,8 @@ type DailyTrackDetail = {
   strategy_session: string;
   lag_releases: number;
   blocked_reason: string | null;
-  factor: ResearchAnalysis["factor"];
-  strategy: ResearchAnalysis["strategy"];
+  factor: DailyTrackAnalysis["factor"];
+  strategy: DailyTrackAnalysis["strategy"];
 };
 
 type DailyTrackList = { items: DailyTrackSummary[]; next_cursor: string | null };
@@ -104,7 +104,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     return <section aria-label="Daily Tracks"><p>Loading DailyTracks…</p></section>;
   }
   if (track) {
-    const analysis: ResearchAnalysis = {
+    const analysis: DailyTrackAnalysis = {
       factor: track.factor,
       strategy: track.strategy,
     };
@@ -159,11 +159,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
           </div>
         </section>
 
-        <ResearchAnalysisView
-          analysis={analysis}
-          strategyEyebrow="Fixed origin · recent chart"
-          strategyHeading="Cumulative Strategy"
-        />
+        <DailyTrackAnalysisView analysis={analysis} />
       </section>
     );
   }
