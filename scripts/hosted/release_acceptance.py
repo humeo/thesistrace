@@ -232,10 +232,6 @@ def main() -> None:
         or public.get("public_origin_ready") is not True
     ):
         raise ReleaseAcceptanceError("Public-Origin acceptance evidence is incomplete")
-    records["system_health"] = records["public_origin"]
-    records["data_health"] = records["public_origin"]
-    records["quantitative_health"] = records["public_origin"]
-
     records["direct_origin_security"] = run_command(
         "direct_origin_security",
         (
@@ -271,7 +267,16 @@ def main() -> None:
         ),
         environment=postgres_environment,
     )
-    records["migrations"] = records["postgresql_rls"]
+    records["migrations"] = run_command(
+        "migrations",
+        (
+            str(ROOT / ".venv" / "bin" / "pytest"),
+            "-q",
+            "tests/hosted/test_workspace_isolation.py::"
+            "test_production_roles_and_rls_cover_every_private_table",
+        ),
+        environment=postgres_environment,
+    )
     records["backend"] = run_command(
         "backend",
         (str(ROOT / ".venv" / "bin" / "pytest"), "-q"),
@@ -291,7 +296,11 @@ def main() -> None:
         ("bun", "run", "--cwd", "web", "test:e2e"),
     )
 
-    checks = {name: True for name in sorted(REQUIRED_LAUNCH_CHECKS)}
+    checks = {
+        name: isinstance(records.get(name), dict)
+        and records[name].get("status") == "passed"
+        for name in sorted(REQUIRED_LAUNCH_CHECKS)
+    }
     evidence = {
         "schema_version": "hosted-v2-launch-v1",
         "clean_stack": True,

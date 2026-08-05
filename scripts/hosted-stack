@@ -127,13 +127,8 @@ prepare() {
     append_value_if_missing THESISTRACE_EDGE_TRUSTED_PROXIES private_ranges
     append_value_if_missing THESISTRACE_ORIGIN_TLS internal
     append_secret_if_missing THESISTRACE_API_DATABASE_PASSWORD
-    append_secret_if_missing THESISTRACE_RELAY_DATABASE_PASSWORD
-    append_secret_if_missing THESISTRACE_DATA_DATABASE_PASSWORD
-    append_secret_if_missing THESISTRACE_COMPUTE_DATABASE_PASSWORD
     append_secret_if_missing THESISTRACE_HEALTH_DATABASE_PASSWORD
     append_secret_if_missing THESISTRACE_OBJECT_STORE_API_TOKEN
-    append_secret_if_missing THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN
-    append_secret_if_missing THESISTRACE_OBJECT_STORE_DATA_TOKEN
     move_secret_to_file POSTGRES_PASSWORD postgres_password
     move_secret_to_file INSFORGE_JWT_SECRET insforge_jwt_secret
     move_secret_to_file INSFORGE_ENCRYPTION_KEY insforge_encryption_key
@@ -142,14 +137,10 @@ prepare() {
     move_secret_to_file THESISTRACE_API_DATABASE_PASSWORD api_database_password
     move_secret_to_file THESISTRACE_HEALTH_DATABASE_PASSWORD health_database_password
     move_secret_to_file THESISTRACE_OBJECT_STORE_API_TOKEN object_store_api_token
-    move_secret_to_file THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN object_store_compute_token
-    move_secret_to_file THESISTRACE_OBJECT_STORE_DATA_TOKEN object_store_data_token
     move_secret_to_file TUSHARE_TOKEN tushare_token
     move_secret_to_file THESISTRACE_LAUNCH_QUALIFICATION_KEY launch_qualification_key
-    printf '{"api":"%s","compute":"%s","data":"%s"}' \
+    printf '{"api":"%s"}' \
         "$(sed -n '1p' "$secret_dir/object_store_api_token")" \
-        "$(sed -n '1p' "$secret_dir/object_store_compute_token")" \
-        "$(sed -n '1p' "$secret_dir/object_store_data_token")" \
         >"$secret_dir/object_store_tokens"
     chmod 600 "$secret_dir/object_store_tokens"
     postgres_user="${POSTGRES_USER:-$(environment_value POSTGRES_USER)}"

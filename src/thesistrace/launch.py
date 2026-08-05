@@ -15,17 +15,14 @@ REQUIRED_LAUNCH_CHECKS = frozenset(
         "browser",
         "capacity",
         "coordinated_backup",
-        "data_health",
         "direct_origin_security",
         "frontend",
         "full_restore",
         "migrations",
         "postgresql_rls",
         "public_origin",
-        "quantitative_health",
         "source_authorization",
         "storage",
-        "system_health",
     }
 )
 

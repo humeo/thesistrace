@@ -13,7 +13,6 @@ from thesistrace.launch import (
     LaunchQualificationError,
     LaunchQualificationService,
     launch_attestation,
-    launch_failures,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,13 +36,6 @@ def public_smoke_module() -> ModuleType:
     return module
 
 
-def local_public_smoke_module() -> ModuleType:
-    path = ROOT / "scripts" / "hosted-local-smoke.py"
-    spec = importlib.util.spec_from_file_location("hosted_local_public_smoke", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def local_postgres_module() -> ModuleType:
@@ -139,102 +131,10 @@ def stable_runtime_state(_environment) -> dict[str, object]:
     return {"runtime": "stable"}
 
 
-def test_local_gate_selection_supports_one_gate_or_one_contiguous_range(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-
-    exact = module.select_phases(
-        parse_arguments(module, tmp_path, "--phase", "identity_product")
-    )
-    ranged = module.select_phases(
-        parse_arguments(
-            module,
-            tmp_path,
-            "--from",
-            "api_relay_recovery",
-            "--until",
-            "publication_recovery",
-        )
-    )
-
-    assert [phase.name for phase in exact] == ["identity_product"]
-    assert [phase.name for phase in ranged] == [
-        "api_relay_recovery",
-        "compute_recovery",
-        "publication_recovery",
-    ]
 
 
-def test_local_gate_selection_rejects_mixed_or_reversed_selectors(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-
-    with pytest.raises(SystemExit):
-        parse_arguments(
-            module,
-            tmp_path,
-            "--phase",
-            "identity_product",
-            "--from",
-            "identity_product",
-        )
-    with pytest.raises(module.LocalAcceptanceError, match="canonical order"):
-        module.select_phases(
-            parse_arguments(
-                module,
-                tmp_path,
-                "--from",
-                "publication_recovery",
-                "--until",
-                "api_relay_recovery",
-            )
-        )
 
 
-def test_local_gate_requires_prerequisites_from_the_same_session(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-    calls: list[str] = []
-
-    def executor(phase, environment):
-        calls.append(phase.name)
-        return {"status": "passed"}, {"status": "passed"}
-
-    module.run_acceptance(
-        parse_arguments(
-            module,
-            tmp_path,
-            "--phase",
-            "reset",
-            "--cleanup-policy",
-            "never",
-        ),
-        executor=executor,
-        runtime_reader=runtime_capacity,
-        fingerprint_reader=lambda: {"source_sha256": "a" * 64},
-        state_reader=lambda _environment: {"runtime": "reset"},
-    )
-
-    with pytest.raises(module.LocalAcceptanceError, match="core_session"):
-        module.run_acceptance(
-            parse_arguments(
-                module,
-                tmp_path,
-                "--phase",
-                "identity_product",
-                "--cleanup-policy",
-                "never",
-            ),
-            executor=executor,
-            runtime_reader=runtime_capacity,
-            fingerprint_reader=lambda: {"source_sha256": "a" * 64},
-            state_reader=lambda _environment: {"runtime": "reset"},
-        )
-
-    assert calls == ["reset"]
 
 
 def test_local_gate_failure_preserves_state_unless_cleanup_is_explicit(
@@ -392,65 +292,6 @@ def test_local_gate_command_failure_writes_a_private_diagnostic_log(
     assert failed.value.record["completed_at"].endswith("+00:00")
 
 
-def test_local_resume_runs_only_the_next_canonical_compatible_gate(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-    calls: list[str] = []
-
-    def executor(phase, environment):
-        calls.append(phase.name)
-        payload = {"status": "passed"}
-        if phase.name == "core_session":
-            payload["release_bundle_id"] = "release-local"
-        return payload, {"status": "passed"}
-
-    common = {
-        "executor": executor,
-        "runtime_reader": runtime_capacity,
-        "fingerprint_reader": lambda: {"source_sha256": "a" * 64},
-        "state_reader": lambda _environment: {"runtime": "stable"},
-    }
-    first = module.run_acceptance(
-        parse_arguments(
-            module,
-            tmp_path,
-            "--from",
-            "reset",
-            "--until",
-            "core_session",
-            "--cleanup-policy",
-            "never",
-        ),
-        **common,
-    )
-    calls.clear()
-    resumed = module.run_acceptance(
-        parse_arguments(
-            module,
-            tmp_path,
-            "--resume",
-            "--cleanup-policy",
-            "never",
-        ),
-        **common,
-    )
-
-    assert calls == ["identity_product"]
-    assert resumed["selected_gates"] == ["identity_product"]
-    assert resumed["run_id"] == first["run_id"]
-    assert resumed["state_epoch"] == first["state_epoch"]
-    manifest_path = module.session_manifest_path(arguments(module, tmp_path))
-    manifest = json.loads(manifest_path.read_text())
-    assert stat.S_IMODE(manifest_path.stat().st_mode) == 0o600
-    assert manifest["release_bundle_id"] == "release-local"
-    assert len(manifest["gates"]["core_session"]["input_state_digest"]) == 64
-    assert len(manifest["gates"]["core_session"]["output_state_digest"]) == 64
-    assert [record["gate"] for record in manifest["gate_history"]] == [
-        "reset",
-        "core_session",
-        "identity_product",
-    ]
 
 
 def test_local_session_rejects_changed_inputs_or_runtime_state(
@@ -558,33 +399,6 @@ def test_release_core_and_harness_fingerprints_are_independent(tmp_path: Path) -
     )
 
 
-def test_harness_change_invalidates_evidence_without_destroying_core_state() -> None:
-    module = local_acceptance_module()
-    manifest = {
-        "fingerprint": {
-            "release_core": {"source": "release-a"},
-            "harness": {"source": "harness-a"},
-        },
-        "current_state_digest": "runtime-after-failed-gate",
-        "gates": {
-            "reset": {"status": "passed", "output_state_digest": "reset"},
-            "core_session": {"status": "passed", "output_state_digest": "core"},
-            "identity_product": {
-                "status": "failed",
-                "output_state_digest": "runtime-after-failed-gate",
-            },
-        },
-    }
-    changed = {
-        "release_core": {"source": "release-a"},
-        "harness": {"source": "harness-b"},
-    }
-
-    assert module.reconcile_fingerprint(manifest, changed) == "harness"
-    assert manifest["gates"]["core_session"]["status"] == "passed"
-    assert manifest["gates"]["identity_product"]["status"] == "invalidated"
-    assert manifest["current_state_digest"] == "runtime-after-failed-gate"
-    assert manifest["fingerprint"] == changed
 
 
 def test_release_core_change_requires_a_new_state_epoch() -> None:
@@ -610,55 +424,6 @@ def test_release_core_change_requires_a_new_state_epoch() -> None:
     assert manifest["gates"]["core_session"]["status"] == "passed"
 
 
-def test_state_mismatch_invalidates_the_gate_and_every_later_checkpoint(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-
-    def stable(_environment):
-        return {"state": "stable"}
-
-    common = {
-        "executor": lambda phase, environment: (
-            {
-                "status": "passed",
-                **(
-                    {"release_bundle_id": "release-local"}
-                    if phase.name == "core_session"
-                    else {}
-                ),
-            },
-            {"status": "passed"},
-        ),
-        "runtime_reader": runtime_capacity,
-        "fingerprint_reader": lambda: {"source_sha256": "a" * 64},
-    }
-    module.run_acceptance(
-        parse_arguments(
-            module,
-            tmp_path,
-            "--from",
-            "reset",
-            "--until",
-            "identity_product",
-        ),
-        state_reader=stable,
-        **common,
-    )
-
-    with pytest.raises(module.LocalAcceptanceError, match="input state differs"):
-        module.run_acceptance(
-            parse_arguments(module, tmp_path, "--phase", "core_session"),
-            state_reader=lambda _environment: {"state": "externally-mutated"},
-            **common,
-        )
-
-    manifest = json.loads(
-        module.session_manifest_path(arguments(module, tmp_path)).read_text()
-    )
-    assert manifest["gates"]["reset"]["status"] == "passed"
-    assert manifest["gates"]["core_session"]["status"] == "invalidated"
-    assert manifest["gates"]["identity_product"]["status"] == "invalidated"
 
 
 def test_reset_derives_a_unique_guarded_compose_project_when_unspecified(
@@ -738,66 +503,6 @@ def test_reusable_core_keeps_release_and_source_authorization_state() -> None:
     assert 'rm -f -- "$state_dir/local-source-authorization"' in local_reset
 
 
-def test_local_acceptance_writes_distinct_non_launch_evidence(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-    calls: list[tuple[str, tuple[str, ...]]] = []
-
-    def executor(phase, environment):
-        calls.append((phase.name, phase.command))
-        payload: dict[str, object] = {"status": "passed"}
-        if phase.name == "core_session":
-            payload["release_bundle_id"] = "release-local"
-        return payload, {
-            "status": "passed",
-            "elapsed_seconds": 0.01,
-            "output_sha256": "0" * 64,
-        }
-
-    evidence = module.run_acceptance(
-        arguments(module, tmp_path),
-        executor=executor,
-        runtime_reader=runtime_capacity,
-        state_reader=stable_runtime_state,
-    )
-
-    assert [name for name, _command in calls] == [
-        "reset",
-        "core_session",
-        "identity_product",
-        "postgres_edge_storage",
-        "api_relay_recovery",
-        "compute_recovery",
-        "publication_recovery",
-        "controlled_workflows",
-        "operational_health",
-        "local_recovery",
-        "browser_ready",
-        "frontend_browser",
-    ]
-    assert evidence["schema_version"] == "hosted-v2-local-v1"
-    assert evidence["status"] == "passed"
-    assert evidence["launch_qualified"] is False
-    assert evidence["release_bundle_id"] == "release-local"
-    assert evidence["runtime_capacity"] == runtime_capacity()
-    assert evidence["production_only_not_claimed"] == [
-        "capacity_qualification",
-        "cloudflare",
-        "co_resident_maximum_load",
-        "external_dns_tls",
-        "off_node_recovery",
-        "production_invitation_admission",
-        "production_rto_rpo",
-        "real_smtp_delivery",
-        "whole_node_resilience",
-    ]
-    assert launch_failures(evidence)
-    serialized_commands = " ".join(" ".join(command) for _name, command in calls)
-    assert "acceptance-record-launch" not in serialized_commands
-    assert "capacity-qualification" not in serialized_commands
-    assert "hosted-release-acceptance" not in serialized_commands
-    assert json.loads(arguments(module, tmp_path).output.read_text()) == evidence
 
 
 def test_clean_final_run_executes_every_gate_once_without_checkpoint_reuse(
@@ -834,72 +539,10 @@ def test_clean_final_run_executes_every_gate_once_without_checkpoint_reuse(
     assert evidence["records"]["cleanup"]["status"] == "passed"
 
 
-def test_local_recovery_gates_each_cover_a_real_heartbeat_window() -> None:
-    module = local_acceptance_module()
-    phases = {phase.name: phase for phase in module.local_phases()}
-
-    assert phases["compute_recovery"].timeout_seconds == 900
-    assert phases["publication_recovery"].timeout_seconds == 900
 
 
-def test_local_acceptance_records_the_first_failure_and_preserves_by_default(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-    calls: list[str] = []
-
-    def executor(phase, environment):
-        calls.append(phase.name)
-        if phase.name == "identity_product":
-            raise module.LocalAcceptanceError("public boundary failed")
-        payload = {"status": "passed"}
-        if phase.name == "core_session":
-            payload["release_bundle_id"] = "release-local"
-        return payload, {"status": "passed"}
-
-    with pytest.raises(module.LocalAcceptanceError, match="public boundary failed"):
-        module.run_acceptance(
-            arguments(module, tmp_path),
-            executor=executor,
-            runtime_reader=runtime_capacity,
-            state_reader=stable_runtime_state,
-        )
-
-    assert calls == ["reset", "core_session", "identity_product"]
-    evidence = json.loads(arguments(module, tmp_path).output.read_text())
-    assert evidence["status"] == "failed"
-    assert evidence["launch_qualified"] is False
-    assert evidence["failure"] == {
-        "phase": "identity_product",
-        "message": "public boundary failed",
-    }
-    assert evidence["diagnostics"]["preserved"] is True
 
 
-def test_local_acceptance_records_an_operator_interrupt_before_exit(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-
-    def executor(phase, environment):
-        if phase.name == "identity_product":
-            raise KeyboardInterrupt
-        payload = {"status": "passed"}
-        if phase.name == "core_session":
-            payload["release_bundle_id"] = "release-local"
-        return payload, {"status": "passed"}
-
-    with pytest.raises(module.LocalAcceptanceError, match="operator signal"):
-        module.run_acceptance(
-            arguments(module, tmp_path),
-            executor=executor,
-            runtime_reader=runtime_capacity,
-            state_reader=stable_runtime_state,
-        )
-
-    evidence = json.loads(arguments(module, tmp_path).output.read_text())
-    assert evidence["failure"]["phase"] == "identity_product"
-    assert evidence["diagnostics"]["preserved"] is True
 
 
 def test_local_acceptance_rejects_a_runtime_smaller_than_2c4g(
@@ -923,31 +566,6 @@ def test_local_acceptance_rejects_a_runtime_smaller_than_2c4g(
     assert evidence["failure"]["phase"] == "preflight"
 
 
-def test_local_ops_accepts_only_the_explicit_launch_only_system_gaps() -> None:
-    module = local_ops_module()
-    views = {
-        "system": {
-            "status": "degraded",
-            "checks": {
-                "api": True,
-                "backup": False,
-                "workflow_capacity": False,
-            },
-        },
-        "data": {"status": "available", "checks": {"schema": True}},
-        "quantitative": {
-            "status": "available",
-            "checks": {"deterministic_regression": True},
-        },
-    }
-
-    assert module.validate_local_health_views(views) == {
-        "backup",
-        "workflow_capacity",
-    }
-    views["system"]["checks"]["api"] = False
-    with pytest.raises(module.LocalOperationalHealthError, match="unexpected"):
-        module.validate_local_health_views(views)
 
 
 def test_local_ops_reports_the_failing_endpoint_name_and_url(monkeypatch) -> None:
@@ -967,48 +585,8 @@ def test_local_ops_reports_the_failing_endpoint_name_and_url(monkeypatch) -> Non
         module.read_url("collector", url)
 
 
-def test_local_public_smoke_is_distinct_and_reuses_the_real_product_flow() -> None:
-    script = (ROOT / "scripts" / "hosted-local-smoke.py").read_text()
-
-    for gate in (
-        "identity-product",
-        "api-relay-recovery",
-        "compute-recovery",
-        "publication-recovery",
-    ):
-        assert gate in script
-    assert "hosted-local-public-origin-gate-v1" in script
-    assert "acceptance-record-launch" not in script
-    assert "capacity-qualification" not in script
 
 
-def test_local_public_smoke_dispatches_exactly_one_named_gate(monkeypatch) -> None:
-    module = local_public_smoke_module()
-    calls: list[str] = []
-
-    class ReleaseSmoke:
-        def run_local_identity_product(self):
-            calls.append("identity-product")
-            return {"status": "passed", "gate": "identity-product"}
-
-        def run_local_api_relay_recovery(self):
-            calls.append("api-relay-recovery")
-            return {"status": "passed", "gate": "api-relay-recovery"}
-
-        def run_local_compute_recovery(self):
-            calls.append("compute-recovery")
-            return {"status": "passed", "gate": "compute-recovery"}
-
-        def run_local_publication_recovery(self):
-            calls.append("publication-recovery")
-            return {"status": "passed", "gate": "publication-recovery"}
-
-    monkeypatch.setattr(module, "release_smoke_module", lambda: ReleaseSmoke())
-
-    evidence = module.run_gate("compute-recovery")
-
-    assert calls == ["compute-recovery"]
-    assert evidence == {"status": "passed", "gate": "compute-recovery"}
 
 
 def test_local_postgres_acceptance_uses_an_isolated_real_database(
@@ -1207,42 +785,6 @@ def test_local_resource_sampler_does_not_exec_when_swap_is_disabled_by_docker() 
     assert snapshot["api"]["swap_peak_bytes"] == 0
 
 
-def test_local_acceptance_fails_closed_on_unsafe_runtime_observations(
-    tmp_path: Path,
-) -> None:
-    module = local_acceptance_module()
-
-    def executor(phase, environment):
-        resources = {
-            "sample_count": 1,
-            "peak_memory_bytes": 100,
-            "peak_cpu_percent": 1.0,
-            "peak_swap_bytes": 0,
-            "unexpected_restart_containers": [],
-            "oom_killed_containers": ["worker-1"]
-            if phase.name == "compute_recovery"
-            else [],
-            "unhealthy_containers": [],
-            "sampling_errors": [],
-        }
-        payload = {"status": "passed"}
-        if phase.name == "core_session":
-            payload["release_bundle_id"] = "release-local"
-        return payload, {"status": "passed", "resources": resources}
-
-    with pytest.raises(module.LocalAcceptanceError, match="OOM kill"):
-        module.run_acceptance(
-            arguments(module, tmp_path),
-            executor=executor,
-            runtime_reader=runtime_capacity,
-            state_reader=stable_runtime_state,
-        )
-
-    evidence = json.loads(arguments(module, tmp_path).output.read_text())
-    assert evidence["status"] == "failed"
-    assert evidence["failure"]["phase"] == "runtime_observations"
-    assert evidence["runtime_observations"]["oom_kill"] is True
-    assert evidence["launch_qualified"] is False
 
 
 def test_local_recovery_proves_cold_restart_and_disposable_restore() -> None:

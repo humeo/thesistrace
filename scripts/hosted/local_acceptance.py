@@ -27,9 +27,7 @@ from thesistrace.objects import canonical_json_bytes
 
 ROOT = Path(__file__).resolve().parents[2]
 STACK = ROOT / "scripts" / "hosted-stack"
-LOCAL_SMOKE = ROOT / "scripts" / "hosted-local-smoke.py"
 LOCAL_BOUNDARIES = ROOT / "scripts" / "hosted" / "local_boundary_acceptance.py"
-LOCAL_WORKFLOWS = ROOT / "scripts" / "hosted" / "local_workflow_acceptance.py"
 LOCAL_SCHEMA_VERSION = "hosted-v2-local-v1"
 MINIMUM_LOCAL_LOGICAL_CPU = 2
 MINIMUM_LOCAL_MEMORY_BYTES = int(3.5 * 1024**3)
@@ -48,14 +46,8 @@ PRODUCTION_ONLY_NOT_CLAIMED = (
 CANONICAL_GATE_NAMES = (
     "reset",
     "core_session",
-    "identity_product",
     "postgres_edge_storage",
-    "api_relay_recovery",
-    "compute_recovery",
-    "publication_recovery",
-    "controlled_workflows",
     "operational_health",
-    "local_recovery",
     "browser_ready",
     "frontend_browser",
 )
@@ -426,63 +418,28 @@ def local_phases() -> tuple[Phase, ...]:
         Phase("reset", (str(STACK), "local-reset"), 300),
         Phase("core_session", (str(STACK), "local-up"), 1800, ("reset",)),
         Phase(
-            "identity_product",
-            (sys.executable, str(LOCAL_SMOKE), "--gate", "identity-product"),
-            1200,
-            ("core_session",),
-        ),
-        Phase(
             "postgres_edge_storage",
             (sys.executable, str(LOCAL_BOUNDARIES)),
             1200,
             ("core_session",),
         ),
         Phase(
-            "api_relay_recovery",
-            (sys.executable, str(LOCAL_SMOKE), "--gate", "api-relay-recovery"),
-            600,
-            ("identity_product",),
-        ),
-        Phase(
-            "compute_recovery",
-            (sys.executable, str(LOCAL_SMOKE), "--gate", "compute-recovery"),
-            900,
-            ("identity_product",),
-        ),
-        Phase(
-            "publication_recovery",
-            (sys.executable, str(LOCAL_SMOKE), "--gate", "publication-recovery"),
-            900,
-            ("identity_product",),
-        ),
-        Phase(
-            "controlled_workflows",
-            (sys.executable, str(LOCAL_WORKFLOWS)),
-            1200,
-        ),
-        Phase(
             "operational_health",
             (str(STACK), "local-ops-check"),
             600,
-            ("identity_product",),
-        ),
-        Phase(
-            "local_recovery",
-            (str(STACK), "local-recovery-smoke"),
-            1200,
-            ("identity_product",),
+            ("core_session",),
         ),
         Phase(
             "browser_ready",
             (str(STACK), "local-browser-ready"),
             300,
-            ("identity_product",),
+            ("core_session",),
         ),
         Phase(
             "frontend_browser",
             ("make", "hosted-local-frontend"),
             1200,
-            ("identity_product", "browser_ready"),
+            ("core_session", "browser_ready"),
         ),
         Phase("cleanup", (str(STACK), "local-down"), 300),
     )
@@ -725,14 +682,12 @@ def default_fingerprint() -> dict[str, object]:
     )
     harness_roots = (
         "Makefile",
-        "scripts/hosted-local-smoke.py",
         "scripts/hosted-release-smoke.py",
         "scripts/hosted/local_acceptance.py",
         "scripts/hosted/local_boundary_acceptance.py",
         "scripts/hosted/local_frontend_acceptance.py",
         "scripts/hosted/local_ops_probe.py",
         "scripts/hosted/local_recovery_acceptance.py",
-        "scripts/hosted/local_workflow_acceptance.py",
         "scripts/hosted/seed_acceptance_state.py",
         "tests/hosted",
     )
@@ -784,7 +739,7 @@ def reconcile_fingerprint(
         manifest["fingerprint"] = fingerprint
         invalidate_from(
             manifest,
-            "identity_product",
+            "postgres_edge_storage",
             reason="acceptance harness model changed",
             preserve_runtime_state=True,
         )
@@ -795,7 +750,7 @@ def reconcile_fingerprint(
         manifest["fingerprint"] = fingerprint
         invalidate_from(
             manifest,
-            "identity_product",
+            "postgres_edge_storage",
             reason="acceptance harness inputs changed",
             preserve_runtime_state=True,
         )

@@ -39,6 +39,18 @@ CREATE TABLE thesistrace_product.dataset_publication_attempts (
     UNIQUE (publication_id, ordinal)
 );
 
+CREATE TABLE thesistrace_product.platform_execution_outbox (
+    id text PRIMARY KEY,
+    resource_kind text NOT NULL
+        CHECK (resource_kind = 'dataset_publication'),
+    resource_id text NOT NULL
+        REFERENCES thesistrace_product.dataset_publications(id),
+    status text NOT NULL CHECK (status IN ('pending', 'dispatched')),
+    created_at text NOT NULL,
+    dispatched_at text,
+    UNIQUE (resource_kind, resource_id)
+);
+
 CREATE TABLE thesistrace_product.tracking_release_triggers (
     release_id text PRIMARY KEY
         REFERENCES thesistrace_product.dataset_releases(id),
@@ -55,11 +67,13 @@ GRANT USAGE ON SCHEMA thesistrace_control TO thesistrace_data;
 REVOKE ALL ON
     thesistrace_product.dataset_publications,
     thesistrace_product.dataset_publication_attempts,
+    thesistrace_product.platform_execution_outbox,
     thesistrace_product.tracking_release_triggers
 FROM PUBLIC;
 REVOKE ALL ON
     thesistrace_product.dataset_publications,
     thesistrace_product.dataset_publication_attempts,
+    thesistrace_product.platform_execution_outbox,
     thesistrace_product.tracking_release_triggers
 FROM thesistrace_api, thesistrace_compute, thesistrace_data, thesistrace_relay;
 GRANT SELECT, UPDATE ON
@@ -140,6 +154,20 @@ BEGIN
         requested_at,
         requested_at
     );
+    INSERT INTO thesistrace_product.platform_execution_outbox (
+        id,
+        resource_kind,
+        resource_id,
+        status,
+        created_at
+    )
+    VALUES (
+        'outbox_' || requested_id,
+        'dataset_publication',
+        requested_id,
+        'pending',
+        requested_at
+    );
     RETURN QUERY SELECT requested_id, true;
 END;
 $$;
@@ -174,3 +202,82 @@ REVOKE ALL ON FUNCTION thesistrace_control.hosted_tushare_authorized()
 FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION thesistrace_control.hosted_tushare_authorized()
 TO thesistrace_data;
+
+CREATE OR REPLACE FUNCTION thesistrace_control.pending_execution_outbox(
+    requested_limit integer
+)
+RETURNS TABLE (
+    outbox_id text,
+    workspace_id text,
+    resource_kind text,
+    resource_id text
+)
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = pg_catalog, thesistrace_product
+AS $$
+    SELECT
+        pending.outbox_id,
+        pending.workspace_id,
+        pending.resource_kind,
+        pending.resource_id
+    FROM (
+        SELECT
+            entry.id AS outbox_id,
+            entry.workspace_id,
+            entry.resource_kind,
+            entry.resource_id,
+            entry.created_at
+        FROM thesistrace_product.execution_outbox AS entry
+        WHERE entry.status = 'pending'
+
+        UNION ALL
+
+        SELECT
+            entry.id AS outbox_id,
+            NULL::text AS workspace_id,
+            entry.resource_kind,
+            entry.resource_id,
+            entry.created_at
+        FROM thesistrace_product.platform_execution_outbox AS entry
+        WHERE entry.status = 'pending'
+    ) AS pending
+    ORDER BY pending.created_at, pending.outbox_id
+    LIMIT LEAST(GREATEST(requested_limit, 1), 100)
+$$;
+
+CREATE OR REPLACE FUNCTION thesistrace_control.mark_execution_dispatched(
+    requested_outbox_id text
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, thesistrace_product
+AS $$
+BEGIN
+    UPDATE thesistrace_product.execution_outbox
+    SET status = 'dispatched',
+        dispatched_at = now()::text
+    WHERE id = requested_outbox_id
+      AND status = 'pending';
+    IF FOUND THEN
+        RETURN true;
+    END IF;
+
+    UPDATE thesistrace_product.platform_execution_outbox
+    SET status = 'dispatched',
+        dispatched_at = now()::text
+    WHERE id = requested_outbox_id
+      AND status = 'pending';
+    RETURN FOUND;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION thesistrace_control.pending_execution_outbox(integer)
+FROM PUBLIC;
+REVOKE ALL ON FUNCTION thesistrace_control.mark_execution_dispatched(text)
+FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION thesistrace_control.pending_execution_outbox(integer)
+TO thesistrace_relay;
+GRANT EXECUTE ON FUNCTION thesistrace_control.mark_execution_dispatched(text)
+TO thesistrace_relay;

@@ -28,9 +28,6 @@ def test_health_role_reads_only_bounded_global_snapshot() -> None:
     )
     passwords = {
         "api": "health-test-api-password",
-        "relay": "health-test-relay-password",
-        "data": "health-test-data-password",
-        "compute": "health-test-compute-password",
         "health": "health-test-observer-password",
     }
     provision_service_role_credentials(TEST_DATABASE_URL, passwords)

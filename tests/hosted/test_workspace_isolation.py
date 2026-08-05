@@ -74,22 +74,8 @@ class OpenLaunchGate(OpenCapacityGate):
 
 def passing_capacity_evidence() -> dict[str, object]:
     return {
-        "schema_version": "capacity-qualification-v2",
+        "schema_version": "capacity-qualification-v3",
         "universe": "top3000",
-        "compute_workers": [
-            {
-                "status": "succeeded",
-                "activity_attempt": 1,
-                "p99_memory_mib": 600,
-                "peak_memory_mib": 650,
-            }
-            for _index in range(4)
-        ],
-        "dataset_publication": {
-            "status": "succeeded",
-            "worker_slot": "data-1",
-            "activity_attempt": 1,
-        },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
         "runtime_capacity": {
             "source": "docker-info",
@@ -99,9 +85,6 @@ def passing_capacity_evidence() -> dict[str, object]:
         "swap_used": False,
         "oom_kill": False,
         "unexpected_restart": False,
-        "missing_heartbeat": False,
-        "duplicate_publication": False,
-        "incorrect_result": False,
         "production_paths": {
             "parquet": True,
             "result_bundle": True,
@@ -294,22 +277,14 @@ def bootstrap_shared_release(tmp_path: Path) -> dict[str, object]:
     [
         {
             "api": "api-password",
-            "relay": "relay-password",
-            "data": "data-password",
         },
         {
             "api": "api-password",
-            "relay": "",
-            "data": "data-password",
-            "compute": "compute-password",
-            "health": "health-password",
+            "health": "",
         },
         {
             "api": "shared-password",
-            "relay": "relay-password",
-            "data": "data-password",
-            "compute": "shared-password",
-            "health": "health-password",
+            "health": "shared-password",
         },
     ],
 )
@@ -859,7 +834,7 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
     with psycopg.connect(TEST_DATABASE_URL) as connection:
         roles = connection.execute(
             """
-            SELECT rolname, rolsuper, rolbypassrls
+            SELECT rolname, rolsuper, rolbypassrls, rolcanlogin
             FROM pg_roles
             WHERE rolname = ANY(%s)
             ORDER BY rolname
@@ -876,11 +851,11 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
             ),
         ).fetchall()
         assert roles == [
-            ("thesistrace_api", False, False),
-            ("thesistrace_compute", False, False),
-            ("thesistrace_data", False, False),
-            ("thesistrace_health", False, False),
-            ("thesistrace_relay", False, False),
+            ("thesistrace_api", False, False, False),
+            ("thesistrace_compute", False, False, False),
+            ("thesistrace_data", False, False, False),
+            ("thesistrace_health", False, False, False),
+            ("thesistrace_relay", False, False, False),
         ]
         table_contracts = connection.execute(
             """
@@ -1161,9 +1136,6 @@ def test_service_database_credentials_are_distinct_and_role_bound() -> None:
     prepare_postgres()
     passwords = {
         "api": "acceptance-api-password",
-        "relay": "acceptance-relay-password",
-        "data": "acceptance-data-password",
-        "compute": "acceptance-compute-password",
         "health": "acceptance-health-password",
     }
     provision_service_role_credentials(
@@ -1172,9 +1144,6 @@ def test_service_database_credentials_are_distinct_and_role_bound() -> None:
     )
     roles = {
         "api": "thesistrace_api",
-        "relay": "thesistrace_relay",
-        "data": "thesistrace_data",
-        "compute": "thesistrace_compute",
         "health": "thesistrace_health",
     }
     for service, role in roles.items():
@@ -1191,8 +1160,8 @@ def test_service_database_credentials_are_distinct_and_role_bound() -> None:
 
     wrong_password_url = psycopg.conninfo.make_conninfo(
         TEST_DATABASE_URL,
-        user=roles["compute"],
-        password=passwords["data"],
+        user=roles["api"],
+        password=passwords["health"],
         connect_timeout=2,
     )
     with pytest.raises(psycopg.OperationalError):

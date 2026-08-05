@@ -89,6 +89,26 @@ WITH CHECK (
     workspace_id = thesistrace_control.current_workspace_id()
 );
 
+ALTER TABLE thesistrace_product.execution_outbox
+DROP CONSTRAINT execution_outbox_resource_kind_check;
+
+ALTER TABLE thesistrace_product.execution_outbox
+DROP CONSTRAINT IF EXISTS
+execution_outbox_workspace_id_resource_id_fkey;
+
+ALTER TABLE thesistrace_product.execution_outbox
+ADD CONSTRAINT execution_outbox_resource_kind_check
+CHECK (
+    resource_kind IN (
+        'research_run',
+        'research_run_cancel',
+        'tracking_equivalence',
+        'tracking_equivalence_cancel',
+        'tracking_generation_rebuild',
+        'tracking_generation_rebuild_cancel'
+    )
+);
+
 REVOKE ALL ON
     thesistrace_product.tracking_equivalence_requests,
     thesistrace_product.tracking_generation_rebuilds
@@ -109,4 +129,7 @@ TO thesistrace_compute;
 
 GRANT SELECT, INSERT, UPDATE ON
     thesistrace_product.tracking_generation_rebuilds
+TO thesistrace_compute;
+
+GRANT SELECT, INSERT ON thesistrace_product.execution_outbox
 TO thesistrace_compute;

@@ -6,6 +6,19 @@ SECURITY DEFINER
 SET search_path = pg_catalog, thesistrace_control, thesistrace_product
 AS $$
     WITH
+    pending_outbox AS (
+        SELECT created_at::timestamptz AS created_at
+        FROM thesistrace_product.execution_outbox
+        WHERE status = 'pending'
+        UNION ALL
+        SELECT created_at::timestamptz
+        FROM thesistrace_product.platform_execution_outbox
+        WHERE status = 'pending'
+        UNION ALL
+        SELECT created_at::timestamptz
+        FROM thesistrace_product.tracking_execution_outbox
+        WHERE status = 'pending'
+    ),
     current_release AS (
         SELECT pointer.release_id,
                release.manifest_json::jsonb AS manifest,
@@ -78,6 +91,14 @@ AS $$
     )
     SELECT jsonb_build_object(
         'system', jsonb_build_object(
+            'outbox_pending', (SELECT count(*) FROM pending_outbox),
+            'outbox_oldest_age_seconds', COALESCE(
+                (
+                    SELECT EXTRACT(EPOCH FROM clock_timestamp() - min(created_at))
+                    FROM pending_outbox
+                ),
+                0
+            ),
             'workflow_running',
                 (SELECT count(*) FROM thesistrace_product.research_runs
                  WHERE status IN ('queued', 'running'))

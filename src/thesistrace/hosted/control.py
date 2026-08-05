@@ -16,8 +16,10 @@ from thesistrace.tenancy import service_workspace, verified_subject
 
 HOSTED_DATABASE_ROLES = {
     "api": "thesistrace_api",
-    "compute": "thesistrace_compute",
-    "data": "thesistrace_data",
+    # Retained adapter modes share the sole application database identity.
+    # Separate Hosted worker identities were disabled by migration 0027.
+    "compute": "thesistrace_api",
+    "data": "thesistrace_api",
 }
 
 

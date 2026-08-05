@@ -121,7 +121,7 @@ def assert_idle(database_url: str) -> None:
     busy = {table: count for table, count in counts.items() if count}
     if busy:
         raise SystemExit(f"Hosted browser acceptance requires an idle stack: {busy}")
-    print(json.dumps({"status": "passed", "workflow_running": 0}, sort_keys=True))
+    print(json.dumps({"active_jobs": 0, "status": "passed"}, sort_keys=True))
 
 
 def seed_invitation(database_url: str, email: str) -> None:

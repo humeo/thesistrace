@@ -34,10 +34,7 @@ class StubHealthStore(HealthSnapshotStore):
     def snapshot(self) -> dict[str, object]:
         return {
             "system": {
-                "outbox_pending": 0,
-                "outbox_oldest_age_seconds": 0.0,
-                "workflow_running": 1,
-                "workflow_capacity": 4,
+                "active_jobs": 1,
             },
             "data": {
                 "release_present": True,
@@ -482,7 +479,7 @@ def test_prometheus_projection_is_bounded_and_contains_no_private_identity() -> 
         "system": {
             "status": "available",
             "checks": {"database": True, "telemetry": True},
-            "measurements": {"outbox_pending": 0, "workflow_capacity": 4},
+            "measurements": {"active_jobs": 0},
         },
         "data": {
             "status": "available",

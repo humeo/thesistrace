@@ -205,30 +205,65 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
     ]
     for root in (
         ROOT / "src" / "thesistrace" / "hosted",
-        ROOT / "tests" / "hosted",
         ROOT / "scripts",
         ROOT / "deploy" / "hosted",
     ):
         inventory_files.extend(
             path
             for path in root.rglob("*")
-            if path.is_file() and path.suffix in {".json", ".py", ".sh", ".toml", ".yaml", ".yml"}
+            if path.is_file()
+            and ROOT / "deploy" / "hosted" / "migrations" not in path.parents
+            and path.suffix
+            in {".app", ".json", ".py", ".sh", ".toml", ".yaml", ".yml"}
         )
     forbidden = (
         "temporal",
         "thesistrace-execution-relay",
         "execution-relay",
         "execution_outbox",
+        "execution_relay",
         "compute-worker",
         "data-worker",
         "thesistrace-recovery-probe",
         "recovery-probe",
         "dispatch-probe",
+        "dispatch_probe",
+        "hosted-local-smoke",
+        "local_workflow_acceptance",
+        "thesistrace_relay",
+        "workflow_capacity",
+        "workflow_running",
     )
     for path in inventory_files:
         source = path.read_text().lower()
         for token in forbidden:
             assert token not in source, f"{token} remains in {path.relative_to(ROOT)}"
+
+    historical_migrations = [
+        path
+        for path in sorted(
+            (ROOT / "deploy" / "hosted" / "migrations").glob("*.sql")
+        )
+        if path.name < "0027_"
+    ]
+    assert historical_migrations
+    for path in historical_migrations:
+        archived = subprocess.run(
+            ["git", "show", f"91780a6:{path.relative_to(ROOT)}"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+        ).stdout
+        assert path.read_bytes() == archived
+    contraction = (
+        ROOT
+        / "deploy"
+        / "hosted"
+        / "migrations"
+        / "0027_remove_hosted_execution.sql"
+    ).read_text()
+    assert "NOLOGIN" in contraction
+    assert "DROP TABLE thesistrace_product.execution_outbox" in contraction
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:

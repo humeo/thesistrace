@@ -1,48 +1,10 @@
-CREATE TABLE thesistrace_control.resource_tombstones (
-    id text PRIMARY KEY,
-    workspace_id text NOT NULL
-        REFERENCES thesistrace_control.personal_workspaces(id),
-    resource_kind text NOT NULL
-        CHECK (resource_kind IN ('research_run', 'daily_track')),
-    resource_id text NOT NULL,
-    authoritative_manifest_sha256 text
-        CHECK (
-            authoritative_manifest_sha256 IS NULL
-            OR authoritative_manifest_sha256 ~ '^[0-9a-f]{64}$'
-        ),
-    actor text NOT NULL CHECK (actor <> ''),
-    deleted_at timestamptz NOT NULL,
-    UNIQUE (workspace_id, resource_kind, resource_id)
-);
+-- Historical migrations are immutable. This forward contraction disables
+-- retired Hosted service identities and removes their dispatch state after
+-- replacing retained functions that formerly referenced it.
 
-CREATE TABLE thesistrace_control.resource_cleanup_jobs (
-    tombstone_id text PRIMARY KEY
-        REFERENCES thesistrace_control.resource_tombstones(id),
-    daily_track_id text,
-    fencing_token integer,
-    status text NOT NULL CHECK (status IN ('pending', 'completed')),
-    attempt_count integer NOT NULL DEFAULT 0,
-    completed_at timestamptz,
-    last_error text,
-    CHECK (
-        (daily_track_id IS NULL AND fencing_token IS NULL)
-        OR (daily_track_id IS NOT NULL AND fencing_token IS NOT NULL)
-    )
-);
-
-REVOKE ALL ON thesistrace_control.resource_tombstones FROM PUBLIC;
-REVOKE ALL ON thesistrace_control.resource_cleanup_jobs FROM PUBLIC;
-REVOKE ALL ON thesistrace_control.resource_tombstones
-FROM thesistrace_api, thesistrace_compute, thesistrace_data,
-     thesistrace_relay;
-REVOKE ALL ON thesistrace_control.resource_cleanup_jobs
-FROM thesistrace_api, thesistrace_compute, thesistrace_data,
-     thesistrace_relay;
-
-CREATE TRIGGER resource_tombstones_immutable
-BEFORE UPDATE OR DELETE ON thesistrace_control.resource_tombstones
-FOR EACH ROW EXECUTE FUNCTION
-    thesistrace_control.reject_management_history_mutation();
+ALTER ROLE thesistrace_relay NOLOGIN;
+ALTER ROLE thesistrace_data NOLOGIN;
+ALTER ROLE thesistrace_compute NOLOGIN;
 
 CREATE OR REPLACE FUNCTION thesistrace_control.request_resource_deletion(
     p_tombstone_id text,
@@ -186,10 +148,6 @@ BEGIN
           AND reference.workspace_id = v_workspace_id
           AND reference.resource_kind = 'research_run'
           AND reference.resource_id = p_resource_id;
-        DELETE FROM thesistrace_product.execution_outbox AS outbox
-        WHERE outbox.workspace_id = v_workspace_id
-          AND outbox.resource_kind IN ('research_run', 'research_run_cancel')
-          AND outbox.resource_id = p_resource_id;
         DELETE FROM thesistrace_product.user_compute_admissions AS admission
         WHERE admission.workspace_id = v_workspace_id
           AND admission.resource_kind = 'research_run'
@@ -236,27 +194,6 @@ BEGIN
               WHERE checkpoint.workspace_id = v_workspace_id
                 AND checkpoint.daily_track_id = p_resource_id
           );
-        DELETE FROM thesistrace_product.execution_outbox AS outbox
-        WHERE outbox.workspace_id = v_workspace_id
-          AND (
-              outbox.resource_id IN (
-                  SELECT request.id
-                  FROM thesistrace_product.tracking_equivalence_requests
-                      AS request
-                  WHERE request.workspace_id = v_workspace_id
-                    AND request.daily_track_id = p_resource_id
-              )
-              OR outbox.resource_id IN (
-                  SELECT rebuild.id
-                  FROM thesistrace_product.tracking_generation_rebuilds
-                      AS rebuild
-                  WHERE rebuild.workspace_id = v_workspace_id
-                    AND rebuild.daily_track_id = p_resource_id
-              )
-          );
-        DELETE FROM thesistrace_product.tracking_execution_outbox AS outbox
-        WHERE outbox.workspace_id = v_workspace_id
-          AND outbox.daily_track_id = p_resource_id;
         DELETE FROM thesistrace_product.tracking_advance_attempts AS attempt
         WHERE attempt.workspace_id = v_workspace_id
           AND attempt.advance_id IN (
@@ -308,132 +245,165 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION
-thesistrace_control.pending_resource_cleanups()
-RETURNS TABLE (
-    tombstone_id text,
-    resource_kind text,
-    resource_id text,
-    daily_track_id text,
-    fencing_token integer,
-    attempt_count integer,
-    last_error text
-)
+CREATE OR REPLACE FUNCTION thesistrace_control.operator_health_snapshot()
+RETURNS jsonb
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = pg_catalog, thesistrace_control
+SET search_path = pg_catalog, thesistrace_control, thesistrace_product
 AS $$
-    SELECT job.tombstone_id,
-           tombstone.resource_kind,
-           tombstone.resource_id,
-           job.daily_track_id,
-           job.fencing_token,
-           job.attempt_count,
-           job.last_error
-    FROM thesistrace_control.resource_cleanup_jobs AS job
-    JOIN thesistrace_control.resource_tombstones AS tombstone
-      ON tombstone.id = job.tombstone_id
-    WHERE job.status = 'pending'
-    ORDER BY tombstone.deleted_at, job.tombstone_id;
-$$;
-
-CREATE OR REPLACE FUNCTION
-thesistrace_control.resource_cleanup_candidates(p_tombstone_id text)
-RETURNS SETOF text
-LANGUAGE sql
-STABLE
-STRICT
-SECURITY DEFINER
-SET search_path = pg_catalog, thesistrace_control
-AS $$
-    SELECT own.object_key
-    FROM thesistrace_control.storage_references AS own
-    WHERE own.owner_scope = 'workspace'
-      AND own.resource_kind = 'resource_tombstone'
-      AND own.resource_id = p_tombstone_id
-      AND NOT EXISTS (
-          SELECT 1
-          FROM thesistrace_control.storage_references AS retained
-          WHERE retained.object_key = own.object_key
-            AND NOT (
-                retained.owner_scope = own.owner_scope
-                AND retained.workspace_id = own.workspace_id
-                AND retained.resource_kind = own.resource_kind
-                AND retained.resource_id = own.resource_id
+    WITH
+    current_release AS (
+        SELECT pointer.release_id,
+               release.manifest_json::jsonb AS manifest,
+               release.created_at::timestamptz AS created_at
+        FROM thesistrace_product.dataset_release_pointer AS pointer
+        JOIN thesistrace_product.dataset_releases AS release
+          ON release.id = pointer.release_id
+        WHERE pointer.singleton = 1
+    ),
+    committed_publication AS (
+        SELECT publication.status,
+               publication.kind,
+               publication.parameters_json,
+               publication.result_release_id,
+               publication.result_manifest_sha256
+        FROM current_release
+        JOIN thesistrace_product.dataset_publications AS publication
+          ON publication.result_release_id = current_release.release_id
+        WHERE publication.status = 'succeeded'
+        ORDER BY publication.updated_at::timestamptz DESC
+        LIMIT 1
+    ),
+    current_data AS (
+        SELECT
+            release.manifest,
+            release.created_at,
+            EXTRACT(EPOCH FROM clock_timestamp() - release.created_at) AS age_seconds,
+            (
+                release.manifest ->> 'canonical_schema_version' = 'canonical-eod-v1'
+                AND jsonb_typeof(release.manifest -> 'schemas') = 'array'
+                AND jsonb_array_length(release.manifest -> 'schemas') > 0
+                AND jsonb_typeof(release.manifest -> 'canonical_tables') = 'array'
+            ) AS schema_valid,
+            (
+                COALESCE(release.manifest ->> 'session_count', '') ~ '^[1-9][0-9]*$'
+                AND COALESCE(release.manifest ->> 'instrument_count', '') ~ '^[1-9][0-9]*$'
+                AND release.manifest #>> '{appended_session_range,start}' IS NOT NULL
+                AND release.manifest #>> '{appended_session_range,end}' IS NOT NULL
+            ) AS coverage_valid,
+            (
+                release.manifest -> 'predecessor_id' = 'null'::jsonb
+                OR EXISTS (
+                    SELECT 1
+                    FROM thesistrace_product.dataset_releases AS predecessor
+                    WHERE predecessor.id = release.manifest ->> 'predecessor_id'
+                )
+            ) AS lineage_valid,
+            COALESCE(
+                publication.status = 'succeeded'
+                AND publication.result_release_id = release.release_id
+                AND publication.result_manifest_sha256
+                    = release.manifest ->> 'manifest_sha256'
+                AND publication.result_manifest_sha256 ~ '^[0-9a-f]{64}$',
+                false
+            ) AS publication_validation_succeeded,
+            COALESCE(
+                publication.kind LIKE 'fixture_%'
+                OR release.manifest #>> '{appended_session_range,end}'
+                    = publication.parameters_json ->> 'as_of',
+                false
+            ) AS release_session_current
+        FROM current_release AS release
+        LEFT JOIN committed_publication AS publication ON true
+    ),
+    latest_equivalence AS (
+        SELECT status, updated_at::timestamptz AS updated_at
+        FROM thesistrace_product.tracking_equivalence_requests
+        ORDER BY updated_at::timestamptz DESC
+        LIMIT 1
+    )
+    SELECT jsonb_build_object(
+        'system', jsonb_build_object(
+            'active_jobs',
+                (SELECT count(*) FROM thesistrace_product.research_runs
+                 WHERE status IN ('queued', 'running'))
+                + (SELECT count(*) FROM thesistrace_product.dataset_publications
+                   WHERE status IN ('queued', 'running'))
+                + (SELECT count(*) FROM thesistrace_product.tracking_advances
+                   WHERE status IN ('queued', 'running'))
+                + (SELECT count(*) FROM thesistrace_product.tracking_equivalence_requests
+                   WHERE status IN ('queued', 'running'))
+                + (SELECT count(*) FROM thesistrace_product.tracking_generation_rebuilds
+                   WHERE status IN ('queued', 'running'))
+        ),
+        'data', jsonb_build_object(
+            'release_present', EXISTS (SELECT 1 FROM current_data),
+            'release_age_seconds', COALESCE(
+                (SELECT age_seconds FROM current_data), -1
+            ),
+            'publication_validation_succeeded', COALESCE(
+                (SELECT publication_validation_succeeded FROM current_data), false
+            ),
+            'release_session_current', COALESCE(
+                (SELECT release_session_current FROM current_data), false
+            ),
+            'schema_valid', COALESCE(
+                (SELECT schema_valid FROM current_data), false
+            ),
+            'coverage_valid', COALESCE(
+                (SELECT coverage_valid FROM current_data), false
+            ),
+            'lineage_valid', COALESCE(
+                (SELECT lineage_valid FROM current_data), false
+            ),
+            'failed_publications', (
+                SELECT count(*)
+                FROM thesistrace_product.dataset_publications AS publication
+                WHERE publication.status = 'failed'
+                  AND publication.updated_at::timestamptz > COALESCE(
+                      (SELECT created_at FROM current_data), '-infinity'::timestamptz
+                  )
+            ),
+            'previous_release_preserved',
+                EXISTS (SELECT 1 FROM current_data)
+                AND NOT EXISTS (
+                    SELECT 1
+                    FROM thesistrace_product.dataset_publications AS publication
+                    WHERE publication.status = 'failed'
+                      AND publication.result_release_id IS NOT NULL
+                )
+        ),
+        'quantitative', jsonb_build_object(
+            'equivalence_status', COALESCE(
+                (SELECT status FROM latest_equivalence), 'not_run'
+            ),
+            'equivalence_age_seconds', COALESCE(
+                (
+                    SELECT EXTRACT(EPOCH FROM clock_timestamp() - updated_at)
+                    FROM latest_equivalence
+                ),
+                -1
             )
-      )
-    ORDER BY own.object_key;
+        )
+    )
 $$;
 
-CREATE OR REPLACE FUNCTION
-thesistrace_control.complete_resource_cleanup(
-    p_tombstone_id text,
-    p_completed_at timestamptz
-)
-RETURNS void
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, thesistrace_control
-AS $$
-BEGIN
-    DELETE FROM thesistrace_control.storage_references
-    WHERE owner_scope = 'workspace'
-      AND resource_kind = 'resource_tombstone'
-      AND resource_id = p_tombstone_id;
-    DELETE FROM thesistrace_control.stored_objects AS stored
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM thesistrace_control.storage_references AS reference
-        WHERE reference.object_key = stored.object_key
-    );
-    UPDATE thesistrace_control.resource_cleanup_jobs
-    SET status = 'completed',
-        attempt_count = attempt_count + 1,
-        completed_at = p_completed_at,
-        last_error = NULL
-    WHERE tombstone_id = p_tombstone_id AND status = 'pending';
-END;
-$$;
+DROP FUNCTION thesistrace_control.request_scheduled_dataset_publication(
+    text, text, text, jsonb, text, text
+);
+DROP FUNCTION thesistrace_control.hosted_tushare_authorized();
+DROP FUNCTION thesistrace_control.active_daily_track_scan_bound();
+DROP FUNCTION thesistrace_control.active_daily_track_refs(
+    text, text, text, text, integer
+);
+DROP FUNCTION thesistrace_control.pending_execution_outbox(integer);
+DROP FUNCTION thesistrace_control.mark_execution_dispatched(text);
 
-CREATE OR REPLACE FUNCTION thesistrace_control.fail_resource_cleanup(
-    p_tombstone_id text,
-    p_error text
-)
-RETURNS void
-LANGUAGE sql
-SECURITY DEFINER
-SET search_path = pg_catalog, thesistrace_control
-AS $$
-    UPDATE thesistrace_control.resource_cleanup_jobs
-    SET attempt_count = attempt_count + 1,
-        last_error = left(p_error, 1000)
-    WHERE tombstone_id = p_tombstone_id AND status = 'pending';
-$$;
+DROP TABLE thesistrace_product.tracking_execution_outbox;
+DROP TABLE thesistrace_product.tracking_release_triggers;
+DROP TABLE thesistrace_product.platform_execution_outbox;
+DROP TABLE thesistrace_product.execution_outbox;
 
-REVOKE ALL ON FUNCTION
-thesistrace_control.request_resource_deletion(
-    text, text, text, text, timestamptz
-) FROM PUBLIC;
-REVOKE ALL ON FUNCTION
-thesistrace_control.pending_resource_cleanups() FROM PUBLIC;
-REVOKE ALL ON FUNCTION
-thesistrace_control.resource_cleanup_candidates(text) FROM PUBLIC;
-REVOKE ALL ON FUNCTION
-thesistrace_control.complete_resource_cleanup(text, timestamptz) FROM PUBLIC;
-REVOKE ALL ON FUNCTION
-thesistrace_control.fail_resource_cleanup(text, text) FROM PUBLIC;
-
-GRANT EXECUTE ON FUNCTION
-thesistrace_control.request_resource_deletion(
-    text, text, text, text, timestamptz
-) TO thesistrace_api;
-GRANT EXECUTE ON FUNCTION
-thesistrace_control.pending_resource_cleanups() TO thesistrace_api;
-GRANT EXECUTE ON FUNCTION
-thesistrace_control.resource_cleanup_candidates(text) TO thesistrace_api;
-GRANT EXECUTE ON FUNCTION
-thesistrace_control.complete_resource_cleanup(text, timestamptz)
-TO thesistrace_api;
-GRANT EXECUTE ON FUNCTION
-thesistrace_control.fail_resource_cleanup(text, text) TO thesistrace_api;
+REVOKE ALL ON FUNCTION thesistrace_control.operator_health_snapshot()
+FROM thesistrace_relay, thesistrace_data, thesistrace_compute;

@@ -65,10 +65,19 @@ for removed_path in \
 done
 
 ! rg -n \
-  'temporal|thesistrace-execution-relay|execution-relay|execution_outbox|compute-worker|data-worker|thesistrace-recovery-probe|recovery-probe|dispatch-probe' \
+  'temporal|thesistrace-execution-relay|execution-relay|execution_relay|execution_outbox|compute-worker|data-worker|thesistrace-recovery-probe|recovery-probe|recovery_probe|dispatch-probe|dispatch_probe|hosted-local-smoke|local_workflow_acceptance|thesistrace_relay|workflow_capacity|workflow_running' \
   pyproject.toml uv.lock Makefile src/thesistrace/config.py \
   src/thesistrace/capacity.py src/thesistrace/launch.py \
-  src/thesistrace/hosted tests/hosted scripts deploy/hosted
+  src/thesistrace/hosted scripts deploy/hosted \
+  --glob '!deploy/hosted/migrations/*.sql'
+
+git ls-tree -r --name-only "$archive_commit" deploy/hosted/migrations |
+while IFS= read -r migration_file; do
+  test "$(git show "$archive_commit:$migration_file" | shasum -a 256 | cut -d' ' -f1)" = \
+    "$(shasum -a 256 "$migration_file" | cut -d' ' -f1)"
+done
+test -f deploy/hosted/migrations/0027_remove_hosted_execution.sql
+test "$(jq -r '.components.product_migrations.version' deploy/hosted/release.json)" = 0027
 
 uv run pytest -q tests/architecture tests/kernel
 trap './scripts/core-test-runtime down' EXIT

@@ -280,15 +280,6 @@ class RuntimeRecoveryOperations:
             "local Public-Origin smoke after cold restart",
             (sys.executable, str(ROOT / "scripts" / "hosted-smoke.py")),
         )
-        self._run(
-            "retained product smoke after cold restart",
-            (
-                sys.executable,
-                str(ROOT / "scripts" / "hosted-local-smoke.py"),
-                "--gate",
-                "identity-product",
-            ),
-        )
         if self.captured_context is None or self._recovery_context() != self.captured_context:
             raise LocalRecoveryAcceptanceError(
                 "release, migration, epoch, or retained product context changed"

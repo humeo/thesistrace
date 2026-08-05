@@ -35,7 +35,7 @@
       "source_paths": ["deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch", "scripts/hosted-stack"]
     },
     "product_migrations": {
-      "version": "0026",
+      "version": "0027",
       "artifact": "thesistrace/app:{bundle_id}",
       "source_paths": ["deploy/hosted/migrations", "src/thesistrace/hosted/migrations.py"]
     },

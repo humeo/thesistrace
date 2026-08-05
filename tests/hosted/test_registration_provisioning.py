@@ -402,22 +402,8 @@ def prepare_postgres() -> None:
 
 def passing_capacity_evidence() -> dict[str, object]:
     return {
-        "schema_version": "capacity-qualification-v2",
+        "schema_version": "capacity-qualification-v3",
         "universe": "top3000",
-        "compute_workers": [
-            {
-                "status": "succeeded",
-                "activity_attempt": 1,
-                "p99_memory_mib": 600,
-                "peak_memory_mib": 650,
-            }
-            for _index in range(4)
-        ],
-        "dataset_publication": {
-            "status": "succeeded",
-            "worker_slot": "data-1",
-            "activity_attempt": 1,
-        },
         "nonworker_services": {"memory_limit_mib": 5120, "cpu_limit": 2},
         "runtime_capacity": {
             "source": "docker-info",
@@ -427,9 +413,6 @@ def passing_capacity_evidence() -> dict[str, object]:
         "swap_used": False,
         "oom_kill": False,
         "unexpected_restart": False,
-        "missing_heartbeat": False,
-        "duplicate_publication": False,
-        "incorrect_result": False,
         "production_paths": {
             "parquet": True,
             "result_bundle": True,
@@ -566,7 +549,7 @@ def test_postgres_invitation_issue_is_fenced_by_latest_capacity_measurement() ->
     prepare_postgres()
     management = PostgresManagementStore(TEST_DATABASE_URL)
     failing = passing_capacity_evidence()
-    failing["compute_workers"][0]["p99_memory_mib"] = 701
+    failing["runtime_capacity"]["logical_cpu"] = 5
     CapacityQualificationService(management).record(
         actor="operator-test",
         release_bundle_id="test-release",

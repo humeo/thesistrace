@@ -6,12 +6,9 @@ from thesistrace.qualification import (
     qualification_matches_release,
 )
 
-COMPUTE_ACTIVITY_COUNT = 4
-COMPUTE_P99_MEMORY_LIMIT_MIB = 700
-COMPUTE_PEAK_MEMORY_LIMIT_MIB = 800
 NONWORKER_MEMORY_LIMIT_MIB = 5 * 1024
 NONWORKER_CPU_LIMIT = 2.0
-CAPACITY_EVIDENCE_SCHEMA_VERSION = "capacity-qualification-v2"
+CAPACITY_EVIDENCE_SCHEMA_VERSION = "capacity-qualification-v3"
 MINIMUM_RUNTIME_LOGICAL_CPU = 6.0
 MINIMUM_RUNTIME_MEMORY_BYTES = 12 * 1024 * 1024 * 1024
 
@@ -97,33 +94,6 @@ def qualification_failures(evidence: dict[str, object]) -> list[str]:
                 failures.append("runtime_cpu_budget_insufficient")
             if memory_bytes < MINIMUM_RUNTIME_MEMORY_BYTES:
                 failures.append("runtime_memory_budget_insufficient")
-    workers = evidence.get("compute_workers")
-    if not isinstance(workers, list) or len(workers) != COMPUTE_ACTIVITY_COUNT:
-        failures.append("four_compute_activities_required")
-    else:
-        for worker in workers:
-            if not isinstance(worker, dict):
-                failures.append("compute_measurement_invalid")
-                continue
-            if float(worker.get("p99_memory_mib", float("inf"))) > (
-                COMPUTE_P99_MEMORY_LIMIT_MIB
-            ):
-                failures.append("compute_p99_memory_exceeded")
-            if float(worker.get("peak_memory_mib", float("inf"))) > (
-                COMPUTE_PEAK_MEMORY_LIMIT_MIB
-            ):
-                failures.append("compute_peak_memory_exceeded")
-            if worker.get("status") != "succeeded":
-                failures.append("compute_result_incorrect")
-            if worker.get("activity_attempt") != 1:
-                failures.append("compute_activity_retried")
-    publication = evidence.get("dataset_publication")
-    if not isinstance(publication, dict) or publication.get("status") != "succeeded":
-        failures.append("dataset_publication_failed")
-    if not isinstance(publication, dict) or publication.get("worker_slot") != "data-1":
-        failures.append("dataset_publication_not_isolated")
-    if not isinstance(publication, dict) or publication.get("activity_attempt") != 1:
-        failures.append("dataset_publication_retried")
     nonworker = evidence.get("nonworker_services")
     if not isinstance(nonworker, dict):
         failures.append("nonworker_measurement_missing")
@@ -138,9 +108,6 @@ def qualification_failures(evidence: dict[str, object]) -> list[str]:
         "swap_used",
         "oom_kill",
         "unexpected_restart",
-        "missing_heartbeat",
-        "duplicate_publication",
-        "incorrect_result",
     ):
         if evidence.get(key) is not False:
             failures.append(key)

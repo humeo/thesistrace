@@ -3,7 +3,7 @@ import time
 import urllib.request
 from collections.abc import Mapping
 
-EXPECTED_LOCAL_SYSTEM_GAPS = frozenset({"backup", "workflow_capacity"})
+EXPECTED_LOCAL_SYSTEM_GAPS = frozenset({"backup"})
 TELEMETRY_URLS = {
     "collector": "http://otel-collector:8888/metrics",
     "prometheus": "http://prometheus:9090/-/ready",
