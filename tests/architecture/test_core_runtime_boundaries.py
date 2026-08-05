@@ -337,7 +337,12 @@ def test_hosted_operations_and_observability_are_absent_from_the_active_tree() -
 
     for path in (
         ROOT / "docs" / "adr" / "0117-use-one-default-quota-profile-with-workspace-overrides.md",
+        ROOT / "docs" / "adr" / "0119-protect-the-single-node-with-three-disk-pressure-levels.md",
+        ROOT / "docs" / "adr" / "0120-separate-operator-telemetry-from-user-task-status.md",
+        ROOT / "docs" / "adr" / "0130-bound-the-first-compose-node-with-a-resource-envelope.md",
+        ROOT / "docs" / "adr" / "0136-pause-admission-and-drain-activities-during-maintenance.md",
         ROOT / "docs" / "adr" / "0138-separate-liveness-readiness-and-system-health.md",
+        ROOT / "docs" / "adr" / "0139-defer-alert-delivery-and-inspect-dashboards-daily.md",
         ROOT / "docs" / "adr" / "0149-separate-local-acceptance-from-launch-qualification.md",
     ):
         assert "scope: archived - outside the active Core" in path.read_text()
@@ -357,6 +362,15 @@ def test_hosted_operations_and_observability_are_absent_from_the_active_tree() -
     assert "DROP ROLE thesistrace_health" in contraction
     assert "DROP TRIGGER IF EXISTS personal_workspace_default_quota_profile" in contraction
     assert "DROP TRIGGER IF EXISTS reject_dataset_publication_during_maintenance" in contraction
+
+    admission_contraction = (
+        ROOT / "deploy" / "hosted" / "migrations" / "0029_remove_hosted_admission.sql"
+    ).read_text()
+    assert "DROP TABLE thesistrace_product.user_compute_admissions" in admission_contraction
+    deletion_function = admission_contraction.split(
+        "DROP TABLE thesistrace_product.user_compute_admissions"
+    )[0]
+    assert "user_compute_admissions" not in deletion_function
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:

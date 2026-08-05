@@ -30,7 +30,6 @@ PRIVATE_TABLES = (
     "research_definition_drafts",
     "research_definitions",
     "research_runs",
-    "user_compute_admissions",
     "research_run_idempotency",
     "research_run_attempts",
     "daily_tracks",
@@ -99,7 +98,6 @@ def truncate_product_state() -> None:
                 thesistrace_product.research_definition_drafts,
                 thesistrace_product.research_definitions,
                 thesistrace_product.research_runs,
-                thesistrace_product.user_compute_admissions,
                 thesistrace_product.research_run_idempotency,
                 thesistrace_product.research_run_attempts,
                 thesistrace_product.daily_tracks,
@@ -185,7 +183,6 @@ def seed_private_table_graph(
         "research_definition_drafts": f"draft-{prefix}",
         "research_definitions": f"definition-{prefix}",
         "research_runs": f"run-{prefix}",
-        "user_compute_admissions": f"run-{prefix}",
         "research_run_idempotency": f"run-key-{prefix}",
         "research_run_attempts": f"attempt-{prefix}",
         "daily_tracks": f"track-{prefix}",
@@ -249,19 +246,6 @@ def seed_private_table_graph(
                 workspace_id,
                 ids["research_run_idempotency"],
                 ids["research_runs"],
-            ),
-        )
-        connection.execute(
-            """
-            INSERT INTO thesistrace_product.user_compute_admissions
-                (workspace_id, resource_kind, resource_id, admitted_at, completed_at)
-            VALUES (%s, 'research_run', %s, %s, %s)
-            """,
-            (
-                workspace_id,
-                ids["user_compute_admissions"],
-                now,
-                now,
             ),
         )
         connection.execute(

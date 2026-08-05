@@ -107,6 +107,7 @@ compose() {
     set +a
     docker compose \
         --project-name "$compose_project" \
+        --project-directory "$root" \
         --file "$compose_file" \
         "$@"
 }

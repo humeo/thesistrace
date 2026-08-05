@@ -56,6 +56,7 @@ def test_management_commands_use_private_one_shot_services() -> None:
     assert smtp["secrets"] == ["insforge_admin_password"]
 
     launcher = (ROOT / "scripts/hosted-stack").read_text()
+    assert '--project-directory "$root"' in launcher
     assert 'curl $curl_options "$origin/api/v1/ready"' in launcher
     assert "operator-tool thesistrace-operator" in launcher
     assert "smtp-tool python /app/scripts/hosted/configure_smtp.py" in launcher
