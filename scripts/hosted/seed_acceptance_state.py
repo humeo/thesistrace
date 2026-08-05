@@ -84,7 +84,6 @@ def assert_clean(database_url: str) -> None:
         "thesistrace_control.product_users",
         "thesistrace_control.personal_workspaces",
         "thesistrace_control.registration_invitations",
-        "thesistrace_control.launch_qualifications",
         "thesistrace_product.dataset_releases",
         "thesistrace_product.research_definition_drafts",
         "thesistrace_product.research_runs",

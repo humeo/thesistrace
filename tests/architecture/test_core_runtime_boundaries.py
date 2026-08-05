@@ -355,6 +355,8 @@ def test_hosted_operations_and_observability_are_absent_from_the_active_tree() -
     ):
         assert retired_object in contraction
     assert "DROP ROLE thesistrace_health" in contraction
+    assert "DROP TRIGGER IF EXISTS personal_workspace_default_quota_profile" in contraction
+    assert "DROP TRIGGER IF EXISTS reject_dataset_publication_during_maintenance" in contraction
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
