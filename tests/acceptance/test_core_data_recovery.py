@@ -24,7 +24,12 @@ from thesistrace.entrypoints.runtime import (
     core_environment_is_configured,
     open_core_runtime,
 )
-from thesistrace.publication import PreparedPublication, Publication, PublishedRef
+from thesistrace.publication import (
+    PreparedPublication,
+    Publication,
+    PublishedRef,
+    VerifiedBundle,
+)
 
 
 @pytest.mark.skipif(
@@ -287,6 +292,9 @@ class _FailingPublication:
         if self._failure_seam == "verification":
             self._delete_object(next(iter(prepared.payload_sha256s.values())))
         return prepared
+
+    def read(self, published_ref: PublishedRef) -> VerifiedBundle:
+        return self._delegate.read(published_ref)
 
     def record(
         self,
