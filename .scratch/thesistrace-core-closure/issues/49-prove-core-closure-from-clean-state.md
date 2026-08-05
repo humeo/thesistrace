@@ -4,7 +4,7 @@
 loop after every product boundary and contraction is already independently
 accepted.
 
-**Blocked by:** 48.
+**Blocked by:** 48, 50.
 
 **Status:** ready-for-agent
 

@@ -6,7 +6,7 @@ from threading import Barrier
 import pyarrow as pa
 import pytest
 from botocore.client import BaseClient
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, ResponseStreamingError
 
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.publication import (
@@ -258,6 +258,85 @@ def test_concurrent_prepare_uses_conditional_create_without_overwrite(
         Key=target_key,
     )["Body"].read()
     assert stored == expected
+
+
+@pytest.mark.parametrize("operation", ["prepare", "verify"])
+def test_transient_response_stream_failure_is_retried_at_read_boundary(
+    core_settings: CoreSettings,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    payloads = {"only": JsonPayload({"stream": "retry"})}
+
+    with open_core_runtime(core_settings) as runtime:
+        prepared = runtime.publication.prepare(
+            kind="stream.retry",
+            payloads=payloads,
+            provenance={"ticket": 49},
+        )
+        original_get_object = runtime.publication._s3.get_object
+        calls = 0
+        failed_body = _FailingResponseBody()
+
+        def fail_first_read(**arguments: object) -> object:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"Body": failed_body}
+            return original_get_object(**arguments)
+
+        monkeypatch.setattr(runtime.publication._s3, "get_object", fail_first_read)
+        if operation == "prepare":
+            runtime.publication.prepare(
+                kind="stream.retry",
+                payloads=payloads,
+                provenance={"ticket": 49},
+            )
+        else:
+            runtime.publication.verify_prepared(prepared)
+
+    assert calls == 2
+    assert failed_body.closed is True
+
+
+def test_transient_response_stream_retries_are_bounded(
+    core_settings: CoreSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with open_core_runtime(core_settings) as runtime:
+        prepared = runtime.publication.prepare(
+            kind="stream.exhaustion",
+            payloads={"only": JsonPayload({"stream": "exhaustion"})},
+            provenance={"ticket": 49},
+        )
+        calls = 0
+        failed_bodies: list[_FailingResponseBody] = []
+
+        def fail_every_read(**_arguments: object) -> object:
+            nonlocal calls
+            calls += 1
+            body = _FailingResponseBody()
+            failed_bodies.append(body)
+            return {"Body": body}
+
+        monkeypatch.setattr(runtime.publication._s3, "get_object", fail_every_read)
+        with pytest.raises(PublicationUnavailableError) as captured:
+            runtime.publication.verify_prepared(prepared)
+
+    assert calls == 3
+    assert all(body.closed for body in failed_bodies)
+    assert str(captured.value) == "Publication object read is temporarily unavailable"
+
+
+class _FailingResponseBody:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def read(self) -> bytes:
+        raise ResponseStreamingError(error=RuntimeError("incomplete response stream"))
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _find_key_with_content(s3: BaseClient, bucket: str, expected: bytes) -> str:

@@ -28,6 +28,7 @@ from thesistrace.publication.serialization import (
 )
 
 MANIFEST_SCHEMA_VERSION = 1
+OBJECT_READ_ATTEMPTS = 3
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 TRANSIENT_S3_ERRORS = (
     ConnectionClosedError,
@@ -468,47 +469,53 @@ class Publication:
             ) from error
 
     def _verify_existing(self, digest: str, expected: bytes) -> None:
-        try:
-            actual = self._s3.get_object(
-                Bucket=self._bucket,
-                Key=_object_key(digest),
-            )["Body"].read()
-        except ClientError as error:
-            if _client_error_is_transient(error):
-                raise PublicationUnavailableError(
-                    "Publication object verification is temporarily unavailable"
-                ) from error
-            raise PublicationVerificationError("Publication object is missing") from error
-        except TRANSIENT_S3_ERRORS as error:
-            raise PublicationUnavailableError(
-                "Publication object verification is temporarily unavailable"
-            ) from error
+        actual = self._read_object_bytes(
+            digest,
+            unavailable_message="Publication object verification is temporarily unavailable",
+            missing_message="Publication object is missing",
+        )
         if actual != expected or hashlib.sha256(actual).hexdigest() != digest:
             raise PublicationVerificationError(
                 "Publication content address contains different bytes"
             )
 
     def _read_verified(self, digest: str, expected_bytes: int) -> bytes:
-        try:
-            content = self._s3.get_object(
-                Bucket=self._bucket,
-                Key=_object_key(digest),
-            )["Body"].read()
-        except ClientError as error:
-            if _client_error_is_transient(error):
-                raise PublicationUnavailableError(
-                    "Publication object read is temporarily unavailable"
-                ) from error
-            raise PublicationVerificationError("Publication object is missing") from error
-        except TRANSIENT_S3_ERRORS as error:
-            raise PublicationUnavailableError(
-                "Publication object read is temporarily unavailable"
-            ) from error
+        content = self._read_object_bytes(
+            digest,
+            unavailable_message="Publication object read is temporarily unavailable",
+            missing_message="Publication object is missing",
+        )
         if len(content) != expected_bytes:
             raise PublicationVerificationError("Publication object length is invalid")
         if hashlib.sha256(content).hexdigest() != digest:
             raise PublicationVerificationError("Publication object checksum is invalid")
         return content
+
+    def _read_object_bytes(
+        self,
+        digest: str,
+        *,
+        unavailable_message: str,
+        missing_message: str,
+    ) -> bytes:
+        last_transient_error: Exception | None = None
+        for _attempt in range(OBJECT_READ_ATTEMPTS):
+            try:
+                body = self._s3.get_object(
+                    Bucket=self._bucket,
+                    Key=_object_key(digest),
+                )["Body"]
+                try:
+                    return bytes(body.read())
+                finally:
+                    body.close()
+            except ClientError as error:
+                if not _client_error_is_transient(error):
+                    raise PublicationVerificationError(missing_message) from error
+                last_transient_error = error
+            except TRANSIENT_S3_ERRORS as error:
+                last_transient_error = error
+        raise PublicationUnavailableError(unavailable_message) from last_transient_error
 
 
 def _serialize_payload(
