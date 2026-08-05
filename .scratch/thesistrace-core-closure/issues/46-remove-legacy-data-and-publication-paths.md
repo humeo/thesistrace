@@ -24,9 +24,54 @@ complete product path.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/architecture tests/adapters tests/integration tests/acceptance`
-  with every legacy Data and publication entrypoint absent.
-- Run `bun run --cwd web test:e2e` and confirm first, later, no-change, and
-  failed Data outcomes still use the canonical path.
+```sh
+set -eu
+
+for removed_path in \
+  src/thesistrace/api.py \
+  src/thesistrace/datasets.py \
+  src/thesistrace/platform_publications.py \
+  src/thesistrace/canonical_objects.py \
+  src/thesistrace/publication_object_index.py \
+  src/thesistrace/tushare_source.py \
+  tests/acceptance/test_canonical_parquet_releases.py \
+  tests/acceptance/test_dataset_contract.py \
+  tests/acceptance/test_empty_workspace.py \
+  tests/acceptance/test_fixture_bootstrap.py \
+  tests/acceptance/test_incremental_releases.py \
+  tests/acceptance/test_parquet_objects.py \
+  tests/acceptance/test_tushare_source.py
+do
+  test ! -e "$removed_path"
+done
+
+if rg -n \
+  --glob '!web/node_modules/**' \
+  --glob '!web/dist/**' \
+  'thesistrace\.(api|datasets|platform_publications|canonical_objects|publication_object_index|tushare_source)|DatasetPublisher|/api/v1/(dataset-releases|sources/tushare|objects)' \
+  pyproject.toml uv.lock Makefile src scripts tests/adapters tests/integration web
+then
+  echo 'Legacy Data or Publication path remains reachable' >&2
+  exit 1
+fi
+
+test -f src/thesistrace/data/service.py
+test -f src/thesistrace/adapters/fixture_data.py
+test -f src/thesistrace/adapters/tushare_data.py
+test -f src/thesistrace/adapters/tushare_provider.py
+test -f src/thesistrace/publication/service.py
+
+uv run pytest -q tests/architecture tests/adapters
+
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run \
+  uv run pytest -q tests/integration tests/acceptance/test_core_data_*.py \
+  tests/acceptance/test_core_fixture_data_update.py \
+  tests/acceptance/test_core_later_data_update.py \
+  tests/acceptance/test_core_no_change_data_update.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:e2e
+```
 
 ## Comments
