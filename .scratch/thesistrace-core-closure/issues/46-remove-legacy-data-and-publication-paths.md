@@ -56,6 +56,12 @@ then
   exit 1
 fi
 
+if rg -n 'thesistrace\.objects' prototypes
+then
+  echo 'A runnable prototype still calls the legacy filesystem object module' >&2
+  exit 1
+fi
+
 test -f src/thesistrace/data/service.py
 test -f src/thesistrace/adapters/fixture_data.py
 test -f src/thesistrace/adapters/tushare_data.py
