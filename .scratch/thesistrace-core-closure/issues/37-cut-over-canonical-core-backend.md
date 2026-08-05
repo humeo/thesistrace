@@ -6,21 +6,23 @@ controlled contraction.
 
 **Blocked by:** 12, 13, 14, 23, 24, 25, 31, 32, 34, 35, 36.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Every public resource URL and action resolves only through the new Data,
+**Implementation:** complete
+
+- [x] Every public resource URL and action resolves only through the new Data,
   Definitions, ResearchRuns, and DailyTracks modules.
-- [ ] Worker startup invokes only module-owned Data, ResearchRun, and DailyTrack
+- [x] Worker startup invokes only module-owned Data, ResearchRun, and DailyTrack
   processors.
-- [ ] Active assembly contains no Local/Hosted selection, authentication,
+- [x] Active assembly contains no Local/Hosted selection, authentication,
   SQLite, Temporal, outbox, relay, or global dispatch branch.
-- [ ] Product modules use declared private interfaces rather than cross-schema
+- [x] Product modules use declared private interfaces rather than cross-schema
   SQL, global metadata, or Hosted imports.
-- [ ] The same configuration shape addresses PostgreSQL and any standard
+- [x] The same configuration shape addresses PostgreSQL and any standard
   S3-compatible endpoint without choosing a product mode.
-- [ ] Old backend paths remain in the tree only as unreachable contraction
+- [x] Old backend paths remain in the tree only as unreachable contraction
   targets; this ticket deletes none of them.
-- [ ] Restarting the canonical HTTP and workers preserves all four product
+- [x] Restarting the canonical HTTP and workers preserves all four product
   resources and authoritative publications.
 
 **How to verify:**
@@ -64,3 +66,30 @@ module-owned Data, ResearchRun, and DailyTrack processors were imported; no
 legacy or Hosted backend module may execute.
 
 ## Comments
+
+- The executable verification contract was committed first in `f5b9ba7`.
+  `ad5a77f` repointed the default `thesistrace-api` and
+  `thesistrace-worker` commands to the canonical entrypoints and added closed
+  route/import/restart acceptance without deleting contraction source.
+- Review round 1 found that the populated flow had processed work through test
+  helpers before invoking the default worker, and that the restart snapshot
+  omitted owning-module publication references. `3837bed` changed the test to
+  enqueue only through HTTP and use the actual default worker for first Data,
+  ResearchRun, later Data, and DailyTrack progression; it also captured Data,
+  ResearchRun, DailyTrack, Checkpoint, and Publication references.
+- Review round 2 passed Standards but found two Spec gaps: the
+  manifest-to-object association and non-`/api` application routes were not in
+  the inventories. `908e3e3` added `publication.manifest_objects`, reopened all
+  Dataset Release and Definition details, and enumerated every application
+  route while excluding only the four exact FastAPI framework endpoints.
+- Review round 3 passed Standards and Spec with zero findings. It confirmed the
+  default process seams, import exclusions, module workers, complete route
+  inventory, authoritative reference snapshot, test isolation, and the
+  intentional boundary that Web switching/deletion remains in Tickets 38–39.
+- Final verification was run exactly from **How to verify** against isolated
+  real PostgreSQL and RustFS and passed with `23 passed, 1 warning in 39.15s`;
+  the trap removed both runtime containers afterward.
+- The repository browser gate intentionally remains on the old Web until
+  Ticket 38 switches the four-resource Shell. The full `make check` is run at
+  that boundary rather than reactivating an old backend merely to keep the
+  transitional browser command green.
