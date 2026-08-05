@@ -168,6 +168,20 @@ def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> 
     assert "definitions." not in run_migrations
 
 
+def test_start_tracking_receipt_cutover_is_owned_by_the_runtime_assembly() -> None:
+    cutover = (ROOT / "src" / "thesistrace" / "entrypoints" / "migrations.py").read_text()
+    runtime = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
+
+    assert "INSERT INTO research_runs.start_tracking_receipts" in cutover
+    assert "FROM daily_tracks.activation_receipts" in cutover
+    assert "DELETE FROM daily_tracks.activation_receipts" in cutover
+    assert "apply_migrations(database, DAILY_TRACK_MIGRATIONS)" in runtime
+    assert "apply_migrations(database, CUTOVER_MIGRATIONS)" in runtime
+    assert runtime.index("apply_migrations(database, DAILY_TRACK_MIGRATIONS)") < runtime.index(
+        "apply_migrations(database, CUTOVER_MIGRATIONS)"
+    )
+
+
 def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
     run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()

@@ -1034,7 +1034,9 @@ def _rerun_fingerprint(run_id: str) -> str:
 
 
 def _start_tracking_fingerprint(run_id: str) -> str:
-    value = {"action": "research-runs.start-tracking/v1", "run_id": run_id}
+    # Keep the original wire fingerprint stable while receipt ownership moves
+    # from DailyTracks to ResearchRuns.
+    value = {"action": "research-runs.start-tracking/v1", "seed_run_id": run_id}
     serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(serialized).hexdigest()
 

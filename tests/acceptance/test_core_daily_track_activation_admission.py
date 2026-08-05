@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
@@ -13,12 +14,115 @@ from test_core_daily_track_activation import (
     _stored_seed,
 )
 
+from thesistrace._postgres import PostgresDatabase, apply_migrations
+from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
+from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
+from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import JsonPayload, PublishedRef
+from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_run import ResearchRunTrackingUnavailable
+from thesistrace.research_run.migrations import MIGRATIONS as RESEARCH_RUN_MIGRATIONS
 
 ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_legacy_start_tracking_receipt_moves_to_research_runs_and_survives_restart() -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+    seed_run_id = "run_ticket36_legacy"
+    request_id = "ticket-36-legacy-receipt"
+    track = {
+        "id": "track_ticket36_legacy",
+        "status": "active",
+        "seed_run_id": seed_run_id,
+        "seed_release_id": "release_ticket36_legacy",
+        "current_release_id": "release_ticket36_legacy",
+        "definition_id": "definition_ticket36_legacy",
+        "definition_revision": 1,
+        "result_checksum_sha256": "a" * 64,
+        "strategy_session": "2025-12-31",
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            {
+                "action": "research-runs.start-tracking/v1",
+                "seed_run_id": seed_run_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        for plan in (
+            PUBLICATION_MIGRATIONS,
+            DATA_MIGRATIONS,
+            DEFINITION_MIGRATIONS,
+            RESEARCH_RUN_MIGRATIONS,
+            DAILY_TRACK_MIGRATIONS,
+        ):
+            apply_migrations(database, plan)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.tracks (
+                    id, status, seed_run_id, origin,
+                    current_release_id, current_strategy_session
+                ) VALUES (%s, 'active', %s, %s, %s, %s)
+                """,
+                (
+                    track["id"],
+                    seed_run_id,
+                    Jsonb({}),
+                    track["current_release_id"],
+                    track["strategy_session"],
+                ),
+            )
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.activation_receipts (
+                    request_id, request_fingerprint, track_id, outcome
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (request_id, fingerprint, track["id"], Jsonb(track)),
+            )
+    finally:
+        database.close()
+
+    with TestClient(create_app(settings)) as upgraded:
+        replay = upgraded.post(
+            f"/api/research-runs/{seed_run_id}/daily-tracks",
+            json={"request_id": request_id},
+        )
+        assert replay.status_code == 201
+        assert replay.json() == track
+        conflict = upgraded.post(
+            "/api/research-runs/run_ticket36_other/daily-tracks",
+            json={"request_id": request_id},
+        )
+        assert conflict.status_code == 409
+
+    with TestClient(create_app(settings)) as restarted:
+        replay = restarted.post(
+            f"/api/research-runs/{seed_run_id}/daily-tracks",
+            json={"request_id": request_id},
+        )
+        assert replay.status_code == 201
+        assert replay.json() == track
+        assert _admission_counts(restarted.app.state.core_runtime.database) == {
+            "tracks": 1,
+            "active_or_blocked": 1,
+            "research_run_receipts": 1,
+            "legacy_daily_track_receipts": 0,
+        }
 
 
 @pytest.mark.skipif(

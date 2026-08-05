@@ -18,6 +18,7 @@ from thesistrace.data import DataService, authorable_field_bindings
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.definition import DefinitionService
 from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
+from thesistrace.entrypoints.migrations import CUTOVER_MIGRATIONS
 from thesistrace.publication import Publication
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_kernel import operator_catalog
@@ -102,6 +103,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         apply_migrations(database, DEFINITION_MIGRATIONS)
         apply_migrations(database, RESEARCH_RUN_MIGRATIONS)
         apply_migrations(database, DAILY_TRACK_MIGRATIONS)
+        apply_migrations(database, CUTOVER_MIGRATIONS)
         s3 = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,

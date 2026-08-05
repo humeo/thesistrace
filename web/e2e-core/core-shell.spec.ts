@@ -507,6 +507,7 @@ test("handles Start Tracking replay and active limit", async ({ page }) => {
   };
   let acceptedRequestId: string | null = null;
   let replayRequests = 0;
+  const acceptedTracksByRequestId = new Map<string, typeof acceptedTrack>();
   await page.route(`**/api/research-runs/${replayRun.id}`, (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(replayRun) }),
   );
@@ -519,14 +520,17 @@ test("handles Start Tracking replay and active limit", async ({ page }) => {
     replayRequests += 1;
     if (replayRequests === 1) {
       acceptedRequestId = body.request_id;
+      acceptedTracksByRequestId.set(body.request_id, acceptedTrack);
       await route.abort("failed");
       return;
     }
     expect(body.request_id).toBe(acceptedRequestId);
+    const replayedTrack = acceptedTracksByRequestId.get(body.request_id);
+    expect(replayedTrack).toEqual(acceptedTrack);
     await route.fulfill({
       status: 201,
       contentType: "application/json",
-      body: JSON.stringify(acceptedTrack),
+      body: JSON.stringify(replayedTrack),
     });
   });
   await page.route(`**/api/research-runs/${limitRun.id}/daily-tracks`, (route) =>
@@ -545,6 +549,7 @@ test("handles Start Tracking replay and active limit", async ({ page }) => {
   await page.getByRole("button", { name: "Start Tracking", exact: true }).click();
   await expect(page).toHaveURL(`/daily-tracks/${acceptedTrack.id}`);
   expect(replayRequests).toBe(2);
+  expect(acceptedTracksByRequestId.size).toBe(1);
 
   await page.goto(`/research-runs/${limitRun.id}`);
   const stableLimitUrl = page.url();
