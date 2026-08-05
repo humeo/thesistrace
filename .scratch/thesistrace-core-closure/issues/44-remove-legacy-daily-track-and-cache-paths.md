@@ -48,10 +48,19 @@ if rg -n \
   --glob '!docs/archive/*.md' \
   --glob '!web/node_modules/**' \
   --glob '!web/dist/**' \
-  'thesistrace\.(tracking|tracking_operations|working_cache)|DailyTrackingService|TrackingOperationService|WorkingCache(Store|Port)|/api/v1/daily-tracks|working_cache_root' \
+  'thesistrace\.(tracking|tracking_operations|working_cache)|DailyTrackingService|TrackingOperationService|WorkingCache(Store|Port)|/api/v1/daily-tracks' \
   pyproject.toml uv.lock Makefile src scripts tests web
 then
   echo 'Legacy Tracking or global Working Cache remains reachable' >&2
+  exit 1
+fi
+
+if rg -n 'working_cache_root' \
+  src/thesistrace/config.py \
+  src/thesistrace/runtime.py \
+  tests/acceptance/test_runtime_ports.py
+then
+  echo 'Legacy global Working Cache configuration remains' >&2
   exit 1
 fi
 
