@@ -22,10 +22,46 @@ fence in-flight work, and retain its authoritative history.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` for active Stop,
-  blocked Stop, replay, conflict, late-worker fencing, cache removal, and
-  restart.
-- Run `bun run --cwd web test:e2e` and confirm no later Data Update changes the
-  stopped Track's Head.
+Run the ticket verification against real PostgreSQL and RustFS, then remove the
+isolated runtime even if a check fails:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/acceptance/test_core_daily_track_stop.py \
+  tests/acceptance/test_core_daily_track_recovery.py \
+  tests/architecture/test_core_runtime_boundaries.py
+bun run --cwd web typecheck
+./scripts/core-test-runtime run bun run --cwd web test:e2e:core-shell -- \
+  --grep "stops a DailyTrack irreversibly"
+```
+
+The acceptance test must stop one active Track with a committed Head and local
+Working Cache, stop one blocked Track, and race Stop against a third Track whose
+progression has prepared its result but has not published. `POST
+/api/daily-tracks/{track_id}/stop` accepts only `{"request_id":"..."}`. Missing
+Track returns 404; malformed input returns 422 without a Stop receipt.
+
+For active and blocked Tracks, Stop must atomically persist `stopped`, advance
+the execution fence, cancel any unfinished progression and live Attempt, and
+leave Tracking Origin, Head, committed Checkpoint rows, and readable detail
+unchanged. The worker-local cache file must be absent after the action. The
+prepared late worker must be fenced: after it resumes, Publication count,
+Checkpoint count, Head, and stopped state remain unchanged.
+
+After Stop, publishing at least one later Dataset Release and running ordinary
+workers must not claim, Retry, reactivate, or move the stopped Track. Matching
+request replay, including after constructing a fresh Core runtime, must return
+the originally stored stopped outcome without changing the fence or receipt
+count. Reusing that request ID for another Track returns 409. Another Stop with
+a new request ID and every Retry on a stopped Track return 409.
+
+The named browser test must state that Stop is irreversible before submission,
+show the terminal stopped status at the same stable URL after acceptance,
+remove both Stop and Retry actions, survive reload, and keep the same Head after
+a later Data Release. It must not render Attempt, fence, claim, receipt,
+manifest, object key, cache path, or worker controls.
 
 ## Comments
