@@ -101,7 +101,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         assert [
             row["target_release_id"] for row in _checkpoint_rows(settings, failed_track["id"])
         ] == [releases[0]["id"]]
-        assert _running_target(settings, failed_track["id"]) == releases[1]["id"]
+        assert _unfinished_target(settings, failed_track["id"]) == releases[1]["id"]
         assert runtime.daily_tracks.process_next() is False
         runtime.data._source = FixtureDataSource(sessions_after_bootstrap=4)
         accepted = client.post(
@@ -118,7 +118,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
             client.get(f"/api/daily-tracks/{failed_track['id']}").json()["head_release_id"]
             == releases[0]["id"]
         )
-        assert _running_target(settings, failed_track["id"]) == releases[1]["id"]
+        assert _unfinished_target(settings, failed_track["id"]) == releases[1]["id"]
 
         assert client.post(f"/api/daily-tracks/{failed_track['id']}/catch-up").status_code in {
             404,
@@ -214,7 +214,7 @@ def _checkpoint_rows(settings: CoreSettings, track_id: str) -> list[dict[str, ob
         database.close()
 
 
-def _running_target(settings: CoreSettings, track_id: str) -> str:
+def _unfinished_target(settings: CoreSettings, track_id: str) -> str:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -223,7 +223,7 @@ def _running_target(settings: CoreSettings, track_id: str) -> str:
                 """
                 SELECT target_release_id
                 FROM daily_tracks.progressions
-                WHERE track_id = %s AND status = 'running'
+                WHERE track_id = %s AND status IN ('running', 'blocked')
                 """,
                 (track_id,),
             ).fetchone()

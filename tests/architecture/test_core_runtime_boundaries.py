@@ -220,6 +220,10 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "CREATE TABLE daily_tracks.activation_receipts" in track_migrations
     assert "CREATE TABLE daily_tracks.progressions" in track_migrations
     assert "CREATE TABLE daily_tracks.checkpoints" in track_migrations
+    assert "0004_blocked_track_failure_isolation" in track_migrations
+    assert "blocked_target_release_id" in track_migrations
+    assert "MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3" in track_source
+    assert "def _record_progression_failure(" in track_source
     assert "def activate(" in track_source
     assert "def resolve_activation(" in track_source
     assert "origin" in track_source

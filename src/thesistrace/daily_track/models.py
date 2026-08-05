@@ -59,7 +59,7 @@ class DailyTrackSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal["active"]
+    status: Literal["active", "blocked"]
     seed_run_id: str
     seed_release_id: str
     current_release_id: str
@@ -147,7 +147,7 @@ class DailyTrackDetail(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal["active"]
+    status: Literal["active", "blocked"]
     origin: DailyTrackOriginView
     head_release_id: str
     strategy_session: str

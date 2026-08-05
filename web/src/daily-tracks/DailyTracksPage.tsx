@@ -7,7 +7,7 @@ import {
 
 type DailyTrackSummary = {
   id: string;
-  status: "active";
+  status: "active" | "blocked";
   seed_run_id: string;
   seed_release_id: string;
   current_release_id: string;
@@ -19,7 +19,7 @@ type DailyTrackSummary = {
 
 type DailyTrackDetail = {
   id: string;
-  status: "active";
+  status: "active" | "blocked";
   origin: {
     seed_run_id: string;
     seed_release_id: string;

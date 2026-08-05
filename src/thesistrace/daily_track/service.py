@@ -63,6 +63,8 @@ Progress = Callable[[str, str, str], None]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
+MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3
+PUBLIC_BLOCKED_REASON = "DailyTrack could not process this Dataset Release."
 # 504 rolling signal sessions plus the 21-session maximum label maturity tail.
 # The query reads one extra predecessor Checkpoint; _select_rebuild_steps then
 # trims the selected Release suffix to this many actual Research Sessions.
@@ -257,6 +259,7 @@ class DailyTrackService:
                 PublicationUnavailableError,
                 PublicationVerificationError,
             ) as error:
+                self._record_progression_failure(claim, error)
                 raise DailyTrackProgressionFailed(
                     "DailyTrack progression failed at its current target"
                 ) from error
@@ -279,7 +282,8 @@ class DailyTrackService:
             row = transaction.execute(
                 """
                 SELECT id, status, origin, current_release_id,
-                       current_strategy_session, head_manifest_sha256
+                       current_strategy_session, head_manifest_sha256,
+                       blocked_reason
                 FROM daily_tracks.tracks
                 WHERE id = %s
                 """,
@@ -456,7 +460,7 @@ class DailyTrackService:
                 "head_release_id": str(row["current_release_id"]),
                 "strategy_session": str(row["current_strategy_session"]),
                 "lag_releases": lag_releases,
-                "blocked_reason": None,
+                "blocked_reason": row["blocked_reason"],
                 "factor": factor,
                 "strategy": {
                     "summary": strategy_summary,
@@ -1225,6 +1229,103 @@ class DailyTrackService:
                 },
             )
 
+    def _record_progression_failure(
+        self,
+        claim: _ProgressionClaim,
+        error: Exception,
+    ) -> None:
+        failure_reason = type(error).__name__
+        with self._database.transaction() as transaction:
+            track = transaction.execute(
+                """
+                SELECT status, current_release_id, execution_fence
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (claim.track_id,),
+            ).fetchone()
+            progression = transaction.execute(
+                """
+                SELECT status, fence
+                FROM daily_tracks.progressions
+                WHERE track_id = %s AND target_release_id = %s
+                FOR UPDATE
+                """,
+                (claim.track_id, claim.target.id),
+            ).fetchone()
+            attempt = transaction.execute(
+                """
+                SELECT status, fence, ordinal
+                FROM daily_tracks.progression_attempts
+                WHERE id = %s AND track_id = %s AND target_release_id = %s
+                FOR UPDATE
+                """,
+                (claim.attempt_id, claim.track_id, claim.target.id),
+            ).fetchone()
+            if track != {
+                "status": "active",
+                "current_release_id": claim.current_release_id,
+                "execution_fence": claim.fence,
+            }:
+                raise DailyTrackFenced
+            if progression != {"status": "running", "fence": claim.fence}:
+                raise DailyTrackFenced
+            if (
+                attempt is None
+                or attempt["status"] != "running"
+                or int(attempt["fence"]) != claim.fence
+            ):
+                raise DailyTrackFenced
+            failed = transaction.execute(
+                """
+                UPDATE daily_tracks.progression_attempts
+                SET status = 'failed', heartbeat_at = now(),
+                    lease_expires_at = now(), finished_at = now(),
+                    failure_reason = %s
+                WHERE id = %s AND track_id = %s AND target_release_id = %s
+                  AND status = 'running' AND fence = %s
+                """,
+                (
+                    failure_reason,
+                    claim.attempt_id,
+                    claim.track_id,
+                    claim.target.id,
+                    claim.fence,
+                ),
+            )
+            if failed.rowcount != 1:
+                raise DailyTrackFenced
+            if int(attempt["ordinal"]) < MAX_AUTOMATIC_PROGRESSION_ATTEMPTS:
+                return
+            blocked_progression = transaction.execute(
+                """
+                UPDATE daily_tracks.progressions
+                SET status = 'blocked', finished_at = now()
+                WHERE track_id = %s AND target_release_id = %s
+                  AND status = 'running' AND fence = %s
+                """,
+                (claim.track_id, claim.target.id, claim.fence),
+            )
+            blocked_track = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET status = 'blocked', blocked_target_release_id = %s,
+                    blocked_reason = %s
+                WHERE id = %s AND status = 'active'
+                  AND current_release_id = %s AND execution_fence = %s
+                """,
+                (
+                    claim.target.id,
+                    PUBLIC_BLOCKED_REASON,
+                    claim.track_id,
+                    claim.current_release_id,
+                    claim.fence,
+                ),
+            )
+            if blocked_progression.rowcount != 1 or blocked_track.rowcount != 1:
+                raise DailyTrackFenced
+
     def _require_progression_dependencies(self) -> None:
         if self._publication is None or self._next_release is None or self._load_canonical is None:
             raise RuntimeError("DailyTrack progression dependencies are not configured")
@@ -1252,7 +1353,7 @@ def _summary(row: object) -> DailyTrackSummary:
     verified_result = origin.verified_result
     return DailyTrackSummary(
         id=str(row["id"]),
-        status="active",
+        status=row["status"],
         seed_run_id=origin.seed_run_id,
         seed_release_id=origin.seed_release_id,
         current_release_id=str(row["current_release_id"]),

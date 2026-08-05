@@ -638,6 +638,131 @@ test("shows recent and cumulative DailyTrack analysis", async ({ page }) => {
   await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });
 
+test("blocks one failed DailyTrack independently", async ({ page }) => {
+  const emptyHorizon = (horizon: 1 | 5 | 20) => ({
+    horizon,
+    summary: {
+      ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      rank_ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null },
+      top_bottom_return: null,
+    },
+    coverage: {
+      signal_session_count: 0,
+      ic_valid_session_count: 0,
+      rank_ic_valid_session_count: 0,
+      quantile_valid_session_count: 0,
+    },
+  });
+  const analysis = {
+    factor: {
+      horizons: {
+        "1": emptyHorizon(1),
+        "5": emptyHorizon(5),
+        "20": emptyHorizon(20),
+      },
+    },
+    strategy: {
+      summary: {
+        metrics: {
+          net_cumulative_return: 0.08,
+          benchmark_cumulative_return: 0.05,
+          annualized_excess_return: 0.03,
+          maximum_drawdown: { value: -0.02 },
+          sharpe: 0.9,
+          transaction_costs: { cumulative_amount: 300 },
+        },
+      },
+      benchmark: {
+        universe: "top1000",
+        methodology: "selected_universe_equal_weight",
+      },
+      observations: [],
+    },
+  };
+  const origin = {
+    seed_run_id: "run_failure_isolation",
+    seed_release_id: "release_seed",
+    definition_id: "def_failure_isolation",
+    definition_revision: 2,
+    result_checksum_sha256: "b".repeat(64),
+    strategy_session: "2025-12-31",
+  };
+  const blocked = {
+    id: "track_b10c0ed",
+    status: "blocked",
+    origin,
+    head_release_id: "release_seed",
+    strategy_session: "2025-12-31",
+    lag_releases: 2,
+    blocked_reason: "DailyTrack could not process this Dataset Release.",
+    ...analysis,
+  };
+  const active = {
+    ...blocked,
+    id: "track_ac71ae",
+    status: "active",
+    head_release_id: "release_latest",
+    strategy_session: "2026-01-02",
+    lag_releases: 0,
+    blocked_reason: null,
+  };
+  const latestRelease = {
+    id: "release_latest",
+    predecessor_id: "release_failed_target",
+    session_count: 758,
+    covered_session_range: { start: "2023-01-03", end: "2026-01-02" },
+  };
+  await page.route("**/api/daily-tracks/track_b10c0ed", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(blocked) }),
+  );
+  await page.route("**/api/daily-tracks/track_ac71ae", (route) =>
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(active) }),
+  );
+  await page.route("**/api/data", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "idle",
+        latest_release: latestRelease,
+        latest_update_outcome: "published",
+      }),
+    }),
+  );
+  await page.route("**/api/data/releases", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [latestRelease], next_cursor: null }),
+    }),
+  );
+
+  await page.goto("/daily-tracks/track_b10c0ed");
+  await expect(page.getByText("Status blocked", { exact: true })).toBeVisible();
+  await expect(page.getByText("Head Release release_seed", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(
+      "Blocked DailyTrack could not process this Dataset Release.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Factor Evaluation" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Cumulative Strategy" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
+
+  await page.goto("/daily-tracks/track_ac71ae");
+  await expect(page.getByText("Status active", { exact: true })).toBeVisible();
+  await expect(page.getByText("Head Release release_latest", { exact: true })).toBeVisible();
+
+  await page.goto("/data");
+  await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible();
+  await expect(
+    page.getByRole("article").getByText("release_latest", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("758 Research Sessions", { exact: true })).toBeVisible();
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
+});
+
 test("saves and reopens an incomplete nameless Definition", async ({ page }) => {
   await page.goto("/definitions");
 

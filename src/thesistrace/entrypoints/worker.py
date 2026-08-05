@@ -35,14 +35,16 @@ def _process_once(runtime: CoreRuntime) -> None:
     _process_data(runtime)
     if runtime.research_runs.process_next():
         logger.info("Core worker processed ResearchRun")
-    try:
-        while runtime.daily_tracks.process_next():
-            logger.info("Core worker advanced DailyTrack")
-    except DailyTrackProgressionFailed as error:
-        logger.error(
-            "Core worker stopped one DailyTrack catch-up at its current target",
-            extra={"error_type": type(error.__cause__).__name__},
-        )
+    while True:
+        try:
+            while runtime.daily_tracks.process_next():
+                logger.info("Core worker advanced DailyTrack")
+            return
+        except DailyTrackProgressionFailed as error:
+            logger.error(
+                "Core worker isolated one DailyTrack failure at its current target",
+                extra={"error_type": type(error.__cause__).__name__},
+            )
 
 
 def _process_data(runtime: CoreRuntime) -> None:

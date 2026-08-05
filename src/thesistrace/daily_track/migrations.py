@@ -130,5 +130,30 @@ MIGRATIONS = MigrationPlan(
                 FROM daily_tracks.progressions;
             """,
         ),
+        Migration(
+            name="0004_blocked_track_failure_isolation",
+            statement="""
+                ALTER TABLE daily_tracks.tracks
+                    DROP CONSTRAINT tracks_status_check,
+                    ADD COLUMN blocked_target_release_id text NULL,
+                    ADD COLUMN blocked_reason text NULL,
+                    ADD CONSTRAINT tracks_status_check
+                        CHECK (status IN ('active', 'blocked')),
+                    ADD CONSTRAINT tracks_blocked_state_check CHECK (
+                        (status = 'active'
+                            AND blocked_target_release_id IS NULL
+                            AND blocked_reason IS NULL)
+                        OR
+                        (status = 'blocked'
+                            AND blocked_target_release_id IS NOT NULL
+                            AND blocked_reason IS NOT NULL)
+                    );
+
+                ALTER TABLE daily_tracks.progressions
+                    DROP CONSTRAINT progressions_status_check,
+                    ADD CONSTRAINT progressions_status_check
+                        CHECK (status IN ('running', 'succeeded', 'blocked'));
+            """,
+        ),
     ),
 )
