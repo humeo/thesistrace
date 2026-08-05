@@ -919,6 +919,12 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
 test("stops a DailyTrack irreversibly", async ({ page }) => {
   const id = "track_570aaed";
   let stopped = false;
+  const laterRelease = {
+    id: "release_later_than_stopped_head",
+    predecessor_id: "release_committed_head",
+    session_count: 758,
+    covered_session_range: { start: "2023-01-03", end: "2026-01-02" },
+  };
   const horizon = (value: 1 | 5 | 20) => ({
     horizon: value,
     summary: {
@@ -988,6 +994,22 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
       }),
     });
   });
+  await page.route("**/api/data", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        status: "idle",
+        latest_release: laterRelease,
+        latest_update_outcome: "published",
+      }),
+    }),
+  );
+  await page.route("**/api/data/releases", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({ items: [laterRelease], next_cursor: null }),
+    }),
+  );
 
   await page.goto(`/daily-tracks/${id}`);
   await expect(
@@ -1001,6 +1023,18 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop DailyTrack" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Retry blocked target" })).toHaveCount(0);
+  const stableUrl = page.url();
+  await page.goto("/data");
+  await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible();
+  await expect(
+    page.getByRole("article").getByText(laterRelease.id, { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("Later Release", { exact: true })).toBeVisible();
+  await page.goto(stableUrl);
+  await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Head Release release_committed_head", { exact: true }),
+  ).toBeVisible();
   await page.reload();
   await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
   await expect(
