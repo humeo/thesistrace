@@ -64,6 +64,12 @@ then
   exit 1
 fi
 
+if rg -n 'lock_daily_track' src/thesistrace/ports.py
+then
+  echo 'Legacy Tracking lock seam remains on the shared metadata port' >&2
+  exit 1
+fi
+
 test -f src/thesistrace/daily_track/cache.py
 test -f src/thesistrace/daily_track/checkpoint.py
 test -f src/thesistrace/daily_track/service.py

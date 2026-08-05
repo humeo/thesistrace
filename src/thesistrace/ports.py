@@ -12,13 +12,6 @@ class ControlMetadataPort(Protocol):
 
     def connect(self): ...
 
-    def lock_daily_track_activation(
-        self,
-        connection,
-    ) -> None: ...
-
-    def lock_daily_track(self, connection, track_id: str) -> None: ...
-
     def storage_mutation_fence(
         self,
     ) -> AbstractContextManager[None]: ...

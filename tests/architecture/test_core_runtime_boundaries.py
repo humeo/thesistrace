@@ -476,6 +476,7 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     source = "\n".join(path.read_text() for path in package.rglob("*.py"))
     exported = (package / "__init__.py").read_text()
     runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
+    legacy_ports = (ROOT / "src" / "thesistrace" / "ports.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
 
     assert "thesistrace." + "working_cache" not in source
@@ -484,6 +485,7 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     assert "working_cache_root" not in CoreSettings.__dataclass_fields__
     assert "TemporaryDirectory" in runtime_source
     assert "working_cache_root=Path(working_cache.name)" in runtime_source
+    assert "lock_daily_track" not in legacy_ports
     assert "/api/working-cache" not in http_source
 
 
