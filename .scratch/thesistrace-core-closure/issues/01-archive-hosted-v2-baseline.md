@@ -5,7 +5,7 @@ V2 implementation before any Hosted or legacy contraction begins.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

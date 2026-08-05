@@ -6,7 +6,7 @@ policy is exhausted.
 
 **Blocked by:** 22.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

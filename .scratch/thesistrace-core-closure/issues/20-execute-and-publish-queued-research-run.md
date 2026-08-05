@@ -5,7 +5,7 @@ worker and pure Kernel to one durable, completely published success.
 
 **Blocked by:** 19.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

@@ -5,7 +5,7 @@ contract as Fixture without creating a second product or publication path.
 
 **Blocked by:** 10.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

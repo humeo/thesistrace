@@ -5,7 +5,7 @@ Session exists, while enforcing single active work and request replay rules.
 
 **Blocked by:** 10.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

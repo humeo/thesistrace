@@ -5,7 +5,7 @@ saved Research Definition while preserving the user's current editor content.
 
 **Blocked by:** 16.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

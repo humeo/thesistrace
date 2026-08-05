@@ -5,7 +5,7 @@ publication fails, then recover durable update state safely after process loss.
 
 **Blocked by:** 11.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

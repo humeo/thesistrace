@@ -5,7 +5,7 @@ Dataset Release while preserving every earlier Release and its provenance.
 
 **Blocked by:** 10.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

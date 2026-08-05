@@ -5,7 +5,7 @@ Research Sessions using the same calculation implementation as Kernel Run.
 
 **Blocked by:** 07.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

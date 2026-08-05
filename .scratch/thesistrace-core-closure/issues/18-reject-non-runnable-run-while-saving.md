@@ -5,7 +5,7 @@ issues without creating a ResearchRun when the saved content is not runnable.
 
 **Blocked by:** 17.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

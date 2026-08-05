@@ -5,7 +5,7 @@ allowing late computation or publication to change the committed outcome.
 
 **Blocked by:** 20.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

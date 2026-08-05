@@ -5,7 +5,7 @@ it later without any continuing dependency on the Definition or Run lifecycle.
 
 **Blocked by:** 21.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

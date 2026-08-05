@@ -5,7 +5,7 @@ ordering, Benchmark, and retained-result behavior before calculation code moves.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

@@ -5,7 +5,7 @@ delivery without creating a duplicate terminal result.
 
 **Blocked by:** 20.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

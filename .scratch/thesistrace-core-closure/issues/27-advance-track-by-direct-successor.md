@@ -6,7 +6,7 @@ and its product detail.
 
 **Blocked by:** 08, 11, 26.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

@@ -5,7 +5,7 @@ succeeded ResearchRun detail without creating a fifth product resource.
 
 **Blocked by:** 20.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

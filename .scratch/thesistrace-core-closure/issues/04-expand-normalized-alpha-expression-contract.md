@@ -6,7 +6,7 @@ Alpha semantics.
 
 **Blocked by:** 02.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

@@ -5,7 +5,7 @@ content-addressed uploads through a standard S3 client against pinned RustFS.
 
 **Blocked by:** 03.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

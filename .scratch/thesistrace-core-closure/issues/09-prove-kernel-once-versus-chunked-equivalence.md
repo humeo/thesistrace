@@ -5,7 +5,7 @@ chunks produces canonically identical Kernel state at the same boundary.
 
 **Blocked by:** 08.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

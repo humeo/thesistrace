@@ -6,7 +6,7 @@ product resource.
 
 **Blocked by:** 03.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 

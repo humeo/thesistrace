@@ -6,7 +6,7 @@ PostgreSQL, Publication, and RustFS path.
 
 **Blocked by:** 06.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 **Implementation:** complete
 
