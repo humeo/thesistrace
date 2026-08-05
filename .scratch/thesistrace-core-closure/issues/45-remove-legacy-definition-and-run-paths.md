@@ -23,9 +23,65 @@ Result paths after the canonical modules own every active research action.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/kernel tests/architecture tests/integration tests/acceptance`
-  with all legacy Definition and ResearchRun entrypoints absent.
-- Run `bun run --cwd web test:e2e` and confirm Save, rejected Run, successful
-  Result, edited Run, Cancel, and Rerun use only canonical routes.
+```sh
+set -eu
+
+for removed_path in \
+  src/thesistrace/definitions.py \
+  src/thesistrace/research_runs.py \
+  src/thesistrace/bounded_research.py \
+  src/thesistrace/result_objects.py \
+  src/thesistrace/resource_deletion.py \
+  tests/acceptance/test_bounded_research.py \
+  tests/acceptance/test_research_definitions.py \
+  tests/acceptance/test_research_runs.py \
+  tests/acceptance/test_resource_deletion.py \
+  tests/acceptance/test_result_bundle_capacity.py \
+  tests/acceptance/test_runtime_ports.py
+do
+  test ! -e "$removed_path"
+done
+
+if rg -n \
+  --glob '!docs/adr/*.md' \
+  --glob '!docs/research/*.md' \
+  --glob '!docs/archive/*.md' \
+  --glob '!web/node_modules/**' \
+  --glob '!web/dist/**' \
+  'thesistrace\.(definitions|research_runs|bounded_research|result_objects|resource_deletion)|ResearchDefinitionService|recover_staged_research_run|/api/v1/research-(definitions|definition-versions|runs)' \
+  pyproject.toml uv.lock Makefile src scripts tests web
+then
+  echo 'Legacy Definition or ResearchRun path remains reachable' >&2
+  exit 1
+fi
+
+test -f src/thesistrace/definition/service.py
+test -f src/thesistrace/research_run/service.py
+test -f src/thesistrace/research_kernel/run.py
+
+if rg -n '@app\.(post|put|delete)\("/api/research-runs"' \
+  src/thesistrace/entrypoints/http.py
+then
+  echo 'Generic ResearchRun mutation route remains' >&2
+  exit 1
+fi
+
+rg -n '@app\.post\("/api/definitions/run"' \
+  src/thesistrace/entrypoints/http.py
+rg -n '"/api/definitions/\{definition_id\}/run"' \
+  src/thesistrace/entrypoints/http.py
+rg -n '"/api/research-runs/\{run_id\}/rerun"' \
+  src/thesistrace/entrypoints/http.py
+
+uv run pytest -q tests/kernel tests/architecture
+
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run \
+  uv run pytest -q tests/integration tests/acceptance/test_core_definition_*.py \
+  tests/acceptance/test_core_research_run_*.py
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run bun run --cwd web test:e2e
+```
 
 ## Comments
