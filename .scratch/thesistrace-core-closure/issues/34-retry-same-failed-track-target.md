@@ -22,9 +22,50 @@ succeeds.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` with successful,
-  repeated, conflicting, malformed, and repeatedly failing Retry cases.
-- Run `bun run --cwd web test:e2e` and confirm Retry first reaches the old target
-  before ordered catch-up continues.
+Run the ticket verification against real PostgreSQL and RustFS, then remove the
+isolated runtime even if a check fails:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/acceptance/test_core_daily_track_retry.py \
+  tests/acceptance/test_core_daily_track_failure_isolation.py \
+  tests/architecture/test_core_runtime_boundaries.py
+bun run --cwd web typecheck
+./scripts/core-test-runtime run bun run --cwd web test:e2e:core-shell -- \
+  --grep "retries the same blocked DailyTrack target"
+```
+
+The acceptance test must first create a blocked Track with three failed
+automatic Attempts at one direct-successor Dataset Release, publish at least
+one newer successor, and persist a second independently blocked Track. `POST
+/api/daily-tracks/{track_id}/retry` must accept only a structurally valid
+`{"request_id":"..."}` for a currently blocked Track. It must not accept a
+target, Release, Definition, or Run input. Missing Track returns 404; active
+Track returns 409; malformed input returns 422 and creates no Retry receipt.
+
+An accepted Retry must atomically make only the existing blocked progression
+eligible again, clear the public blocked reason while work is active, and leave
+Head unchanged. Before any later Release can be processed, one ordinary
+`process_next()` call must move Head to the original failed target and return
+the Track to `active`; only a subsequent call may process its next direct
+successor. No new ResearchRun, merged progression, or latest-Release jump is
+allowed.
+
+Replaying the same request ID for the same Track and failed target, including
+after constructing a fresh Core runtime, must return the originally stored
+action outcome without creating another receipt or Attempt. Reusing that
+request ID for another blocked Track must return 409. If the retried target
+fails again, the Track must return to `blocked` after that Retry Attempt with
+the same Head, target, and sanitized reason; it must not consume the newer
+Release.
+
+The named browser test must show Retry only on blocked detail, submit no target
+selection, visibly transition through the accepted state, and prove the Head
+first reaches the original failed Release before later ordered catch-up. It
+must show a sanitized repeated failure with Retry still available and must not
+render Attempt, fence, claim, receipt, manifest, object key, or worker controls.
 
 ## Comments
