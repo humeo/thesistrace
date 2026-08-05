@@ -23,9 +23,49 @@ Stop.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/architecture tests/integration tests/acceptance`
-  and exercise Track activation through Stop with only canonical modules.
-- Inspect remaining entrypoints and imports; no legacy tracking or global cache
-  caller may remain reachable.
+```sh
+set -eu
+
+for removed_path in \
+  src/thesistrace/tracking.py \
+  src/thesistrace/tracking_operations.py \
+  src/thesistrace/working_cache.py \
+  tests/acceptance/test_daily_tracking.py \
+  tests/acceptance/test_incremental_working_cache.py \
+  tests/acceptance/test_revised_v1_product_chain.py \
+  tests/acceptance/test_working_cache_activation.py \
+  tests/acceptance/test_working_cache_fencing.py \
+  tests/acceptance/test_working_cache_recovery.py \
+  tests/acceptance/test_working_cache_stop.py \
+  tests/kernel/test_tracking_equivalence.py
+do
+  test ! -e "$removed_path"
+done
+
+if rg -n \
+  --glob '!docs/adr/*.md' \
+  --glob '!docs/research/*.md' \
+  --glob '!docs/archive/*.md' \
+  --glob '!web/node_modules/**' \
+  --glob '!web/dist/**' \
+  'thesistrace\.(tracking|tracking_operations|working_cache)|DailyTrackingService|TrackingOperationService|WorkingCache(Store|Port)|/api/v1/daily-tracks|working_cache_root' \
+  pyproject.toml uv.lock Makefile src scripts tests web
+then
+  echo 'Legacy Tracking or global Working Cache remains reachable' >&2
+  exit 1
+fi
+
+test -f src/thesistrace/daily_track/cache.py
+test -f src/thesistrace/daily_track/checkpoint.py
+test -f src/thesistrace/daily_track/service.py
+
+uv run pytest -q tests/kernel tests/architecture
+
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime reset
+./scripts/core-test-runtime run \
+  uv run pytest -q tests/integration tests/acceptance/test_core_daily_track_*.py
+./scripts/core-test-runtime run bun run --cwd web test:e2e
+```
 
 ## Comments
