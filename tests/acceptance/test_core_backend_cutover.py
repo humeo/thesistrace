@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
-from test_core_daily_track_activation import _admit_and_execute, _drop_product_schemas
+from test_core_daily_track_activation import _drop_product_schemas
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.http import create_app
@@ -46,27 +46,58 @@ def test_default_backend_preserves_all_resources_and_publications_across_restart
 
     with TestClient(create_app(settings)) as client:
         assert _public_routes(client) == PUBLIC_ROUTES
-        run = _admit_and_execute(client, request_id="ticket-37-cutover")
+        first_update = client.post(
+            "/api/data/update",
+            headers={"Idempotency-Key": "ticket-37-first-release"},
+            json={},
+        )
+        assert first_update.status_code == 202
+        _run_default_worker(settings, fixture_availability="1")
+        assert client.get("/api/data").json()["latest_update_outcome"] == "published"
+
+        admitted = client.post(
+            "/api/definitions/run",
+            json={
+                "request_id": "ticket-37-cutover",
+                "alpha": {
+                    "operator_id": "ts_mean",
+                    "operands": [
+                        {"field_id": "price.close.adjusted"},
+                        {"literal": 20},
+                    ],
+                },
+                "universe": "top1000",
+                "neutralization": "industry",
+                "holdings_count": 30,
+                "rebalance_every_sessions": 5,
+            },
+        )
+        assert admitted.status_code == 200
+        run = admitted.json()["run"]
+        assert run["status"] == "queued"
+        _run_default_worker(settings, fixture_availability="1")
+        run = client.get(f"/api/research-runs/{run['id']}").json()
+        assert run["status"] == "succeeded"
+
         started = client.post(
             f"/api/research-runs/{run['id']}/daily-tracks",
             json={"request_id": "ticket-37-start-tracking"},
         )
         assert started.status_code == 201
         track = started.json()
+        later_update = client.post(
+            "/api/data/update",
+            headers={"Idempotency-Key": "ticket-37-later-release"},
+            json={},
+        )
+        assert later_update.status_code == 202
+        _run_default_worker(settings, fixture_availability="2")
+        advanced = client.get(f"/api/daily-tracks/{track['id']}").json()
+        assert advanced["head_release_id"] != track["seed_release_id"]
         before = _resource_snapshot(client, run_id=run["id"], track_id=track["id"])
-        publications_before = _publication_snapshot(settings)
+        authoritative_before = _authoritative_snapshot(settings)
 
-    worker = shutil.which("thesistrace-worker")
-    assert worker is not None
-    completed = subprocess.run(
-        [worker, "--once"],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=_core_environment(settings),
-        timeout=30,
-    )
-    assert completed.returncode == 0, completed.stderr
+    _run_default_worker(settings, fixture_availability="2")
 
     with TestClient(create_app(settings)) as restarted:
         assert _public_routes(restarted) == PUBLIC_ROUTES
@@ -75,7 +106,7 @@ def test_default_backend_preserves_all_resources_and_publications_across_restart
             run_id=run["id"],
             track_id=track["id"],
         ) == before
-        assert _publication_snapshot(settings) == publications_before
+        assert _authoritative_snapshot(settings) == authoritative_before
 
 
 def _public_routes(client: TestClient) -> set[tuple[str, str]]:
@@ -104,7 +135,7 @@ def _resource_snapshot(
     }
 
 
-def _publication_snapshot(settings: CoreSettings) -> dict[str, object]:
+def _authoritative_snapshot(settings: CoreSettings) -> dict[str, object]:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -115,18 +146,64 @@ def _publication_snapshot(settings: CoreSettings) -> dict[str, object]:
             objects = transaction.execute(
                 "SELECT sha256, byte_size FROM publication.objects ORDER BY sha256"
             ).fetchall()
-        return {"manifests": manifests, "objects": objects}
+            releases = transaction.execute(
+                """
+                SELECT id, predecessor_id, manifest_sha256
+                FROM data.releases
+                ORDER BY id
+                """
+            ).fetchall()
+            runs = transaction.execute(
+                """
+                SELECT id, dataset_release_id, result_manifest_sha256, result_provenance
+                FROM research_runs.runs
+                ORDER BY id
+                """
+            ).fetchall()
+            tracks = transaction.execute(
+                """
+                SELECT id, origin, current_release_id, head_manifest_sha256
+                FROM daily_tracks.tracks
+                ORDER BY id
+                """
+            ).fetchall()
+            checkpoints = transaction.execute(
+                """
+                SELECT track_id, target_release_id, manifest_sha256, provenance
+                FROM daily_tracks.checkpoints
+                ORDER BY track_id, target_release_id
+                """
+            ).fetchall()
+        return {
+            "publication_manifests": manifests,
+            "publication_objects": objects,
+            "data_releases": releases,
+            "research_runs": runs,
+            "daily_tracks": tracks,
+            "daily_track_checkpoints": checkpoints,
+        }
     finally:
         database.close()
 
 
-def _core_environment(settings: CoreSettings) -> dict[str, str]:
-    return {
-        **os.environ,
-        "THESISTRACE_DATABASE_URL": settings.database_url,
-        "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
-        "THESISTRACE_S3_ACCESS_KEY_ID": settings.s3_access_key_id,
-        "THESISTRACE_S3_SECRET_ACCESS_KEY": settings.s3_secret_access_key,
-        "THESISTRACE_S3_BUCKET": settings.s3_bucket,
-        "THESISTRACE_S3_REGION": settings.s3_region,
-    }
+def _run_default_worker(settings: CoreSettings, *, fixture_availability: str) -> None:
+    worker = shutil.which("thesistrace-worker")
+    assert worker is not None
+    completed = subprocess.run(
+        [worker, "--once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "THESISTRACE_DATABASE_URL": settings.database_url,
+            "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
+            "THESISTRACE_S3_ACCESS_KEY_ID": settings.s3_access_key_id,
+            "THESISTRACE_S3_SECRET_ACCESS_KEY": settings.s3_secret_access_key,
+            "THESISTRACE_S3_BUCKET": settings.s3_bucket,
+            "THESISTRACE_S3_REGION": settings.s3_region,
+            "THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE": fixture_availability,
+        },
+        timeout=60,
+    )
+    assert completed.returncode == 0, completed.stderr
