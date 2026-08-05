@@ -6,18 +6,20 @@ succeeds.
 
 **Blocked by:** 29, 33.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Retry is accepted only for a blocked Track and always addresses its
+**Implementation:** complete
+
+- [x] Retry is accepted only for a blocked Track and always addresses its
   existing failed target.
-- [ ] It cannot select, skip to, or merge a newer Dataset Release.
-- [ ] Success moves Head to the original target, returns the Track to `active`,
+- [x] It cannot select, skip to, or merge a newer Dataset Release.
+- [x] Success moves Head to the original target, returns the Track to `active`,
   and makes the next direct successor eligible.
-- [ ] Another failure preserves `blocked`, its prior Head, and the same target.
-- [ ] Matching request replay returns the original action outcome; different
+- [x] Another failure preserves `blocked`, its prior Head, and the same target.
+- [x] Matching request replay returns the original action outcome; different
   input with the same request ID conflicts.
-- [ ] A structurally malformed Retry creates no action receipt.
-- [ ] The Web exposes Retry and its resulting product state without internal
+- [x] A structurally malformed Retry creates no action receipt.
+- [x] The Web exposes Retry and its resulting product state without internal
   Attempt controls.
 
 **How to verify:**
@@ -69,3 +71,33 @@ must show a sanitized repeated failure with Retry still available and must not
 render Attempt, fence, claim, receipt, manifest, object key, or worker controls.
 
 ## Comments
+
+- The executable verification contract was specified in `cb326e0` before the
+  implementation. The real PostgreSQL/RustFS TDD test initially failed at the
+  absent DailyTrack Retry persistence/API boundary.
+- Implemented in `a24a8ee`. The typed Retry command accepts only `request_id`;
+  DailyTracks atomically reopens the persisted blocked Progression, clears the
+  temporary public blocked state, and writes its module-owned idempotency
+  receipt without changing Head or creating a ResearchRun.
+- Real acceptance blocks two Tracks at the same direct successor, publishes a
+  newer Release, and proves malformed, missing, active, replay, and cross-Track
+  conflict behavior. A successful Retry advances first to the original failed
+  target and only then to the newer successor. A failed Retry Attempt restores
+  the same blocked Head, target, and sanitized reason. Fresh-runtime replay
+  returns the stored outcome without another receipt or Attempt.
+- The named browser test submits only a generated request ID, shows the accepted
+  state, observes the Head at the original target before latest, and covers a
+  repeated sanitized failure with Retry still available. It renders no target
+  selector or internal execution controls.
+- Independent review passed both Standards and Spec with no findings. It
+  confirmed transaction/module ownership, fixed-target semantics, ordering,
+  idempotency, restart behavior, no new ResearchRun, and the product-only Web
+  surface.
+- Final verification was run exactly from **How to verify** against isolated
+  real PostgreSQL and RustFS and passed: backend and architecture reported `22
+  passed, 1 warning in 62.93s`; Web typecheck passed; the named browser test
+  reported `1 passed in 5.2s`; the trap removed both runtime containers.
+- Final repository verification passed with `make check`: Ruff passed; Pytest
+  reported `533 passed, 106 skipped, 2 warnings in 1125.57s`; Web typecheck and
+  production build passed (`1591` modules in `2.21s`); narrow E2E reported `1
+  passed in 49.5s`; desktop E2E reported `1 passed in 45.1s`.
