@@ -1,3 +1,5 @@
+"""Tushare transport, collection, and canonical normalization adapter."""
+
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass

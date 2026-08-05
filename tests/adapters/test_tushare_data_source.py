@@ -1,12 +1,35 @@
+from collections.abc import Mapping
 from datetime import date
 from pathlib import Path
 
+import httpx
 import pytest
 
 from thesistrace.adapters.tushare_data import TushareDataSource, _materialize_increment
+from thesistrace.adapters.tushare_provider import TushareAdapter, TushareSourceError
 from thesistrace.data import CollectionPlan, DataSourceError
 from thesistrace.fixture import build_fixture
-from thesistrace.tushare_source import TushareAdapter, TushareSourceError
+
+
+class RecordingTransport:
+    def __init__(self, denied_api: str | None = None) -> None:
+        self.denied_api = denied_api
+        self.payloads: list[dict[str, object]] = []
+
+    def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+        copied = dict(payload)
+        self.payloads.append(copied)
+        if payload["api_name"] == self.denied_api:
+            return {"code": 2002, "msg": "permission denied", "data": None}
+        fields = str(payload["fields"]).split(",")
+        return {
+            "code": 0,
+            "msg": "",
+            "data": {
+                "fields": fields,
+                "items": [[field for field in fields]],
+            },
+        }
 
 
 class RecordedProvider:
@@ -184,6 +207,191 @@ def test_tushare_rejects_responses_missing_requested_fields() -> None:
     assert failure.value.reason_code == "INVALID_RESPONSE"
 
 
+def test_tushare_provider_preflight_checks_every_contract_without_exposing_token() -> None:
+    transport = RecordingTransport()
+    provider = TushareAdapter(
+        token="deployment-secret-token",
+        transport=transport,
+        throttle_seconds=0,
+    )
+
+    result = provider.preflight()
+
+    assert result["status"] == "available"
+    assert result["source"] == "tushare"
+    assert result["source_contract_version"] == "tushare-v1"
+    assert {item["contract"] for item in result["permissions"]} == {
+        "reference",
+        "calendar_sse",
+        "calendar_szse",
+        "daily",
+        "adjustment",
+        "suspension",
+        "st",
+        "price_limit",
+        "sw2021_classification",
+        "sw2021_membership",
+    }
+    assert all(item["status"] == "available" for item in result["permissions"])
+    assert "deployment-secret-token" not in repr(result)
+    assert all(payload["token"] == "deployment-secret-token" for payload in transport.payloads)
+
+
+def test_tushare_provider_names_the_denied_contract() -> None:
+    provider = TushareAdapter(
+        token="secret",
+        transport=RecordingTransport(denied_api="stock_st"),
+        throttle_seconds=0,
+    )
+
+    with pytest.raises(TushareSourceError) as failure:
+        provider.preflight()
+
+    assert failure.value.diagnostic() == {
+        "reason_code": "MISSING_PERMISSION",
+        "source_code": 2002,
+        "contract": "st",
+    }
+
+
+def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
+    class PagingTransport:
+        def __init__(self) -> None:
+            self.offsets: list[int] = []
+
+        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+            params = dict(payload["params"])
+            offset = int(params["offset"])
+            self.offsets.append(offset)
+            pages = {
+                0: [["600002.SH", "20260729"], ["600001.SH", "20260729"]],
+                2: [["600001.SH", "20260729"], ["600003.SH", "20260729"]],
+                4: [],
+            }
+            return {
+                "code": 0,
+                "msg": "",
+                "data": {
+                    "fields": ["ts_code", "trade_date"],
+                    "items": pages[offset],
+                },
+            }
+
+    transport = PagingTransport()
+    provider = TushareAdapter(
+        token="secret",
+        transport=transport,
+        page_size=2,
+        throttle_seconds=0,
+    )
+
+    rows = provider.query_paginated(
+        "daily",
+        params={"trade_date": "20260729"},
+        fields=("ts_code", "trade_date"),
+        primary_key=("trade_date", "ts_code"),
+    )
+
+    assert transport.offsets == [0, 2, 4]
+    assert rows == [
+        {"ts_code": "600001.SH", "trade_date": "20260729"},
+        {"ts_code": "600002.SH", "trade_date": "20260729"},
+        {"ts_code": "600003.SH", "trade_date": "20260729"},
+    ]
+
+
+def test_tushare_provider_searches_later_windows_for_adjustment_anchor() -> None:
+    class DelayedAnchorTransport:
+        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+            params = dict(payload["params"])
+            fields = str(payload["fields"]).split(",")
+            second_window = str(params.get("start_date", "")) > "20260101"
+            item: list[object] | None = None
+            if second_window and payload["api_name"] == "daily":
+                values = {
+                    "ts_code": "600000.SH",
+                    "trade_date": "20260220",
+                    "open": "10",
+                    "high": "11",
+                    "low": "9",
+                    "close": "10.5",
+                    "pre_close": "10",
+                    "change": "0.5",
+                    "pct_chg": "5",
+                    "vol": "100",
+                    "amount": "1000",
+                }
+                item = [values[field] for field in fields]
+            if second_window and payload["api_name"] == "adj_factor":
+                values = {
+                    "ts_code": "600000.SH",
+                    "trade_date": "20260220",
+                    "adj_factor": "1",
+                }
+                item = [values[field] for field in fields]
+            return {
+                "code": 0,
+                "msg": "",
+                "data": {"fields": fields, "items": [] if item is None else [item]},
+            }
+
+    provider = TushareAdapter(
+        token="secret",
+        transport=DelayedAnchorTransport(),
+        throttle_seconds=0,
+    )
+
+    daily, adjustments = provider._collect_adjustment_anchors(
+        [
+            {
+                "ts_code": "600000.SH",
+                "exchange": "SSE",
+                "market": "主板",
+                "list_date": "20260101",
+                "delist_date": "",
+            }
+        ],
+        date(2026, 3, 31),
+    )
+
+    assert daily[0]["trade_date"] == "20260220"
+    assert adjustments[0]["trade_date"] == "20260220"
+
+
+def test_tushare_provider_retries_transient_http_statuses() -> None:
+    class UnavailableTransport:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+            del payload
+            self.calls += 1
+            request = httpx.Request("POST", "https://api.tushare.pro")
+            response = httpx.Response(503, request=request)
+            raise httpx.HTTPStatusError(
+                "unavailable",
+                request=request,
+                response=response,
+            )
+
+    transport = UnavailableTransport()
+    provider = TushareAdapter(
+        token="secret",
+        transport=transport,
+        throttle_seconds=0,
+        max_attempts=3,
+    )
+
+    with pytest.raises(TushareSourceError) as failure:
+        provider.query("daily", params={}, fields=("ts_code",))
+
+    assert failure.value.diagnostic() == {
+        "reason_code": "UPSTREAM_UNAVAILABLE",
+        "source_code": 503,
+    }
+    assert transport.calls == 3
+
+
 def test_tushare_materializes_price_corrections_by_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -291,7 +499,8 @@ def test_tushare_provider_does_not_own_canonical_calendar_or_fixture_rules() -> 
         Path(__file__).resolve().parents[2]
         / "src"
         / "thesistrace"
-        / "tushare_source.py"
+        / "adapters"
+        / "tushare_provider.py"
     ).read_text()
     collector = source.split("def collect_bootstrap_snapshot", maxsplit=1)[1].split(
         "def collect_incremental_snapshot", maxsplit=1

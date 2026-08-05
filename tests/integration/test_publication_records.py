@@ -4,12 +4,12 @@ import pytest
 from botocore.client import BaseClient
 
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
-from thesistrace.objects import canonical_json_bytes
 from thesistrace.publication import (
     JsonPayload,
     PublicationNotFoundError,
     PublicationVerificationError,
 )
+from thesistrace.publication.serialization import canonical_json_bytes
 
 
 def test_record_joins_the_callers_transaction_and_read_starts_from_commit(

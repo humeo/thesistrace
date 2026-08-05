@@ -5,14 +5,14 @@ from collections.abc import Callable, Mapping
 from datetime import date
 from typing import Protocol
 
-from thesistrace.data import CanonicalSourceBatch, CollectionPlan, DataSourceError
-from thesistrace.data.canonical_mapping import SOURCE_CORRECTABLE_PRICE_FIELDS
-from thesistrace.tushare_source import (
+from thesistrace.adapters.tushare_provider import (
     SOURCE_CONTRACT_VERSION,
     TushareSourceError,
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
+from thesistrace.data import CanonicalSourceBatch, CollectionPlan, DataSourceError
+from thesistrace.data.canonical_mapping import SOURCE_CORRECTABLE_PRICE_FIELDS
 
 
 class TushareProvider(Protocol):

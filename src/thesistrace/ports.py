@@ -4,7 +4,7 @@ from typing import Protocol
 
 import pyarrow as pa
 
-from thesistrace.objects import ParquetWriterContract
+from thesistrace.publication.serialization import ParquetWriterContract
 
 
 class ControlMetadataPort(Protocol):

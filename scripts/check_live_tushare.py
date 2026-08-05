@@ -4,8 +4,8 @@ import json
 import os
 
 from thesistrace.adapters.tushare_data import TushareDataSource
+from thesistrace.adapters.tushare_provider import HttpTushareTransport, TushareAdapter
 from thesistrace.data import CollectionPlan
-from thesistrace.tushare_source import HttpTushareTransport, TushareAdapter
 
 
 def main() -> None:

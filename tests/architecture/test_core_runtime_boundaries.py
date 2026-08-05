@@ -579,10 +579,7 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
     ):
         assert not (package / removed).exists()
 
-    legacy_http = (package / "api.py").read_text()
-    assert "/api/v1/research-" + "definitions" not in legacy_http
-    assert "/api/v1/research-" + "definition-versions" not in legacy_http
-    assert "/api/v1/research-" + "runs" not in legacy_http
+    assert not (package / "api.py").exists()
 
     canonical_http = (package / "entrypoints" / "http.py").read_text()
     tree = ast.parse(canonical_http)

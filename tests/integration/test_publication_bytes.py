@@ -9,7 +9,6 @@ from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
-from thesistrace.objects import ParquetWriterContract, canonical_json_bytes
 from thesistrace.publication import (
     JsonPayload,
     ParquetRowsPayload,
@@ -17,6 +16,10 @@ from thesistrace.publication import (
     PublicationPreparationError,
     PublicationUnavailableError,
     PublicationVerificationError,
+)
+from thesistrace.publication.serialization import (
+    ParquetWriterContract,
+    canonical_json_bytes,
 )
 
 ROWS_CONTRACT = ParquetWriterContract(
