@@ -5,19 +5,19 @@ code while retaining deferred identity and deployment decisions as history.
 
 **Blocked by:** 39, 41.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] The Hosted archive ref is reverified before deletion.
-- [ ] InsForge authentication integration, Auth Session runtime, User,
+- [x] The Hosted archive ref is reverified before deletion.
+- [x] InsForge authentication integration, Auth Session runtime, User,
   Personal Workspace, invitation, tenancy, and RLS enforcement code are removed
   from the active product.
-- [ ] Hosted deployment runtime, Cloudflare, Caddy, hosted Compose, rollout, and
+- [x] Hosted deployment runtime, Cloudflare, Caddy, hosted Compose, rollout, and
   release-migration machinery are removed with their active targets and tests.
-- [ ] Core resource shapes, URLs, and actions retain no ownership or identity
+- [x] Core resource shapes, URLs, and actions retain no ownership or identity
   placeholder branch.
-- [ ] ADR and research history remain available; deferred identity material is
+- [x] ADR and research history remain available; deferred identity material is
   clearly not an active Core requirement.
-- [ ] Core still starts as one instance-owned product without login.
+- [x] Core still starts as one instance-owned product without login.
 
 **How to verify:**
 
@@ -97,3 +97,10 @@ trap './scripts/core-test-runtime down' EXIT
 ```
 
 ## Comments
+
+- Implementation: `cffe7b0`; review fixes: `80dfdc6`.
+- Independent review after fixes: Standards PASS; Spec PASS; no remaining
+  P0-P3 findings.
+- Exact static checks and archive checks passed.
+- Python verification: `96 passed, 96 skipped`.
+- Isolated PostgreSQL/RustFS Core browser verification: `18 passed`.
