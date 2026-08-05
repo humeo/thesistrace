@@ -80,6 +80,7 @@ trap './scripts/core-test-runtime down' EXIT
 ./scripts/core-test-runtime reset
 ./scripts/core-test-runtime run \
   uv run pytest -q tests/integration tests/acceptance/test_core_daily_track_*.py
+./scripts/core-test-runtime reset
 ./scripts/core-test-runtime run bun run --cwd web test:e2e
 ```
 
