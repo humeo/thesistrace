@@ -6,20 +6,20 @@ complete product path.
 
 **Blocked by:** 45.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Old Data Update, Release, source-selection, and publication callers are
+- [x] Old Data Update, Release, source-selection, and publication callers are
   removed without deleting the canonical DataSource adapters.
-- [ ] Old filesystem object, metadata facade, release mutation, and provider-mode
+- [x] Old filesystem object, metadata facade, release mutation, and provider-mode
   publication entrypoints have no remaining caller.
-- [ ] Legacy Data and publication tests are removed or migrated to the canonical
+- [x] Legacy Data and publication tests are removed or migrated to the canonical
   Data product and shared Publication contracts.
-- [ ] No fallback can publish a Dataset Release through SQLite, filesystem
+- [x] No fallback can publish a Dataset Release through SQLite, filesystem
   objects, a custom server, or an old source-specific route.
-- [ ] Canonical Fixture and Tushare DataSource adapters, PostgreSQL Releases,
+- [x] Canonical Fixture and Tushare DataSource adapters, PostgreSQL Releases,
   standard S3 Publication, verified reads, and Data Web behavior remain
   unchanged.
-- [ ] Shared canonical-data and quantitative code still used by the Core is
+- [x] Shared canonical-data and quantitative code still used by the Core is
   preserved rather than deleted with its old caller.
 
 **How to verify:**
@@ -86,3 +86,22 @@ trap './scripts/core-test-runtime down' EXIT
 ```
 
 ## Comments
+
+- Implementation: `ab59938`; review fixes: `76f7b48`, `50f5473`, `88251fa`.
+- Tushare transport, provider collection, and normalization moved unchanged
+  from `tushare_source.py` to `adapters/tushare_provider.py`; the canonical
+  `TushareDataSource` and live probe now import that adapter-owned module.
+- Independent review round 1: Standards FAIL / Spec PASS. It found one
+  prototype import of the filesystem object module and missing real-normalizer
+  characterization after legacy test deletion.
+- The prototype now imports canonical Publication serialization. Adapter tests
+  directly cover 756-session bootstrap, increment, invalid decimals and bars,
+  suspension contradictions, and historical instrument/industry corrections.
+- Review rounds 2 and 3 found only progressively wider negative-scan gaps. The
+  final Ticket gate covers prototypes, scripts, adapter/integration/acceptance
+  tests, and Web tooling while leaving Ticket 47's staged `src` orphan cluster
+  in scope for the next deletion.
+- Final exact verification: architecture and adapters `71 passed`; isolated
+  integration and canonical Data acceptance `34 passed` (one dependency
+  deprecation warning); clean-reset Web E2E `18 passed`. The expanded active
+  caller scan was rerun after the final Ticket-only correction and was clean.
