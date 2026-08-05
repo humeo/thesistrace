@@ -5,19 +5,19 @@ and Hosted glue after every Hosted and old-Web caller is gone.
 
 **Blocked by:** 42.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] The custom object-store HTTP service, storage-token protocol, remote
+- [x] The custom object-store HTTP service, storage-token protocol, remote
   filesystem proxy, and Hosted-only Tushare egress proxy are removed.
-- [ ] Hosted runtime-mode configuration, shared startup glue, remaining Hosted
+- [x] Hosted runtime-mode configuration, shared startup glue, remaining Hosted
   entrypoints, dependencies, scripts, Make targets, and tests are removed when
   no caller remains.
-- [ ] Core Publication still uses only the standard S3 client against the
+- [x] Core Publication still uses only the standard S3 client against the
   configured endpoint.
-- [ ] Canonical Tushare remains a direct DataSource adapter and creates no
+- [x] Canonical Tushare remains a direct DataSource adapter and creates no
   product mode.
-- [ ] No Core response exposes a replacement storage or proxy protocol.
-- [ ] The Hosted archive and historical ADR/research material remain intact.
+- [x] No Core response exposes a replacement storage or proxy protocol.
+- [x] The Hosted archive and historical ADR/research material remain intact.
 
 **How to verify:**
 
@@ -69,3 +69,8 @@ trap './scripts/core-test-runtime down' EXIT
 ```
 
 ## Comments
+
+- Implementation: `0b96433`.
+- Independent review: Standards PASS; Spec PASS; no P0-P3 findings.
+- Exact static, entrypoint, dependency, and adapter verification: `60 passed`.
+- Isolated PostgreSQL/RustFS Publication integration: `18 passed`.
