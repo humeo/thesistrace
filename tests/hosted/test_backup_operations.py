@@ -33,7 +33,6 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
 ) -> None:
     source = tmp_path / "source"
     write(source / "postgres-data" / "PG_VERSION", b"15\n")
-    write(source / "temporal-data" / "PG_VERSION", b"16\n")
     write(
         source / "immutable-objects" / "sha256" / "ab" / "abcdef.json",
         b'{"alpha":1}',
@@ -53,7 +52,6 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
         target=tmp_path / "off-node",
         sources={
             "postgres-data": source / "postgres-data",
-            "temporal-data": source / "temporal-data",
             "immutable-objects": source / "immutable-objects",
             "insforge-storage": source / "insforge-storage",
             "release-state": source / "release-state",
@@ -81,7 +79,6 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
                 name: source / name
                 for name in (
                     "postgres-data",
-                    "temporal-data",
                     "immutable-objects",
                     "insforge-storage",
                     "release-state",
@@ -101,7 +98,6 @@ def test_coordinated_recovery_set_is_encrypted_and_restores_exact_sources(
     )
 
     assert (restored / "volumes/postgres-data/PG_VERSION").read_bytes() == b"15\n"
-    assert (restored / "volumes/temporal-data/PG_VERSION").read_bytes() == b"16\n"
     assert (
         restored / "volumes/immutable-objects/sha256/ab/abcdef.json"
     ).read_bytes() == b'{"alpha":1}'
@@ -184,7 +180,6 @@ def test_expiry_removes_only_complete_recovery_sets_older_than_seven_days(
     sources: dict[str, Path] = {}
     for name in (
         "postgres-data",
-        "temporal-data",
         "immutable-objects",
         "insforge-storage",
         "release-state",
@@ -194,7 +189,6 @@ def test_expiry_removes_only_complete_recovery_sets_older_than_seven_days(
         write(path / "value", name.encode())
         sources[name] = path
     write(sources["postgres-data"] / "PG_VERSION", b"15\n")
-    write(sources["temporal-data"] / "PG_VERSION", b"16\n")
     write(sources["secret-recovery"] / "current.recovery", b"TTSR1-sealed")
     write(sources["release-state"] / "current.json", b'{"bundle_id":"bundle-old"}')
     write(
@@ -265,7 +259,6 @@ def test_restore_rejects_the_wrong_key_without_leaving_partial_plaintext(
     sources: dict[str, Path] = {}
     for name in (
         "postgres-data",
-        "temporal-data",
         "immutable-objects",
         "insforge-storage",
         "release-state",
@@ -275,7 +268,6 @@ def test_restore_rejects_the_wrong_key_without_leaving_partial_plaintext(
         write(path / "value", name.encode())
         sources[name] = path
     write(sources["postgres-data"] / "PG_VERSION", b"15\n")
-    write(sources["temporal-data"] / "PG_VERSION", b"16\n")
     write(sources["secret-recovery"] / "current.recovery", b"TTSR1-sealed")
     write(sources["release-state"] / "current.json", b'{"bundle_id":"bundle-1"}')
     write(
@@ -307,7 +299,6 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
     sources: dict[str, Path] = {}
     for name in (
         "postgres-data",
-        "temporal-data",
         "immutable-objects",
         "insforge-storage",
         "release-state",
@@ -317,7 +308,6 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
         path.mkdir(parents=True)
         sources[name] = path
     write(sources["postgres-data"] / "PG_VERSION", b"15\n")
-    write(sources["temporal-data"] / "PG_VERSION", b"16\n")
     write(sources["secret-recovery"] / "current.recovery", b"TTSR1-sealed")
     write(sources["release-state"] / "current.json", b'{"bundle_id":"bundle-1"}')
     write(
@@ -334,7 +324,6 @@ def test_restore_authenticates_the_complete_set_before_erasing_live_volumes(
     restore_root = tmp_path / "restore-root"
     for relative in (
         "volumes/postgres-data",
-        "volumes/temporal-data",
         "volumes/immutable-objects",
         "volumes/insforge-storage",
         "metadata/release-state",
@@ -399,7 +388,6 @@ def test_restore_replaces_authoritative_volumes_and_recovers_secrets_separately(
     sources: dict[str, Path] = {}
     for name in (
         "postgres-data",
-        "temporal-data",
         "immutable-objects",
         "insforge-storage",
         "release-state",
@@ -418,7 +406,6 @@ def test_restore_replaces_authoritative_volumes_and_recovers_secrets_separately(
     )
     sources["secret-recovery"] = secret_recovery
     write(sources["postgres-data"] / "PG_VERSION", b"15\n")
-    write(sources["temporal-data"] / "PG_VERSION", b"16\n")
     write(sources["release-state"] / "current.json", b'{"bundle_id":"bundle-1"}')
     configuration_file = (
         sources["release-state"]
@@ -442,7 +429,6 @@ def test_restore_replaces_authoritative_volumes_and_recovers_secrets_separately(
     restore_root = tmp_path / "restore-root"
     for relative in (
         "volumes/postgres-data",
-        "volumes/temporal-data",
         "volumes/immutable-objects",
         "volumes/insforge-storage",
         "metadata/release-state",
@@ -571,7 +557,6 @@ def test_backup_never_marks_a_partial_coordinated_source_as_complete(
     sources: dict[str, Path] = {}
     for name in (
         "postgres-data",
-        "temporal-data",
         "immutable-objects",
         "insforge-storage",
         "release-state",

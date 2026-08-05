@@ -1,9 +1,7 @@
-import asyncio
 import json
 import logging
 from datetime import UTC, datetime
 from io import BytesIO
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,17 +12,14 @@ from thesistrace.hosted.health_service import (
     create_health_app,
     http_available,
     public_origin_available,
-    read_temporal_queues,
     render_prometheus,
     run_semantic_regression,
     storage_pressure_snapshot,
     trace_export_available,
-    worker_slots_ready,
 )
 from thesistrace.hosted.observability import (
     JsonLogFormatter,
     sanitize_text,
-    validate_temporal_control_payload,
 )
 from thesistrace.hosted.probes import ProcessProbeState, create_probe_app
 
@@ -287,7 +282,6 @@ def test_recovery_health_requires_restored_platform_not_external_or_historical_c
         recovery = client.get("/health/recovery").json()
 
     assert recovery["status"] == "available"
-    assert recovery["checks"]["system.workflow_capacity"] is True
     assert recovery["checks"]["data.schema"] is True
     assert recovery["checks"]["quantitative.deterministic_regression"] is True
     assert "system.public_origin" not in recovery["checks"]
@@ -296,22 +290,6 @@ def test_recovery_health_requires_restored_platform_not_external_or_historical_c
     assert "data.tushare" not in recovery["checks"]
     assert "data.validation" not in recovery["checks"]
     assert "quantitative.equivalence" not in recovery["checks"]
-
-
-def test_recovery_health_degrades_when_a_restored_compute_slot_is_missing() -> None:
-    dependencies = healthy_dependencies()
-    dependencies["worker_slots_ready"] = 3
-    app = create_health_app(
-        StubHealthStore(),
-        dependency_status=lambda: dependencies,
-        semantic_state=complete_semantic_state(),
-        run_regression_on_startup=False,
-    )
-    with TestClient(app) as client:
-        recovery = client.get("/health/recovery").json()
-
-    assert recovery["status"] == "degraded"
-    assert recovery["checks"]["system.workflow_capacity"] is False
 
 
 def test_disk_warning_degrades_only_system_health_without_killing_readiness() -> None:
@@ -495,58 +473,6 @@ def test_public_origin_derives_hostname_from_site_address(
     assert observed["headers"] == {"Host": "research.example"}
 
 
-def test_temporal_task_queue_snapshot_uses_real_backlog_and_poller_evidence(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class WorkflowService:
-        async def describe_task_queue(self, request, **_kwargs):
-            return SimpleNamespace(
-                stats=SimpleNamespace(approximate_backlog_count=len(request.task_queue.name)),
-                pollers=[object()],
-            )
-
-    async def connect(*_args, **_kwargs):
-        return SimpleNamespace(workflow_service=WorkflowService())
-
-    monkeypatch.setattr(
-        "thesistrace.hosted.health_service.Client.connect",
-        connect,
-    )
-    snapshot = asyncio.run(read_temporal_queues())
-    assert snapshot["pollers_ready"] is True
-    assert snapshot["task_queue_compute_workflow_backlog"] == len("thesistrace-compute-workflows")
-    assert snapshot["task_queue_data_activity_backlog"] == len("thesistrace-data")
-
-
-def test_idle_dynamic_activity_queue_does_not_require_a_poller() -> None:
-    class WorkflowService:
-        async def describe_task_queue(self, request, **_kwargs):
-            dynamic = request.task_queue.name.endswith(("-p1", "-p3"))
-            return SimpleNamespace(
-                stats=SimpleNamespace(approximate_backlog_count=0),
-                pollers=[] if dynamic else [object()],
-            )
-
-    client = SimpleNamespace(workflow_service=WorkflowService())
-    snapshot = asyncio.run(read_temporal_queues(client))
-    assert snapshot["pollers_ready"] is True
-
-
-def test_worker_slot_probes_run_concurrently(monkeypatch: pytest.MonkeyPatch) -> None:
-    import threading
-    import time
-
-    barrier = threading.Barrier(4)
-
-    def probe(_url: str) -> bool:
-        barrier.wait(timeout=0.5)
-        time.sleep(0.02)
-        return True
-
-    monkeypatch.setattr("thesistrace.hosted.health_service.http_available", probe)
-    assert worker_slots_ready() == 4
-
-
 def test_semantic_regression_uses_product_contracts_not_profitability() -> None:
     result = run_semantic_regression()
     assert result == {
@@ -623,17 +549,3 @@ def test_structured_logs_redact_private_and_secret_values() -> None:
         assert "top-secret" not in redacted
         assert "dXNlcjpwYXNz" not in redacted
         assert "two secret words" not in redacted
-
-
-def test_temporal_payloads_allow_only_small_opaque_control_values() -> None:
-    validate_temporal_control_payload({"workspace_id": "workspace_opaque", "run_id": "run_opaque"})
-
-    for private_payload in (
-        {"expression": "pct_change($close_adj, 20)"},
-        {"market_payload": {"close": 10.0}},
-        {"result_bundle": {"net_return": 0.1}},
-        {"note": "user@example.com"},
-        {"note": "token=top-secret"},
-    ):
-        with pytest.raises(ValueError):
-            validate_temporal_control_payload(private_payload)

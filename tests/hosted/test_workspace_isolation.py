@@ -14,7 +14,6 @@ from thesistrace.capacity import CapacityQualificationService
 from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.hosted.control import PostgresControlMetadataStore
-from thesistrace.hosted.execution_outbox import PostgresExecutionOutbox
 from thesistrace.hosted.management import PostgresManagementStore
 from thesistrace.hosted.migrations import (
     MigrationError,
@@ -933,26 +932,6 @@ def test_production_roles_and_rls_cover_every_private_table(tmp_path: Path) -> N
         through_track_id=expected_track_refs[-1]["track_id"],
         limit=1,
     ) == expected_track_refs[1:]
-    relay = PostgresExecutionOutbox(TEST_DATABASE_URL)
-    tracking_entries = [
-        entry
-        for entry in relay.pending(limit=100)
-        if entry["resource_kind"] == "tracking_advance"
-    ]
-    assert {
-        (entry["workspace_id"], entry["resource_id"])
-        for entry in tracking_entries
-    } == {
-        (workspace_a, ids_a["tracking_advances"]),
-        (workspace_b, ids_b["tracking_advances"]),
-    }
-    for entry in tracking_entries:
-        assert relay.mark_dispatched(str(entry["outbox_id"])) is True
-    assert not [
-        entry
-        for entry in relay.pending(limit=100)
-        if entry["resource_kind"] == "tracking_advance"
-    ]
 
     with psycopg.connect(TEST_DATABASE_URL) as connection:
         roles = connection.execute(

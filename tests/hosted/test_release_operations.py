@@ -1,18 +1,14 @@
-import asyncio
 import json
 import os
 import stat
 import subprocess
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
-import thesistrace.hosted.release_cli as release_cli
 from thesistrace.api import create_app
 from thesistrace.config import Settings, settings_from_environment
-from thesistrace.hosted.release_cli import TemporalMaintenanceControl, enter_maintenance
 from thesistrace.hosted.release_gate import ReleaseGateError
 from thesistrace.hosted.release_gate import main as release_gate_main
 from thesistrace.hosted.release_operations import (
@@ -62,70 +58,6 @@ class FakeGate:
         self.events.append(f"gate:{enabled}")
 
 
-class FakeAsyncItems:
-    def __init__(self, items: list[object]) -> None:
-        self.items = items
-
-    def __aiter__(self):
-        async def iterate():
-            for item in self.items:
-                yield item
-
-        return iterate()
-
-
-class FakeScheduleHandle:
-    def __init__(self, events: list[str], schedule_id: str) -> None:
-        self.events = events
-        self.schedule_id = schedule_id
-
-    async def pause(self, *, note: str) -> None:
-        self.events.append(f"pause:{self.schedule_id}:{note}")
-
-    async def unpause(self, *, note: str) -> None:
-        self.events.append(f"unpause:{self.schedule_id}:{note}")
-
-
-class FakeTemporalClient:
-    def __init__(self) -> None:
-        self.events: list[str] = []
-        self.workflow_queries: list[str] = []
-
-    async def list_schedules(self) -> FakeAsyncItems:
-        return FakeAsyncItems(
-            [SimpleNamespace(id="daily-publication"), SimpleNamespace(id="tracking")]
-        )
-
-    def get_schedule_handle(self, schedule_id: str) -> FakeScheduleHandle:
-        return FakeScheduleHandle(self.events, schedule_id)
-
-    def list_workflows(self, query: str) -> FakeAsyncItems:
-        self.workflow_queries.append(query)
-        return FakeAsyncItems(
-            [
-                SimpleNamespace(id="workflow-1", run_id="run-1"),
-                SimpleNamespace(id="workflow-2", run_id="run-2"),
-            ]
-        )
-
-    def get_workflow_handle(self, workflow_id: str, *, run_id: str):
-        assert (workflow_id, run_id) in {
-            ("workflow-1", "run-1"),
-            ("workflow-2", "run-2"),
-        }
-        pending_count = 2 if workflow_id == "workflow-1" else 1
-
-        class Handle:
-            async def describe(self):
-                return SimpleNamespace(
-                    raw_description=SimpleNamespace(
-                        pending_activities=[object()] * pending_count
-                    )
-                )
-
-        return Handle()
-
-
 def test_release_manifest_pins_every_compatible_component() -> None:
     bundle = ReleaseBundle.from_manifest(ROOT / "deploy" / "hosted" / "release.json", ROOT)
     assert set(bundle.components) == {
@@ -134,7 +66,6 @@ def test_release_manifest_pins_every_compatible_component() -> None:
         "api",
         "worker",
         "insforge",
-        "temporal",
         "product_migrations",
         "configuration",
     }
@@ -157,50 +88,6 @@ def test_release_manifest_tracks_the_latest_product_migration() -> None:
     )
 
     assert manifest["components"]["product_migrations"]["version"] == latest
-
-
-def test_temporal_maintenance_pauses_every_listed_schedule() -> None:
-    client = FakeTemporalClient()
-
-    count = asyncio.run(TemporalMaintenanceControl(client).pause_schedules())
-
-    assert count == 2
-    assert client.events == [
-        "pause:daily-publication:ThesisTrace release maintenance",
-        "pause:tracking:ThesisTrace release maintenance",
-    ]
-
-
-def test_temporal_maintenance_resumes_every_listed_schedule() -> None:
-    client = FakeTemporalClient()
-
-    count = asyncio.run(TemporalMaintenanceControl(client).resume_schedules())
-
-    assert count == 2
-    assert client.events == [
-        "unpause:daily-publication:ThesisTrace release maintenance complete",
-        "unpause:tracking:ThesisTrace release maintenance complete",
-    ]
-
-
-def test_temporal_maintenance_counts_pending_activities_in_running_workflows() -> None:
-    client = FakeTemporalClient()
-
-    count = asyncio.run(TemporalMaintenanceControl(client).running_activity_count())
-
-    assert count == 3
-    assert client.workflow_queries == [
-        'ExecutionStatus="Running" AND ('
-        'WorkflowType="CapacityQualificationComputeWorkflow" OR '
-        'WorkflowType="CapacityQualificationDataWorkflow" OR '
-        'WorkflowType="DatasetPublicationWorkflow" OR '
-        'WorkflowType="ScheduledDatasetPublicationWorkflow" OR '
-        'WorkflowType="ResearchWorkflow" OR '
-        'WorkflowType="TrackingReleaseWorkflow" OR '
-        'WorkflowType="TrackingAdvanceWorkflow" OR '
-        'WorkflowType="TrackingEquivalenceWorkflow" OR '
-        'WorkflowType="TrackingGenerationRebuildWorkflow")'
-    ]
 
 
 def test_release_bundle_activation_is_immutable_and_retains_one_previous(
@@ -372,43 +259,6 @@ def test_rollback_activates_only_the_immediately_previous_compatible_bundle(
         "status": "restore_required",
         "reason": "persisted-data compatibility epoch changed",
     }
-
-
-def test_real_maintenance_cli_drains_then_reports_nonterminal_timeout(monkeypatch) -> None:
-    gate = FakeGate()
-    now = [0.0]
-
-    class Temporal:
-        async def pause_schedules(self) -> int:
-            return 2
-
-        async def running_activity_count(self) -> int:
-            return 1
-
-    async def connect(*_args, **_kwargs):
-        return object()
-
-    async def sleep(seconds: float) -> None:
-        now[0] += seconds
-
-    monkeypatch.setattr(release_cli, "database_url_from_environment", lambda: "postgres://db")
-    monkeypatch.setattr(release_cli, "PostgresMaintenanceGate", lambda _url: gate)
-    monkeypatch.setattr(release_cli, "Client", SimpleNamespace(connect=connect))
-    monkeypatch.setattr(release_cli, "TemporalMaintenanceControl", lambda _client: Temporal())
-    monkeypatch.setattr(release_cli.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(release_cli.asyncio, "sleep", sleep)
-
-    result = asyncio.run(enter_maintenance(5))
-
-    assert result == {
-        "maintenance": "entered",
-        "paused_schedules": 2,
-        "drained": False,
-        "remaining_activities": 1,
-        "interrupted_activity_state": "nonterminal_redelivery",
-    }
-    assert gate.events == ["gate:True"]
-    assert now[0] == 5
 
 
 def test_hosted_api_rejects_new_heavy_work_during_maintenance(tmp_path: Path) -> None:
@@ -596,7 +446,6 @@ def test_compose_orders_all_one_shot_migrations_before_public_services() -> None
     compose = (ROOT / "deploy" / "hosted" / "compose.yaml").read_text()
     for job in (
         "insforge-migrations:",
-        "temporal-schema:",
         "thesistrace-migrations:",
         "release-gate:",
     ):
@@ -613,9 +462,6 @@ def test_compose_orders_all_one_shot_migrations_before_public_services() -> None
     sql = migration.read_text()
     assert "platform_maintenance" in sql
     assert "maintenance_enabled" in sql
-    relay = (ROOT / "src" / "thesistrace" / "hosted" / "execution_outbox.py").read_text()
-    assert "maintenance_enabled" in relay
-    assert "return []" in relay
 
     all_admission = (
         ROOT
@@ -696,16 +542,6 @@ def test_existing_up_and_restart_never_rebuild_the_active_bundle() -> None:
     assert "compose up --detach --wait --no-build" in restart_block
 
 
-def test_maintenance_exit_restarts_only_workers_without_dependencies() -> None:
-    launcher = (ROOT / "scripts" / "hosted-stack").read_text()
-    start_block = launcher.split("start_workers() {", 1)[1].split("\n}", 1)[0]
-    exit_block = launcher.split("exit_maintenance() {", 1)[1].split("\n}", 1)[0]
-
-    assert "start_workers" in exit_block
-    assert "compose up --detach --no-deps" in start_block
-    assert "compose start" not in start_block
-
-
 def test_compatible_rollback_does_not_rerun_migration_jobs() -> None:
     launcher = (ROOT / "scripts" / "hosted-stack").read_text()
     rollback_block = launcher.split("    rollback)", 1)[1].split("        ;;", 1)[0]
@@ -733,8 +569,6 @@ def test_release_recreates_every_configuration_consumer() -> None:
     )[0]
     for service in (
         "postgres",
-        "temporal-postgres",
-        "temporal",
         "postgrest",
         "deno",
         "insforge",
@@ -746,12 +580,6 @@ def test_release_recreates_every_configuration_consumer() -> None:
         "api",
         "health-service",
         "edge",
-        "execution-relay",
-        "data-worker",
-        "compute-worker-1",
-        "compute-worker-2",
-        "compute-worker-3",
-        "compute-worker-4",
     ):
         assert service in recreate
     assert "--force-recreate --no-build --no-deps" in recreate
@@ -784,6 +612,4 @@ def test_interrupted_deploy_recovery_waits_only_for_steady_dependencies() -> Non
         "\n}", 1
     )[0]
 
-    assert "postgres temporal-postgres temporal" in recovery
-    assert "temporal-schema" not in recovery
-    assert "temporal-namespace" not in recovery
+    assert "postgres" in recovery
