@@ -51,6 +51,15 @@ must all return the same single Track. An injected failure after private
 DailyTrack activation but before the outer transaction commits must leave no
 Track and no ResearchRuns receipt.
 
+The same acceptance file must construct a pre-cutover DailyTracks-owned Start
+Tracking receipt and prove that canonical runtime startup moves its identity,
+fingerprint, outcome, and creation time into ResearchRuns, deletes the legacy
+row only after the move succeeds, and preserves replay/conflict behavior after
+another restart. If an identical ResearchRuns receipt already exists, startup
+accepts it and removes the legacy copy. If the same request ID has incompatible
+stored identity or outcome, startup must fail explicitly and the transaction
+must preserve the legacy row.
+
 For admission capacity, first persist nine active-or-blocked Tracks, including
 at least one blocked Track. Race two different eligible seed Runs for the final
 slot: exactly one becomes the tenth Track and the other returns 409 with a
