@@ -9,7 +9,7 @@ export default defineConfig({
   use: { baseURL },
   webServer: [
     {
-      command: `THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE=1,2,3 concurrently -k -n api,worker "../.venv/bin/thesistrace-core-api --port 8101" "../.venv/bin/thesistrace-core-worker"`,
+      command: `THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE=1,2,3 concurrently -k -n api,worker "../.venv/bin/thesistrace-api --port 8101" "../.venv/bin/thesistrace-worker"`,
       url: "http://127.0.0.1:8101/api/data",
       reuseExistingServer: false,
       timeout: 30_000,

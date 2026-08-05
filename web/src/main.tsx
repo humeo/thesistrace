@@ -1,19 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 
-import App from "./App";
-import { HostedAuthBoundary } from "./hostedAuth";
-import { CoreApp, isCoreRoute } from "./shell/CoreApp";
+import { CoreApp } from "./shell/CoreApp";
 
-const pathname = window.location.pathname;
+const pathname = window.location.pathname === "/" ? "/data" : window.location.pathname;
+if (window.location.pathname === "/") {
+  window.history.replaceState(null, "", pathname);
+}
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    {isCoreRoute(pathname) ? (
-      <CoreApp currentPath={pathname} />
-    ) : (
-      <HostedAuthBoundary>
-        <App />
-      </HostedAuthBoundary>
-    )}
+    <CoreApp currentPath={pathname} />
   </React.StrictMode>,
 );

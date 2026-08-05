@@ -3,6 +3,33 @@ import { expect, test } from "@playwright/test";
 const internalDailyTrackMechanics =
   /(?:^|[^A-Za-z0-9])(?:activation|checkpoint|manifest|object|receipt|progression|claim|attempt|lease|heartbeat|fence|publication|recovery|worker|cache|working_cache|working-cache|cache_root|working_cache_root|physical_path|ordinal|failure_reason|started_at|finished_at|execution_fence|target_release_id|predecessor_release_id)(?:$|[^A-Za-z0-9])/i;
 
+test("uses the four-resource shell as the only active product", async ({ page }) => {
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/data$/);
+
+  const navigation = page.getByRole("navigation", { name: "Product resources" });
+  await expect(navigation.getByRole("link")).toHaveCount(4);
+  for (const [name, path, heading] of [
+    ["Data", "/data", "Data"],
+    ["Definitions", "/definitions", "Definitions"],
+    ["Research Runs", "/research-runs", "Research Runs"],
+    ["Daily Tracks", "/daily-tracks", "Daily Tracks"],
+  ] as const) {
+    await navigation.getByRole("link", { name }).click();
+    await expect(page).toHaveURL(new RegExp(`${path}$`));
+    await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("navigation", { name: "Product resources" }).getByRole("link"),
+    ).toHaveCount(4);
+  }
+
+  await expect(
+    page.getByText(
+      /研究工作台|login|hosted|workspace dashboard|operations ledger|raw json|download/i,
+    ),
+  ).toHaveCount(0);
+});
+
 test("publishes the first Dataset Release through the real Core", async ({ page }) => {
   test.setTimeout(180_000);
   for (const forbidden of [
@@ -832,12 +859,13 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Factor Evaluation" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Cumulative Strategy" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Retry blocked target" })).toBeVisible();
   await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 
   await page.goto("/daily-tracks/track_ac71ae");
   await expect(page.getByText("Status active", { exact: true })).toBeVisible();
   await expect(page.getByText("Head Release release_latest", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
 
   await page.goto("/data");
   await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible();

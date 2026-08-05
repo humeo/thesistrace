@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "THESISTRACE_HOME=../.local concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "dev": "THESISTRACE_API_PORT=8100 concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api --port 8100\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
     "dev:test": "bun run reset:test && THESISTRACE_HOME=.test-workspace TUSHARE_TOKEN= THESISTRACE_API_PORT=8100 THESISTRACE_WEB_PORT=5273 concurrently -k -n api,worker,web \"../.venv/bin/thesistrace-api\" \"../.venv/bin/thesistrace-worker\" \"vite --host 127.0.0.1\"",
     "reset:test": "bun e2e/reset-workspace.ts",
     "build": "tsc -b && vite build",
@@ -12,7 +12,7 @@
     "test:shell": "bun test src/shell/AppShell.test.tsx",
     "test:core": "bun run typecheck && playwright test --config=playwright.core-shell.config.ts --reporter=line",
     "test:e2e:core-shell": "playwright test --config=playwright.core-shell.config.ts --reporter=line",
-    "test:e2e": "THESISTRACE_E2E_VIEWPORT=narrow playwright test --reporter=line && THESISTRACE_E2E_VIEWPORT=desktop playwright test --reporter=line",
+    "test:e2e": "playwright test --config=playwright.core-shell.config.ts --reporter=line",
     "test:e2e:hosted": "playwright test --config=playwright.hosted.config.ts --reporter=line"
   },
   "dependencies": {

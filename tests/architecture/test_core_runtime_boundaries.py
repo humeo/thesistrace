@@ -116,6 +116,9 @@ def test_isolated_runtime_pins_only_postgres_and_rustfs() -> None:
 
 def test_web_shell_declares_only_the_four_product_resources() -> None:
     source = (ROOT / "web" / "src" / "shell" / "AppShell.tsx").read_text()
+    main = (ROOT / "web" / "src" / "main.tsx").read_text()
+    package = json.loads((ROOT / "web" / "package.json").read_text())
+    browser = (ROOT / "web" / "playwright.core-shell.config.ts").read_text()
     assert source.count("path:") == 4
     assert 'path: "/data"' in source
     assert 'path: "/definitions"' in source
@@ -123,6 +126,17 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     assert 'path: "/daily-tracks"' in source
     for forbidden in ("hosted", "login", "workspace", "manifest", "download"):
         assert forbidden not in source.lower()
+    assert 'import { CoreApp } from "./shell/CoreApp"' in main
+    assert "history.replaceState" in main
+    for inactive in ('from "./App"', "HostedAuthBoundary", "isCoreRoute"):
+        assert inactive not in main
+    assert package["scripts"]["test:e2e"] == (
+        "playwright test --config=playwright.core-shell.config.ts --reporter=line"
+    )
+    assert "thesistrace-api --port 8101" in browser
+    assert "thesistrace-worker" in browser
+    assert "thesistrace-core-api" not in browser
+    assert "thesistrace-core-worker" not in browser
 
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
