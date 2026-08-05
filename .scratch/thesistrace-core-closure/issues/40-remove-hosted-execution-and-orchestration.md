@@ -23,9 +23,61 @@ Hosted worker execution path while preserving canonical PostgreSQL workers.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/architecture tests/integration tests/acceptance`
-  with no Temporal service or Hosted worker available.
-- Inspect the dependency and entrypoint inventory; every removed execution
-  component must have no remaining active caller.
+Run the contraction inventory and canonical-worker acceptance with no Temporal,
+relay, or Hosted worker service available. The trap must remove the isolated
+PostgreSQL/RustFS runtime even if a later check fails:
+
+```sh
+set -eu
+archive_commit=2884f96ecd1f3aed1e16b00116d54a99c9def89a
+test "$(git show-ref --hash refs/archive/hosted-v2-pre-core-closure)" = \
+  "$archive_commit"
+git cat-file -e "$archive_commit:src/thesistrace/hosted/temporal_worker.py"
+git cat-file -e "$archive_commit:src/thesistrace/hosted/execution_relay.py"
+
+for removed_path in \
+  deploy/hosted/temporal \
+  scripts/hosted/temporal_dispatch_probe.py \
+  scripts/hosted/local_workflow_acceptance.py \
+  src/thesistrace/hosted/activity_heartbeat.py \
+  src/thesistrace/hosted/activity_policy.py \
+  src/thesistrace/hosted/capacity_probe.py \
+  src/thesistrace/hosted/capacity_workflow.py \
+  src/thesistrace/hosted/compute_dispatch.py \
+  src/thesistrace/hosted/data_worker.py \
+  src/thesistrace/hosted/dataset_publication_workflow.py \
+  src/thesistrace/hosted/execution_outbox.py \
+  src/thesistrace/hosted/execution_relay.py \
+  src/thesistrace/hosted/research_workflow.py \
+  src/thesistrace/hosted/temporal_recovery_probe.py \
+  src/thesistrace/hosted/temporal_worker.py \
+  src/thesistrace/hosted/tracking_operations_workflow.py \
+  src/thesistrace/hosted/tracking_workflow.py; do
+  test ! -e "$removed_path"
+done
+
+! rg -n \
+  'temporalio|THESISTRACE_TEMPORAL|thesistrace-temporal-worker|thesistrace-execution-relay|execution-relay|compute-worker|execution_outbox' \
+  pyproject.toml uv.lock Makefile src tests scripts deploy/hosted
+
+uv run pytest -q tests/architecture tests/kernel
+./scripts/core-test-runtime reset
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/acceptance/test_core_backend_cutover.py \
+  tests/acceptance/test_core_research_run_execution.py \
+  tests/acceptance/test_core_daily_track_advance.py
+```
+
+The installed dependency and console-script inventories must contain no
+Temporal client, Hosted execution relay, recovery probe, or compute/data worker
+entrypoint. Remaining Hosted operations and deployment files may stay for the
+next contraction tickets, but they must not import, configure, start, probe,
+back up, restore, or report the removed execution path.
+
+The architecture and real-runtime acceptance must show that the default worker
+uses only the PostgreSQL-owned ResearchRuns and DailyTracks processors, while
+the accepted quantitative calculations and immutable Publication references
+remain unchanged.
 
 ## Comments
