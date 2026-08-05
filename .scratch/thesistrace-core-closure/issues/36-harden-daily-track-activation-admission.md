@@ -5,20 +5,22 @@ bounded after the first DailyTrack activation path already works.
 
 **Blocked by:** 26.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] ResearchRuns records its Start Tracking receipt and calls private
+**Implementation:** complete
+
+- [x] ResearchRuns records its Start Tracking receipt and calls private
   DailyTrack activation in one PostgreSQL transaction; failure leaves neither a
   receipt nor a partial Track.
-- [ ] DailyTracks enforces one Track per seed ResearchRun under concurrent
+- [x] DailyTracks enforces one Track per seed ResearchRun under concurrent
   activation without ResearchRuns reading DailyTrack tables.
-- [ ] Activation is allowed when the current active-or-blocked count is below
+- [x] Activation is allowed when the current active-or-blocked count is below
   ten, the tenth Track succeeds, and the eleventh is rejected; stopped Tracks
   do not count.
-- [ ] Matching request replay returns the originally activated DailyTrack.
-- [ ] Reusing a request ID with different action input returns a conflict, and a
+- [x] Matching request replay returns the originally activated DailyTrack.
+- [x] Reusing a request ID with different action input returns a conflict, and a
   structurally malformed request creates no receipt.
-- [ ] Duplicate-seed, limit, replay, conflict, and rollback outcomes are visible
+- [x] Duplicate-seed, limit, replay, conflict, and rollback outcomes are visible
   as product action results without exposing transaction or Activation
   Checkpoint internals.
 
@@ -78,3 +80,30 @@ constraint, lock, quota-profile, checkpoint, manifest, object, worker, or
 deployment internals.
 
 ## Comments
+
+- The executable verification contract was committed first in `2d152c8`.
+  `0736e79` implemented ResearchRuns-owned receipts, the atomic private
+  DailyTracks activation seam, unique-seed concurrency, the active-or-blocked
+  limit, stopped exclusion, and the product-safe Web outcomes.
+- Review round 1 found two P2 gaps: legacy DailyTracks receipts were not moved,
+  and the browser test did not model acceptance before response loss.
+  `0fb3343` added upgrade/restart coverage and an accepted-first browser model.
+- Review round 2 found that the first cutover fix used cross-module SQL, was not
+  collision-safe, and left `StartTrackingCommand` in DailyTracks. `1ce7e6d`
+  removed the extra schema, made runtime assembly coordinate one transaction
+  through module-owned SQL, serialized concurrent startup, accepted identical
+  collisions, rejected incompatible collisions without deleting legacy data,
+  and moved the request model to ResearchRuns. `99599cc` added these cases to
+  **How to verify**.
+- Review round 3 passed Standards and Spec with zero findings. It confirmed SQL
+  ownership, transaction rollback/delete ordering, fingerprint compatibility,
+  startup serialization, admission concurrency and browser accepted-first
+  replay.
+- Final verification was run exactly from **How to verify** against isolated
+  real PostgreSQL and RustFS and passed: backend and architecture reported `25
+  passed, 1 warning in 22.17s`; Web typecheck passed; the named browser test
+  reported `1 passed in 4.2s`; both runtime containers were removed afterward.
+- Full repository verification passed with `make check`: Ruff passed; Pytest
+  reported `534 passed, 115 skipped, 2 warnings in 764.65s`; Web typecheck and
+  production build passed (`1591` modules in `1.33s`); narrow E2E reported `1
+  passed in 31.9s` and desktop E2E reported `1 passed in 25.4s`.
