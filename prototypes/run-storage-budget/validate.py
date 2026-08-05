@@ -23,7 +23,7 @@ from thesistrace.factor import (
     mean_or_none,
 )
 from thesistrace.fixture import build_fixture
-from thesistrace.objects import canonical_json_bytes
+from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.strategy import run_strategy, strategy_metrics
 
 SESSION_COUNT = 756

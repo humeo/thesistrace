@@ -1,12 +1,18 @@
+import copy
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
 import pytest
 
 from thesistrace.adapters.tushare_data import TushareDataSource, _materialize_increment
-from thesistrace.adapters.tushare_provider import TushareAdapter, TushareSourceError
+from thesistrace.adapters.tushare_provider import (
+    TushareAdapter,
+    TushareSourceError,
+    normalize_tushare_increment,
+    normalize_tushare_snapshot,
+)
 from thesistrace.data import CollectionPlan, DataSourceError
 from thesistrace.fixture import build_fixture
 
@@ -30,6 +36,87 @@ class RecordingTransport:
                 "items": [[field for field in fields]],
             },
         }
+
+
+def normalizer_snapshot(session_keys: list[str]) -> dict[str, list[dict[str, object]]]:
+    daily = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": session,
+            "open": "10",
+            "high": "11",
+            "low": "9",
+            "close": "10.5",
+            "pre_close": "10",
+            "change": "0.5",
+            "pct_chg": "5",
+            "vol": "100",
+            "amount": "1000",
+        }
+        for session in session_keys
+    ]
+    return {
+        "calendar_sse": [
+            {"exchange": "SSE", "cal_date": session, "is_open": "1"}
+            for session in session_keys
+        ],
+        "calendar_szse": [
+            {"exchange": "SZSE", "cal_date": session, "is_open": "1"}
+            for session in session_keys
+        ],
+        "stock_basic": [
+            {
+                "ts_code": "600000.SH",
+                "exchange": "SSE",
+                "market": "主板",
+                "list_date": "20220101",
+                "delist_date": "",
+            }
+        ],
+        "anchor_daily": [dict(daily[0])],
+        "anchor_adjustments": [
+            {
+                "ts_code": "600000.SH",
+                "trade_date": session_keys[0],
+                "adj_factor": "1",
+            }
+        ],
+        "daily": daily,
+        "adjustments": [
+            {
+                "ts_code": "600000.SH",
+                "trade_date": session,
+                "adj_factor": "1",
+            }
+            for session in session_keys
+        ],
+        "suspensions": [],
+        "st": [],
+        "price_limits": [
+            {
+                "ts_code": "600000.SH",
+                "trade_date": session,
+                "up_limit": "11",
+                "down_limit": "9",
+            }
+            for session in session_keys
+        ],
+        "industry_membership": [
+            {
+                "ts_code": "600000.SH",
+                "in_date": "20220101",
+                "out_date": "",
+                "l1_code": "801010",
+                "l2_code": "801011",
+                "l3_code": "850111",
+            }
+        ],
+    }
+
+
+def normalizer_bootstrap_sessions() -> list[str]:
+    first = date(2023, 1, 1)
+    return [(first + timedelta(days=index)).strftime("%Y%m%d") for index in range(756)]
 
 
 class RecordedProvider:
@@ -180,6 +267,120 @@ def test_tushare_rejects_malformed_provider_snapshots_as_source_data() -> None:
 
     assert failure.value.category == "invalid_source_data"
     assert failure.value.detail_code == "MALFORMED_PROVIDER_PAYLOAD"
+
+
+def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    source, canonical = normalize_tushare_snapshot(normalizer_snapshot(sessions))
+
+    assert source["source_contract_version"] == "tushare-v1"
+    assert canonical["research_calendar"] == [
+        f"{session[:4]}-{session[4:6]}-{session[6:]}" for session in sessions
+    ]
+    assert canonical["instruments"] == [
+        {
+            "instrument_id": "equity:600000.SH",
+            "ts_code": "600000.SH",
+            "asset_type": "ordinary_a_share",
+            "exchange": "SSE",
+            "board": "main",
+            "listed_from": "2022-01-01",
+            "listed_to": "",
+        }
+    ]
+    assert len(canonical["prices"]) == 756
+    assert canonical["prices"][0]["volume_shares"] == "10000"
+    assert canonical["prices"][0]["turnover_cny"] == "1000000.00"
+
+    next_session = (
+        date.fromisoformat(canonical["research_calendar"][-1]) + timedelta(days=1)
+    ).strftime("%Y%m%d")
+    source_delta, canonical_delta = normalize_tushare_increment(
+        normalizer_snapshot([next_session]),
+        canonical,
+    )
+
+    assert source_delta["corrections"] == []
+    assert canonical_delta["research_calendar_append"] == [
+        f"{next_session[:4]}-{next_session[4:6]}-{next_session[6:]}"
+    ]
+    assert len(canonical_delta["prices_append"]) == 1
+    assert canonical_delta["price_corrections"] == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason_code"),
+    (
+        ("open", "NaN", "INVALID_DECIMAL"),
+        ("low", "12", "INVALID_DAILY_BAR"),
+    ),
+)
+def test_tushare_normalizer_rejects_invalid_market_values(
+    field: str,
+    value: str,
+    reason_code: str,
+) -> None:
+    snapshot = normalizer_snapshot(normalizer_bootstrap_sessions())
+    snapshot["daily"][0][field] = value
+
+    with pytest.raises(TushareSourceError) as failure:
+        normalize_tushare_snapshot(snapshot)
+
+    assert failure.value.reason_code == reason_code
+
+
+@pytest.mark.parametrize(
+    ("suspend_timing", "reason_code"),
+    (
+        ("全天", "CONTRADICTORY_SUSPENSION_EVIDENCE"),
+        ("无法识别", "AMBIGUOUS_SUSPENSION_EVIDENCE"),
+    ),
+)
+def test_tushare_normalizer_rejects_invalid_suspension_evidence(
+    suspend_timing: str,
+    reason_code: str,
+) -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": sessions[0],
+            "suspend_timing": suspend_timing,
+        }
+    ]
+
+    with pytest.raises(TushareSourceError) as failure:
+        normalize_tushare_snapshot(snapshot)
+
+    assert failure.value.reason_code == reason_code
+
+
+def test_tushare_increment_rejects_historical_reference_changes() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    _source, canonical = normalize_tushare_snapshot(normalizer_snapshot(sessions))
+    next_session = (
+        date.fromisoformat(canonical["research_calendar"][-1]) + timedelta(days=1)
+    ).strftime("%Y%m%d")
+    snapshot = normalizer_snapshot([next_session])
+
+    instrument_change = copy.deepcopy(snapshot)
+    instrument_change["stock_basic"][0]["list_date"] = "20210101"
+    with pytest.raises(TushareSourceError) as instrument_failure:
+        normalize_tushare_increment(instrument_change, canonical)
+    assert (
+        instrument_failure.value.reason_code
+        == "HISTORICAL_INSTRUMENT_CORRECTION_REQUIRES_REVIEW"
+    )
+
+    industry_change = copy.deepcopy(snapshot)
+    industry_change["industry_membership"][0]["l1_code"] = "CHANGED"
+    with pytest.raises(TushareSourceError) as industry_failure:
+        normalize_tushare_increment(industry_change, canonical)
+    assert (
+        industry_failure.value.reason_code
+        == "HISTORICAL_INDUSTRY_CORRECTION_REQUIRES_REVIEW"
+    )
 
 
 def test_tushare_rejects_responses_missing_requested_fields() -> None:

@@ -49,7 +49,8 @@ if rg -n \
   --glob '!web/node_modules/**' \
   --glob '!web/dist/**' \
   'thesistrace\.(api|datasets|platform_publications|canonical_objects|publication_object_index|tushare_source)|DatasetPublisher|/api/v1/(dataset-releases|sources/tushare|objects)' \
-  pyproject.toml uv.lock Makefile src scripts tests/adapters tests/integration web
+  pyproject.toml uv.lock Makefile src scripts prototypes \
+  tests/adapters tests/integration web
 then
   echo 'Legacy Data or Publication path remains reachable' >&2
   exit 1
