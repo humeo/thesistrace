@@ -354,24 +354,25 @@ def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> 
     assert "definitions." not in run_migrations
 
 
-def test_start_tracking_receipt_cutover_is_owned_by_the_runtime_assembly() -> None:
+def test_start_tracking_receipts_are_owned_only_by_research_runs() -> None:
     runtime = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
     track = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
     run = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    track_migrations = (ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py").read_text()
+    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
     track_models = (ROOT / "src" / "thesistrace" / "daily_track" / "models.py").read_text()
     run_models = (ROOT / "src" / "thesistrace" / "research_run" / "models.py").read_text()
 
-    assert "core_cutovers" not in runtime
+    assert "cutover" not in runtime.lower()
+    assert "legacy" not in runtime.lower()
     for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
         assert f"{sql_verb} research_runs." not in runtime
         assert f"{sql_verb} daily_tracks." not in runtime
-    assert "read_legacy_activation_receipts" in runtime
-    assert "import_start_tracking_receipts" in runtime
-    assert "delete_legacy_activation_receipts" in runtime
-    assert "FROM daily_tracks.activation_receipts" in track
-    assert "FOR UPDATE OF receipt" in track
-    assert "DELETE FROM daily_tracks.activation_receipts" in track
     assert "INSERT INTO research_runs.start_tracking_receipts" in run
+    assert "CREATE TABLE research_runs.start_tracking_receipts" in run_migrations
+    assert "activation_receipts" not in track
+    assert "activation_receipts" not in track_migrations
+    assert "LegacyStartTrackingReceipt" not in track_models
     assert "StartTrackingCommand" not in track_models
     assert "class StartTrackingCommand" in run_models
 
@@ -426,7 +427,6 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
     assert "CREATE TABLE daily_tracks.tracks" in track_migrations
-    assert "CREATE TABLE daily_tracks.activation_receipts" in track_migrations
     assert "CREATE TABLE daily_tracks.progressions" in track_migrations
     assert "CREATE TABLE daily_tracks.checkpoints" in track_migrations
     assert "0004_blocked_track_failure_isolation" in track_migrations

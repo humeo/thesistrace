@@ -50,6 +50,8 @@ class RunInput:
         stamp_duty_sell_rate: str,
         transfer_fee_rate: str,
     ) -> None:
+        if not isinstance(alpha_expression, Mapping):
+            raise KernelRunError("Alpha expression must be a normalized tree")
         object.__setattr__(self, "_canonical_data_json", canonical_json_bytes(canonical_data))
         object.__setattr__(
             self,
@@ -79,7 +81,7 @@ class RunInput:
 
     def alpha_expression_snapshot(self) -> AlphaExpression:
         value = json.loads(self._alpha_expression_json)
-        if not isinstance(value, (str, Mapping)):
+        if not isinstance(value, Mapping):
             raise KernelRunError("Alpha expression snapshot is invalid")
         return value
 

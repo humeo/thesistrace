@@ -24,8 +24,8 @@ produce a recoverable system.
 - Deployment and operations assets: `deploy/hosted/**`
 - Hosted scripts: `scripts/hosted/**`, `scripts/hosted-stack`,
   `scripts/hosted-*-smoke.py`, and `scripts/validate-cloudflare-edge`
-- Runbooks: `docs/archive/hosted-compose.md` and
-  `docs/archive/hosted-health.md`
+- Runbooks at the archived ref: `docs/runbook/hosted-compose.md` and
+  `docs/runbook/hosted-health.md`
 - Hosted architecture decisions: `docs/adr/0110-*.md` through
   `docs/adr/0149-*.md`
 - Hosted Web surface: `web/e2e-hosted/**`,

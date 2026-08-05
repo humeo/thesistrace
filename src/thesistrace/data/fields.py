@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -53,15 +52,3 @@ AUTHORABLE_FIELDS = (
 def authorable_field_bindings() -> dict[str, str]:
     """Return Data-owned stable field IDs bound to Kernel evaluation names."""
     return {field.field_id: field.evaluation_name for field in AUTHORABLE_FIELDS}
-
-
-def authorable_field_bindings_from_snapshot(value: object) -> dict[str, str]:
-    """Resolve frozen Definition bindings, with legacy content as a fallback."""
-    if not isinstance(value, list):
-        return authorable_field_bindings()
-    bindings = {
-        str(item["field_id"]): str(item["name"])
-        for item in value
-        if isinstance(item, Mapping) and "field_id" in item and "name" in item
-    }
-    return bindings or authorable_field_bindings()

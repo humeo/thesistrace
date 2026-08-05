@@ -3,7 +3,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from thesistrace.research_kernel import KernelState, RunInput, RunOutput, run
+from thesistrace.research_kernel import KernelRunError, KernelState, RunInput, RunOutput, run
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -94,6 +94,33 @@ def test_kernel_run_input_does_not_expose_mutable_expression_state(
     exposed["operator_id"] = "add"
 
     assert run(run_input).artifacts_snapshot() == expected
+
+
+def test_kernel_run_input_rejects_string_alpha_expression(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    assert isinstance(definition, dict)
+    strategy = definition["strategy"]
+    costs = definition["costs"]
+    assert isinstance(strategy, dict)
+    assert isinstance(costs, dict)
+
+    with pytest.raises(KernelRunError, match="normalized tree"):
+        RunInput(
+            canonical_data=accepted_calculation_case["canonical"],
+            alpha_expression="pct_change($close_adj, 20)",  # type: ignore[arg-type]
+            field_bindings=FIELD_BINDINGS,
+            universe=str(definition["universe"]),
+            neutralization=str(definition["neutralization"]),
+            holdings_count=int(strategy["holdings_count"]),
+            rebalance_interval=int(strategy["rebalance_interval"]),
+            initial_cash_cny=str(strategy["initial_cash_cny"]),
+            commission_rate_all_in=str(costs["commission_rate_all_in"]),
+            commission_min_cny=str(costs["commission_min_cny"]),
+            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        )
 
 
 def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:

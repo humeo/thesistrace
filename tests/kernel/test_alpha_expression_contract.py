@@ -92,29 +92,117 @@ def test_normalized_input_has_one_bounded_semantics() -> None:
 
 
 @pytest.mark.parametrize(
-    "normalized",
+    ("normalized", "expected"),
     [
-        operation("add", field("price.close.adjusted"), literal(2)),
-        operation("subtract", field("price.close.adjusted"), literal(2)),
-        operation("multiply", field("price.close.adjusted"), literal(2)),
-        operation("divide", field("price.close.adjusted"), literal(2)),
-        operation("negate", field("price.close.adjusted")),
-        operation("abs", operation("negate", field("price.close.adjusted"))),
-        operation("log", field("price.close.adjusted")),
-        operation("sign", field("price.close.adjusted")),
-        operation("lag", field("price.close.adjusted"), literal(2)),
-        operation("delta", field("price.close.adjusted"), literal(2)),
-        operation("pct_change", field("price.close.adjusted"), literal(2)),
-        operation("ts_mean", field("price.close.adjusted"), literal(2)),
-        operation("ts_sum", field("price.close.adjusted"), literal(2)),
-        operation("ts_std", field("price.close.adjusted"), literal(2)),
-        operation("ts_min", field("price.close.adjusted"), literal(2)),
-        operation("ts_max", field("price.close.adjusted"), literal(2)),
+        (
+            operation("add", field("price.close.adjusted"), literal(2)),
+            [3.0, 4.0, 6.0, 10.0, 18.0],
+        ),
+        (
+            operation("subtract", field("price.close.adjusted"), literal(2)),
+            [-1.0, 0.0, 2.0, 6.0, 14.0],
+        ),
+        (
+            operation("multiply", field("price.close.adjusted"), literal(2)),
+            [2.0, 4.0, 8.0, 16.0, 32.0],
+        ),
+        (
+            operation("divide", field("price.close.adjusted"), literal(2)),
+            [0.5, 1.0, 2.0, 4.0, 8.0],
+        ),
+        (
+            operation("negate", field("price.close.adjusted")),
+            [-1.0, -2.0, -4.0, -8.0, -16.0],
+        ),
+        (
+            operation("abs", operation("negate", field("price.close.adjusted"))),
+            [1.0, 2.0, 4.0, 8.0, 16.0],
+        ),
+        (
+            operation("log", field("price.close.adjusted")),
+            [0.0, math.log(2.0), math.log(4.0), math.log(8.0), math.log(16.0)],
+        ),
+        (
+            operation("sign", field("price.close.adjusted")),
+            [1.0, 1.0, 1.0, 1.0, 1.0],
+        ),
+        (
+            operation("lag", field("price.close.adjusted"), literal(2)),
+            [None, None, 1.0, 2.0, 4.0],
+        ),
+        (
+            operation("delta", field("price.close.adjusted"), literal(2)),
+            [None, None, 3.0, 6.0, 12.0],
+        ),
+        (
+            operation("pct_change", field("price.close.adjusted"), literal(2)),
+            [None, None, 3.0, 3.0, 3.0],
+        ),
+        (
+            operation("ts_mean", field("price.close.adjusted"), literal(2)),
+            [None, 1.5, 3.0, 6.0, 12.0],
+        ),
+        (
+            operation("ts_sum", field("price.close.adjusted"), literal(2)),
+            [None, 3.0, 6.0, 12.0, 24.0],
+        ),
+        (
+            operation("ts_std", field("price.close.adjusted"), literal(2)),
+            [None, 0.5, 1.0, 2.0, 4.0],
+        ),
+        (
+            operation("ts_min", field("price.close.adjusted"), literal(2)),
+            [None, 1.0, 2.0, 4.0, 8.0],
+        ),
+        (
+            operation("ts_max", field("price.close.adjusted"), literal(2)),
+            [None, 2.0, 4.0, 8.0, 16.0],
+        ),
     ],
 )
-def test_every_normalized_operator_executes(normalized: dict[str, object]) -> None:
+def test_every_normalized_operator_has_exact_semantics(
+    normalized: dict[str, object],
+    expected: list[float | None],
+) -> None:
     values = {"close_adj": [1.0, 2.0, 4.0, 8.0, 16.0]}
-    assert len(evaluate_series(normalized, values, field_bindings=FIELD_BINDINGS)) == 5
+    assert evaluate_series(normalized, values, field_bindings=FIELD_BINDINGS) == expected
+
+
+def test_normalized_evaluation_preserves_missing_and_non_finite_rules() -> None:
+    close = field("price.close.adjusted")
+    values = {"close_adj": [1.0, 2.0, None, 4.0, 8.0]}
+
+    assert evaluate_series(
+        operation("pct_change", close, literal(1)),
+        values,
+        field_bindings=FIELD_BINDINGS,
+    ) == [None, 1.0, None, None, 1.0]
+    assert evaluate_series(
+        operation("ts_mean", close, literal(2)),
+        values,
+        field_bindings=FIELD_BINDINGS,
+    ) == [None, 1.5, None, None, 6.0]
+    assert evaluate_series(
+        operation("ts_std", close, literal(1)),
+        values,
+        field_bindings=FIELD_BINDINGS,
+    ) == [0.0, 0.0, None, 0.0, 0.0]
+    assert evaluate_series(
+        operation("sign", operation("negate", close)),
+        values,
+        field_bindings=FIELD_BINDINGS,
+    ) == [-1.0, -1.0, None, -1.0, -1.0]
+    assert evaluate_series(
+        operation("log", operation("subtract", close, literal(4))),
+        values,
+        field_bindings=FIELD_BINDINGS,
+    ) == [None, None, None, None, math.log(4.0)]
+    assert evaluate_series(
+        operation("divide", close, operation("subtract", close, close)),
+        values,
+        field_bindings=FIELD_BINDINGS,
+    ) == [None] * 5
+    assert evaluate_series(literal(1), {}, field_bindings=FIELD_BINDINGS) == [1.0]
 
 
 def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:

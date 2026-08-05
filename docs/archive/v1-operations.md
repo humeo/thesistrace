@@ -75,7 +75,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/sources/tushare/preflight
 ```
 
 After a successful preflight, follow
-[Tushare live Bootstrap](./tushare-live-bootstrap.md). The token is sent only
+[Tushare live Bootstrap](../runbook/tushare-live-bootstrap.md). The token is sent only
 to Tushare and is never written to metadata, logs, Dataset Releases,
 Definitions, Results, or Tracking Checkpoints.
 

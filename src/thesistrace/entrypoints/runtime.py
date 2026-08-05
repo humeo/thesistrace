@@ -141,7 +141,6 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             publication=publication,
             activate_track=daily_tracks.activate,
         )
-        _move_start_tracking_receipts(database, daily_tracks, research_runs)
         yield CoreRuntime(
             database=database,
             data=data,
@@ -160,14 +159,3 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
     finally:
         database.close()
         working_cache.cleanup()
-
-
-def _move_start_tracking_receipts(
-    database: PostgresDatabase,
-    daily_tracks: DailyTrackService,
-    research_runs: ResearchRunService,
-) -> None:
-    with database.transaction() as transaction:
-        receipts = daily_tracks.read_legacy_activation_receipts(transaction)
-        research_runs.import_start_tracking_receipts(transaction, receipts)
-        daily_tracks.delete_legacy_activation_receipts(transaction, receipts)

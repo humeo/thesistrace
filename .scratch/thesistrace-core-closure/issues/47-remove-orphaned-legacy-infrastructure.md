@@ -47,13 +47,19 @@ do
   test ! -e "$removed_path"
 done
 
-if rg -n \
-  --glob '!web/node_modules/**' \
-  --glob '!web/dist/**' \
-  'thesistrace\.(config|runtime|storage|worker|objects|ports|management|activity_contract|alpha|factor|strategy|numeric)|MetadataStore|ImmutableObjectStore|RuntimePorts|LocalWorkerDispatch|ExecutionDispatchPort|sqlite3' \
-  pyproject.toml uv.lock Makefile src scripts prototypes \
-  tests/kernel tests/adapters tests/integration tests/acceptance web
-then
+legacy_hits="$(
+  rg -n \
+    --glob '!web/node_modules/**' \
+    --glob '!web/dist/**' \
+    'thesistrace\.(config|runtime|storage|worker|objects|ports|management|activity_contract|alpha|factor|strategy|numeric)|MetadataStore|ImmutableObjectStore|RuntimePorts|LocalWorkerDispatch|ExecutionDispatchPort|LegacyStartTrackingReceipt|activation_receipts|authorable_field_bindings_from_snapshot|sqlite3' \
+    pyproject.toml uv.lock Makefile src scripts \
+    tests/kernel tests/adapters tests/integration tests/acceptance web || {
+      rg_status=$?
+      test "$rg_status" -eq 1 || exit "$rg_status"
+    }
+)"
+if test -n "$legacy_hits"; then
+  printf '%s\n' "$legacy_hits"
   echo 'A second runtime or legacy facade remains reachable' >&2
   exit 1
 fi

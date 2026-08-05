@@ -15,11 +15,7 @@ from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.daily_track import (
-    DailyTrackSummary,
-    LegacyStartTrackingReceipt,
-    TrackingOrigin,
-)
+from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
 from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
@@ -109,10 +105,6 @@ class ResearchRunTrackingTemporarilyUnavailable(RuntimeError):
     pass
 
 
-class StartTrackingReceiptCutoverConflict(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class _ExecutionClaim:
     run_id: str
@@ -152,51 +144,6 @@ class ResearchRunService:
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._activate_track = activate_track
-
-    def import_start_tracking_receipts(
-        self,
-        transaction: PostgresTransaction,
-        receipts: tuple[LegacyStartTrackingReceipt, ...],
-    ) -> None:
-        for receipt in receipts:
-            existing = transaction.execute(
-                """
-                SELECT request_fingerprint, seed_run_id, track_id, outcome
-                FROM research_runs.start_tracking_receipts
-                WHERE request_id = %s
-                FOR UPDATE
-                """,
-                (receipt.request_id,),
-            ).fetchone()
-            if existing is not None:
-                same_receipt = (
-                    existing["request_fingerprint"] == receipt.request_fingerprint
-                    and existing["seed_run_id"] == receipt.seed_run_id
-                    and existing["track_id"] == receipt.track_id
-                    and DailyTrackSummary.model_validate(existing["outcome"])
-                    == receipt.outcome
-                )
-                if not same_receipt:
-                    raise StartTrackingReceiptCutoverConflict(
-                        "incompatible Start Tracking receipt blocks ownership cutover"
-                    )
-                continue
-            transaction.execute(
-                """
-                INSERT INTO research_runs.start_tracking_receipts (
-                    request_id, request_fingerprint, seed_run_id,
-                    track_id, outcome, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    receipt.request_id,
-                    receipt.request_fingerprint,
-                    receipt.seed_run_id,
-                    receipt.track_id,
-                    Jsonb(receipt.outcome.model_dump(mode="json")),
-                    receipt.created_at,
-                ),
-            )
 
     def admit(
         self,
