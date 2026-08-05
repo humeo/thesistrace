@@ -6,22 +6,24 @@ replacement acceptance passes.
 
 **Blocked by:** 37.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Stable routes are `/data`, `/definitions`, `/definitions/:id`,
+**Implementation:** complete
+
+- [x] Stable routes are `/data`, `/definitions`, `/definitions/:id`,
   `/research-runs`, `/research-runs/:id`, `/daily-tracks`, and
   `/daily-tracks/:id`.
-- [ ] The Shell owns navigation and current-route composition only.
-- [ ] Each resource module owns its list, detail, actions, typed requests,
+- [x] The Shell owns navigation and current-route composition only.
+- [x] Each resource module owns its list, detail, actions, typed requests,
   loading, refresh, empty, and error behavior.
-- [ ] Run sends current editor content directly; no Web sequence performs Save
+- [x] Run sends current editor content directly; no Web sequence performs Save
   and then Run as separate product actions.
-- [ ] Resource refresh stays local to the active Update, Run, or Track instead
+- [x] Resource refresh stays local to the active Update, Run, or Track instead
   of a global polling loop.
-- [ ] Visible navigation completes Data Update, incomplete Save, rejected Run,
+- [x] Visible navigation completes Data Update, incomplete Save, rejected Run,
   successful Run/Result, edited Run, Rerun, Cancel, Track activation, later
   Release advance, blocked Retry, and Stop against the canonical backend.
-- [ ] This ticket switches the active UI but deletes no old Web or authentication
+- [x] This ticket switches the active UI but deletes no old Web or authentication
   source.
 
 **How to verify:**
@@ -67,3 +69,28 @@ active Data Update, ResearchRun, or DailyTrack module rather than a Shell-level
 or global loop.
 
 ## Comments
+
+- The executable verification contract was committed first in `2b8fe3b`.
+  `716e63f` made `index.html`, `src/main.tsx`, default development, and default
+  browser acceptance use the four-resource Shell and canonical commands.
+- `edf723e` removed the alternate production Rollup input and added the edited
+  current-content Run flow. Review round 1 had identified both omissions.
+- Review round 2 found a development-only `/core.html` entry, dead route
+  classifier declarations, and insufficient proof that edited Run performs no
+  implicit Save. `4f7b7e7` made `/core.html` redirect-only, removed the dead
+  declarations, and asserted that the edited action emits exactly one
+  Definition write: `POST /api/definitions/:id/run`.
+- Review round 3 passed Standards and Spec with zero findings. It confirmed one
+  active Vite entry, direct static module imports, Shell-only routing ownership,
+  redirect-only legacy entry behavior, and the single-action edited Run.
+- Final verification was run exactly from **How to verify** against isolated
+  real PostgreSQL and RustFS. TypeScript checking passed; the production build
+  emitted only `dist/index.html` and one product bundle; the Shell unit test
+  passed; and all `18` default Playwright flows passed in `1.9m`. The trap
+  removed both runtime containers afterward.
+- An expanded diagnostic run of the future Ticket 49 Core-enabled repository
+  gate exposed an older recovery-test proxy that lacked the later
+  `Publication.read` operation. The test-only fix in `71bd456` passed all five
+  publication-recovery failure branches and an independent Standards/Spec
+  review with zero findings. The full no-skip gate remains Ticket 49's
+  orchestration boundary rather than a requirement of this Web cutover.
