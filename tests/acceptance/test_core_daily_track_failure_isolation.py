@@ -128,6 +128,47 @@ def test_one_failed_track_blocks_without_stalling_data_or_another_track(
         assert _track_snapshot(restarted_runtime.database, failed_track["id"]) == blocked_snapshot
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_third_lost_worker_blocks_on_restart_without_a_fourth_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as first_process:
+        runtime = first_process.app.state.core_runtime
+        seed_run = _admit_and_execute(first_process)
+        track = _start_track(first_process, seed_run["id"], "ticket-33-lost-track")
+        target = _publish_successor(first_process, available_sessions=1)
+
+        def lose_worker(_claim: object) -> object:
+            raise SystemExit("simulated lost DailyTrack worker")
+
+        monkeypatch.setattr(runtime.daily_tracks, "_execute", lose_worker)
+        for _ordinal in (1, 2, 3):
+            with pytest.raises(SystemExit, match="simulated lost DailyTrack worker"):
+                runtime.daily_tracks.process_next()
+            _expire_latest_running_attempt(runtime.database, track["id"])
+
+    with TestClient(create_app(settings)) as restarted_process:
+        runtime = restarted_process.app.state.core_runtime
+        assert runtime.daily_tracks.process_next() is False
+        detail = restarted_process.get(f"/api/daily-tracks/{track['id']}").json()
+        assert detail["status"] == "blocked"
+        assert detail["blocked_reason"] == PUBLIC_BLOCKED_REASON
+        assert detail["head_release_id"] == track["current_release_id"]
+        snapshot = _track_snapshot(runtime.database, track["id"])
+        assert snapshot["blocked_target_release_id"] == target["id"]
+        assert snapshot["progression_status"] == "blocked"
+        assert snapshot["attempts"] == [
+            {"ordinal": ordinal, "status": "failed", "failure_reason": "WorkerLost"}
+            for ordinal in (1, 2, 3)
+        ]
+
+
 def _assert_public_projection_is_sanitized(projection: object) -> None:
     serialized = json.dumps(projection, sort_keys=True).lower()
     for term in INTERNAL_TERMS:
@@ -187,6 +228,25 @@ def _publication_count(database: PostgresDatabase) -> int:
         ).fetchone()
     assert row is not None
     return int(row["publication_count"])
+
+
+def _expire_latest_running_attempt(database: PostgresDatabase, track_id: str) -> None:
+    with database.transaction() as transaction:
+        expired = transaction.execute(
+            """
+            UPDATE daily_tracks.progression_attempts
+            SET lease_expires_at = now() - interval '1 second'
+            WHERE id = (
+                SELECT id
+                FROM daily_tracks.progression_attempts
+                WHERE track_id = %s AND status = 'running'
+                ORDER BY ordinal DESC
+                LIMIT 1
+            )
+            """,
+            (track_id,),
+        )
+    assert expired.rowcount == 1
 
 
 def _admit_and_execute(client: TestClient) -> dict[str, object]:

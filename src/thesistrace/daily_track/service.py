@@ -702,6 +702,22 @@ class DailyTrackService:
                         )
                         if failed.rowcount != 1:
                             continue
+                        if (
+                            int(latest_attempt["ordinal"])
+                            >= MAX_AUTOMATIC_PROGRESSION_ATTEMPTS
+                        ):
+                            if int(progression["fence"]) != int(row["execution_fence"]):
+                                raise RuntimeError(
+                                    "DailyTrack progression fence is inconsistent"
+                                )
+                            self._block_progression(
+                                transaction,
+                                track_id=str(row["id"]),
+                                current_release_id=current_release_id,
+                                target_release_id=target.id,
+                                fence=int(progression["fence"]),
+                            )
+                            continue
                 fence = int(row["execution_fence"]) + 1
                 if progression is None:
                     transaction.execute(
@@ -1298,33 +1314,50 @@ class DailyTrackService:
                 raise DailyTrackFenced
             if int(attempt["ordinal"]) < MAX_AUTOMATIC_PROGRESSION_ATTEMPTS:
                 return
-            blocked_progression = transaction.execute(
-                """
-                UPDATE daily_tracks.progressions
-                SET status = 'blocked', finished_at = now()
-                WHERE track_id = %s AND target_release_id = %s
-                  AND status = 'running' AND fence = %s
-                """,
-                (claim.track_id, claim.target.id, claim.fence),
+            self._block_progression(
+                transaction,
+                track_id=claim.track_id,
+                current_release_id=claim.current_release_id,
+                target_release_id=claim.target.id,
+                fence=claim.fence,
             )
-            blocked_track = transaction.execute(
-                """
-                UPDATE daily_tracks.tracks
-                SET status = 'blocked', blocked_target_release_id = %s,
-                    blocked_reason = %s
-                WHERE id = %s AND status = 'active'
-                  AND current_release_id = %s AND execution_fence = %s
-                """,
-                (
-                    claim.target.id,
-                    PUBLIC_BLOCKED_REASON,
-                    claim.track_id,
-                    claim.current_release_id,
-                    claim.fence,
-                ),
-            )
-            if blocked_progression.rowcount != 1 or blocked_track.rowcount != 1:
-                raise DailyTrackFenced
+
+    def _block_progression(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        track_id: str,
+        current_release_id: str,
+        target_release_id: str,
+        fence: int,
+    ) -> None:
+        blocked_progression = transaction.execute(
+            """
+            UPDATE daily_tracks.progressions
+            SET status = 'blocked', finished_at = now()
+            WHERE track_id = %s AND target_release_id = %s
+              AND status = 'running' AND fence = %s
+            """,
+            (track_id, target_release_id, fence),
+        )
+        blocked_track = transaction.execute(
+            """
+            UPDATE daily_tracks.tracks
+            SET status = 'blocked', blocked_target_release_id = %s,
+                blocked_reason = %s
+            WHERE id = %s AND status = 'active'
+              AND current_release_id = %s AND execution_fence = %s
+            """,
+            (
+                target_release_id,
+                PUBLIC_BLOCKED_REASON,
+                track_id,
+                current_release_id,
+                fence,
+            ),
+        )
+        if blocked_progression.rowcount != 1 or blocked_track.rowcount != 1:
+            raise DailyTrackFenced
 
     def _require_progression_dependencies(self) -> None:
         if self._publication is None or self._next_release is None or self._load_canonical is None:
