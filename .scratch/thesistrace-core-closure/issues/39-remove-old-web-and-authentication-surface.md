@@ -5,18 +5,20 @@ Hosted authentication wrapper after the replacement Shell is accepted.
 
 **Blocked by:** 01, 38.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] The Hosted archive ref is reverified before any old surface is deleted.
-- [ ] Old routes, monolithic navigation, authentication wrapper, Workspace
+**Implementation:** complete
+
+- [x] The Hosted archive ref is reverified before any old surface is deleted.
+- [x] Old routes, monolithic navigation, authentication wrapper, Workspace
   Dashboard, Operations Ledger, raw JSON popup, and download surface are gone.
-- [ ] Draft, frozen version, Result, Attempt, Generation, Advance, Checkpoint,
+- [x] Draft, frozen version, Result, Attempt, Generation, Advance, Checkpoint,
   Local/Hosted label, and deployment controls have no active page or URL.
-- [ ] No feature flag, fallback route, or alternate bundle can restore the old
+- [x] No feature flag, fallback route, or alternate bundle can restore the old
   product surface.
-- [ ] The seven stable URLs and complete Core browser flow behave identically
+- [x] The seven stable URLs and complete Core browser flow behave identically
   after deletion.
-- [ ] Backend Hosted and legacy removal remain outside this ticket.
+- [x] Backend Hosted and legacy removal remain outside this ticket.
 
 **How to verify:**
 
@@ -69,3 +71,28 @@ DailyTracks resources. Backend Hosted and legacy source is deliberately left
 for Tickets 40–44.
 
 ## Comments
+
+- Before deletion, `refs/archive/hosted-v2-pre-core-closure` was resolved to
+  `2884f96ecd1f3aed1e16b00116d54a99c9def89a`, restored into the clean detached
+  worktree `/private/tmp/thesistrace-hosted-v2-restore`, and checked against all
+  required and excluded paths from Ticket 01. The worktree was clean and was
+  removed after verification.
+- The executable post-deletion contract was committed first in `d392862`.
+  `ddf6db6` then removed the old monolithic App, authentication wrapper, old
+  and Hosted browser suites, second HTML/React entry, old CSS, and three
+  dependencies used only by that surface: about `5,000` lines in total.
+- The transitional Playwright selector was contracted to one standard
+  `playwright.config.ts` and one `test:e2e` command. Vite has one production
+  `index.html` input and explicitly returns `404` for the removed
+  `/core.html`, so its SPA fallback cannot revive the old entry.
+- The exact command in **How to verify** passed after placing the empty-state
+  browser flow before the backend acceptance that rebuilds schemas. The result
+  was TypeScript/build/Shell green, `18 passed` browser flows in `1.9m`, and
+  `22 passed, 1 warning in 20.68s` for architecture plus backend cutover. The
+  production build emitted only `dist/index.html` and one product bundle, and
+  the trap removed both runtime containers.
+- Review round 1 passed Standards and Spec with zero findings. It confirmed the
+  fixed archive ref, complete Web/Auth deletion, single entry/configuration,
+  explicit old-entry rejection, unchanged seven stable URLs and Core journey,
+  and that no backend Hosted or legacy source was deleted ahead of Tickets
+  40–44.
