@@ -24,11 +24,48 @@ bounded after the first DailyTrack activation path already works.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/integration tests/acceptance` with concurrent
-  duplicate activation, transaction rollback, replay, conflict, malformed
-  input, the successful tenth Track, and the rejected eleventh Track.
-- Run `bun run --cwd web test:e2e` and confirm the Run detail returns the same
-  Track on replay and shows the duplicate or limit outcome without a partial
-  resource.
+Run the ticket verification against real PostgreSQL and RustFS, then remove the
+isolated runtime even if a check fails:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/acceptance/test_core_daily_track_activation_admission.py \
+  tests/acceptance/test_core_daily_track_activation.py \
+  tests/architecture/test_core_runtime_boundaries.py
+bun run --cwd web typecheck
+./scripts/core-test-runtime run bun run --cwd web test:e2e:core-shell -- \
+  --grep "handles Start Tracking replay and active limit"
+```
+
+The acceptance tests must use the product action `POST
+/api/research-runs/{run_id}/daily-tracks` with only
+`{"request_id":"..."}`. They must prove that ResearchRuns owns the Start
+Tracking receipt while DailyTracks owns the unique `seed_run_id` Track row and
+all activation SQL. Matching replay returns the original Track without another
+row or receipt; cross-Run request-ID reuse returns 409; malformed input returns
+422 without a receipt. Concurrent requests for one previously untracked seed
+must all return the same single Track. An injected failure after private
+DailyTrack activation but before the outer transaction commits must leave no
+Track and no ResearchRuns receipt.
+
+For admission capacity, first persist nine active-or-blocked Tracks, including
+at least one blocked Track. Race two different eligible seed Runs for the final
+slot: exactly one becomes the tenth Track and the other returns 409 with a
+product-safe limit result. The database must contain exactly ten active or
+blocked Tracks and no receipt or partial Track for the rejected Run. Stop one
+of those Tracks through the product Stop action, retry the rejected seed with a
+new request ID, and prove it now succeeds as the tenth active-or-blocked Track;
+the stopped Track remains readable but is excluded from the count.
+
+The named browser test must simulate a response lost after the server accepted
+Start Tracking, retry from the same Run detail with the same request ID, and
+navigate to the originally created Track without a duplicate. It must also
+show the active-limit outcome on a succeeded Run without navigating or creating
+a partial DailyTrack. Neither outcome may expose transaction, receipt, unique
+constraint, lock, quota-profile, checkpoint, manifest, object, worker, or
+deployment internals.
 
 ## Comments
