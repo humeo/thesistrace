@@ -51,6 +51,8 @@ legacy_hits="$(
   rg -n \
     --glob '!web/node_modules/**' \
     --glob '!web/dist/**' \
+    --glob '!src/thesistrace/*/migrations.py' \
+    --glob '!tests/acceptance/test_core_contraction_migration.py' \
     'thesistrace\.(config|runtime|storage|worker|objects|ports|management|activity_contract|alpha|factor|strategy|numeric)|MetadataStore|ImmutableObjectStore|RuntimePorts|LocalWorkerDispatch|ExecutionDispatchPort|LegacyStartTrackingReceipt|activation_receipts|authorable_field_bindings_from_snapshot|sqlite3' \
     pyproject.toml uv.lock Makefile src scripts \
     tests/kernel tests/adapters tests/integration tests/acceptance web || {

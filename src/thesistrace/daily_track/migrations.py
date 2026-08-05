@@ -19,6 +19,13 @@ MIGRATIONS = MigrationPlan(
                 CREATE INDEX daily_tracks_created_idx
                     ON daily_tracks.tracks (created_at DESC, id);
 
+                CREATE TABLE daily_tracks.activation_receipts (
+                    request_id text PRIMARY KEY,
+                    request_fingerprint text NOT NULL,
+                    track_id text NOT NULL REFERENCES daily_tracks.tracks(id),
+                    outcome jsonb NOT NULL CHECK (jsonb_typeof(outcome) = 'object'),
+                    created_at timestamptz NOT NULL DEFAULT now()
+                );
             """,
         ),
         Migration(
@@ -34,6 +41,13 @@ MIGRATIONS = MigrationPlan(
                 SET current_release_id = origin ->> 'seed_release_id',
                     current_strategy_session =
                         origin -> 'initial_strategy_state' ->> 'session';
+
+                UPDATE daily_tracks.activation_receipts AS receipt
+                SET outcome = receipt.outcome || jsonb_build_object(
+                    'current_release_id', track.current_release_id
+                )
+                FROM daily_tracks.tracks AS track
+                WHERE track.id = receipt.track_id;
 
                 ALTER TABLE daily_tracks.tracks
                     ALTER COLUMN current_release_id SET NOT NULL,
@@ -185,6 +199,12 @@ MIGRATIONS = MigrationPlan(
                     outcome jsonb NOT NULL CHECK (jsonb_typeof(outcome) = 'object'),
                     created_at timestamptz NOT NULL DEFAULT now()
                 );
+            """,
+        ),
+        Migration(
+            name="0007_drop_legacy_activation_receipts",
+            statement="""
+                DROP TABLE daily_tracks.activation_receipts;
             """,
         ),
     ),

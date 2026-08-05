@@ -74,10 +74,12 @@ make dev
 curl -X POST http://127.0.0.1:8000/api/v1/sources/tushare/preflight
 ```
 
-After a successful preflight, follow
-[Tushare live Bootstrap](../runbook/tushare-live-bootstrap.md). The token is sent only
-to Tushare and is never written to metadata, logs, Dataset Releases,
-Definitions, Results, or Tracking Checkpoints.
+At the archived ref, the operator next followed the companion
+`docs/runbook/tushare-live-bootstrap.md` publication procedure from that same
+historical tree. The current file at that path is intentionally only a Core
+credential check and does not describe this retired publication flow. The
+token was sent only to Tushare and was never written to metadata, logs,
+Dataset Releases, Definitions, Results, or Tracking Checkpoints.
 
 In an empty Workspace, choose the completed session in **LIVE AS OF** and click
 **发布 Live Tushare Bootstrap**. The Web UI calls the same public API shown in

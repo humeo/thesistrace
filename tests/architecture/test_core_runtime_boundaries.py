@@ -371,7 +371,9 @@ def test_start_tracking_receipts_are_owned_only_by_research_runs() -> None:
     assert "INSERT INTO research_runs.start_tracking_receipts" in run
     assert "CREATE TABLE research_runs.start_tracking_receipts" in run_migrations
     assert "activation_receipts" not in track
-    assert "activation_receipts" not in track_migrations
+    assert "CREATE TABLE daily_tracks.activation_receipts" in track_migrations
+    assert "0007_drop_legacy_activation_receipts" in track_migrations
+    assert "0007_import_legacy_start_tracking_receipts" in run_migrations
     assert "LegacyStartTrackingReceipt" not in track_models
     assert "StartTrackingCommand" not in track_models
     assert "class StartTrackingCommand" in run_models

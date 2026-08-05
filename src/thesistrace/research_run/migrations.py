@@ -110,5 +110,46 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0007_import_legacy_start_tracking_receipts",
+            statement="""
+                DO $migration$
+                BEGIN
+                    IF to_regclass('daily_tracks.activation_receipts') IS NOT NULL THEN
+                        IF EXISTS (
+                            SELECT 1
+                            FROM daily_tracks.activation_receipts AS legacy
+                            JOIN daily_tracks.tracks AS track
+                                ON track.id = legacy.track_id
+                            JOIN research_runs.start_tracking_receipts AS current
+                                ON current.request_id = legacy.request_id
+                            WHERE current.request_fingerprint <> legacy.request_fingerprint
+                               OR current.seed_run_id <> track.seed_run_id
+                               OR current.track_id <> legacy.track_id
+                               OR current.outcome <> legacy.outcome
+                        ) THEN
+                            RAISE EXCEPTION
+                                'incompatible Start Tracking receipt blocks contraction';
+                        END IF;
+
+                        INSERT INTO research_runs.start_tracking_receipts (
+                            request_id, request_fingerprint, seed_run_id,
+                            track_id, outcome, created_at
+                        )
+                        SELECT legacy.request_id,
+                               legacy.request_fingerprint,
+                               track.seed_run_id,
+                               legacy.track_id,
+                               legacy.outcome,
+                               legacy.created_at
+                        FROM daily_tracks.activation_receipts AS legacy
+                        JOIN daily_tracks.tracks AS track
+                            ON track.id = legacy.track_id
+                        ON CONFLICT (request_id) DO NOTHING;
+                    END IF;
+                END
+                $migration$;
+            """,
+        ),
     ),
 )
