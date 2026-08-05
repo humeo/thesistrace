@@ -5,20 +5,20 @@ Result paths after the canonical modules own every active research action.
 
 **Blocked by:** 44.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Draft, separately browsable frozen version, old Save-then-Run sequencing,
+- [x] Draft, separately browsable frozen version, old Save-then-Run sequencing,
   and legacy Definition routes are removed.
-- [ ] Old ResearchRun creation, execution, Result, Cancel, Rerun, and internal
+- [x] Old ResearchRun creation, execution, Result, Cancel, Rerun, and internal
   lifecycle projections are removed with their callers.
-- [ ] Legacy Definition and ResearchRun tests are removed or migrated to the
+- [x] Legacy Definition and ResearchRun tests are removed or migrated to the
   mutable Definition, atomic Run, immutable-input, and bounded Result contracts.
-- [ ] No path can create a ResearchRun outside Definition Run or ResearchRun
+- [x] No path can create a ResearchRun outside Definition Run or ResearchRun
   Rerun, and no generic create, update, or delete route remains.
-- [ ] Canonical Definition revision handling, Run receipts, PostgreSQL worker,
+- [x] Canonical Definition revision handling, Run receipts, PostgreSQL worker,
   standard S3 Publication, Cancel fencing, and exact-input Rerun remain
   unchanged.
-- [ ] Quantitative code now owned by the Research Kernel is preserved rather
+- [x] Quantitative code now owned by the Research Kernel is preserved rather
   than deleted with an old lifecycle caller.
 
 **How to verify:**
@@ -74,3 +74,19 @@ trap './scripts/core-test-runtime down' EXIT
 ```
 
 ## Comments
+
+- Implementation: `5d9d2c1`; verification corrections and review fix:
+  `74fd7cc`, `21b548f`.
+- The first literal verification attempt stopped before tests because the
+  Ticket named `research_kernel/run.py`; the Ticket was corrected to the real
+  `research_kernel/kernel_run.py` path before the complete rerun.
+- Independent review round 1: Standards FAIL / Spec FAIL. It found the wrong
+  Kernel path and a route guard coupled to single-line decorator formatting.
+- The route invariant now parses FastAPI decorators with Python AST and proves
+  both allowed Run/Rerun paths plus the absence of generic ResearchRun
+  POST/PUT/DELETE routes.
+- Independent review round 2: Standards PASS / Spec PASS; no remaining P0-P3.
+- Final exact verification: route invariant `1 passed, 21 deselected`; Kernel
+  and architecture `90 passed`; isolated integration and canonical Definition /
+  ResearchRun acceptance `55 passed` (one dependency deprecation warning);
+  clean-reset Web E2E `18 passed`.
