@@ -57,7 +57,7 @@ fi
 
 test -f src/thesistrace/definition/service.py
 test -f src/thesistrace/research_run/service.py
-test -f src/thesistrace/research_kernel/run.py
+test -f src/thesistrace/research_kernel/kernel_run.py
 
 if rg -n '@app\.(post|put|delete)\("/api/research-runs"' \
   src/thesistrace/entrypoints/http.py
