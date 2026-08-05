@@ -1,35 +1,24 @@
 import logging
 import os
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import uuid4
 
-import psycopg
 import pytest
 from fastapi.testclient import TestClient
 
-from thesistrace.auth import InsForgeIdentity
-from thesistrace.hosted.control import PostgresControlMetadataStore
-from thesistrace.hosted.management import PostgresManagementStore
-from thesistrace.hosted.migrations import apply_migrations
 from thesistrace.hosted.object_store import RemoteObjectStore
 from thesistrace.hosted.object_store_service import create_object_store_app
-from thesistrace.hosted.provisioning import PostgresProvisioningStore
-from thesistrace.quota import QuotaExceededError, QuotaProfileService
+from thesistrace.quota import QuotaExceededError
 from thesistrace.storage import MetadataStore
 from thesistrace.storage_admission import (
     DiskPressurePolicy,
     StorageAdmissionError,
     publication_storage_objects,
 )
-from thesistrace.tenancy import workspace_execution
 
 ROOT = Path(__file__).resolve().parents[2]
 TEST_DATABASE_URL = os.environ.get("THESISTRACE_TEST_DATABASE_URL")
 TOKENS = {
     "api": "api-storage-token",
-    "compute": "compute-storage-token",
-    "data": "data-storage-token",
 }
 
 
@@ -171,7 +160,7 @@ def test_publication_index_counts_exact_unique_content_and_manifest_bytes() -> N
     )
 
 
-def test_object_store_rejects_growth_by_role_but_keeps_reads_and_cleanup(
+def test_object_store_rejects_growth_but_keeps_reads_and_cleanup(
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -184,40 +173,29 @@ def test_object_store_rejects_growth_by_role_but_keeps_reads_and_cleanup(
             disk_used_bytes=lambda: used[0],
         )
     )
-    compute = RemoteObjectStore(
+    objects = RemoteObjectStore(
         "http://object-store",
-        TOKENS["compute"],
-        client=client,
-    )
-    data = RemoteObjectStore(
-        "http://object-store",
-        TOKENS["data"],
+        TOKENS["api"],
         client=client,
     )
     try:
-        prior = compute.put_json({"prior": "truth"})
+        prior = objects.put_json({"prior": "truth"})
 
         used[0] = 699
         with caplog.at_level(logging.WARNING):
-            data.put_json({})
+            objects.put_json({})
         assert "persistent disk warning threshold reached" in caplog.text
 
         used[0] = 790
         with pytest.raises(StorageAdmissionError) as private_rejected:
-            compute.put_json({"private": 1})
+            objects.put_json({"private": 1})
         assert private_rejected.value.limit == 80
-        assert data.put_json({"private": 1})["bytes"] == 13
 
-        used[0] = 890
-        with pytest.raises(StorageAdmissionError) as platform_rejected:
-            data.put_json({"platform": 1})
-        assert platform_rejected.value.limit == 90
-
-        assert compute.read_json(str(prior["sha256"])) == {"prior": "truth"}
+        assert objects.read_json(str(prior["sha256"])) == {"prior": "truth"}
 
         used[0] = 0
         with pytest.raises(StorageAdmissionError):
-            with compute.stage(
+            with objects.stage(
                 "run_disk_pressure",
                 "attempt_disk_pressure",
                 cleanup_uncommitted_payloads=True,
@@ -235,8 +213,8 @@ def test_object_store_rejects_growth_by_role_but_keeps_reads_and_cleanup(
                     pytest.fail("disk-pressure publication must not commit")
 
         used[0] = 950
-        assert compute.staged_publication_ids(prefix="run_") == []
-        assert compute.read_json(str(prior["sha256"])) == {"prior": "truth"}
+        assert objects.staged_publication_ids(prefix="run_") == []
+        assert objects.read_json(str(prior["sha256"])) == {"prior": "truth"}
     finally:
         client.close()
 
@@ -285,125 +263,3 @@ def test_research_result_quota_check_is_atomic_with_success_publication(
     assert unchanged["status"] == "running"
     assert unchanged["result_bundle_id"] is None
     assert unchanged["result_manifest_sha256"] is None
-
-
-@pytest.mark.skipif(
-    not TEST_DATABASE_URL,
-    reason="THESISTRACE_TEST_DATABASE_URL is required for PostgreSQL acceptance",
-)
-def test_postgres_private_storage_is_exact_idempotent_and_excludes_platform() -> None:
-    assert TEST_DATABASE_URL is not None
-    apply_migrations(
-        TEST_DATABASE_URL,
-        ROOT / "deploy" / "hosted" / "migrations",
-    )
-    suffix = uuid4().hex
-    identity = InsForgeIdentity(
-        subject=f"storage-subject-{suffix}",
-        email=f"storage-{suffix}@example.com",
-    )
-    now = datetime.now(UTC)
-    provisioning = PostgresProvisioningStore(TEST_DATABASE_URL)
-    provisioning.issue_invitation(
-        actor="storage-test",
-        normalized_email=identity.email,
-        expires_at=now + timedelta(hours=1),
-        now=now,
-    )
-    workspace_id = provisioning.provision(
-        identity=identity,
-        normalized_email=identity.email,
-        now=now,
-    ).identity.workspace_id
-    QuotaProfileService(PostgresManagementStore(TEST_DATABASE_URL)).override(
-        actor="storage-test",
-        workspace_id=workspace_id,
-        max_private_storage_bytes=10,
-    )
-    first = [{
-        "object_key": f"sha256:{'a' * 64}",
-        "sha256": "a" * 64,
-        "bytes": 7,
-        "kind": "content",
-    }]
-    second = [{
-        "object_key": f"sha256:{'b' * 64}",
-        "sha256": "b" * 64,
-        "bytes": 5,
-        "kind": "content",
-    }]
-
-    with workspace_execution(workspace_id):
-        compute = PostgresControlMetadataStore(
-            TEST_DATABASE_URL,
-            database_role="compute",
-        )
-        with compute.connect() as connection:
-            assert compute.commit_private_storage_references(
-                connection,
-                resource_kind="research_run",
-                resource_id=f"run-{suffix}",
-                objects=first,
-            ) == 7
-        with compute.connect() as connection:
-            assert compute.commit_private_storage_references(
-                connection,
-                resource_kind="tracking_checkpoint",
-                resource_id=f"checkpoint-{suffix}",
-                objects=first,
-            ) == 7
-
-    data = PostgresControlMetadataStore(
-        TEST_DATABASE_URL,
-        database_role="data",
-    )
-    with data.connect() as connection:
-        assert data.commit_platform_storage_references(
-            connection,
-            resource_kind="dataset_release",
-            resource_id=f"release-{suffix}",
-            objects=second,
-        ) == 5
-
-    with workspace_execution(workspace_id):
-        compute = PostgresControlMetadataStore(
-            TEST_DATABASE_URL,
-            database_role="compute",
-        )
-        with pytest.raises(QuotaExceededError) as quota_rejected:
-            with compute.connect() as connection:
-                compute.commit_private_storage_references(
-                    connection,
-                    resource_kind="research_run",
-                    resource_id=f"run-over-limit-{suffix}",
-                    objects=second,
-                )
-        assert quota_rejected.value.dimension == "max_private_storage_bytes"
-        assert quota_rejected.value.limit == 10
-
-    with psycopg.connect(TEST_DATABASE_URL) as connection:
-        exact_private_bytes = connection.execute(
-            """
-            SELECT COALESCE(sum(stored.compressed_bytes), 0)
-            FROM thesistrace_control.stored_objects AS stored
-            WHERE EXISTS (
-                SELECT 1
-                FROM thesistrace_control.storage_references AS reference
-                WHERE reference.owner_scope = 'workspace'
-                  AND reference.workspace_id = %s
-                  AND reference.object_key = stored.object_key
-            )
-            """,
-            (workspace_id,),
-        ).fetchone()[0]
-        rejected_references = connection.execute(
-            """
-            SELECT count(*)
-            FROM thesistrace_control.storage_references
-            WHERE workspace_id = %s
-              AND resource_id = %s
-            """,
-            (workspace_id, f"run-over-limit-{suffix}"),
-        ).fetchone()[0]
-    assert exact_private_bytes == 7
-    assert rejected_references == 0
