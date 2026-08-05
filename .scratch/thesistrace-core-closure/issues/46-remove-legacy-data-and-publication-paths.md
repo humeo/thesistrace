@@ -56,9 +56,13 @@ then
   exit 1
 fi
 
-if rg -n 'thesistrace\.objects' prototypes
+if rg -n \
+  --glob '!web/node_modules/**' \
+  --glob '!web/dist/**' \
+  'thesistrace\.objects' \
+  prototypes scripts tests/adapters tests/integration tests/acceptance web
 then
-  echo 'A runnable prototype still calls the legacy filesystem object module' >&2
+  echo 'A non-staged caller still imports the legacy filesystem object module' >&2
   exit 1
 fi
 
