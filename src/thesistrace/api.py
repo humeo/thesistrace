@@ -10,16 +10,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from thesistrace.config import Settings, settings_from_environment
 from thesistrace.datasets import DatasetPublisher, InvalidFixtureError
-from thesistrace.definitions import DefinitionValidationError, ResearchDefinitionService
 from thesistrace.objects import ImmutableObjectStore
-from thesistrace.research_runs import (
-    ResearchRunService,
-    recover_staged_research_run,
-)
-from thesistrace.resource_deletion import (
-    ResourceDeletionError,
-    ResourceDeletionService,
-)
 from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import DatasetPublicationConflict
 from thesistrace.tushare_source import (
@@ -56,18 +47,6 @@ def error_detail(reason_code: str, message: str) -> dict[str, str]:
     return {"reason_code": reason_code, "message": message}
 
 
-def deletion_response(tombstone: dict[str, object]) -> JSONResponse:
-    return JSONResponse(
-        status_code=202,
-        content={
-            "resource_kind": tombstone["resource_kind"],
-            "resource_id": tombstone["resource_id"],
-            "deleted_at": tombstone["deleted_at"],
-            "cleanup_status": "scheduled",
-        },
-    )
-
-
 def page(items: list[dict[str, object]], offset: int, limit: int) -> dict[str, object]:
     selected = items[offset : offset + limit]
     return {
@@ -88,13 +67,6 @@ def create_app(
     store = runtime.control_metadata
     objects = runtime.objects
     publisher = DatasetPublisher(store, objects)
-    definitions = ResearchDefinitionService(store, publisher)
-    research_runs = ResearchRunService(store, publisher, objects)
-    resource_deletion = ResourceDeletionService(
-        store,
-        objects,
-    )
-    resource_deletion.reconcile_pending()
     source_transport = tushare_transport or HttpTushareTransport()
     app = FastAPI(title="ThesisTrace", version="0.1.0")
 
@@ -142,195 +114,6 @@ def create_app(
             "resource_counts": store.resource_counts(),
             "latest_dataset_release": store.latest_dataset_release(),
         }
-
-    @app.get("/api/v1/research-definitions")
-    def list_research_definitions(
-        offset: int = Query(0, ge=0),
-        limit: int = Query(100, ge=1, le=100),
-    ) -> dict[str, object]:
-        return page(store.list_research_drafts(), offset, limit)
-
-    @app.post("/api/v1/research-definitions")
-    def create_research_definition(content: dict[str, object]) -> JSONResponse:
-        return JSONResponse(status_code=201, content=definitions.create_draft(content))
-
-    @app.get("/api/v1/research-definitions/{draft_id}")
-    def get_research_definition(draft_id: str) -> dict[str, object]:
-        draft = store.research_draft(draft_id)
-        if draft is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "RESEARCH_DEFINITION_NOT_FOUND",
-                    "research definition draft not found",
-                ),
-            )
-        return draft
-
-    @app.put("/api/v1/research-definitions/{draft_id}")
-    def update_research_definition(draft_id: str, content: dict[str, object]) -> dict[str, object]:
-        draft = definitions.update_draft(draft_id, content)
-        if draft is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "RESEARCH_DEFINITION_NOT_FOUND",
-                    "research definition draft not found",
-                ),
-            )
-        return draft
-
-    @app.post("/api/v1/research-definitions/{draft_id}/runs")
-    def request_research_run(
-        draft_id: str,
-        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
-    ) -> JSONResponse:
-        try:
-            frozen, run, created = definitions.request_run(draft_id, idempotency_key)
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "RESEARCH_DEFINITION_NOT_FOUND",
-                    "research definition draft not found",
-                ),
-            ) from error
-        except DefinitionValidationError as error:
-            raise HTTPException(status_code=422, detail={"errors": error.errors}) from error
-        if created:
-            runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
-        return JSONResponse(
-            status_code=202 if created else 200,
-            content={"frozen_definition": frozen, "run": run},
-        )
-
-    @app.get("/api/v1/research-definition-versions/{version_id}")
-    def get_research_definition_version(version_id: str) -> dict[str, object]:
-        frozen = store.frozen_research_definition(version_id)
-        if frozen is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail(
-                    "RESEARCH_DEFINITION_VERSION_NOT_FOUND",
-                    "frozen definition not found",
-                ),
-            )
-        return frozen
-
-    @app.get("/api/v1/research-definition-versions")
-    def list_research_definition_versions(
-        offset: int = Query(0, ge=0),
-        limit: int = Query(100, ge=1, le=100),
-    ) -> dict[str, object]:
-        return page(store.list_frozen_research_definitions(), offset, limit)
-
-    @app.get("/api/v1/research-runs")
-    def list_research_runs(
-        offset: int = Query(0, ge=0),
-        limit: int = Query(100, ge=1, le=100),
-    ) -> dict[str, object]:
-        return page(store.list_research_runs(), offset, limit)
-
-    @app.get("/api/v1/research-runs/{run_id}")
-    def get_research_run(run_id: str) -> dict[str, object]:
-        run = store.research_run(run_id)
-        if run is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
-            )
-        return run
-
-    @app.get("/api/v1/research-runs/{run_id}/attempts/{ordinal}")
-    def get_research_run_attempt(run_id: str, ordinal: int) -> dict[str, object]:
-        run = store.research_run(run_id)
-        if run is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
-            )
-        attempts = run.get("attempts")
-        if isinstance(attempts, list):
-            for attempt in attempts:
-                if isinstance(attempt, dict) and attempt.get("ordinal") == ordinal:
-                    return attempt
-        raise HTTPException(
-            status_code=404,
-            detail=error_detail(
-                "RESEARCH_RUN_ATTEMPT_NOT_FOUND",
-                "ResearchRun Attempt not found",
-            ),
-        )
-
-    @app.get("/api/v1/research-runs/{run_id}/result")
-    def get_research_run_result(
-        run_id: str,
-        daily_offset: int = Query(0, ge=0),
-        daily_limit: int = Query(756, ge=1, le=756),
-        position_offset: int = Query(0, ge=0),
-        position_limit: int = Query(100, ge=1, le=100),
-    ) -> dict[str, object]:
-        try:
-            result = research_runs.result_view(run_id)
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
-            ) from error
-        if result is None:
-            raise HTTPException(
-                status_code=409,
-                detail=error_detail(
-                    "RESULT_BUNDLE_UNAVAILABLE",
-                    "ResearchRun has no successful Result Bundle",
-                ),
-            )
-        return result
-
-    @app.post("/api/v1/research-runs/{run_id}/cancel")
-    def cancel_research_run(run_id: str) -> dict[str, object]:
-        run = store.cancel_research_run(run_id)
-        if run is None:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
-            )
-        if run["status"] == "cancelled":
-            run = recover_staged_research_run(store, objects, run_id)
-        return run
-
-    @app.delete("/api/v1/research-runs/{run_id}")
-    def delete_research_run(run_id: str) -> JSONResponse:
-        try:
-            tombstone = resource_deletion.delete_research_run(
-                run_id,
-                actor="local-user",
-            )
-        except ResourceDeletionError as error:
-            raise HTTPException(
-                status_code=(404 if error.reason_code == "RESOURCE_NOT_FOUND" else 409),
-                detail=error_detail(error.reason_code, str(error)),
-            ) from error
-        return deletion_response(tombstone)
-
-    @app.post("/api/v1/research-runs/{run_id}/rerun")
-    def rerun_research(
-        run_id: str,
-        idempotency_key: str = Header(min_length=1, alias="Idempotency-Key"),
-    ) -> JSONResponse:
-        try:
-            run, created = store.create_research_rerun(run_id, idempotency_key)
-        except KeyError as error:
-            raise HTTPException(
-                status_code=404,
-                detail=error_detail("RESEARCH_RUN_NOT_FOUND", "ResearchRun not found"),
-            ) from error
-        if created:
-            runtime.execution_dispatch.dispatch("research_run", str(run["id"]))
-        return JSONResponse(
-            status_code=202 if created else 200,
-            content=run,
-        )
 
     @app.get("/api/v1/health")
     def get_health() -> dict[str, object]:

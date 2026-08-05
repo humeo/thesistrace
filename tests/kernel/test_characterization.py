@@ -1,9 +1,7 @@
-import hashlib
 from decimal import Decimal
 
 from thesistrace.factor import factor_day
 from thesistrace.numeric import canonical_binary64_bytes, canonical_decimal
-from thesistrace.objects import canonical_json_bytes
 from thesistrace.strategy import equal_weight_benchmark_return
 
 EXPECTED_CHECKSUMS = {
@@ -29,7 +27,6 @@ def test_accepted_quantitative_boundaries_are_frozen(
     labels = accepted_calculation_case["forward_labels"]
     factor = accepted_calculation_case["factor_evaluation"]
     strategy = accepted_calculation_case["strategy_backtest"]
-    retained = accepted_calculation_case["compact_projection"]
 
     assert matrix["checksum"] == EXPECTED_CHECKSUMS["alpha"]
     assert matrix["effective_lookback"] == 20
@@ -129,84 +126,6 @@ def test_accepted_quantitative_boundaries_are_frozen(
         "annualized_volatility": 0.10505935281412912,
         "sharpe": -0.27412571961790205,
     }
-
-    assert sorted(retained) == [
-        "diagnostic_summary",
-        "execution_aggregates",
-        "factor_summary",
-        "rebalance_aggregates",
-        "strategy_daily_observations",
-        "strategy_summary",
-        "terminal_positions",
-        "terminal_strategy_state",
-    ]
-    assert (
-        hashlib.sha256(canonical_json_bytes(retained)).hexdigest()
-        == "cebf53e0c134ab0cdc6762e3f1af3e0cb9ce304d4ddf0ff8c8ae4a6fec6ded39"
-    )
-    assert {
-        key: len(retained[key])
-        for key in (
-            "strategy_daily_observations",
-            "rebalance_aggregates",
-            "execution_aggregates",
-            "terminal_positions",
-        )
-    } == {
-        "strategy_daily_observations": 504,
-        "rebalance_aggregates": 101,
-        "execution_aggregates": 57,
-        "terminal_positions": 10,
-    }
-    assert retained["strategy_daily_observations"][0] == {
-        "session": "2024-08-23",
-        "gross_nav": "1e+7",
-        "net_nav": "1e+7",
-        "benchmark_nav": "1e+0",
-        "net_cash": "1e+7",
-        "transaction_cost_cny": "0",
-        "holdings_count": 0,
-        "maximum_single_name_weight": 0.0,
-        "upper_limit_buy_rejections": 0,
-        "lower_limit_sell_rejections": 0,
-        "suspension_rejections": 0,
-    }
-    assert retained["strategy_daily_observations"][-1] == {
-        "session": "2026-07-29",
-        "gross_nav": "96879440930735930735930736e-19",
-        "net_nav": "9336960784113593073593073596e-21",
-        "benchmark_nav": "1101382289594383888352628991e-27",
-        "net_cash": "695784113593073593073596e-21",
-        "transaction_cost_cny": "0",
-        "holdings_count": 10,
-        "maximum_single_name_weight": 0.10012808467511992,
-        "upper_limit_buy_rejections": 0,
-        "lower_limit_sell_rejections": 0,
-        "suspension_rejections": 0,
-    }
-    assert retained["rebalance_aggregates"][0] == {
-        "session": "2024-08-26",
-        "signal_session": "2024-08-23",
-        "turnover": 0.999661694313196,
-        "fill_count": 10,
-        "buy_order_count": 10,
-        "sell_order_count": 0,
-    }
-    assert retained["terminal_positions"][:2] == [
-        {
-            "instrument_id": "equity:000025.SZ",
-            "execution_shares": 70800,
-            "adjusted_units": "6156521739130434782608695652173913e-29",
-            "last_adjusted_price": "150765e-4",
-        },
-        {
-            "instrument_id": "equity:000027.SZ",
-            "execution_shares": 69200,
-            "adjusted_units": "6017391304347826086956521739130435e-29",
-            "last_adjusted_price": "155365e-4",
-        },
-    ]
-
 
 def test_independent_edge_fixture_freezes_numeric_missing_order_and_benchmark() -> None:
     assert canonical_decimal(Decimal("123.4500")) == "12345e-2"

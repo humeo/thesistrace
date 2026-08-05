@@ -3,7 +3,6 @@ import pytest
 from thesistrace.alpha import evaluate_alpha_matrix
 from thesistrace.factor import build_forward_labels, evaluate_factor
 from thesistrace.fixture import build_fixture
-from thesistrace.result_objects import compact_projection
 from thesistrace.strategy import run_strategy
 
 
@@ -56,5 +55,4 @@ def accepted_calculation_case() -> dict[str, object]:
         **artifacts,
         "canonical": canonical,
         "definition": definition,
-        "compact_projection": compact_projection(artifacts, definition),
     }

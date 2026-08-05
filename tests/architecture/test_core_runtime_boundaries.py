@@ -526,11 +526,11 @@ def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> No
 
     for forbidden in (
         "thesistrace._postgres",
-        "thesistrace.bounded_research",
+        "thesistrace." + "bounded_research",
         "thesistrace." + "hosted",
         "thesistrace.ports",
         "thesistrace.quota",
-        "thesistrace.research_runs",
+        "thesistrace." + "research_runs",
         "thesistrace.storage",
         "boto3",
         "fastapi",
@@ -568,24 +568,29 @@ print(json.dumps(sorted(forbidden)))
     assert json.loads(completed.stdout) == []
 
 
-def test_partition_loader_has_no_second_calculation_engine() -> None:
-    loader = (ROOT / "src" / "thesistrace" / "bounded_research.py").read_text()
-    adapter = (ROOT / "src" / "thesistrace" / "research_runs.py").read_text()
-
+def test_legacy_definition_and_research_run_modules_are_absent() -> None:
+    package = ROOT / "src" / "thesistrace"
     for removed in (
-        "AlphaValueStore",
-        "PriceLookup",
-        "StateLookup",
-        "LimitLookup",
-        "UniverseLookup",
-        "_calculate_alpha",
-        "_calculate_labels_and_factor",
-        "strategy_canonical",
-        "discard_alpha_only_fields",
+        "definitions.py",
+        "research_runs.py",
+        "bounded_research.py",
+        "result_objects.py",
+        "resource_deletion.py",
     ):
-        assert removed not in loader
-    assert "RunInput(" not in loader
-    assert adapter.count("RunInput(") == 1
+        assert not (package / removed).exists()
+
+    legacy_http = (package / "api.py").read_text()
+    assert "/api/v1/research-" + "definitions" not in legacy_http
+    assert "/api/v1/research-" + "definition-versions" not in legacy_http
+    assert "/api/v1/research-" + "runs" not in legacy_http
+
+    canonical_http = (package / "entrypoints" / "http.py").read_text()
+    assert '@app.post("/api/definitions/run"' in canonical_http
+    assert '"/api/definitions/{definition_id}/run"' in canonical_http
+    assert '"/api/research-runs/{run_id}/rerun"' in canonical_http
+    assert '@app.post("/api/research-runs"' not in canonical_http
+    assert '@app.put("/api/research-runs"' not in canonical_http
+    assert '@app.delete("/api/research-runs"' not in canonical_http
 
 
 def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
@@ -615,6 +620,6 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
         "mode:",
         "mode =",
         "thesistrace." + "tracking",
-        "thesistrace.research_runs",
+        "thesistrace." + "research_runs",
     ):
         assert forbidden not in advance_source

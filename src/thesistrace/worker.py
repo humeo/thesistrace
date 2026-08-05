@@ -6,8 +6,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from thesistrace.config import settings_from_environment
-from thesistrace.datasets import DatasetPublisher
-from thesistrace.research_runs import ResearchRunService
 from thesistrace.runtime import build_runtime
 
 logger = logging.getLogger(__name__)
@@ -37,12 +35,6 @@ def main() -> None:
     )
     runtime = build_runtime(settings)
     store = runtime.control_metadata
-    objects = runtime.objects
-    runs = ResearchRunService(
-        store,
-        DatasetPublisher(store, objects),
-        objects,
-    )
     while True:
         store.record_worker_heartbeat(datetime.now(UTC))
         if args.role == "data":
@@ -50,13 +42,6 @@ def main() -> None:
                 return
             time.sleep(args.interval)
             continue
-        try:
-            store.recover_abandoned_research_runs(
-                stale_after_seconds=settings.worker_stale_after_seconds
-            )
-            runs.execute_next()
-        except Exception:
-            logger.exception("ResearchRun worker iteration failed")
         store.record_worker_heartbeat(datetime.now(UTC))
         if args.once:
             return
