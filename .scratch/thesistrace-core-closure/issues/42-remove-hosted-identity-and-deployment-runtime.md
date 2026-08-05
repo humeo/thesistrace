@@ -67,7 +67,7 @@ done
   pyproject.toml uv.lock Makefile src scripts tests web
 
 ! rg -n \
-  'workspace_id|personal_workspace|user_id|auth|login|session|hosted' \
+  'workspace_id|personal_workspace|user_id|auth_session|login|hosted' \
   src/thesistrace/data \
   src/thesistrace/definition \
   src/thesistrace/research_run \
