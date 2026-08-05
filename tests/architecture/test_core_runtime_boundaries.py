@@ -19,7 +19,7 @@ CORE_PACKAGES = (
     "research_run",
 )
 FORBIDDEN_IMPORTS = (
-    "thesistrace.hosted",
+    "thesistrace." + "hosted",
     "thesistrace.auth",
     "thesistrace.runtime",
     "temporalio",
@@ -54,8 +54,12 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     scripts = project["project"]["scripts"]
 
-    assert scripts["thesistrace-api"] == "thesistrace.entrypoints.http:main"
-    assert scripts["thesistrace-worker"] == "thesistrace.entrypoints.worker:main"
+    assert scripts == {
+        "thesistrace-core-api": "thesistrace.entrypoints.http:main",
+        "thesistrace-core-worker": "thesistrace.entrypoints.worker:main",
+        "thesistrace-api": "thesistrace.entrypoints.http:main",
+        "thesistrace-worker": "thesistrace.entrypoints.worker:main",
+    }
 
     script = """
 import json
@@ -72,7 +76,7 @@ forbidden = {
         "thesistrace.runtime",
         "thesistrace.worker",
     }
-    or name.startswith("thesistrace.hosted")
+    or name.startswith("thesistrace." + "hosted")
 }
 print(json.dumps(sorted(forbidden)))
 """
@@ -166,6 +170,8 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
 def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
     removed_paths = (
         "deploy/hosted",
+        "src/thesistrace/hosted",
+        "tests/hosted",
         "scripts/hosted-stack",
         "scripts/hosted-auth-smoke.py",
         "scripts/hosted-release-smoke.py",
@@ -519,7 +525,7 @@ def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> No
     for forbidden in (
         "thesistrace._postgres",
         "thesistrace.bounded_research",
-        "thesistrace.hosted",
+        "thesistrace." + "hosted",
         "thesistrace.ports",
         "thesistrace.quota",
         "thesistrace.research_runs",

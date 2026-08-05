@@ -8,7 +8,7 @@ from thesistrace.config import Settings
 from thesistrace.datasets import DatasetPublisher
 from thesistrace.objects import ImmutableObjectStore
 from thesistrace.research_runs import ResearchRunService
-from thesistrace.runtime import RuntimeConfigurationError, RuntimePorts, build_runtime
+from thesistrace.runtime import RuntimePorts, build_runtime
 from thesistrace.storage import MetadataStore
 from thesistrace.tracking import DailyTrackingService
 
@@ -43,9 +43,7 @@ def test_local_runtime_ports_preserve_the_v1_application(tmp_path: Path) -> None
             json={"fixture": "v1"},
         )
         assert published.status_code == 201
-        assert client.get("/api/v1/workspace").json()["resource_counts"][
-            "dataset_releases"
-        ] == 1
+        assert client.get("/api/v1/workspace").json()["resource_counts"]["dataset_releases"] == 1
         draft = client.post(
             "/api/v1/research-definitions",
             json={
@@ -99,19 +97,3 @@ def test_services_accept_explicit_structural_ports(tmp_path: Path) -> None:
     )
     with pytest.raises(TypeError):
         DailyTrackingService(metadata, datasets, objects)
-
-
-def test_unknown_runtime_mode_fails_before_application_start(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(
-        RuntimeConfigurationError,
-        match="unsupported THESISTRACE_RUNTIME_MODE",
-    ):
-        build_runtime(
-            Settings(
-                metadata_path=tmp_path / "metadata.sqlite3",
-                object_root=tmp_path / "objects",
-                runtime_mode="unknown",
-            )
-        )

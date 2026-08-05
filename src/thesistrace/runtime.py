@@ -13,10 +13,6 @@ from thesistrace.storage import MetadataStore
 from thesistrace.working_cache import WorkingCacheStore
 
 
-class RuntimeConfigurationError(RuntimeError):
-    pass
-
-
 @dataclass(frozen=True)
 class RuntimePorts:
     control_metadata: ControlMetadataPort
@@ -26,10 +22,6 @@ class RuntimePorts:
 
 
 def build_runtime(settings: Settings) -> RuntimePorts:
-    if settings.runtime_mode != "local":
-        raise RuntimeConfigurationError(
-            f"unsupported THESISTRACE_RUNTIME_MODE: {settings.runtime_mode}"
-        )
     metadata = MetadataStore(settings.metadata_path)
     metadata.initialize()
     return RuntimePorts(

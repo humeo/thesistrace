@@ -18,8 +18,6 @@ thesistrace-core-api = "thesistrace.entrypoints.http:main"
 thesistrace-core-worker = "thesistrace.entrypoints.worker:main"
 thesistrace-api = "thesistrace.entrypoints.http:main"
 thesistrace-worker = "thesistrace.entrypoints.worker:main"
-thesistrace-object-store = "thesistrace.hosted.object_store_service:main"
-thesistrace-tushare-egress = "thesistrace.hosted.tushare_egress:main"
 
 [dependency-groups]
 dev = [
