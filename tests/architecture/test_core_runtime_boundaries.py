@@ -163,6 +163,61 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         assert not (ROOT / "web" / removed_path).exists()
 
 
+def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None:
+    removed_paths = (
+        "deploy/hosted/temporal",
+        "scripts/hosted/capacity_qualification.py",
+        "scripts/hosted/temporal_dispatch_probe.py",
+        "scripts/hosted/local_workflow_acceptance.py",
+        "src/thesistrace/hosted/activity_heartbeat.py",
+        "src/thesistrace/hosted/activity_policy.py",
+        "src/thesistrace/hosted/capacity_probe.py",
+        "src/thesistrace/hosted/capacity_workflow.py",
+        "src/thesistrace/hosted/compute_dispatch.py",
+        "src/thesistrace/hosted/data_worker.py",
+        "src/thesistrace/hosted/dataset_publication_workflow.py",
+        "src/thesistrace/hosted/execution_outbox.py",
+        "src/thesistrace/hosted/execution_relay.py",
+        "src/thesistrace/hosted/research_workflow.py",
+        "src/thesistrace/hosted/temporal_recovery_probe.py",
+        "src/thesistrace/hosted/temporal_worker.py",
+        "src/thesistrace/hosted/tracking_operations_workflow.py",
+        "src/thesistrace/hosted/tracking_workflow.py",
+        "tests/hosted/test_capacity_qualification.py",
+        "tests/hosted/test_compute_dispatch.py",
+        "tests/hosted/test_dataset_publication_workflow.py",
+        "tests/hosted/test_research_workflow.py",
+        "tests/hosted/test_temporal_worker_heartbeat.py",
+        "tests/hosted/test_tracking_operations_workflow.py",
+        "tests/hosted/test_tracking_workflow.py",
+    )
+    for removed_path in removed_paths:
+        assert not (ROOT / removed_path).exists()
+
+    inventory_files = [ROOT / "pyproject.toml", ROOT / "uv.lock", ROOT / "Makefile"]
+    for root in (
+        ROOT / "src" / "thesistrace" / "hosted",
+        ROOT / "scripts",
+        ROOT / "deploy" / "hosted",
+    ):
+        inventory_files.extend(
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix in {".json", ".py", ".sh", ".toml", ".yaml", ".yml"}
+        )
+    forbidden = (
+        "temporal",
+        "thesistrace-execution-relay",
+        "execution-relay",
+        "execution_outbox",
+        "compute-worker",
+    )
+    for path in inventory_files:
+        source = path.read_text().lower()
+        for token in forbidden:
+            assert token not in source, f"{token} remains in {path.relative_to(ROOT)}"
+
+
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
     facade_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()
     alpha_source = (ROOT / "src" / "thesistrace" / "research_kernel" / "alpha.py").read_text()

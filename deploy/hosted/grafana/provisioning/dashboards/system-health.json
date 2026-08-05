@@ -84,7 +84,7 @@
     },
     {
       "id": 5,
-      "title": "Expected Worker slots online",
+      "title": "Service probes online",
       "type": "stat",
       "fieldConfig": {
         "defaults": {
@@ -102,19 +102,14 @@
       },
       "targets": [
         {
-          "expr": "(sum(up{job=\"service-probes\",instance=~\"compute-worker-[1-4]:9100\"}) or vector(0)) / 4",
-          "legendFormat": "compute slots",
-          "refId": "A"
-        },
-        {
           "expr": "min(up{job=\"service-probes\"}) or vector(0)",
           "legendFormat": "all role probes",
-          "refId": "B"
+          "refId": "A"
         },
         {
           "expr": "min(thesistrace_service_ready) or vector(0)",
           "legendFormat": "role readiness",
-          "refId": "C"
+          "refId": "B"
         }
       ],
       "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16}

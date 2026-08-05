@@ -917,11 +917,7 @@ def validate_core_runtime_state(
     }
     required = {
         "api",
-        "execution-relay",
-        "compute-worker-1",
-        "data-worker",
         "postgres",
-        "temporal",
     }
     missing = sorted(required - services)
     if missing:
@@ -929,9 +925,6 @@ def validate_core_runtime_state(
             "core_session is missing required services: " + ", ".join(missing)
         )
     for forbidden in (
-        "compute-worker-2",
-        "compute-worker-3",
-        "compute-worker-4",
         "otel-collector",
         "prometheus",
         "grafana",

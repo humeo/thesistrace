@@ -7,7 +7,7 @@ services:
       POSTGRES_USER: thesistrace
       POSTGRES_PASSWORD: thesistrace-test
     ports:
-      - "55432:5432"
+      - "${THESISTRACE_CORE_TEST_POSTGRES_PORT:-55432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U thesistrace -d thesistrace"]
       interval: 1s
@@ -23,8 +23,8 @@ services:
       RUSTFS_ACCESS_KEY: rustfsadmin
       RUSTFS_SECRET_KEY: rustfsadmin
     ports:
-      - "59000:9000"
-      - "59001:9001"
+      - "${THESISTRACE_CORE_TEST_S3_PORT:-59010}:9000"
+      - "${THESISTRACE_CORE_TEST_S3_CONSOLE_PORT:-59011}:9001"
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health"]
       interval: 1s

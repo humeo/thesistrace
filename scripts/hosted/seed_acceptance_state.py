@@ -226,13 +226,10 @@ def inspect_publication(database_url: str, publication_id: str) -> None:
             SELECT publication.status, publication.result_release_id,
                    publication.result_manifest_sha256,
                    publication.diagnostic_json,
-                   outbox.status,
                    release.manifest_json,
                    pointer.release_id,
                    trigger.status
             FROM thesistrace_product.dataset_publications AS publication
-            LEFT JOIN thesistrace_product.platform_execution_outbox AS outbox
-              ON outbox.resource_id = publication.id
             LEFT JOIN thesistrace_product.dataset_releases AS release
               ON release.id = publication.result_release_id
             LEFT JOIN thesistrace_product.dataset_release_pointer AS pointer
@@ -279,10 +276,9 @@ def inspect_publication(database_url: str, publication_id: str) -> None:
                 "result_release_id": row[1],
                 "result_manifest_sha256": row[2],
                 "diagnostic": row[3],
-                "outbox_status": row[4],
-                "release_manifest_json": row[5],
-                "latest_release_id": row[6],
-                "tracking_trigger_status": row[7],
+                "release_manifest_json": row[4],
+                "latest_release_id": row[5],
+                "tracking_trigger_status": row[6],
                 "attempt_count": len(attempts),
                 "attempts": [
                     {

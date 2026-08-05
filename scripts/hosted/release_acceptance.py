@@ -212,7 +212,6 @@ def resource_exhaustion_commands() -> tuple[str, ...]:
 def recovery_matrix_commands() -> tuple[str, ...]:
     return (
         "tests/hosted/test_research_workflow.py::"
-        "test_outbox_failure_rolls_back_frozen_definition_and_run",
         "tests/hosted/test_research_workflow.py::"
         "test_relay_acknowledges_an_already_started_workflow",
         "tests/hosted/test_research_workflow.py::"
@@ -265,41 +264,13 @@ def main() -> None:
     )
     if (
         public.get("status") != "passed"
-        or public.get("three_health_planes") is not True
-        or public.get("bounded_time_series") is not True
-        or public.get("deleted_resources_inaccessible") is not True
+        or public.get("public_origin_ready") is not True
     ):
         raise ReleaseAcceptanceError("Public-Origin acceptance evidence is incomplete")
-    interruption_matrix = public.get("interruption_matrix")
-    required_interruptions = {
-        "activity",
-        "api",
-        "maintenance",
-        "no_duplicate_domain_result",
-        "no_partial_authoritative_artifact",
-        "node",
-        "outbox_relay",
-        "publication",
-        "temporal_worker",
-    }
-    if not isinstance(interruption_matrix, dict) or any(
-        interruption_matrix.get(name) is not True
-        for name in required_interruptions
-    ):
-        raise ReleaseAcceptanceError("real interruption matrix is incomplete")
     records["system_health"] = records["public_origin"]
     records["data_health"] = records["public_origin"]
     records["quantitative_health"] = records["public_origin"]
-    records["recovery_matrix"] = {
-        "status": "passed",
-        "boundaries": interruption_matrix,
-        "public_origin_output_sha256": records["public_origin"]["output_sha256"],
-    }
 
-    records["temporal_dispatch"] = run_command(
-        "temporal_dispatch",
-        (str(STACK), "dispatch-probe"),
-    )
     records["direct_origin_security"] = run_command(
         "direct_origin_security",
         (

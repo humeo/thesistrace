@@ -6,6 +6,10 @@ compose_file="$repo_root/deploy/core/compose.test.yaml"
 project_name=thesistrace-core-test
 data_root=/private/tmp/thesistrace-core-test-data
 export THESISTRACE_CORE_TEST_DATA_ROOT=$data_root
+core_test_postgres_port=${THESISTRACE_CORE_TEST_POSTGRES_PORT:-55432}
+core_test_s3_port=${THESISTRACE_CORE_TEST_S3_PORT:-59010}
+export THESISTRACE_CORE_TEST_POSTGRES_PORT=$core_test_postgres_port
+export THESISTRACE_CORE_TEST_S3_PORT=$core_test_s3_port
 
 validate_data_root() {
   case "$data_root" in
@@ -36,8 +40,8 @@ compose() {
 }
 
 run_with_environment() {
-  THESISTRACE_DATABASE_URL=postgresql://thesistrace:thesistrace-test@127.0.0.1:55432/thesistrace \
-  THESISTRACE_S3_ENDPOINT_URL=http://127.0.0.1:59000 \
+  THESISTRACE_DATABASE_URL="postgresql://thesistrace:thesistrace-test@127.0.0.1:$core_test_postgres_port/thesistrace" \
+  THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$core_test_s3_port" \
   THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
   THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
   THESISTRACE_S3_BUCKET=thesistrace-core-test \

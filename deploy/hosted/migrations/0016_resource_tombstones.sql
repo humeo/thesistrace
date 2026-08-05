@@ -186,10 +186,6 @@ BEGIN
           AND reference.workspace_id = v_workspace_id
           AND reference.resource_kind = 'research_run'
           AND reference.resource_id = p_resource_id;
-        DELETE FROM thesistrace_product.execution_outbox AS outbox
-        WHERE outbox.workspace_id = v_workspace_id
-          AND outbox.resource_kind IN ('research_run', 'research_run_cancel')
-          AND outbox.resource_id = p_resource_id;
         DELETE FROM thesistrace_product.user_compute_admissions AS admission
         WHERE admission.workspace_id = v_workspace_id
           AND admission.resource_kind = 'research_run'
@@ -236,27 +232,6 @@ BEGIN
               WHERE checkpoint.workspace_id = v_workspace_id
                 AND checkpoint.daily_track_id = p_resource_id
           );
-        DELETE FROM thesistrace_product.execution_outbox AS outbox
-        WHERE outbox.workspace_id = v_workspace_id
-          AND (
-              outbox.resource_id IN (
-                  SELECT request.id
-                  FROM thesistrace_product.tracking_equivalence_requests
-                      AS request
-                  WHERE request.workspace_id = v_workspace_id
-                    AND request.daily_track_id = p_resource_id
-              )
-              OR outbox.resource_id IN (
-                  SELECT rebuild.id
-                  FROM thesistrace_product.tracking_generation_rebuilds
-                      AS rebuild
-                  WHERE rebuild.workspace_id = v_workspace_id
-                    AND rebuild.daily_track_id = p_resource_id
-              )
-          );
-        DELETE FROM thesistrace_product.tracking_execution_outbox AS outbox
-        WHERE outbox.workspace_id = v_workspace_id
-          AND outbox.daily_track_id = p_resource_id;
         DELETE FROM thesistrace_product.tracking_advance_attempts AS attempt
         WHERE attempt.workspace_id = v_workspace_id
           AND attempt.advance_id IN (

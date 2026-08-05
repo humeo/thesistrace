@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import re
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
@@ -16,7 +16,6 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.trace import Status, StatusCode
 
 MAX_LOG_MESSAGE_BYTES = 2048
-MAX_TEMPORAL_CONTROL_PAYLOAD_BYTES = 4096
 EMAIL = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 WORKSPACE_ID = re.compile(r"\bworkspace_[0-9a-f]+\b", re.IGNORECASE)
 AUTHORIZATION_HEADER = re.compile(
@@ -33,24 +32,6 @@ RESEARCH_ASSIGNMENT = re.compile(
 )
 ALPHA_FIELD = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
 _configured = False
-FORBIDDEN_TEMPORAL_KEYS = {
-    "alpha",
-    "authorization",
-    "close",
-    "email",
-    "expression",
-    "high",
-    "low",
-    "market_payload",
-    "open",
-    "password",
-    "result_bundle",
-    "result_payload",
-    "secret",
-    "token",
-}
-
-
 class JsonLogFormatter(logging.Formatter):
     def __init__(self, service: str) -> None:
         super().__init__()
@@ -87,39 +68,6 @@ def sanitize_text(value: str) -> str:
     if len(encoded) <= MAX_LOG_MESSAGE_BYTES:
         return sanitized
     return encoded[:MAX_LOG_MESSAGE_BYTES].decode("utf-8", errors="ignore") + "…"
-
-
-def validate_temporal_control_payload(value: object) -> None:
-    payload = json.dumps(
-        value,
-        ensure_ascii=False,
-        allow_nan=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    if len(payload) > MAX_TEMPORAL_CONTROL_PAYLOAD_BYTES:
-        raise ValueError("Temporal control payload exceeds 4096 bytes")
-
-    def visit(item: object) -> None:
-        if isinstance(item, Mapping):
-            for key, child in item.items():
-                normalized_key = str(key).lower()
-                if normalized_key in FORBIDDEN_TEMPORAL_KEYS:
-                    raise ValueError(
-                        f"private field is forbidden in Temporal payload: {normalized_key}"
-                    )
-                visit(child)
-            return
-        if isinstance(item, Sequence) and not isinstance(item, str | bytes):
-            for child in item:
-                visit(child)
-            return
-        if isinstance(item, str) and (
-            EMAIL.search(item) or ALPHA_FIELD.search(item) or SECRET_ASSIGNMENT.search(item)
-        ):
-            raise ValueError("private value is forbidden in Temporal payload")
-
-    visit(value)
 
 
 def configure_observability(service: str) -> None:

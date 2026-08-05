@@ -11,7 +11,7 @@ import urllib.request
 from collections.abc import Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
@@ -22,22 +22,10 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse, PlainTextResponse
 from psycopg.rows import dict_row
-from temporalio.api.enums.v1 import TaskQueueType
-from temporalio.api.taskqueue.v1 import TaskQueue
-from temporalio.api.workflowservice.v1 import DescribeTaskQueueRequest
-from temporalio.client import Client
 
 from thesistrace.config import database_url_from_environment
 from thesistrace.fixture import build_fixture
 from thesistrace.hosted.backup_operations import read_backup_health
-from thesistrace.hosted.compute_dispatch import (
-    COMPUTE_WORKFLOW_TASK_QUEUE,
-    P1_ACTIVITY_TASK_QUEUE,
-    P3_ACTIVITY_TASK_QUEUE,
-)
-from thesistrace.hosted.dataset_publication_workflow import (
-    DATASET_PUBLICATION_TASK_QUEUE,
-)
 from thesistrace.hosted.observability import configure_observability, instrument_http
 from thesistrace.numeric import NUMERIC_CONTRACT_ID, binary64_checksum
 from thesistrace.objects import canonical_json_bytes
@@ -50,7 +38,6 @@ CORE_SYSTEM_CHECKS = (
     "identity",
     "database",
     "object_store",
-    "temporal",
 )
 RECOVERY_REQUIRED_CHECKS = {
     "system": (
@@ -58,12 +45,8 @@ RECOVERY_REQUIRED_CHECKS = {
         "identity",
         "database",
         "object_store",
-        "temporal",
         "telemetry",
-        "task_queues",
-        "outbox_lag",
         "disk_pressure",
-        "workflow_capacity",
     ),
     "data": (
         "release_freshness",
@@ -186,23 +169,6 @@ class SemanticRegressionState:
             return dict(self._checks), self._observed_at, self._running
 
 
-@dataclass
-class TemporalQueueState:
-    _snapshot: dict[str, int | bool] = field(default_factory=dict)
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-
-    def complete(self, snapshot: Mapping[str, int | bool]) -> None:
-        with self._lock:
-            self._snapshot = {str(key): value for key, value in snapshot.items()}
-
-    def fail(self) -> None:
-        self.complete({"pollers_ready": False})
-
-    def snapshot(self) -> dict[str, int | bool]:
-        with self._lock:
-            return dict(self._snapshot)
-
-
 def run_semantic_regression() -> dict[str, bool]:
     _source, canonical = build_fixture()
     definition = {
@@ -278,14 +244,12 @@ def create_health_app(
     *,
     dependency_status: Callable[[], dict[str, object]],
     semantic_state: SemanticRegressionState | None = None,
-    temporal_queue_state: TemporalQueueState | None = None,
     fault_plane: str | None = None,
     run_regression_on_startup: bool = True,
 ) -> FastAPI:
     if fault_plane not in {None, "system", "data", "quantitative"}:
         raise ValueError("health fault plane must be system, data, or quantitative")
     state = semantic_state or SemanticRegressionState()
-    queue_state = temporal_queue_state
 
     async def execute_regression() -> None:
         if not state.start():
@@ -299,10 +263,6 @@ def create_health_app(
     async def lifespan(lifespan_app: FastAPI):
         if run_regression_on_startup:
             lifespan_app.state.semantic_regression_task = asyncio.create_task(execute_regression())
-        if queue_state is not None:
-            lifespan_app.state.temporal_queue_task = asyncio.create_task(
-                monitor_temporal_queues(queue_state)
-            )
         yield
 
     app = FastAPI(
@@ -319,8 +279,6 @@ def create_health_app(
         except Exception:
             snapshot = {"system": {}, "data": {}, "quantitative": {}}
         dependencies = dependency_status()
-        if queue_state is not None:
-            dependencies["temporal_queues"] = queue_state.snapshot()
         semantic_checks, observed_at, running = state.snapshot()
         if fault_plane == "system":
             dependencies["api"] = False
@@ -328,24 +286,14 @@ def create_health_app(
             dependencies["tushare"] = False
         elif fault_plane == "quantitative":
             semantic_checks["deterministic_regression"] = False
-        system_values = mapping(snapshot.get("system"))
         data_values = mapping(snapshot.get("data"))
         quantitative_values = mapping(snapshot.get("quantitative"))
 
         system_checks = {name: bool(dependencies.get(name, False)) for name in CORE_SYSTEM_CHECKS}
         system_checks["telemetry"] = bool(dependencies.get("telemetry", False))
         system_checks["trace_export"] = bool(dependencies.get("trace_export", False))
-        queue_snapshot = dependencies.get("temporal_queues")
-        system_checks["task_queues"] = bool(
-            isinstance(queue_snapshot, Mapping) and queue_snapshot.get("pollers_ready", False)
-        )
-        system_checks["outbox_lag"] = (
-            float(system_values.get("outbox_oldest_age_seconds", 0.0)) <= 60.0
-        )
         storage_pressure = mapping(dependencies.get("storage_pressure"))
         system_checks["disk_pressure"] = bool(storage_pressure.get("below_warning", False))
-        worker_slots_ready = int(dependencies.get("worker_slots_ready", 0))
-        system_checks["workflow_capacity"] = worker_slots_ready == 4
         backup = mapping(dependencies.get("backup"))
         system_checks["backup"] = bool(backup.get("healthy", False))
         data_checks = {
@@ -376,15 +324,6 @@ def create_health_app(
             "system": health_view(
                 system_checks,
                 {
-                    "outbox_pending": system_values.get("outbox_pending", 0),
-                    "outbox_oldest_age_seconds": system_values.get(
-                        "outbox_oldest_age_seconds", 0.0
-                    ),
-                    "workflow_running": system_values.get("workflow_running", 0),
-                    "workflow_capacity": worker_slots_ready,
-                    "outbox_user_pending": system_values.get("task_queue_user_pending", 0),
-                    "outbox_data_pending": system_values.get("task_queue_data_pending", 0),
-                    "outbox_tracking_pending": system_values.get("task_queue_tracking_pending", 0),
                     "storage_used_ratio": storage_pressure.get("used_ratio", -1.0),
                     "backup_last_success_age_seconds": backup.get(
                         "last_success_age_seconds", -1.0
@@ -392,7 +331,6 @@ def create_health_app(
                     "backup_last_attempt_succeeded": backup.get(
                         "last_attempt_succeeded", False
                     ),
-                    **temporal_queue_measurements(dependencies),
                 },
             ),
             "data": health_view(
@@ -529,11 +467,9 @@ def default_dependency_status(store: HealthSnapshotStore) -> dict[str, object]:
         "identity": lambda: http_available("http://insforge:7130/api/health"),
         "database": store.ready,
         "object_store": lambda: http_available("http://object-store:8010/live"),
-        "temporal": lambda: tcp_available("temporal", 7233),
         "telemetry": lambda: http_available("http://otel-collector:13133/"),
         "trace_export": trace_export_available,
         "tushare": tushare_available,
-        "worker_slots_ready": worker_slots_ready,
         "storage_pressure": storage_pressure_snapshot,
         "backup": lambda: read_backup_health(
             Path(
@@ -557,23 +493,6 @@ def dependency_result(future: concurrent.futures.Future[object]) -> object:
         return future.result()
     except Exception:
         return False
-
-
-def temporal_queue_measurements(
-    dependencies: Mapping[str, object],
-) -> dict[str, int]:
-    snapshot = dependencies.get("temporal_queues")
-    if not isinstance(snapshot, Mapping):
-        return {
-            "task_queue_compute_workflow_backlog": -1,
-            "task_queue_compute_p1_backlog": -1,
-            "task_queue_compute_p3_backlog": -1,
-            "task_queue_data_workflow_backlog": -1,
-            "task_queue_data_activity_backlog": -1,
-        }
-    return {
-        str(name): int(value) for name, value in snapshot.items() if str(name).endswith("_backlog")
-    }
 
 
 def public_origin_available() -> bool:
@@ -627,14 +546,6 @@ def http_available(url: str) -> bool:
         return False
 
 
-def tcp_available(host: str, port: int) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=2):
-            return True
-    except OSError:
-        return False
-
-
 def trace_export_available() -> bool:
     try:
         with urllib.request.urlopen(
@@ -677,105 +588,6 @@ def storage_pressure_snapshot() -> dict[str, float | bool]:
         }
 
 
-def worker_slots_ready() -> int:
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=4,
-        thread_name_prefix="health-worker",
-    ) as executor:
-        checks = executor.map(
-            http_available,
-            (
-                f"http://compute-worker-{slot}:9100/ready"
-                for slot in range(1, 5)
-            ),
-        )
-        return sum(checks)
-
-
-async def monitor_temporal_queues(state: TemporalQueueState) -> None:
-    address = os.environ.get("THESISTRACE_TEMPORAL_ADDRESS", "temporal:7233")
-    namespace = os.environ.get("THESISTRACE_TEMPORAL_NAMESPACE", "thesistrace")
-    client: Client | None = None
-    while True:
-        try:
-            if client is None:
-                client = await asyncio.wait_for(
-                    Client.connect(address, namespace=namespace),
-                    timeout=3,
-                )
-            state.complete(
-                await asyncio.wait_for(
-                    read_temporal_queues(client, namespace=namespace),
-                    timeout=3,
-                )
-            )
-        except Exception:
-            client = None
-            state.fail()
-        await asyncio.sleep(15)
-
-
-async def read_temporal_queues(
-    client: Client | None = None,
-    *,
-    namespace: str | None = None,
-) -> dict[str, int | bool]:
-    effective_namespace = namespace or os.environ.get(
-        "THESISTRACE_TEMPORAL_NAMESPACE",
-        "thesistrace",
-    )
-    if client is None:
-        address = os.environ.get("THESISTRACE_TEMPORAL_ADDRESS", "temporal:7233")
-        client = await Client.connect(
-            address,
-            namespace=effective_namespace,
-            lazy=True,
-        )
-    queues = (
-        (
-            "compute_workflow",
-            COMPUTE_WORKFLOW_TASK_QUEUE,
-            TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
-        ),
-        ("compute_p1", P1_ACTIVITY_TASK_QUEUE, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
-        ("compute_p3", P3_ACTIVITY_TASK_QUEUE, TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY),
-        (
-            "data_workflow",
-            DATASET_PUBLICATION_TASK_QUEUE,
-            TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
-        ),
-        (
-            "data_activity",
-            DATASET_PUBLICATION_TASK_QUEUE,
-            TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY,
-        ),
-    )
-
-    async def describe(name: str, queue: str, queue_type: int):
-        response = await client.workflow_service.describe_task_queue(
-            DescribeTaskQueueRequest(
-                namespace=effective_namespace,
-                task_queue=TaskQueue(name=queue),
-                task_queue_type=queue_type,
-                report_stats=True,
-            ),
-            timeout=timedelta(seconds=2),
-        )
-        return name, int(response.stats.approximate_backlog_count), len(response.pollers)
-
-    described = await asyncio.gather(
-        *(describe(name, queue, queue_type) for name, queue, queue_type in queues)
-    )
-    snapshot: dict[str, int | bool] = {
-        f"task_queue_{name}_backlog": backlog for name, backlog, _pollers in described
-    }
-    snapshot["pollers_ready"] = all(
-        pollers > 0 or (name in {"compute_p1", "compute_p3"} and backlog == 0)
-        for name, backlog, pollers in described
-    )
-    return snapshot
-
-
 def tushare_available() -> bool:
     request = (
         b"CONNECT api.tushare.pro:443 HTTP/1.1\r\n"
@@ -795,11 +607,9 @@ def main() -> None:
         raise RuntimeError("THESISTRACE_DATABASE_URL is required")
     configure_observability("health-service")
     store = PostgresHealthSnapshotStore(database_url)
-    queue_state = TemporalQueueState()
     app = create_health_app(
         store,
         dependency_status=lambda: default_dependency_status(store),
         fault_plane=os.environ.get("THESISTRACE_HEALTH_FAULT_PLANE") or None,
-        temporal_queue_state=queue_state,
     )
     uvicorn.run(app, host="0.0.0.0", port=8020, log_config=None)

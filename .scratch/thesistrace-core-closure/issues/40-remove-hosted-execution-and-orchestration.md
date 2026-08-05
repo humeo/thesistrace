@@ -37,6 +37,7 @@ git cat-file -e "$archive_commit:src/thesistrace/hosted/execution_relay.py"
 
 for removed_path in \
   deploy/hosted/temporal \
+  scripts/hosted/capacity_qualification.py \
   scripts/hosted/temporal_dispatch_probe.py \
   scripts/hosted/local_workflow_acceptance.py \
   src/thesistrace/hosted/activity_heartbeat.py \
@@ -52,17 +53,24 @@ for removed_path in \
   src/thesistrace/hosted/temporal_recovery_probe.py \
   src/thesistrace/hosted/temporal_worker.py \
   src/thesistrace/hosted/tracking_operations_workflow.py \
-  src/thesistrace/hosted/tracking_workflow.py; do
+  src/thesistrace/hosted/tracking_workflow.py \
+  tests/hosted/test_capacity_qualification.py \
+  tests/hosted/test_compute_dispatch.py \
+  tests/hosted/test_dataset_publication_workflow.py \
+  tests/hosted/test_research_workflow.py \
+  tests/hosted/test_temporal_worker_heartbeat.py \
+  tests/hosted/test_tracking_operations_workflow.py \
+  tests/hosted/test_tracking_workflow.py; do
   test ! -e "$removed_path"
 done
 
 ! rg -n \
-  'temporalio|THESISTRACE_TEMPORAL|thesistrace-temporal-worker|thesistrace-execution-relay|execution-relay|compute-worker|execution_outbox' \
-  pyproject.toml uv.lock Makefile src tests scripts deploy/hosted
+  'temporal|thesistrace-execution-relay|execution-relay|execution_outbox|compute-worker' \
+  pyproject.toml uv.lock Makefile src/thesistrace/hosted scripts deploy/hosted
 
 uv run pytest -q tests/architecture tests/kernel
-./scripts/core-test-runtime reset
 trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime reset
 ./scripts/core-test-runtime run uv run pytest -q \
   tests/acceptance/test_core_backend_cutover.py \
   tests/acceptance/test_core_research_run_execution.py \

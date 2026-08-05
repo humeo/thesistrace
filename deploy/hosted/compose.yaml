@@ -16,8 +16,6 @@ x-app: &app
     THESISTRACE_INSFORGE_JWT_AUDIENCE: thesistrace
     THESISTRACE_HOME: /var/lib/thesistrace
     THESISTRACE_API_HOST: 0.0.0.0
-    THESISTRACE_TEMPORAL_ADDRESS: temporal:7233
-    THESISTRACE_TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-thesistrace}
     OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
   restart: unless-stopped
   logging: *bounded-logging
@@ -25,23 +23,6 @@ x-app: &app
 x-release-dependency: &release-dependency
   release-gate:
     condition: service_completed_successfully
-
-x-worker: &worker
-  <<: *app
-  command: ["thesistrace-worker", "--interval", "2"]
-  read_only: true
-  cap_drop: [ALL]
-  security_opt:
-    - no-new-privileges:true
-  pids_limit: 256
-  tmpfs:
-    - /tmp:size=256m,mode=1777
-  depends_on:
-    <<: *release-dependency
-    temporal-namespace:
-      condition: service_completed_successfully
-    api:
-      condition: service_healthy
 
 services:
   volume-permissions:
@@ -96,27 +77,6 @@ services:
     cpus: 0.2
     logging: *bounded-logging
 
-  temporal-postgres:
-    image: postgres:16.10-alpine
-    environment:
-      POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
-      POSTGRES_PASSWORD_FILE: /run/secrets/temporal_database_password
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U ${TEMPORAL_DB_USER:-temporal}"]
-      interval: 3s
-      timeout: 3s
-      retries: 40
-    networks: [execution]
-    volumes:
-      - temporal-data:/var/lib/postgresql/data
-    secrets:
-      - temporal_database_password
-    restart: unless-stopped
-    mem_limit: 384m
-    memswap_limit: 384m
-    cpus: 0.15
-    logging: *bounded-logging
-
   insforge-migrations:
     image: thesistrace/insforge:${THESISTRACE_RELEASE_IMAGE_TAG:-dev}
     build:
@@ -164,81 +124,6 @@ services:
     restart: "no"
     logging: *bounded-logging
 
-  temporal-schema:
-    image: temporalio/admin-tools:1.31.0
-    environment:
-      DB_PORT: "5432"
-      POSTGRES_SEEDS: temporal-postgres
-      POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
-      POSTGRES_PWD_FILE: /run/secrets/temporal_database_password
-    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint"]
-    command: ["/bin/sh", "/bootstrap/setup-postgres.sh"]
-    depends_on:
-      temporal-postgres:
-        condition: service_healthy
-    networks: [execution]
-    volumes:
-      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/temporal:/bootstrap:ro
-      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
-    secrets:
-      - temporal_database_password
-    mem_limit: 256m
-    memswap_limit: 256m
-    cpus: 0.15
-    restart: "no"
-    logging: *bounded-logging
-
-  temporal:
-    image: temporalio/server:1.31.0
-    environment:
-      DB: postgres12
-      DB_PORT: "5432"
-      POSTGRES_SEEDS: temporal-postgres
-      POSTGRES_USER: ${TEMPORAL_DB_USER:-temporal}
-      POSTGRES_PWD_FILE: /run/secrets/temporal_database_password
-      BIND_ON_IP: 0.0.0.0
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/dynamicconfig.yaml
-    depends_on:
-      temporal-schema:
-        condition: service_completed_successfully
-    healthcheck:
-      test: ["CMD", "nc", "-z", "127.0.0.1", "7233"]
-      interval: 3s
-      timeout: 3s
-      retries: 60
-    networks: [execution]
-    volumes:
-      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/dynamicconfig.yaml:ro
-      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/secret-entrypoint.sh:/usr/local/bin/thesistrace-secret-entrypoint:ro
-    entrypoint: ["/usr/local/bin/thesistrace-secret-entrypoint"]
-    command: ["/etc/temporal/entrypoint.sh"]
-    secrets:
-      - temporal_database_password
-    mem_limit: 512m
-    memswap_limit: 512m
-    cpus: 0.25
-    restart: unless-stopped
-    logging: *bounded-logging
-
-  temporal-namespace:
-    image: temporalio/admin-tools:1.31.0
-    environment:
-      TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_NAMESPACE: ${TEMPORAL_NAMESPACE:-thesistrace}
-    entrypoint: ["/bin/sh"]
-    command: ["/bootstrap/create-namespace.sh"]
-    depends_on:
-      temporal:
-        condition: service_healthy
-    networks: [execution]
-    volumes:
-      - ${THESISTRACE_RELEASE_CONFIG_ROOT:-./deploy/hosted}/temporal:/bootstrap:ro
-    mem_limit: 128m
-    memswap_limit: 128m
-    cpus: 0.05
-    restart: "no"
-    logging: *bounded-logging
-
   thesistrace-migrations:
     <<: *app
     build:
@@ -251,9 +136,6 @@ services:
       THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
       THESISTRACE_API_DATABASE_PASSWORD_FILE: /run/secrets/api_database_password
-      THESISTRACE_RELAY_DATABASE_PASSWORD_FILE: /run/secrets/relay_database_password
-      THESISTRACE_DATA_DATABASE_PASSWORD_FILE: /run/secrets/data_database_password
-      THESISTRACE_COMPUTE_DATABASE_PASSWORD_FILE: /run/secrets/compute_database_password
       THESISTRACE_HEALTH_DATABASE_PASSWORD_FILE: /run/secrets/health_database_password
       THESISTRACE_INJECT_MIGRATION_FAILURE: ${THESISTRACE_INJECT_MIGRATION_FAILURE:-0}
       THESISTRACE_MIGRATIONS_DIR: /app/deploy/hosted/migrations
@@ -268,9 +150,6 @@ services:
     secrets:
       - postgres_password
       - api_database_password
-      - relay_database_password
-      - data_database_password
-      - compute_database_password
       - health_database_password
     mem_limit: 256m
     memswap_limit: 256m
@@ -285,8 +164,6 @@ services:
       THESISTRACE_RELEASE_BUNDLE_ROOT: /run/thesistrace-release
     depends_on:
       insforge-migrations:
-        condition: service_completed_successfully
-      temporal-namespace:
         condition: service_completed_successfully
       thesistrace-migrations:
         condition: service_completed_successfully
@@ -509,48 +386,6 @@ services:
     memswap_limit: 512m
     cpus: 0.15
 
-  execution-relay:
-    <<: *app
-    command: ["thesistrace-execution-relay", "--interval", "1"]
-    user: "10002:10002"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    environment:
-      <<: *app-environment
-      THESISTRACE_DATABASE_USER: thesistrace_relay
-      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/relay_database_password
-      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
-      THESISTRACE_DATABASE_ROLE: relay
-      THESISTRACE_SERVICE_SLOT: relay-1
-    depends_on:
-      <<: *release-dependency
-      temporal-namespace:
-        condition: service_completed_successfully
-    networks:
-      - control
-      - execution
-      - observability
-    secrets:
-      - relay_database_password
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=15)",
-        ]
-      interval: 5s
-      timeout: 30s
-      retries: 40
-    mem_limit: 128m
-    memswap_limit: 128m
-    cpus: 0.1
-
   tushare-egress:
     <<: *app
     command: ["thesistrace-tushare-egress"]
@@ -581,148 +416,6 @@ services:
       - tushare-egress
       - data-egress
       - observability
-
-  data-worker:
-    <<: *worker
-    command: ["thesistrace-data-worker"]
-    environment:
-      <<: *app-environment
-      THESISTRACE_DATABASE_USER: thesistrace_data
-      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/data_database_password
-      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
-      THESISTRACE_DATABASE_ROLE: data
-      THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
-      THESISTRACE_OBJECT_STORE_TOKEN_FILE: /run/secrets/object_store_data_token
-      TUSHARE_TOKEN_FILE: /run/secrets/tushare_token
-      HTTPS_PROXY: http://tushare-egress:8080
-      THESISTRACE_SERVICE_SLOT: data-1
-    user: "10003:10003"
-    mem_limit: 1g
-    memswap_limit: 1g
-    cpus: 0.5
-    networks:
-      - control
-      - execution
-      - observability
-      - storage
-      - tushare-egress
-    depends_on:
-      <<: *release-dependency
-      temporal-namespace:
-        condition: service_completed_successfully
-      api:
-        condition: service_healthy
-      tushare-egress:
-        condition: service_healthy
-    secrets:
-      - data_database_password
-      - object_store_data_token
-      - tushare_token
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=15)",
-        ]
-      interval: 5s
-      timeout: 30s
-      retries: 40
-
-  compute-worker-1:
-    <<: *worker
-    command: &compute-command
-      ["thesistrace-temporal-worker"]
-    environment: &compute-environment
-      <<: *app-environment
-      THESISTRACE_DATABASE_USER: thesistrace_compute
-      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/compute_database_password
-      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
-      THESISTRACE_DATABASE_ROLE: compute
-      THESISTRACE_OBJECT_STORE_URL: http://object-store:8010
-      THESISTRACE_OBJECT_STORE_TOKEN_FILE: /run/secrets/object_store_compute_token
-      THESISTRACE_COMPUTE_SLOT_PREFERENCE: p1
-      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "true"
-      THESISTRACE_SERVICE_SLOT: compute-p1-1
-    user: &compute-user "10004:10004"
-    group_add: &compute-groups ["11000"]
-    mem_limit: &compute-memory 1g
-    memswap_limit: &compute-memory-swap 1g
-    cpus: &compute-cpus 0.75
-    networks: &compute-networks
-      - control
-      - execution
-      - observability
-      - storage
-    volumes: &compute-volumes
-      - working-cache:/var/lib/thesistrace/working-cache
-    healthcheck: &compute-healthcheck
-      test:
-        [
-          "CMD",
-          "python",
-          "-c",
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9100/ready', timeout=15)",
-        ]
-      interval: 5s
-      timeout: 30s
-      retries: 40
-    secrets: &compute-secrets
-      - compute_database_password
-      - object_store_compute_token
-
-  compute-worker-2:
-    <<: *worker
-    command: *compute-command
-    environment:
-      <<: *compute-environment
-      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
-      THESISTRACE_SERVICE_SLOT: compute-p1-2
-    user: *compute-user
-    group_add: *compute-groups
-    mem_limit: *compute-memory
-    memswap_limit: *compute-memory-swap
-    cpus: *compute-cpus
-    networks: *compute-networks
-    volumes: *compute-volumes
-    healthcheck: *compute-healthcheck
-    secrets: *compute-secrets
-
-  compute-worker-3:
-    <<: *worker
-    command: *compute-command
-    environment:
-      <<: *compute-environment
-      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
-      THESISTRACE_SERVICE_SLOT: compute-p1-3
-    user: *compute-user
-    group_add: *compute-groups
-    mem_limit: *compute-memory
-    memswap_limit: *compute-memory-swap
-    cpus: *compute-cpus
-    networks: *compute-networks
-    volumes: *compute-volumes
-    healthcheck: *compute-healthcheck
-    secrets: *compute-secrets
-
-  compute-worker-4:
-    <<: *worker
-    command: *compute-command
-    environment:
-      <<: *compute-environment
-      THESISTRACE_COMPUTE_SLOT_PREFERENCE: p3
-      THESISTRACE_COMPUTE_WORKFLOW_POLLER: "false"
-      THESISTRACE_SERVICE_SLOT: compute-p3-1
-    user: *compute-user
-    group_add: *compute-groups
-    mem_limit: *compute-memory
-    memswap_limit: *compute-memory-swap
-    cpus: *compute-cpus
-    networks: *compute-networks
-    volumes: *compute-volumes
-    healthcheck: *compute-healthcheck
-    secrets: *compute-secrets
 
   health-service:
     <<: *app
@@ -794,7 +487,6 @@ services:
       - /tmp:size=256m,mode=1777
     volumes:
       - postgres-data:/backup/source/postgres-data:ro
-      - temporal-data:/backup/source/temporal-data:ro
       - immutable-objects:/backup/source/immutable-objects:ro
       - insforge-storage:/backup/source/insforge-storage:ro
       - ${THESISTRACE_RELEASE_BUNDLE_DIR:-.hosted/releases}:/backup/source/release-state:ro
@@ -822,7 +514,6 @@ services:
       - /tmp:size=256m,mode=1777
     volumes:
       - postgres-data:/restore/volumes/postgres-data
-      - temporal-data:/restore/volumes/temporal-data
       - immutable-objects:/restore/volumes/immutable-objects
       - insforge-storage:/restore/volumes/insforge-storage
       - working-cache:/restore/working-cache
@@ -860,22 +551,6 @@ services:
       - ${THESISTRACE_BACKUP_STATUS_DIR:-.hosted/backup-health}:/run/thesistrace-backup
     secrets:
       - postgres_password
-    restart: "no"
-    logging: *bounded-logging
-
-  recovery-probe:
-    <<: *app
-    profiles: [operator]
-    command: ["thesistrace-recovery-probe"]
-    user: "10004:10004"
-    read_only: true
-    cap_drop: [ALL]
-    security_opt:
-      - no-new-privileges:true
-    pids_limit: 128
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    networks: [execution]
     restart: "no"
     logging: *bounded-logging
 
@@ -991,8 +666,6 @@ services:
 secrets:
   postgres_password:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/postgres_password
-  temporal_database_password:
-    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/temporal_database_password
   insforge_jwt_secret:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/insforge_jwt_secret
   insforge_encryption_key:
@@ -1005,12 +678,6 @@ secrets:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/grafana_admin_password
   api_database_password:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/api_database_password
-  relay_database_password:
-    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/relay_database_password
-  data_database_password:
-    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/data_database_password
-  compute_database_password:
-    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/compute_database_password
   health_database_password:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/health_database_password
   object_store_tokens:
@@ -1060,5 +727,4 @@ volumes:
   insforge-storage:
   postgres-data:
   prometheus-data:
-  temporal-data:
   working-cache:

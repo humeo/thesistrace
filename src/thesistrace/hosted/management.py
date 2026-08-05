@@ -365,23 +365,6 @@ class PostgresManagementStore:
                         record["updated_at"],
                     ),
                 )
-                connection.execute(
-                    """
-                    INSERT INTO thesistrace_product.platform_execution_outbox (
-                        id,
-                        resource_kind,
-                        resource_id,
-                        status,
-                        created_at
-                    )
-                    VALUES (%s, 'dataset_publication', %s, 'pending', %s)
-                    """,
-                    (
-                        f"outbox_{record['id']}",
-                        record["id"],
-                        record["created_at"],
-                    ),
-                )
                 if audit_event is not None:
                     self._insert_audit_event(connection, audit_event)
                 created = connection.execute(

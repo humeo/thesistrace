@@ -113,7 +113,6 @@ prepare() {
             echo "THESISTRACE_SMOKE_INSECURE_TLS=1"
             echo "INSFORGE_SOURCE_DIR=$insforge_dir"
             echo "POSTGRES_PASSWORD=$(random_secret)"
-            echo "TEMPORAL_DB_PASSWORD=$(random_secret)"
             echo "INSFORGE_JWT_SECRET=$(random_secret)"
             echo "INSFORGE_ENCRYPTION_KEY=$(random_secret)"
             echo "INSFORGE_ADMIN_PASSWORD=$(random_secret)"
@@ -136,7 +135,6 @@ prepare() {
     append_secret_if_missing THESISTRACE_OBJECT_STORE_COMPUTE_TOKEN
     append_secret_if_missing THESISTRACE_OBJECT_STORE_DATA_TOKEN
     move_secret_to_file POSTGRES_PASSWORD postgres_password
-    move_secret_to_file TEMPORAL_DB_PASSWORD temporal_database_password
     move_secret_to_file INSFORGE_JWT_SECRET insforge_jwt_secret
     move_secret_to_file INSFORGE_ENCRYPTION_KEY insforge_encryption_key
     move_secret_to_file INSFORGE_ADMIN_PASSWORD insforge_admin_password
@@ -295,7 +293,7 @@ reset_local_release_state() {
 
 require_acceptance_service() {
     case "$1" in
-        api|execution-relay|data-worker|compute-worker-1|compute-worker-2|compute-worker-3|compute-worker-4) ;;
+        api) ;;
         *) echo "service is not an accepted interruption boundary" >&2; exit 2 ;;
     esac
 }
@@ -452,20 +450,15 @@ enter_maintenance() {
     compose run --rm --no-deps -T thesistrace-migrations \
         python -m thesistrace.hosted.release_cli maintenance-enter \
         --max-drain-seconds 900
-    compose stop --timeout 30 \
-        execution-relay data-worker \
-        compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
 }
 
 ensure_maintenance_runtime() {
     compose up --detach --wait --no-build \
-        postgres temporal-postgres temporal
+        postgres
 }
 
 start_workers() {
-    compose up --detach --no-deps \
-        execution-relay data-worker \
-        compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
+    :
 }
 
 exit_maintenance() {
@@ -476,23 +469,20 @@ exit_maintenance() {
 
 recreate_steady_services() {
     compose up --detach --wait --force-recreate --no-build --no-deps \
-        postgres temporal-postgres
+        postgres
     compose up --detach --wait --force-recreate --no-build --no-deps \
-        temporal postgrest deno insforge object-store tushare-egress \
+        postgrest deno insforge object-store tushare-egress \
         otel-collector prometheus grafana
     compose up --detach --wait --force-recreate --no-build --no-deps \
         api health-service edge
-    compose up --no-start --force-recreate --no-build --no-deps \
-        execution-relay data-worker \
-        compute-worker-1 compute-worker-2 compute-worker-3 compute-worker-4
 }
 
 stop_for_cold_snapshot() {
     compose stop --timeout 30 edge
     compose stop --timeout 30 \
-        api health-service insforge deno postgrest object-store temporal \
+        api health-service insforge deno postgrest object-store \
         tushare-egress otel-collector prometheus grafana \
-        postgres temporal-postgres
+        postgres
 }
 
 restart_after_cold_snapshot() {
@@ -580,12 +570,12 @@ restore_backup() {
     select_current_release
     release_images verify-images
     validate_public_edge
-    compose up --detach --wait --no-build postgres temporal-postgres
+    compose up --detach --wait --no-build postgres
     compose up --detach --wait --no-build \
-        insforge-migrations temporal-schema temporal-namespace \
+        insforge-migrations \
         thesistrace-migrations release-gate
     compose up --detach --wait --no-build \
-        temporal postgrest deno insforge object-store tushare-egress \
+        postgrest deno insforge object-store tushare-egress \
         otel-collector prometheus grafana
     compose up --detach --wait --no-build api health-service
     compose --profile operator run --rm --no-deps -T restore-gate \
@@ -648,7 +638,7 @@ case "$action" in
         validate_public_edge
         build_candidate_images
         compose up --detach --wait --no-build \
-            insforge-migrations temporal-schema \
+            insforge-migrations \
             thesistrace-migrations release-gate
         recreate_steady_services
         activate_candidate
@@ -809,15 +799,6 @@ case "$action" in
             --admin-username "${admin_username:-admin}" \
             --actor "$smtp_actor" \
             --audit-outbox /run/operator/audit-outbox
-        ;;
-    dispatch-probe)
-        prepare
-        select_current_release
-        compose run --rm --no-deps -T \
-            --volume "$root:/workspace:ro" \
-            --env PYTHONPATH=/workspace/src \
-            compute-worker-1 \
-            python /workspace/scripts/hosted/temporal_dispatch_probe.py
         ;;
     acceptance-seed-invitation)
         prepare_acceptance "acceptance state seeding is disabled"
@@ -1181,7 +1162,7 @@ case "$action" in
         exit "$audit_result"
         ;;
     *)
-        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-browser-ready|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|dispatch-probe|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
+        echo "usage: scripts/hosted-stack {init|config|deploy|up|local-reset|local-up|local-ops-check|local-recovery-smoke|local-browser-ready|local-cold-stop|local-down|down|restart|smoke|health-check|smtp-configure|recovery-probe-start|operator|maintenance-enter|maintenance-exit|rollback|backup-target-init|backup|restore}" >&2
         exit 2
         ;;
 esac

@@ -20,19 +20,6 @@ SECURITY DEFINER
 SET search_path = pg_catalog, thesistrace_control, thesistrace_product
 AS $$
     WITH
-    pending_outbox AS (
-        SELECT 'user_compute'::text AS queue, created_at::timestamptz AS created_at
-        FROM thesistrace_product.execution_outbox
-        WHERE status = 'pending'
-        UNION ALL
-        SELECT 'data'::text, created_at::timestamptz
-        FROM thesistrace_product.platform_execution_outbox
-        WHERE status = 'pending'
-        UNION ALL
-        SELECT 'tracking'::text, created_at::timestamptz
-        FROM thesistrace_product.tracking_execution_outbox
-        WHERE status = 'pending'
-    ),
     current_release AS (
         SELECT release.manifest_json::jsonb AS manifest,
                release.created_at::timestamptz AS created_at
@@ -86,23 +73,6 @@ AS $$
     )
     SELECT jsonb_build_object(
         'system', jsonb_build_object(
-            'outbox_pending', (SELECT count(*) FROM pending_outbox),
-            'outbox_oldest_age_seconds', COALESCE(
-                (
-                    SELECT EXTRACT(EPOCH FROM clock_timestamp() - min(created_at))
-                    FROM pending_outbox
-                ),
-                0
-            ),
-            'task_queue_user_pending', (
-                SELECT count(*) FROM pending_outbox WHERE queue = 'user_compute'
-            ),
-            'task_queue_data_pending', (
-                SELECT count(*) FROM pending_outbox WHERE queue = 'data'
-            ),
-            'task_queue_tracking_pending', (
-                SELECT count(*) FROM pending_outbox WHERE queue = 'tracking'
-            ),
             'workflow_running',
                 (SELECT count(*) FROM thesistrace_product.research_runs
                  WHERE status IN ('queued', 'running'))
@@ -114,7 +84,7 @@ AS $$
                    WHERE status IN ('queued', 'running'))
                 + (SELECT count(*) FROM thesistrace_product.tracking_generation_rebuilds
                    WHERE status IN ('queued', 'running')),
-            'workflow_capacity', 4
+            'workflow_capacity', 0
         ),
         'data', jsonb_build_object(
             'release_present', EXISTS (SELECT 1 FROM current_data),

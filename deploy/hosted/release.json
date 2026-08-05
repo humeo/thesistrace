@@ -34,11 +34,6 @@
       "artifact": "thesistrace/insforge:{bundle_id}",
       "source_paths": ["deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch", "scripts/hosted-stack"]
     },
-    "temporal": {
-      "version": "1.31.0",
-      "artifact": "temporalio/server:1.31.0",
-      "source_paths": ["deploy/hosted/temporal"]
-    },
     "product_migrations": {
       "version": "0026",
       "artifact": "thesistrace/app:{bundle_id}",
@@ -47,7 +42,7 @@
     "configuration": {
       "version": "hosted-compose-v2",
       "artifact": "deploy/hosted/compose.yaml",
-      "source_paths": ["deploy/hosted/compose.yaml", "deploy/hosted/Caddyfile", "deploy/hosted/secret-entrypoint.sh", "deploy/hosted/temporal", "deploy/hosted/systemd", "deploy/hosted/otel-collector.yaml", "deploy/hosted/prometheus.yaml", "deploy/hosted/grafana/provisioning", "deploy/hosted/cloudflare-proxy-ranges.txt", "docs/runbook/hosted-compose.md"]
+      "source_paths": ["deploy/hosted/compose.yaml", "deploy/hosted/Caddyfile", "deploy/hosted/secret-entrypoint.sh", "deploy/hosted/systemd", "deploy/hosted/otel-collector.yaml", "deploy/hosted/prometheus.yaml", "deploy/hosted/grafana/provisioning", "deploy/hosted/cloudflare-proxy-ranges.txt", "docs/runbook/hosted-compose.md"]
     }
   }
 }

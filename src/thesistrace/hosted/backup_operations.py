@@ -35,7 +35,6 @@ HEADER_BYTES = len(BACKUP_MAGIC) + 16 + 12
 WORKFLOW_PROBE_ID = re.compile(r"recovery-probe-[0-9A-Za-z_-]{1,96}")
 SOURCE_LAYOUT = {
     "postgres-data": "volumes/postgres-data",
-    "temporal-data": "volumes/temporal-data",
     "immutable-objects": "volumes/immutable-objects",
     "insforge-storage": "volumes/insforge-storage",
     "release-state": "metadata/release-state",
@@ -147,7 +146,6 @@ def _validate_coordinated_sources(
 ) -> None:
     required = (
         sources["postgres-data"] / "PG_VERSION",
-        sources["temporal-data"] / "PG_VERSION",
         sources["secret-recovery"] / "current.recovery",
         sources["release-state"] / "current.json",
         sources["release-state"] / "bundles" / release_bundle_id / "bundle.json",

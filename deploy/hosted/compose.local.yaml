@@ -7,15 +7,6 @@ services:
         host_ip: 127.0.0.1
         protocol: tcp
 
-  compute-worker-2:
-    profiles: [launch-capacity]
-
-  compute-worker-3:
-    profiles: [launch-capacity]
-
-  compute-worker-4:
-    profiles: [launch-capacity]
-
   otel-collector:
     profiles: [local-ops]
     mem_limit: 256m

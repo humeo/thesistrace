@@ -1,11 +1,7 @@
 import argparse
 import asyncio
 import json
-import os
-import time
 from pathlib import Path
-
-from temporalio.client import Client
 
 from thesistrace.config import database_url_from_environment
 from thesistrace.hosted.release_operations import (
@@ -21,60 +17,6 @@ from thesistrace.hosted.release_operations import (
     verify_release_image_lock,
 )
 
-PRODUCTION_WORKFLOW_TYPES = (
-    "CapacityQualificationComputeWorkflow",
-    "CapacityQualificationDataWorkflow",
-    "DatasetPublicationWorkflow",
-    "ScheduledDatasetPublicationWorkflow",
-    "ResearchWorkflow",
-    "TrackingReleaseWorkflow",
-    "TrackingAdvanceWorkflow",
-    "TrackingEquivalenceWorkflow",
-    "TrackingGenerationRebuildWorkflow",
-)
-
-
-class TemporalMaintenanceControl:
-    def __init__(self, client: Client) -> None:
-        self.client = client
-
-    async def pause_schedules(self) -> int:
-        count = 0
-        schedules = await self.client.list_schedules()
-        async for schedule in schedules:
-            await self.client.get_schedule_handle(schedule.id).pause(
-                note="ThesisTrace release maintenance"
-            )
-            count += 1
-        return count
-
-    async def resume_schedules(self) -> int:
-        count = 0
-        schedules = await self.client.list_schedules()
-        async for schedule in schedules:
-            await self.client.get_schedule_handle(schedule.id).unpause(
-                note="ThesisTrace release maintenance complete"
-            )
-            count += 1
-        return count
-
-    async def running_activity_count(self) -> int:
-        count = 0
-        workflow_filter = " OR ".join(
-            f'WorkflowType="{workflow_type}"'
-            for workflow_type in PRODUCTION_WORKFLOW_TYPES
-        )
-        executions = self.client.list_workflows(
-            f'ExecutionStatus="Running" AND ({workflow_filter})'
-        )
-        async for execution in executions:
-            description = await self.client.get_workflow_handle(
-                execution.id,
-                run_id=execution.run_id,
-            ).describe()
-            count += len(description.raw_description.pending_activities)
-        return count
-
 
 async def enter_maintenance(max_drain_seconds: int) -> dict[str, object]:
     if not 1 <= max_drain_seconds <= 900:
@@ -84,26 +26,7 @@ async def enter_maintenance(max_drain_seconds: int) -> dict[str, object]:
         raise ReleaseOperationError("maintenance database credentials are required")
     gate = PostgresMaintenanceGate(database_url)
     await asyncio.to_thread(gate.set_enabled, True)
-    client = await Client.connect(
-        os.environ.get("THESISTRACE_TEMPORAL_ADDRESS", "temporal:7233"),
-        namespace=os.environ.get("THESISTRACE_TEMPORAL_NAMESPACE", "thesistrace"),
-    )
-    temporal = TemporalMaintenanceControl(client)
-    paused = await temporal.pause_schedules()
-    deadline = time.monotonic() + max_drain_seconds
-    remaining = await temporal.running_activity_count()
-    while remaining > 0 and time.monotonic() < deadline:
-        await asyncio.sleep(min(2.0, deadline - time.monotonic()))
-        remaining = await temporal.running_activity_count()
-    return {
-        "maintenance": "entered",
-        "paused_schedules": paused,
-        "drained": remaining == 0,
-        "remaining_activities": remaining,
-        "interrupted_activity_state": (
-            "none" if remaining == 0 else "nonterminal_redelivery"
-        ),
-    }
+    return {"maintenance": "entered"}
 
 
 async def exit_maintenance() -> dict[str, object]:
@@ -111,13 +34,8 @@ async def exit_maintenance() -> dict[str, object]:
     if not database_url:
         raise ReleaseOperationError("maintenance database credentials are required")
     gate = PostgresMaintenanceGate(database_url)
-    client = await Client.connect(
-        os.environ.get("THESISTRACE_TEMPORAL_ADDRESS", "temporal:7233"),
-        namespace=os.environ.get("THESISTRACE_TEMPORAL_NAMESPACE", "thesistrace"),
-    )
-    resumed = await TemporalMaintenanceControl(client).resume_schedules()
     await asyncio.to_thread(gate.set_enabled, False)
-    return {"maintenance": "exited", "resumed_schedules": resumed}
+    return {"maintenance": "exited"}
 
 
 def parser() -> argparse.ArgumentParser:
