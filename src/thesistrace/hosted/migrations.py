@@ -14,7 +14,7 @@ class MigrationError(RuntimeError):
 
 SERVICE_ROLES = {
     "api": "thesistrace_api",
-    "health": "thesistrace_health",
+    "management": "thesistrace_management",
 }
 
 
@@ -53,9 +53,7 @@ def apply_migrations(database_url: str, directory: Path) -> list[str]:
                 ).fetchone()
                 if row is not None:
                     if row[0] != digest:
-                        raise MigrationError(
-                            f"applied migration changed: {migration_file.name}"
-                        )
+                        raise MigrationError(f"applied migration changed: {migration_file.name}")
                     continue
                 connection.execute(payload.decode("utf-8"))
                 connection.execute(
@@ -74,15 +72,11 @@ def provision_service_role_credentials(
     credentials: dict[str, str],
 ) -> None:
     if set(credentials) != set(SERVICE_ROLES):
-        raise MigrationError(
-            "api and health database passwords are required"
-        )
+        raise MigrationError("api and management database passwords are required")
     if any(not password for password in credentials.values()):
         raise MigrationError("service database passwords cannot be empty")
     if len(set(credentials.values())) != len(credentials):
-        raise MigrationError(
-            "service database passwords must be distinct"
-        )
+        raise MigrationError("service database passwords must be distinct")
     with psycopg.connect(database_url) as connection:
         with connection.transaction():
             for service, role in SERVICE_ROLES.items():
@@ -108,9 +102,7 @@ def main() -> None:
     )
     applied = apply_migrations(database_url, directory)
     credentials = {
-        service: environment_value(
-            f"THESISTRACE_{service.upper()}_DATABASE_PASSWORD"
-        ) or ""
+        service: environment_value(f"THESISTRACE_{service.upper()}_DATABASE_PASSWORD") or ""
         for service in SERVICE_ROLES
     }
     provision_service_role_credentials(database_url, credentials)

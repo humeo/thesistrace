@@ -37,3 +37,25 @@ def test_compose_and_launcher_have_no_operations_processes() -> None:
     for token in removed:
         assert token not in compose
         assert token not in launcher
+
+
+def test_management_commands_use_private_one_shot_services() -> None:
+    services = compose_model()["services"]
+    operator = services["operator-tool"]
+    smtp = services["smtp-tool"]
+
+    assert operator["profiles"] == ["management"]
+    assert operator["networks"] == ["control"]
+    assert "ports" not in operator
+    assert operator["environment"]["THESISTRACE_DATABASE_USER"] == "thesistrace_management"
+    assert "/run/secrets/management_database_password" in operator["environment"].values()
+
+    assert smtp["profiles"] == ["management"]
+    assert smtp["networks"] == ["control"]
+    assert "ports" not in smtp
+    assert smtp["secrets"] == ["insforge_admin_password"]
+
+    launcher = (ROOT / "scripts/hosted-stack").read_text()
+    assert 'curl $curl_options "$origin/api/v1/ready"' in launcher
+    assert "operator-tool thesistrace-operator" in launcher
+    assert "smtp-tool python /app/scripts/hosted/configure_smtp.py" in launcher

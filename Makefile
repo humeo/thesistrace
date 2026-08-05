@@ -29,7 +29,7 @@ hosted-smoke:
 	./scripts/hosted-stack smoke
 
 hosted-smtp-configure:
-	./scripts/hosted-stack smtp-configure $(CONFIG) $(PASSWORD_FILE) $(ACTOR)
+	./scripts/hosted-stack smtp-configure $(CONFIG) $(PASSWORD_FILE)
 
 hosted-config:
 	./scripts/hosted-stack config

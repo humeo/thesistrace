@@ -163,14 +163,12 @@ password in the command line, process environment, image, or output:
 chmod 600 /root/thesistrace-smtp.json /root/thesistrace-smtp-password
 make hosted-smtp-configure \
   CONFIG=/root/thesistrace-smtp.json \
-  PASSWORD_FILE=/root/thesistrace-smtp-password \
-  ACTOR=operator-name
+  PASSWORD_FILE=/root/thesistrace-smtp-password
 ```
 
 InsForge verifies the public SMTP host and credentials before persisting the
 encrypted password. The helper prints only the confirmed host, port, sender,
-enabled state, and password-presence flag, and appends a sanitized management
-audit event for the named Operator. The private test-only OTP seeding
+enabled state, and password-presence flag. The private test-only OTP seeding
 used by release acceptance is unavailable unless
 `THESISTRACE_ACCEPTANCE_MODE=1`; it is not an operational substitute for SMTP.
 

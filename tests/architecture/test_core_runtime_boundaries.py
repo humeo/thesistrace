@@ -335,6 +335,27 @@ def test_hosted_operations_and_observability_are_absent_from_the_active_tree() -
         assert "archived" in source
         assert "outside the active core" in source
 
+    for path in (
+        ROOT / "docs" / "adr" / "0117-use-one-default-quota-profile-with-workspace-overrides.md",
+        ROOT / "docs" / "adr" / "0138-separate-liveness-readiness-and-system-health.md",
+        ROOT / "docs" / "adr" / "0149-separate-local-acceptance-from-launch-qualification.md",
+    ):
+        assert "scope: archived - outside the active Core" in path.read_text()
+
+    contraction = (
+        ROOT / "deploy" / "hosted" / "migrations" / "0028_remove_hosted_operations.sql"
+    ).read_text()
+    for retired_object in (
+        "operator_health_snapshot",
+        "platform_maintenance",
+        "capacity_qualifications",
+        "launch_qualifications",
+        "workspace_quota_profiles",
+        "thesistrace_health",
+    ):
+        assert retired_object in contraction
+    assert "DROP ROLE thesistrace_health" in contraction
+
 
 def test_alpha_tree_has_one_legacy_parser_and_no_dynamic_execution() -> None:
     facade_source = (ROOT / "src" / "thesistrace" / "alpha.py").read_text()

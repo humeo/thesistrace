@@ -11,11 +11,9 @@ RUN groupadd --gid 11000 thesistrace-cache \
     && groupadd --gid 10001 thesistrace-api \
     && groupadd --gid 10005 thesistrace-storage \
     && groupadd --gid 10006 thesistrace-egress \
-    && groupadd --gid 10007 thesistrace-health \
     && useradd --uid 10001 --gid thesistrace-api --create-home thesistrace-api \
     && useradd --uid 10005 --gid thesistrace-storage --create-home thesistrace-storage \
     && useradd --uid 10006 --gid thesistrace-egress --create-home thesistrace-egress \
-    && useradd --uid 10007 --gid thesistrace-health --create-home thesistrace-health \
     && usermod --append --groups thesistrace-cache thesistrace-api
 
 WORKDIR /app
@@ -23,6 +21,7 @@ COPY --from=uv /uv /uvx /bin/
 COPY pyproject.toml uv.lock README.md ./
 COPY src ./src
 COPY deploy/hosted/migrations ./deploy/hosted/migrations
+COPY scripts/hosted/configure_smtp.py ./scripts/hosted/configure_smtp.py
 RUN uv sync --frozen --no-dev \
     && mkdir -p /var/lib/thesistrace /tmp/thesistrace \
     && chown -R thesistrace-api:thesistrace-api /var/lib/thesistrace /tmp/thesistrace

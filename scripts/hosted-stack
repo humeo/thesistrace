@@ -5,6 +5,9 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 state_dir="${THESISTRACE_HOST_STATE_DIR:-$root/.hosted}"
 env_file="$state_dir/hosted.env"
 secret_dir="$state_dir/secrets"
+insforge_dir="${INSFORGE_SOURCE_DIR:-$state_dir/insforge-v2.2.9}"
+insforge_commit="baff3e7925430e8779f55b0687d0cf13fe5ab270"
+insforge_patch="$root/deploy/hosted/patches/insforge-v2.2.9-jwt-contract.patch"
 compose_file="$root/deploy/hosted/compose.yaml"
 compose_project="${THESISTRACE_COMPOSE_PROJECT_NAME:-thesistrace-hosted}"
 
@@ -39,6 +42,23 @@ move_secret_to_file() {
 prepare() {
     mkdir -p "$state_dir" "$secret_dir"
     chmod 700 "$secret_dir"
+    if [ ! -d "$insforge_dir/.git" ]; then
+        git clone --filter=blob:none https://github.com/InsForge/InsForge.git "$insforge_dir"
+        git -C "$insforge_dir" checkout --detach "$insforge_commit"
+    fi
+    actual_commit="$(git -C "$insforge_dir" rev-parse HEAD)"
+    if [ "$actual_commit" != "$insforge_commit" ]; then
+        echo "InsForge source is not the pinned v2.2.9 commit" >&2
+        exit 1
+    fi
+    if git -C "$insforge_dir" apply --check "$insforge_patch" >/dev/null 2>&1; then
+        git -C "$insforge_dir" apply "$insforge_patch"
+    elif ! git -C "$insforge_dir" apply --reverse --check "$insforge_patch" >/dev/null 2>&1; then
+        echo "InsForge JWT contract patch does not match the pinned source" >&2
+        exit 1
+    fi
+    INSFORGE_SOURCE_DIR="$insforge_dir"
+    export INSFORGE_SOURCE_DIR
     if [ ! -f "$env_file" ]; then
         umask 077
         {
@@ -51,6 +71,7 @@ prepare() {
             echo "INSFORGE_ENCRYPTION_KEY=$(random_secret)"
             echo "INSFORGE_ADMIN_PASSWORD=$(random_secret)"
             echo "THESISTRACE_API_DATABASE_PASSWORD=$(random_secret)"
+            echo "THESISTRACE_MANAGEMENT_DATABASE_PASSWORD=$(random_secret)"
             echo "THESISTRACE_OBJECT_STORE_API_TOKEN=$(random_secret)"
         } >"$env_file"
     fi
@@ -60,12 +81,22 @@ prepare() {
     move_secret_to_file INSFORGE_ENCRYPTION_KEY insforge_encryption_key
     move_secret_to_file INSFORGE_ADMIN_PASSWORD insforge_admin_password
     move_secret_to_file THESISTRACE_API_DATABASE_PASSWORD api_database_password
+    move_secret_to_file THESISTRACE_MANAGEMENT_DATABASE_PASSWORD management_database_password
     move_secret_to_file THESISTRACE_OBJECT_STORE_API_TOKEN object_store_api_token
     move_secret_to_file TUSHARE_TOKEN tushare_token
     printf '{"api":"%s"}' \
         "$(sed -n '1p' "$secret_dir/object_store_api_token")" \
         >"$secret_dir/object_store_tokens"
     chmod 600 "$secret_dir/object_store_tokens"
+    postgres_user="${POSTGRES_USER:-$(environment_value POSTGRES_USER)}"
+    postgres_database="${POSTGRES_DB:-$(environment_value POSTGRES_DB)}"
+    printf 'postgresql://%s:%s@postgres:5432/%s' \
+        "${postgres_user:-postgres}" \
+        "$(sed -n '1p' "$secret_dir/postgres_password")" \
+        "${postgres_database:-insforge}" \
+        >"$secret_dir/insforge_database_url"
+    chmod 600 "$secret_dir/insforge_database_url"
+    mkdir -p "$state_dir/origin-tls"
 }
 
 compose() {
@@ -87,7 +118,7 @@ smoke() {
         curl_options="$curl_options --insecure"
     fi
     # shellcheck disable=SC2086
-    curl $curl_options "$origin/api/health" >/dev/null
+    curl $curl_options "$origin/api/v1/ready" >/dev/null
 }
 
 case "${1:-}" in
@@ -109,17 +140,24 @@ case "${1:-}" in
         smoke
         ;;
     smtp-configure)
-        config_path="${2:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE ACTOR}"
-        password_path="${3:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE ACTOR}"
-        : "${4:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE ACTOR}"
-        compose exec -T api python scripts/hosted/configure_smtp.py \
-            --config "$config_path" \
-            --smtp-password-file "$password_path" \
+        config_path="${2:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE}"
+        password_path="${3:?usage: scripts/hosted-stack smtp-configure CONFIG PASSWORD_FILE}"
+        test -f "$config_path"
+        test -f "$password_path"
+        config_path="$(CDPATH= cd -- "$(dirname -- "$config_path")" && pwd)/$(basename -- "$config_path")"
+        password_path="$(CDPATH= cd -- "$(dirname -- "$password_path")" && pwd)/$(basename -- "$password_path")"
+        compose --profile management run --rm --no-deps -T \
+            --volume "$config_path:/run/operator/smtp-config.json:ro" \
+            --volume "$password_path:/run/operator/smtp-password:ro" \
+            smtp-tool python /app/scripts/hosted/configure_smtp.py \
+            --config /run/operator/smtp-config.json \
+            --smtp-password-file /run/operator/smtp-password \
             --admin-password-file /run/secrets/insforge_admin_password
         ;;
     operator)
         shift
-        compose exec -T api thesistrace-operator "$@"
+        compose --profile management run --rm --no-deps -T \
+            operator-tool thesistrace-operator "$@"
         ;;
     *)
         echo "usage: scripts/hosted-stack {init|config|deploy|up|down|restart|smoke|smtp-configure|operator}" >&2

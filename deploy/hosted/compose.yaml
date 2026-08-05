@@ -134,6 +134,7 @@ services:
       THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/postgres_password
       THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
       THESISTRACE_API_DATABASE_PASSWORD_FILE: /run/secrets/api_database_password
+      THESISTRACE_MANAGEMENT_DATABASE_PASSWORD_FILE: /run/secrets/management_database_password
       THESISTRACE_INJECT_MIGRATION_FAILURE: ${THESISTRACE_INJECT_MIGRATION_FAILURE:-0}
       THESISTRACE_MIGRATIONS_DIR: /app/deploy/hosted/migrations
     depends_on:
@@ -147,9 +148,47 @@ services:
     secrets:
       - postgres_password
       - api_database_password
+      - management_database_password
     mem_limit: 256m
     memswap_limit: 256m
     cpus: 0.1
+    restart: "no"
+
+  operator-tool:
+    <<: *app
+    profiles: [management]
+    command: ["true"]
+    environment:
+      <<: *app-environment
+      THESISTRACE_DATABASE_USER: thesistrace_management
+      THESISTRACE_DATABASE_PASSWORD_FILE: /run/secrets/management_database_password
+      THESISTRACE_DATABASE_NAME: ${POSTGRES_DB:-insforge}
+    networks: [control]
+    secrets:
+      - management_database_password
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    memswap_limit: 256m
+    cpus: 0.1
+    restart: "no"
+
+  smtp-tool:
+    <<: *app
+    profiles: [management]
+    command: ["true"]
+    networks: [control]
+    secrets:
+      - insforge_admin_password
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: 0.05
     restart: "no"
 
   postgrest:
@@ -435,6 +474,8 @@ secrets:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/insforge_database_url
   api_database_password:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/api_database_password
+  management_database_password:
+    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/management_database_password
   object_store_tokens:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_tokens
   object_store_api_token:

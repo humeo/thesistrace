@@ -84,6 +84,10 @@ for path in (
     assert "outside the active core" in source
 PY
 
+sh -n scripts/hosted-stack
+docker compose -f deploy/hosted/compose.yaml config --quiet
+uv run pytest -q tests/hosted
+
 uv run pytest -q tests/architecture tests/integration tests/acceptance
 
 set -eu
