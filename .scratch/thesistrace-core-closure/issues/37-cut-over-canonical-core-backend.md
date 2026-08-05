@@ -25,9 +25,42 @@ controlled contraction.
 
 **How to verify:**
 
-- Run `uv run pytest -q tests/architecture tests/integration tests/acceptance`
-  with only the canonical entrypoints enabled.
-- Inspect running processes and request traces while exercising all resource
-  actions; no old, Hosted, SQLite, or Temporal backend may execute.
+Run the ticket verification against real PostgreSQL and RustFS, then remove the
+isolated runtime even if a check fails:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+trap './scripts/core-test-runtime down' EXIT
+./scripts/core-test-runtime run uv run pytest -q \
+  tests/acceptance/test_core_backend_cutover.py \
+  tests/acceptance/test_core_empty_runtime_restart.py \
+  tests/architecture/test_core_runtime_boundaries.py
+```
+
+The architecture tests must prove that the default `thesistrace-api` and
+`thesistrace-worker` console commands resolve directly to the canonical HTTP
+and worker entrypoints. Their complete import graph and runtime assembly must
+not load the old API/worker, Hosted, authentication, SQLite, Temporal, outbox,
+relay, global dispatch, deployment-mode, or product-mode paths. Explicitly
+named inactive Hosted contraction commands and their source may remain until
+their deletion tickets, but neither default command may select or fall back to
+them. `CoreSettings` must expose one PostgreSQL plus standard S3-compatible
+configuration shape with no Local/Hosted selector.
+
+The cutover acceptance must use only the canonical HTTP adapter and module
+worker processor to publish Fixture Data, create one Definition, complete one
+ResearchRun, and activate one DailyTrack. It must capture the four public
+resource projections and their authoritative publication references, start a
+fresh HTTP runtime, invoke a fresh canonical worker process through the default
+worker command, and prove every projection and publication is unchanged.
+
+The same acceptance must inspect the complete public route inventory: every
+Data, Definitions, ResearchRuns, and DailyTracks URL/action resolves through
+the canonical adapter, while no old lifecycle, authentication, Hosted,
+workspace, operation, raw object, cache, manifest, dispatch, or deployment URL
+is registered. Process evidence must show only the canonical entrypoint and
+module-owned Data, ResearchRun, and DailyTrack processors were imported; no
+legacy or Hosted backend module may execute.
 
 ## Comments
