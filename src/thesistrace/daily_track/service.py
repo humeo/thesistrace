@@ -19,6 +19,7 @@ from thesistrace.daily_track.checkpoint import (
     restore_tracking_checkpoint,
 )
 from thesistrace.daily_track.models import (
+    DailyTrackDetail,
     DailyTrackList,
     DailyTrackSummary,
     KernelStateCheckpoint,
@@ -81,6 +82,10 @@ class DailyTrackProgressionFailed(RuntimeError):
 
 
 class DailyTrackEquivalenceMismatch(RuntimeError):
+    pass
+
+
+class DailyTrackDetailUnavailable(RuntimeError):
     pass
 
 
@@ -267,16 +272,202 @@ class DailyTrackService:
             ).fetchall()
         return DailyTrackList(items=[_summary(row) for row in rows], next_cursor=None)
 
-    def get(self, track_id: str) -> DailyTrackSummary | None:
+    def get(self, track_id: str) -> DailyTrackDetail | None:
+        if self._publication is None or self._next_release is None:
+            raise RuntimeError("DailyTrack detail dependencies are not configured")
         with self._database.transaction() as transaction:
             row = transaction.execute(
-                f"""
-                {_TRACK_SELECT}
+                """
+                SELECT id, status, origin, current_release_id,
+                       current_strategy_session, head_manifest_sha256
+                FROM daily_tracks.tracks
                 WHERE id = %s
                 """,
                 (track_id,),
             ).fetchone()
-        return None if row is None else _summary(row)
+            if row is None:
+                return None
+            lag_releases = self._release_lag(
+                transaction,
+                current_release_id=str(row["current_release_id"]),
+            )
+            checkpoint_rows = _recent_checkpoint_rows(
+                transaction,
+                track_id=track_id,
+                head_manifest_sha256=row["head_manifest_sha256"],
+            )
+            if row["head_manifest_sha256"] is not None and not checkpoint_rows:
+                raise DailyTrackDetailUnavailable("DailyTrack detail is unavailable")
+        try:
+            return self._detail_projection(
+                row,
+                lag_releases=lag_releases,
+                checkpoint_rows=checkpoint_rows,
+            )
+        except Exception as error:
+            logger.error(
+                "DailyTrack detail read failed",
+                extra={"track_id": track_id, "error_type": type(error).__name__},
+            )
+            raise DailyTrackDetailUnavailable("DailyTrack detail is unavailable") from error
+
+    def _release_lag(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        current_release_id: str,
+    ) -> int:
+        assert self._next_release is not None
+        lag = 0
+        cursor = current_release_id
+        visited = {cursor}
+        while (successor := self._next_release(transaction, cursor)) is not None:
+            if successor.predecessor_id != cursor or successor.id in visited:
+                raise RuntimeError("Dataset Release successor chain is invalid")
+            visited.add(successor.id)
+            cursor = successor.id
+            lag += 1
+        return lag
+
+    def _detail_projection(
+        self,
+        row: dict[str, object],
+        *,
+        lag_releases: int,
+        checkpoint_rows: list[dict[str, object]],
+    ) -> DailyTrackDetail:
+        assert self._publication is not None
+        origin = TrackingOrigin.model_validate(row["origin"])
+        seed_result = _read_publication_json(
+            self._publication,
+            PublishedRef(
+                manifest_sha256=origin.verified_result.result_manifest_sha256,
+                kind=origin.verified_result.kind,
+                provenance=_seed_result_provenance(origin),
+            ),
+            payload_name="result",
+        )
+        seed_factor = _mapping_value(seed_result.get("factor_summary"), "Factor Summary")
+        seed_strategy_summary = _mapping_value(
+            seed_result.get("strategy_summary"),
+            "Strategy Summary",
+        )
+        seed_observations = _mapping_rows(
+            seed_result.get("strategy_daily_observations"),
+            "Strategy observations",
+        )
+        seed_benchmark = _mapping_value(
+            seed_strategy_summary.get("benchmark"),
+            "Strategy Benchmark",
+        )
+        universe = _origin_universe(origin)
+        if seed_benchmark != {
+            "universe": universe,
+            "methodology": "selected_universe_equal_weight",
+        }:
+            raise RuntimeError("Tracking Origin Benchmark is invalid")
+
+        recent_by_session: dict[str, dict[str, object]] = {}
+        head_checkpoint: Mapping[str, object] | None = None
+        for checkpoint_row in checkpoint_rows:
+            checkpoint = _read_publication_json(
+                self._publication,
+                PublishedRef(
+                    manifest_sha256=str(checkpoint_row["manifest_sha256"]),
+                    kind="daily-track.checkpoint",
+                    provenance=dict(
+                        _mapping_value(
+                            checkpoint_row["provenance"],
+                            "Checkpoint provenance",
+                        )
+                    ),
+                ),
+                payload_name="checkpoint",
+            )
+            if head_checkpoint is None:
+                head_checkpoint = checkpoint
+            strategy_state = _mapping_value(
+                checkpoint.get("strategy_state"),
+                "Checkpoint Strategy state",
+            )
+            retained = _mapping_rows(
+                strategy_state.get("retained_delta"),
+                "Checkpoint Strategy observations",
+            )
+            for observation in reversed(retained):
+                session = str(observation.get("session", ""))
+                if not session:
+                    raise RuntimeError("Strategy observation session is invalid")
+                recent_by_session.setdefault(session, dict(observation))
+                if len(recent_by_session) >= 504:
+                    break
+            if len(recent_by_session) >= 504:
+                break
+        if len(recent_by_session) < 504:
+            if (
+                checkpoint_rows
+                and str(checkpoint_rows[-1]["predecessor_release_id"])
+                != origin.seed_release_id
+            ):
+                raise RuntimeError("DailyTrack Checkpoint chain is incomplete")
+            for observation in reversed(seed_observations):
+                session = str(observation.get("session", ""))
+                if not session:
+                    raise RuntimeError("Seed Strategy observation session is invalid")
+                recent_by_session.setdefault(session, dict(observation))
+                if len(recent_by_session) >= 504:
+                    break
+        observations = [recent_by_session[session] for session in sorted(recent_by_session)]
+
+        if head_checkpoint is None:
+            factor = _public_factor(seed_factor)
+            strategy_summary = {
+                name: value
+                for name, value in seed_strategy_summary.items()
+                if name != "benchmark"
+            }
+        else:
+            factor = _public_factor(
+                _mapping_value(head_checkpoint.get("factor_summary"), "Factor Summary")
+            )
+            strategy_state = _mapping_value(
+                head_checkpoint.get("strategy_state"),
+                "Checkpoint Strategy state",
+            )
+            strategy_summary = {
+                "metrics": dict(
+                    _mapping_value(strategy_state.get("summary"), "Strategy summary")
+                )
+            }
+        return DailyTrackDetail.model_validate(
+            {
+                "id": str(row["id"]),
+                "status": row["status"],
+                "origin": {
+                    "seed_run_id": origin.seed_run_id,
+                    "seed_release_id": origin.seed_release_id,
+                    "definition_id": origin.definition_id,
+                    "definition_revision": origin.definition_revision,
+                    "result_checksum_sha256": (
+                        origin.verified_result.result_checksum_sha256
+                    ),
+                    "strategy_session": origin.initial_strategy_state.session,
+                },
+                "head_release_id": str(row["current_release_id"]),
+                "strategy_session": str(row["current_strategy_session"]),
+                "lag_releases": lag_releases,
+                "blocked_reason": None,
+                "factor": factor,
+                "strategy": {
+                    "summary": strategy_summary,
+                    "benchmark": {
+                        "universe": universe,
+                        "methodology": "selected_universe_equal_weight",
+                    },
+                    "observations": observations,
+                },
+            }
+        )
 
     def verify_persisted_equivalence(
         self,
@@ -1070,6 +1261,122 @@ def _summary(row: object) -> DailyTrackSummary:
         result_checksum_sha256=verified_result.result_checksum_sha256,
         strategy_session=str(row["current_strategy_session"]),
     )
+
+
+def _recent_checkpoint_rows(
+    transaction: PostgresTransaction,
+    *,
+    track_id: str,
+    head_manifest_sha256: object,
+) -> list[dict[str, object]]:
+    if head_manifest_sha256 is None:
+        return []
+    return transaction.execute(
+        """
+        WITH RECURSIVE recent AS (
+            SELECT checkpoint.track_id, checkpoint.target_release_id,
+                   checkpoint.predecessor_release_id,
+                   checkpoint.manifest_sha256, checkpoint.provenance, 1 AS depth
+            FROM daily_tracks.checkpoints AS checkpoint
+            WHERE checkpoint.track_id = %s
+              AND checkpoint.manifest_sha256 = %s
+
+            UNION ALL
+
+            SELECT predecessor.track_id, predecessor.target_release_id,
+                   predecessor.predecessor_release_id,
+                   predecessor.manifest_sha256, predecessor.provenance,
+                   recent.depth + 1
+            FROM recent
+            JOIN daily_tracks.checkpoints AS predecessor
+              ON predecessor.track_id = recent.track_id
+             AND predecessor.target_release_id = recent.predecessor_release_id
+            WHERE recent.depth < 504
+        )
+        SELECT target_release_id, predecessor_release_id,
+               manifest_sha256, provenance
+        FROM recent
+        ORDER BY depth
+        """,
+        (track_id, str(head_manifest_sha256)),
+    ).fetchall()
+
+
+def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
+    semantic_versions = _mapping_value(
+        origin.immutable_input.get("semantic_versions"),
+        "Tracking semantic versions",
+    )
+    return {
+        "schema_version": origin.verified_result.schema_version,
+        "research_run_id": origin.seed_run_id,
+        "immutable_input_sha256": hashlib.sha256(
+            canonical_json_bytes(origin.immutable_input)
+        ).hexdigest(),
+        "dataset_release_id": origin.seed_release_id,
+        "calculation_contracts": origin.calculation_contracts,
+        "semantic_versions": dict(semantic_versions),
+    }
+
+
+def _origin_universe(origin: TrackingOrigin) -> str:
+    definition = _mapping_value(
+        origin.immutable_input.get("definition"),
+        "Tracking Definition",
+    )
+    content = _mapping_value(definition.get("content"), "Tracking Definition content")
+    universe = content.get("universe")
+    if not isinstance(universe, str) or not universe:
+        raise RuntimeError("Tracking Universe is invalid")
+    return universe
+
+
+def _public_factor(value: Mapping[str, object]) -> dict[str, object]:
+    horizons = _mapping_value(value.get("horizons"), "Factor horizons")
+    if set(horizons) != {"1", "5", "20"}:
+        raise RuntimeError("Factor horizons are invalid")
+    return {
+        "horizons": {
+            name: {
+                "horizon": _mapping_value(horizons[name], "Factor horizon").get("horizon"),
+                "summary": _mapping_value(
+                    _mapping_value(horizons[name], "Factor horizon").get("summary"),
+                    "Factor summary",
+                ),
+                "coverage": _mapping_value(
+                    _mapping_value(horizons[name], "Factor horizon").get("coverage"),
+                    "Factor coverage",
+                ),
+            }
+            for name in ("1", "5", "20")
+        }
+    }
+
+
+def _read_publication_json(
+    publication: Publication,
+    published_ref: PublishedRef,
+    *,
+    payload_name: str,
+) -> Mapping[str, object]:
+    bundle = publication.read(published_ref)
+    payload = bundle.payloads.get(payload_name)
+    if payload is None or payload.media_type != "application/json":
+        raise RuntimeError("DailyTrack product payload is missing")
+    value = json.loads(payload.content)
+    return _mapping_value(value, "DailyTrack product payload")
+
+
+def _mapping_value(value: object, name: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise RuntimeError(f"{name} is invalid")
+    return value
+
+
+def _mapping_rows(value: object, name: str) -> list[Mapping[str, object]]:
+    if not isinstance(value, list) or any(not isinstance(item, Mapping) for item in value):
+        raise RuntimeError(f"{name} is invalid")
+    return value
 
 
 def _ordered_checkpoint_chain(

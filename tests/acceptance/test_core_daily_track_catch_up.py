@@ -43,8 +43,8 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         for release in releases:
             assert runtime.daily_tracks.process_next() is True
             detail = client.get(f"/api/daily-tracks/{first_track['id']}").json()
-            observed_heads.append(detail["current_release_id"])
-            assert detail["current_release_id"] == release["id"]
+            observed_heads.append(detail["head_release_id"])
+            assert detail["head_release_id"] == release["id"]
             assert detail["strategy_session"] == release["covered_session_range"]["end"]
         assert observed_heads == [release["id"] for release in releases]
         assert runtime.daily_tracks.process_next() is False
@@ -80,7 +80,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         worker_track = _start_track(client, worker_run["id"], "ticket-28-worker-track")
         _process_once(runtime)
         worker_detail = client.get(f"/api/daily-tracks/{worker_track['id']}").json()
-        assert worker_detail["current_release_id"] == releases[-1]["id"]
+        assert worker_detail["head_release_id"] == releases[-1]["id"]
         assert len(_checkpoint_rows(settings, worker_track["id"])) == 3
 
         failed_run = _rerun_and_execute(client, seed_run["id"], "ticket-28-failed-run")
@@ -96,7 +96,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         monkeypatch.setattr(runtime.daily_tracks, "_advance_kernel", fail_middle)
         _process_once(runtime)
         failed_detail = client.get(f"/api/daily-tracks/{failed_track['id']}").json()
-        assert failed_detail["current_release_id"] == releases[0]["id"]
+        assert failed_detail["head_release_id"] == releases[0]["id"]
         assert failed_detail["strategy_session"] != seed_session
         assert [
             row["target_release_id"] for row in _checkpoint_rows(settings, failed_track["id"])
@@ -115,7 +115,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
             client.get("/api/data").json()["latest_release"]["predecessor_id"] == releases[-1]["id"]
         )
         assert (
-            client.get(f"/api/daily-tracks/{failed_track['id']}").json()["current_release_id"]
+            client.get(f"/api/daily-tracks/{failed_track['id']}").json()["head_release_id"]
             == releases[0]["id"]
         )
         assert _running_target(settings, failed_track["id"]) == releases[1]["id"]

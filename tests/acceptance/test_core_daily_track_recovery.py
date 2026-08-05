@@ -21,7 +21,7 @@ from thesistrace.publication import PreparedPublication, Publication, PublishedR
 from thesistrace.research_kernel import AdvanceInput, KernelState
 from thesistrace.research_kernel import advance as advance_kernel
 
-_TRACK_FIELDS = {
+_SUMMARY_FIELDS = {
     "id",
     "status",
     "seed_run_id",
@@ -31,6 +31,18 @@ _TRACK_FIELDS = {
     "definition_revision",
     "result_checksum_sha256",
     "strategy_session",
+}
+
+_DETAIL_FIELDS = {
+    "id",
+    "status",
+    "origin",
+    "head_release_id",
+    "strategy_session",
+    "lag_releases",
+    "blocked_reason",
+    "factor",
+    "strategy",
 }
 
 
@@ -54,7 +66,7 @@ def test_0003_migration_backfills_existing_progressions_and_recovers_running() -
         assert runtime.daily_tracks.process_next() is True
         assert (
             old_process.get(f"/api/daily-tracks/{succeeded_track['id']}").json()[
-                "current_release_id"
+                "head_release_id"
             ]
             == successor["id"]
         )
@@ -102,7 +114,7 @@ def test_0003_migration_backfills_existing_progressions_and_recovers_running() -
 
         assert runtime.daily_tracks.process_next() is True
         recovered = upgraded_process.get(f"/api/daily-tracks/{running_track['id']}").json()
-        assert recovered["current_release_id"] == successor["id"]
+        assert recovered["head_release_id"] == successor["id"]
         assert _durable_counts(runtime.database, running_track["id"]) == {
             "progressions": 1,
             "attempts": {"failed": 1, "succeeded": 1},
@@ -131,7 +143,7 @@ def test_fresh_worker_recovers_interrupted_target_then_resumes_ordered_catch_up(
         with pytest.raises(SystemExit, match="simulated DailyTrack worker loss"):
             lost_worker.process_next()
         assert (
-            first_process.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
+            first_process.get(f"/api/daily-tracks/{track['id']}").json()["head_release_id"]
             == track["seed_release_id"]
         )
         _expire_live_attempt(runtime.database, track["id"])
@@ -140,12 +152,12 @@ def test_fresh_worker_recovers_interrupted_target_then_resumes_ordered_catch_up(
         runtime = restarted_process.app.state.core_runtime
         assert runtime.daily_tracks.process_next() is True
         assert (
-            restarted_process.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
+            restarted_process.get(f"/api/daily-tracks/{track['id']}").json()["head_release_id"]
             == successors[0]["id"]
         )
         assert runtime.daily_tracks.process_next() is True
         detail = restarted_process.get(f"/api/daily-tracks/{track['id']}").json()
-        assert detail["current_release_id"] == successors[1]["id"]
+        assert detail["head_release_id"] == successors[1]["id"]
         assert runtime.daily_tracks.process_next() is False
         assert _durable_counts(runtime.database, track["id"]) == {
             "progressions": 2,
@@ -194,7 +206,7 @@ def test_live_owner_renews_its_lease_and_duplicate_worker_cannot_claim() -> None
             assert future.result(timeout=30) is True
 
         assert (
-            client.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
+            client.get(f"/api/daily-tracks/{track['id']}").json()["head_release_id"]
             == successor["id"]
         )
         assert _durable_counts(runtime.database, track["id"]) == {
@@ -240,7 +252,7 @@ def test_recovered_winner_fences_stale_prepared_worker_and_public_state_is_clean
             try:
                 assert winner.process_next() is True
                 winning_detail = client.get(f"/api/daily-tracks/{track['id']}").json()
-                assert winning_detail["current_release_id"] == successor["id"]
+                assert winning_detail["head_release_id"] == successor["id"]
             finally:
                 release_stale.set()
             assert stale_future.result(timeout=30) is True
@@ -257,11 +269,11 @@ def test_recovered_winner_fences_stale_prepared_worker_and_public_state_is_clean
         assert winner.process_next() is False
 
         listed = client.get("/api/daily-tracks").json()
-        assert set(winning_detail) == _TRACK_FIELDS
+        assert set(winning_detail) == _DETAIL_FIELDS
         assert set(listed) == {"items", "next_cursor"}
         assert listed["next_cursor"] is None
         assert len(listed["items"]) == 1
-        assert set(listed["items"][0]) == _TRACK_FIELDS
+        assert set(listed["items"][0]) == _SUMMARY_FIELDS
 
 
 def _service(

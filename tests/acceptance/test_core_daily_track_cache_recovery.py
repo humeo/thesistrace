@@ -80,11 +80,11 @@ def test_missing_corrupt_stale_and_fence_mismatched_cache_rebuilds_same_state(
 
             assert runtime.daily_tracks.process_next() is True
             assert (
-                client.get(f"/api/daily-tracks/{control['id']}").json()["current_release_id"]
+                client.get(f"/api/daily-tracks/{control['id']}").json()["head_release_id"]
                 == target["id"]
             )
             assert (
-                client.get(f"/api/daily-tracks/{rebuilt['id']}").json()["current_release_id"]
+                client.get(f"/api/daily-tracks/{rebuilt['id']}").json()["head_release_id"]
                 == target["id"]
             )
             assert _checkpoint_payload(runtime, control["id"], target["id"]) == (
@@ -106,13 +106,13 @@ def test_missing_corrupt_stale_and_fence_mismatched_cache_rebuilds_same_state(
         assert set(client.get(f"/api/daily-tracks/{rebuilt['id']}").json()) == {
             "id",
             "status",
-            "seed_run_id",
-            "seed_release_id",
-            "current_release_id",
-            "definition_id",
-            "definition_revision",
-            "result_checksum_sha256",
+            "origin",
+            "head_release_id",
             "strategy_session",
+            "lag_releases",
+            "blocked_reason",
+            "factor",
+            "strategy",
         }
         assert first["id"] != target["id"]
 
@@ -149,11 +149,11 @@ def test_fresh_worker_uses_empty_local_cache_and_rebuilds_from_publication() -> 
         assert completed.returncode == 0, completed.stderr
 
         assert (
-            first_process.get(f"/api/daily-tracks/{control['id']}").json()["current_release_id"]
+            first_process.get(f"/api/daily-tracks/{control['id']}").json()["head_release_id"]
             == second["id"]
         )
         assert (
-            first_process.get(f"/api/daily-tracks/{rebuilt['id']}").json()["current_release_id"]
+            first_process.get(f"/api/daily-tracks/{rebuilt['id']}").json()["head_release_id"]
             == second["id"]
         )
         assert _checkpoint_payload(runtime, control["id"], second["id"]) == (
@@ -215,10 +215,7 @@ def test_missing_or_unverifiable_checkpoint_never_falls_back_to_valid_cache(
         with pytest.raises(DailyTrackProgressionFailed) as failure:
             runtime.daily_tracks.process_next()
         assert isinstance(failure.value.__cause__, type(publication_error))
-        assert (
-            client.get(f"/api/daily-tracks/{track['id']}").json()["current_release_id"]
-            == first["id"]
-        )
+        assert _durable_head(runtime.database, track["id"]) == first["id"]
         assert _durable_counts(runtime.database, track["id"]) == {
             **before,
             "progressions": before["progressions"] + 1,
@@ -333,6 +330,16 @@ def _durable_counts(database: PostgresDatabase, track_id: str) -> dict[str, int]
         ).fetchone()
     assert row is not None
     return {key: int(value) for key, value in row.items()}
+
+
+def _durable_head(database: PostgresDatabase, track_id: str) -> str:
+    with database.transaction() as transaction:
+        row = transaction.execute(
+            "SELECT current_release_id FROM daily_tracks.tracks WHERE id = %s",
+            (track_id,),
+        ).fetchone()
+    assert row is not None
+    return str(row["current_release_id"])
 
 
 def _cache_schema_names(database: PostgresDatabase) -> list[str]:

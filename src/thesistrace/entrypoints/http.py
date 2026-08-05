@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict
 
 from thesistrace.daily_track import (
     DailyTrackActivationConflict,
+    DailyTrackDetail,
+    DailyTrackDetailUnavailable,
     DailyTrackList,
     DailyTrackSummary,
     StartTrackingCommand,
@@ -216,9 +218,15 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     def list_daily_tracks(request: Request) -> DailyTrackList:
         return _runtime(request).daily_tracks.list()
 
-    @app.get("/api/daily-tracks/{track_id}", response_model=DailyTrackSummary)
-    def get_daily_track(request: Request, track_id: str) -> DailyTrackSummary:
-        track = _runtime(request).daily_tracks.get(track_id)
+    @app.get("/api/daily-tracks/{track_id}", response_model=DailyTrackDetail)
+    def get_daily_track(request: Request, track_id: str) -> DailyTrackDetail:
+        try:
+            track = _runtime(request).daily_tracks.get(track_id)
+        except DailyTrackDetailUnavailable as error:
+            raise HTTPException(
+                status_code=503,
+                detail="DailyTrack detail is unavailable",
+            ) from error
         if track is None:
             raise HTTPException(status_code=404, detail="DailyTrack not found")
         return track

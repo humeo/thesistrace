@@ -160,22 +160,26 @@ def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
     horizons = _mapping(factor.get("horizons"), "Factor horizons")
     if set(horizons) != {"1", "5", "20"}:
         raise KernelRunError("Factor result must contain horizons 1, 5, and 20")
-    return {
-        "horizons": {
-            horizon: {
-                "horizon": int(_mapping(horizons[horizon], "Factor horizon")["horizon"]),
-                "summary": copy.deepcopy(
-                    dict(
-                        _mapping(
-                            _mapping(horizons[horizon], "Factor horizon").get("summary"),
-                            "Factor summary",
-                        )
-                    )
+    projected: dict[str, object] = {}
+    for horizon in ("1", "5", "20"):
+        value = _mapping(horizons[horizon], "Factor horizon")
+        summary = copy.deepcopy(dict(_mapping(value.get("summary"), "Factor summary")))
+        daily = _rows(value.get("daily"), "Factor daily observations")
+        ic = _mapping(summary.get("ic"), "Factor IC summary")
+        rank_ic = _mapping(summary.get("rank_ic"), "Factor Rank IC summary")
+        projected[horizon] = {
+            "horizon": int(value["horizon"]),
+            "summary": summary,
+            "coverage": {
+                "signal_session_count": len(daily),
+                "ic_valid_session_count": int(ic["valid_session_count"]),
+                "rank_ic_valid_session_count": int(rank_ic["valid_session_count"]),
+                "quantile_valid_session_count": sum(
+                    observation.get("quantile_reason") is None for observation in daily
                 ),
-            }
-            for horizon in ("1", "5", "20")
+            },
         }
-    }
+    return {"horizons": projected}
 
 
 def _strategy_state(

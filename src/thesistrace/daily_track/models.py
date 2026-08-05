@@ -76,6 +76,87 @@ class DailyTrackList(BaseModel):
     next_cursor: str | None
 
 
+class DailyTrackOriginView(BaseModel):
+    """Stable product identity of the value state from which Tracking started."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    seed_run_id: str
+    seed_release_id: str
+    definition_id: str
+    definition_revision: int
+    result_checksum_sha256: str
+    strategy_session: str
+
+
+class DailyTrackFactorCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    signal_session_count: int
+    ic_valid_session_count: int
+    rank_ic_valid_session_count: int
+    quantile_valid_session_count: int
+
+
+class DailyTrackFactorHorizon(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    horizon: Literal[1, 5, 20]
+    summary: dict[str, object]
+    coverage: DailyTrackFactorCoverage
+
+
+class DailyTrackFactorResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    horizons: dict[str, DailyTrackFactorHorizon]
+
+
+class DailyTrackStrategyObservation(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: str
+    gross_nav: str
+    net_nav: str
+    benchmark_nav: str
+    net_cash: str
+    transaction_cost_cny: str
+    holdings_count: int
+    maximum_single_name_weight: float
+    upper_limit_buy_rejections: int
+    lower_limit_sell_rejections: int
+    suspension_rejections: int
+
+
+class DailyTrackBenchmark(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    universe: str
+    methodology: Literal["selected_universe_equal_weight"]
+
+
+class DailyTrackStrategyResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    summary: dict[str, object]
+    benchmark: DailyTrackBenchmark
+    observations: list[DailyTrackStrategyObservation]
+
+
+class DailyTrackDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: str
+    status: Literal["active"]
+    origin: DailyTrackOriginView
+    head_release_id: str
+    strategy_session: str
+    lag_releases: int
+    blocked_reason: str | None
+    factor: DailyTrackFactorResult
+    strategy: DailyTrackStrategyResult
+
+
 class KernelRunInputSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

@@ -85,11 +85,10 @@ def test_active_track_advances_only_to_one_direct_successor(
         assert runtime.daily_tracks.process_next() is True
         runtime.daily_tracks._advance_kernel = original_advance
         advanced = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert advanced == {
-            **seed_track,
-            "current_release_id": successor_id,
-            "strategy_session": successor.appended_session_end,
-        }
+        assert advanced["id"] == seed_track["id"]
+        assert advanced["head_release_id"] == successor_id
+        assert advanced["strategy_session"] == successor.appended_session_end
+        assert advanced["lag_releases"] == 0
         assert observed_sessions == [
             [successor.appended_session_end],
             [successor.appended_session_end],

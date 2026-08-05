@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 
-type DailyTrack = {
+import {
+  ResearchAnalysisView,
+  type ResearchAnalysis,
+} from "../analysis/ResearchAnalysisView";
+
+type DailyTrackSummary = {
   id: string;
   status: "active";
   seed_run_id: string;
@@ -12,12 +17,33 @@ type DailyTrack = {
   strategy_session: string;
 };
 
-type DailyTrackList = { items: DailyTrack[]; next_cursor: string | null };
+type DailyTrackDetail = {
+  id: string;
+  status: "active";
+  origin: {
+    seed_run_id: string;
+    seed_release_id: string;
+    definition_id: string;
+    definition_revision: number;
+    result_checksum_sha256: string;
+    strategy_session: string;
+  };
+  head_release_id: string;
+  strategy_session: string;
+  lag_releases: number;
+  blocked_reason: string | null;
+  factor: ResearchAnalysis["factor"];
+  strategy: ResearchAnalysis["strategy"];
+};
+
+type DailyTrackList = { items: DailyTrackSummary[]; next_cursor: string | null };
+type LoadState = "loading" | "refreshing" | null;
 
 export function DailyTracksPage({ trackId }: { trackId?: string }) {
-  const [track, setTrack] = useState<DailyTrack | null>(null);
-  const [items, setItems] = useState<DailyTrack[] | null>(null);
+  const [track, setTrack] = useState<DailyTrackDetail | null>(null);
+  const [items, setItems] = useState<DailyTrackSummary[] | null>(null);
   const [error, setError] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>("loading");
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
 
@@ -32,7 +58,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         const response = await fetch(path, { signal: controller.signal });
         if (!response.ok) throw new Error("DailyTrack unavailable");
         if (trackId) {
-          const nextTrack = (await response.json()) as DailyTrack;
+          const nextTrack = (await response.json()) as DailyTrackDetail;
           if (generation !== loadGeneration.current) return;
           setTrack(nextTrack);
         } else {
@@ -40,9 +66,13 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
           if (generation !== loadGeneration.current) return;
           setItems(nextItems);
         }
+        setLoadState(null);
       } catch (reason: unknown) {
         if (reason instanceof DOMException && reason.name === "AbortError") return;
-        if (generation === loadGeneration.current) setError(true);
+        if (generation === loadGeneration.current) {
+          setError(true);
+          setLoadState(null);
+        }
       }
     }
 
@@ -53,12 +83,17 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     };
   }, [refreshGeneration, trackId]);
 
+  function refresh() {
+    setLoadState("refreshing");
+    setRefreshGeneration((value) => value + 1);
+  }
+
   if (error) {
     return (
       <section aria-label="Daily Tracks">
         <h1>DailyTrack</h1>
         <p role="alert">DailyTrack unavailable</p>
-        <button onClick={() => setRefreshGeneration((value) => value + 1)}>Retry</button>
+        <button onClick={refresh}>Retry</button>
       </section>
     );
   }
@@ -69,26 +104,66 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     return <section aria-label="Daily Tracks"><p>Loading DailyTracks…</p></section>;
   }
   if (track) {
+    const analysis: ResearchAnalysis = {
+      factor: track.factor,
+      strategy: track.strategy,
+    };
     return (
       <section aria-label="Daily Tracks">
-        <h1>DailyTrack</h1>
+        <header className="page-header">
+          <div>
+            <p className="eyebrow">Persisted daily research</p>
+            <h1>DailyTrack</h1>
+          </div>
+          <button disabled={loadState !== null} onClick={refresh}>Refresh</button>
+        </header>
+        {loadState === "refreshing" ? (
+          <p role="status">Refreshing DailyTrack…</p>
+        ) : null}
         <div className="research-run-facts">
           <p><strong>Status</strong> {track.status}</p>
+          <p><strong>Head Release</strong> {track.head_release_id}</p>
           <p>
-            <strong>Seed ResearchRun</strong>{" "}
-            <a href={`/research-runs/${track.seed_run_id}`}>{track.seed_run_id}</a>
-          </p>
-          <p><strong>Seed Dataset Release</strong> {track.seed_release_id}</p>
-          <p><strong>Current Dataset Release</strong> {track.current_release_id}</p>
-          <p>
-            <strong>Definition</strong>{" "}
-            <a href={`/definitions/${track.definition_id}`}>
-              Revision {track.definition_revision}
-            </a>
+            <strong>Lag</strong>{" "}
+            {track.lag_releases === 0
+              ? "Up to date"
+              : `${track.lag_releases} ${track.lag_releases === 1 ? "Release" : "Releases"} behind`}
           </p>
           <p><strong>Strategy session</strong> {track.strategy_session}</p>
-          <p><strong>Result checksum</strong> {track.result_checksum_sha256}</p>
+          {track.blocked_reason ? (
+            <p><strong>Blocked</strong> {track.blocked_reason}</p>
+          ) : null}
         </div>
+
+        <section className="research-result-section">
+          <div className="section-heading">
+            <p className="eyebrow">Immutable starting point</p>
+            <h2>Tracking Origin</h2>
+          </div>
+          <div className="research-run-facts">
+            <p>
+              <strong>Seed ResearchRun</strong>{" "}
+              <a href={`/research-runs/${track.origin.seed_run_id}`}>
+                {track.origin.seed_run_id}
+              </a>
+            </p>
+            <p><strong>Seed Release</strong> {track.origin.seed_release_id}</p>
+            <p>
+              <strong>Definition</strong>{" "}
+              <a href={`/definitions/${track.origin.definition_id}`}>
+                Revision {track.origin.definition_revision}
+              </a>
+            </p>
+            <p><strong>Origin strategy session</strong> {track.origin.strategy_session}</p>
+            <p><strong>Result checksum</strong> {track.origin.result_checksum_sha256}</p>
+          </div>
+        </section>
+
+        <ResearchAnalysisView
+          analysis={analysis}
+          strategyEyebrow="Fixed origin · recent chart"
+          strategyHeading="Cumulative Strategy"
+        />
       </section>
     );
   }

@@ -233,7 +233,19 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
             "items": [track],
             "next_cursor": None,
         }
-        assert client.get(f"/api/daily-tracks/{track['id']}").json() == track
+        detail = client.get(f"/api/daily-tracks/{track['id']}").json()
+        assert detail["id"] == track["id"]
+        assert detail["head_release_id"] == track["current_release_id"]
+        assert detail["lag_releases"] == 0
+        assert detail["origin"] == {
+            "seed_run_id": track["seed_run_id"],
+            "seed_release_id": track["seed_release_id"],
+            "definition_id": track["definition_id"],
+            "definition_revision": track["definition_revision"],
+            "result_checksum_sha256": track["result_checksum_sha256"],
+            "strategy_session": track["strategy_session"],
+        }
+        assert len(detail["strategy"]["observations"]) == 504
         assert client.post("/api/daily-tracks", json={}).status_code in {404, 405}
         assert client.delete(f"/api/daily-tracks/{track['id']}").status_code in {404, 405}
 
@@ -260,7 +272,7 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
     with TestClient(create_app(settings)) as restarted:
         reopened = restarted.get(f"/api/daily-tracks/{track['id']}")
         assert reopened.status_code == 200
-        assert reopened.json() == track
+        assert reopened.json() == detail
         assert restarted.get("/api/daily-tracks").json()["items"] == [track]
 
 

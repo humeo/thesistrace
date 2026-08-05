@@ -100,7 +100,17 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
   const trackDetail = await (
     await page.request.get(`/api/daily-tracks/${seededTrack.id}`)
   ).json();
-  expect(Object.keys(trackDetail).sort()).toEqual(expectedTrackKeys);
+  expect(Object.keys(trackDetail).sort()).toEqual([
+    "blocked_reason",
+    "factor",
+    "head_release_id",
+    "id",
+    "lag_releases",
+    "origin",
+    "status",
+    "strategy",
+    "strategy_session",
+  ]);
   const trackList = await (await page.request.get("/api/daily-tracks")).json();
   expect(Object.keys(trackList).sort()).toEqual(["items", "next_cursor"]);
   expect(trackList.items).toHaveLength(1);
@@ -131,11 +141,11 @@ test("publishes the first Dataset Release through the real Core", async ({ page 
     observedTrackHeads.push(successorReleaseId);
     await expect.poll(async () => {
       const response = await page.request.get(`/api/daily-tracks/${seededTrack.id}`);
-      return (await response.json()).current_release_id;
+      return (await response.json()).head_release_id;
     }, { timeout: 60_000 }).toBe(successorReleaseId);
     await page.goto(`/daily-tracks/${seededTrack.id}`);
     await expect(
-      page.getByText(`Current Dataset Release ${successorReleaseId}`, { exact: true }),
+      page.getByText(`Head Release ${successorReleaseId}`, { exact: true }),
     ).toBeVisible();
     await expect(page.getByRole("button", { name: /advance|catch up/i })).toHaveCount(0);
     await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
@@ -391,6 +401,54 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
     result_checksum_sha256: "a".repeat(64),
     strategy_session: "2025-12-31",
   };
+  const factorHorizon = (horizon: 1 | 5 | 20) => ({
+    horizon,
+    summary: {
+      ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      rank_ic: { mean: null, sample_deviation: null, icir: null, positive_fraction: null, valid_session_count: 0 },
+      quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null },
+      top_bottom_return: null,
+    },
+    coverage: {
+      signal_session_count: 0,
+      ic_valid_session_count: 0,
+      rank_ic_valid_session_count: 0,
+      quantile_valid_session_count: 0,
+    },
+  });
+  const detail = {
+    id: track.id,
+    status: track.status,
+    origin: {
+      seed_run_id: track.seed_run_id,
+      seed_release_id: track.seed_release_id,
+      definition_id: track.definition_id,
+      definition_revision: track.definition_revision,
+      result_checksum_sha256: track.result_checksum_sha256,
+      strategy_session: track.strategy_session,
+    },
+    head_release_id: track.current_release_id,
+    strategy_session: track.strategy_session,
+    lag_releases: 0,
+    blocked_reason: null,
+    factor: {
+      horizons: { "1": factorHorizon(1), "5": factorHorizon(5), "20": factorHorizon(20) },
+    },
+    strategy: {
+      summary: {
+        metrics: {
+          net_cumulative_return: 0,
+          benchmark_cumulative_return: 0,
+          annualized_excess_return: 0,
+          maximum_drawdown: { value: 0 },
+          sharpe: null,
+          transaction_costs: { cumulative_amount: 0 },
+        },
+      },
+      benchmark: { universe: "top1000", methodology: "selected_universe_equal_weight" },
+      observations: [],
+    },
+  };
   await page.route("**/api/research-runs/run_3333cccc", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(run) }),
   );
@@ -405,7 +463,7 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
     });
   });
   await page.route("**/api/daily-tracks/track_4444dddd", (route) =>
-    route.fulfill({ contentType: "application/json", body: JSON.stringify(track) }),
+    route.fulfill({ contentType: "application/json", body: JSON.stringify(detail) }),
   );
 
   await page.goto("/research-runs/run_3333cccc");
@@ -420,6 +478,153 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
   await page.reload();
   await expect(page.getByRole("heading", { name: "DailyTrack" })).toBeVisible();
   await expect(page.getByText("Status active", { exact: true })).toBeVisible();
+  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
+});
+
+test("shows recent and cumulative DailyTrack analysis", async ({ page }) => {
+  const observations = Array.from({ length: 504 }, (_, index) => ({
+    session: `2026-${String(Math.floor(index / 28) + 1).padStart(2, "0")}-${String((index % 28) + 1).padStart(2, "0")}`,
+    gross_nav: String(1_000_000 + index * 1_100),
+    net_nav: String(1_000_000 + index * 1_000),
+    benchmark_nav: String(1_000_000 + index * 700),
+    net_cash: "120000",
+    transaction_cost_cny: "25",
+    holdings_count: 30,
+    maximum_single_name_weight: 0.04,
+    upper_limit_buy_rejections: 0,
+    lower_limit_sell_rejections: 0,
+    suspension_rejections: 0,
+  }));
+  const correlation = {
+    mean: 0.04,
+    sample_deviation: 0.1,
+    icir: 0.4,
+    positive_fraction: 0.57,
+    valid_session_count: 504,
+  };
+  const horizon = (value: 1 | 5 | 20) => ({
+    horizon: value,
+    summary: {
+      ic: correlation,
+      rank_ic: correlation,
+      quantile_returns: { q1: -0.01, q2: -0.005, q3: 0, q4: 0.005, q5: 0.01 },
+      top_bottom_return: 0.02,
+    },
+    coverage: {
+      signal_session_count: 504,
+      ic_valid_session_count: 504,
+      rank_ic_valid_session_count: 504,
+      quantile_valid_session_count: 504,
+    },
+  });
+  const detail = {
+    id: "track_a11a515",
+    status: "active",
+    origin: {
+      seed_run_id: "run_analysis",
+      seed_release_id: "release_origin",
+      definition_id: "def_analysis",
+      definition_revision: 7,
+      result_checksum_sha256: "a".repeat(64),
+      strategy_session: "2025-12-31",
+    },
+    head_release_id: "release_head",
+    strategy_session: observations.at(-1)?.session,
+    lag_releases: 2,
+    blocked_reason: null,
+    factor: { horizons: { "1": horizon(1), "5": horizon(5), "20": horizon(20) } },
+    strategy: {
+      summary: {
+        metrics: {
+          net_cumulative_return: 0.17,
+          benchmark_cumulative_return: 0.11,
+          annualized_excess_return: 0.06,
+          maximum_drawdown: { value: -0.08 },
+          sharpe: 1.2,
+          transaction_costs: { cumulative_amount: 12345 },
+        },
+      },
+      benchmark: {
+        universe: "top1000",
+        methodology: "selected_universe_equal_weight",
+      },
+      observations,
+    },
+  };
+  let mode: "success" | "empty" | "error" = "success";
+  let reads = 0;
+  let releaseInitialRead!: () => void;
+  const initialRead = new Promise<void>((resolve) => {
+    releaseInitialRead = resolve;
+  });
+  let releaseEmptyRead!: () => void;
+  const emptyRead = new Promise<void>((resolve) => {
+    releaseEmptyRead = resolve;
+  });
+  await page.route("**/api/daily-tracks/track_a11a515", async (route) => {
+    reads += 1;
+    if (reads <= 2) await initialRead;
+    if (mode === "empty") await emptyRead;
+    if (mode === "error") {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "secret manifest object key" }),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        ...detail,
+        strategy: {
+          ...detail.strategy,
+          observations: mode === "empty" ? [] : observations,
+        },
+      }),
+    });
+  });
+
+  const navigation = page.goto("/daily-tracks/track_a11a515", {
+    waitUntil: "domcontentloaded",
+  });
+  await expect(page.getByText("Loading DailyTrack…", { exact: true })).toBeVisible();
+  releaseInitialRead();
+  await navigation;
+  await expect(page.getByRole("heading", { name: "DailyTrack" })).toBeVisible();
+  await expect(page.getByText("Status active", { exact: true })).toBeVisible();
+  await expect(page.getByText("Head Release release_head", { exact: true })).toBeVisible();
+  await expect(page.getByText("Lag 2 Releases behind", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Tracking Origin" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "run_analysis" })).toHaveAttribute(
+    "href",
+    "/research-runs/run_analysis",
+  );
+  for (const value of [1, 5, 20]) {
+    const region = page.getByRole("region", { name: `${value}-session Factor` });
+    await expect(region).toContainText("504 signal sessions");
+  }
+  await expect(page.getByRole("heading", { name: "Cumulative Strategy" })).toBeVisible();
+  await expect(page.getByText("Selected universe top1000", { exact: true })).toBeVisible();
+  await expect(page.getByText("504 Research Sessions", { exact: true })).toBeVisible();
+  await expect(page.getByRole("img", { name: "Strategy and benchmark NAV" })).toBeVisible();
+
+  mode = "empty";
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByRole("status")).toHaveText("Refreshing DailyTrack…");
+  releaseEmptyRead();
+  await expect(page.getByText("No recent Strategy observations.", { exact: true })).toBeVisible();
+
+  mode = "error";
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(page.getByRole("alert")).toHaveText("DailyTrack unavailable");
+  await expect(page.getByText(/secret|manifest|object key/i)).toHaveCount(0);
+
+  mode = "success";
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("504 Research Sessions", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Cumulative Strategy" })).toBeVisible();
   await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });
 
