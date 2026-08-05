@@ -470,7 +470,6 @@ def _drop_product_schemas(settings: CoreSettings) -> None:
     database.open()
     try:
         with database.transaction() as transaction:
-            transaction.execute("DROP SCHEMA IF EXISTS core_cutovers CASCADE")
             transaction.execute("DROP SCHEMA IF EXISTS daily_tracks CASCADE")
             transaction.execute("DROP SCHEMA IF EXISTS research_runs CASCADE")
             transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")

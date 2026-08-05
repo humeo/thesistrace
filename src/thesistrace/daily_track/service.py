@@ -23,6 +23,7 @@ from thesistrace.daily_track.models import (
     DailyTrackList,
     DailyTrackSummary,
     KernelStateCheckpoint,
+    LegacyStartTrackingReceipt,
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
     TrackingOrigin,
@@ -160,6 +161,37 @@ class DailyTrackService:
         self._working_cache = (
             None if working_cache_root is None else _DailyTrackWorkingCache(working_cache_root)
         )
+
+    def read_legacy_activation_receipts(
+        self,
+        transaction: PostgresTransaction,
+    ) -> tuple[LegacyStartTrackingReceipt, ...]:
+        rows = transaction.execute(
+            """
+            SELECT receipt.request_id, receipt.request_fingerprint,
+                   track.seed_run_id, receipt.track_id,
+                   receipt.outcome, receipt.created_at
+            FROM daily_tracks.activation_receipts AS receipt
+            JOIN daily_tracks.tracks AS track ON track.id = receipt.track_id
+            ORDER BY receipt.created_at, receipt.request_id
+            FOR UPDATE OF receipt
+            """
+        ).fetchall()
+        return tuple(LegacyStartTrackingReceipt.model_validate(row) for row in rows)
+
+    def delete_legacy_activation_receipts(
+        self,
+        transaction: PostgresTransaction,
+        receipts: tuple[LegacyStartTrackingReceipt, ...],
+    ) -> None:
+        for receipt in receipts:
+            transaction.execute(
+                """
+                DELETE FROM daily_tracks.activation_receipts
+                WHERE request_id = %s
+                """,
+                (receipt.request_id,),
+            )
 
     def activate(
         self,

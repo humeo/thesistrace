@@ -2,8 +2,8 @@ from thesistrace.daily_track.models import (
     DailyTrackDetail,
     DailyTrackList,
     DailyTrackSummary,
+    LegacyStartTrackingReceipt,
     RetryDailyTrackCommand,
-    StartTrackingCommand,
     StopDailyTrackCommand,
     TrackingOrigin,
 )
@@ -28,10 +28,10 @@ __all__ = [
     "DailyTrackList",
     "DailyTrackService",
     "DailyTrackSummary",
+    "LegacyStartTrackingReceipt",
     "DailyTrackStopConflict",
     "DailyTrackStopUnavailable",
     "RetryDailyTrackCommand",
-    "StartTrackingCommand",
     "StopDailyTrackCommand",
     "TrackingOrigin",
 ]

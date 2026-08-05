@@ -24,6 +24,7 @@ from thesistrace.publication import JsonPayload, PublishedRef
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_run import ResearchRunTrackingUnavailable
 from thesistrace.research_run.migrations import MIGRATIONS as RESEARCH_RUN_MIGRATIONS
+from thesistrace.research_run.service import StartTrackingReceiptCutoverConflict
 
 ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached"
 
@@ -59,43 +60,13 @@ def test_legacy_start_tracking_receipt_moves_to_research_runs_and_survives_resta
         ).encode()
     ).hexdigest()
 
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        for plan in (
-            PUBLICATION_MIGRATIONS,
-            DATA_MIGRATIONS,
-            DEFINITION_MIGRATIONS,
-            RESEARCH_RUN_MIGRATIONS,
-            DAILY_TRACK_MIGRATIONS,
-        ):
-            apply_migrations(database, plan)
-        with database.transaction() as transaction:
-            transaction.execute(
-                """
-                INSERT INTO daily_tracks.tracks (
-                    id, status, seed_run_id, origin,
-                    current_release_id, current_strategy_session
-                ) VALUES (%s, 'active', %s, %s, %s, %s)
-                """,
-                (
-                    track["id"],
-                    seed_run_id,
-                    Jsonb({}),
-                    track["current_release_id"],
-                    track["strategy_session"],
-                ),
-            )
-            transaction.execute(
-                """
-                INSERT INTO daily_tracks.activation_receipts (
-                    request_id, request_fingerprint, track_id, outcome
-                ) VALUES (%s, %s, %s, %s)
-                """,
-                (request_id, fingerprint, track["id"], Jsonb(track)),
-            )
-    finally:
-        database.close()
+    _seed_receipt_cutover_state(
+        settings,
+        request_id=request_id,
+        fingerprint=fingerprint,
+        track=track,
+        existing="identical",
+    )
 
     with TestClient(create_app(settings)) as upgraded:
         replay = upgraded.post(
@@ -123,6 +94,52 @@ def test_legacy_start_tracking_receipt_moves_to_research_runs_and_survives_resta
             "research_run_receipts": 1,
             "legacy_daily_track_receipts": 0,
         }
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_incompatible_receipt_collision_aborts_cutover_without_deleting_legacy() -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+    track = {
+        "id": "track_ticket36_collision",
+        "status": "active",
+        "seed_run_id": "run_ticket36_collision",
+        "seed_release_id": "release_ticket36_collision",
+        "current_release_id": "release_ticket36_collision",
+        "definition_id": "definition_ticket36_collision",
+        "definition_revision": 1,
+        "result_checksum_sha256": "b" * 64,
+        "strategy_session": "2025-12-31",
+    }
+    _seed_receipt_cutover_state(
+        settings,
+        request_id="ticket-36-incompatible-receipt",
+        fingerprint="c" * 64,
+        track=track,
+        existing="incompatible",
+    )
+
+    with pytest.raises(
+        StartTrackingReceiptCutoverConflict,
+        match="incompatible Start Tracking receipt",
+    ):
+        with TestClient(create_app(settings)):
+            pass
+
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        assert _admission_counts(database) == {
+            "tracks": 1,
+            "active_or_blocked": 1,
+            "research_run_receipts": 1,
+            "legacy_daily_track_receipts": 1,
+        }
+    finally:
+        database.close()
 
 
 @pytest.mark.skipif(
@@ -335,6 +352,75 @@ def _eligible_runs(client: TestClient, *, count: int) -> list[dict[str, object]]
             )
         runs.append({**first, "id": run_id})
     return runs
+
+
+def _seed_receipt_cutover_state(
+    settings: CoreSettings,
+    *,
+    request_id: str,
+    fingerprint: str,
+    track: dict[str, object],
+    existing: str,
+) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        for plan in (
+            PUBLICATION_MIGRATIONS,
+            DATA_MIGRATIONS,
+            DEFINITION_MIGRATIONS,
+            RESEARCH_RUN_MIGRATIONS,
+            DAILY_TRACK_MIGRATIONS,
+        ):
+            apply_migrations(database, plan)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.tracks (
+                    id, status, seed_run_id, origin,
+                    current_release_id, current_strategy_session
+                ) VALUES (%s, 'active', %s, %s, %s, %s)
+                """,
+                (
+                    track["id"],
+                    track["seed_run_id"],
+                    Jsonb({}),
+                    track["current_release_id"],
+                    track["strategy_session"],
+                ),
+            )
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.activation_receipts (
+                    request_id, request_fingerprint, track_id, outcome
+                ) VALUES (%s, %s, %s, %s)
+                """,
+                (request_id, fingerprint, track["id"], Jsonb(track)),
+            )
+            if existing:
+                target_fingerprint = fingerprint if existing == "identical" else "d" * 64
+                target_seed = (
+                    track["seed_run_id"]
+                    if existing == "identical"
+                    else "run_ticket36_incompatible_target"
+                )
+                transaction.execute(
+                    """
+                    INSERT INTO research_runs.start_tracking_receipts (
+                        request_id, request_fingerprint, seed_run_id,
+                        track_id, outcome
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        request_id,
+                        target_fingerprint,
+                        target_seed,
+                        track["id"],
+                        Jsonb(track),
+                    ),
+                )
+    finally:
+        database.close()
 
 
 def _admission_counts(database: object) -> dict[str, int]:

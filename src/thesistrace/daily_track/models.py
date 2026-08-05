@@ -1,16 +1,11 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
-
-
-class StartTrackingCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    request_id: RequestId
 
 
 class RetryDailyTrackCommand(BaseModel):
@@ -79,6 +74,19 @@ class DailyTrackSummary(BaseModel):
     definition_revision: int
     result_checksum_sha256: str
     strategy_session: str
+
+
+class LegacyStartTrackingReceipt(BaseModel):
+    """Transitional value read from DailyTracks for ResearchRuns ownership cutover."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    request_id: str
+    request_fingerprint: str
+    seed_run_id: str
+    track_id: str
+    outcome: DailyTrackSummary
+    created_at: datetime
 
 
 class DailyTrackList(BaseModel):

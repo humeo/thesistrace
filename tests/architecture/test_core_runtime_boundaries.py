@@ -169,17 +169,25 @@ def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> 
 
 
 def test_start_tracking_receipt_cutover_is_owned_by_the_runtime_assembly() -> None:
-    cutover = (ROOT / "src" / "thesistrace" / "entrypoints" / "migrations.py").read_text()
     runtime = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
+    track = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
+    run = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    track_models = (ROOT / "src" / "thesistrace" / "daily_track" / "models.py").read_text()
+    run_models = (ROOT / "src" / "thesistrace" / "research_run" / "models.py").read_text()
 
-    assert "INSERT INTO research_runs.start_tracking_receipts" in cutover
-    assert "FROM daily_tracks.activation_receipts" in cutover
-    assert "DELETE FROM daily_tracks.activation_receipts" in cutover
-    assert "apply_migrations(database, DAILY_TRACK_MIGRATIONS)" in runtime
-    assert "apply_migrations(database, CUTOVER_MIGRATIONS)" in runtime
-    assert runtime.index("apply_migrations(database, DAILY_TRACK_MIGRATIONS)") < runtime.index(
-        "apply_migrations(database, CUTOVER_MIGRATIONS)"
-    )
+    assert "core_cutovers" not in runtime
+    for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
+        assert f"{sql_verb} research_runs." not in runtime
+        assert f"{sql_verb} daily_tracks." not in runtime
+    assert "read_legacy_activation_receipts" in runtime
+    assert "import_start_tracking_receipts" in runtime
+    assert "delete_legacy_activation_receipts" in runtime
+    assert "FROM daily_tracks.activation_receipts" in track
+    assert "FOR UPDATE OF receipt" in track
+    assert "DELETE FROM daily_tracks.activation_receipts" in track
+    assert "INSERT INTO research_runs.start_tracking_receipts" in run
+    assert "StartTrackingCommand" not in track_models
+    assert "class StartTrackingCommand" in run_models
 
 
 def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
@@ -250,7 +258,10 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "activate_track" in run_source
     assert "resolve_track_activation" not in run_source
     assert "CREATE TABLE research_runs.start_tracking_receipts" in run_migrations
-    assert "daily_tracks.activation_receipts" not in track_source
+    activation_source = track_source[
+        track_source.index("    def activate(") : track_source.index("    def process_next(")
+    ]
+    assert "daily_tracks.activation_receipts" not in activation_source
     assert "read_in_transaction" in run_source
     assert "TrackingOrigin(" in run_source
     assert "daily_tracks." not in run_source

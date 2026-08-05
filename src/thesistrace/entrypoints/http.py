@@ -20,7 +20,6 @@ from thesistrace.daily_track import (
     DailyTrackStopUnavailable,
     DailyTrackSummary,
     RetryDailyTrackCommand,
-    StartTrackingCommand,
     StopDailyTrackCommand,
 )
 from thesistrace.data import (
@@ -53,6 +52,7 @@ from thesistrace.research_run import (
     ResearchRunSummary,
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
+    StartTrackingCommand,
 )
 
 

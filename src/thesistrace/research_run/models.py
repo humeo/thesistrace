@@ -52,6 +52,12 @@ class ResearchRunRerunCommand(BaseModel):
     request_id: RequestId
 
 
+class StartTrackingCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+
+
 class ResearchRunList(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

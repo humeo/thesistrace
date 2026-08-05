@@ -18,7 +18,6 @@ from thesistrace.data import DataService, authorable_field_bindings
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.definition import DefinitionService
 from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
-from thesistrace.entrypoints.migrations import CUTOVER_MIGRATIONS
 from thesistrace.publication import Publication
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_kernel import operator_catalog
@@ -103,7 +102,6 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         apply_migrations(database, DEFINITION_MIGRATIONS)
         apply_migrations(database, RESEARCH_RUN_MIGRATIONS)
         apply_migrations(database, DAILY_TRACK_MIGRATIONS)
-        apply_migrations(database, CUTOVER_MIGRATIONS)
         s3 = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,
@@ -143,6 +141,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             publication=publication,
             activate_track=daily_tracks.activate,
         )
+        _move_start_tracking_receipts(database, daily_tracks, research_runs)
         yield CoreRuntime(
             database=database,
             data=data,
@@ -161,3 +160,14 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
     finally:
         database.close()
         working_cache.cleanup()
+
+
+def _move_start_tracking_receipts(
+    database: PostgresDatabase,
+    daily_tracks: DailyTrackService,
+    research_runs: ResearchRunService,
+) -> None:
+    with database.transaction() as transaction:
+        receipts = daily_tracks.read_legacy_activation_receipts(transaction)
+        research_runs.import_start_tracking_receipts(transaction, receipts)
+        daily_tracks.delete_legacy_activation_receipts(transaction, receipts)
