@@ -26,9 +26,44 @@ replacement acceptance passes.
 
 **How to verify:**
 
-- Run `bun run --cwd web typecheck`, `bun run --cwd web build`, and
-  `bun run --cwd web test:e2e` against the real canonical backend.
-- Manually navigate every stable route in the desktop browser and confirm the
-  complete visible Core loop never leaves the four-resource Shell.
+Run the default Web verification against real PostgreSQL, RustFS, canonical
+HTTP, and canonical workers, then remove the isolated runtime even if a check
+fails:
+
+```sh
+set -eu
+./scripts/core-test-runtime reset
+trap './scripts/core-test-runtime down' EXIT
+bun run --cwd web typecheck
+bun run --cwd web build
+bun run --cwd web test:shell
+./scripts/core-test-runtime run bun run --cwd web test:e2e
+```
+
+The default `index.html`, `src/main.tsx`, `bun run dev`, and `bun run test:e2e`
+must resolve only to the four-resource Core Shell and the canonical backend
+commands. `/` may replace its own history entry with `/data`; it must not render
+or bundle the old application or Hosted authentication boundary. Old Web and
+authentication files remain untouched as inactive deletion targets for Ticket
+39. The active bundle must use statically analyzable direct imports and contain
+no runtime product-mode branch.
+
+The default browser suite must navigate `/data`, `/definitions`, one stable
+`/definitions/:id`, `/research-runs`, one stable `/research-runs/:id`,
+`/daily-tracks`, and one stable `/daily-tracks/:id`. At every route the Shell
+must expose exactly four resource links and only the active resource module.
+No old workspace, login, Hosted, operations, raw JSON, download, manifest,
+object, worker, cache, deployment, Draft, frozen-version, Attempt, Generation,
+Advance, or Checkpoint surface may appear.
+
+Across the named browser cases, visible navigation must prove Data Update,
+nameless incomplete Save/reopen, invalid Run rejection without a ResearchRun,
+valid current-editor Run and bounded Result, edited independent Run, exact-input
+Rerun, Cancel, response-loss replay, Start Tracking, later Release automatic
+advance, isolated blocked outcome, Retry, and irreversible Stop against the
+canonical routes. Run must send the current editor content as one action; no
+Save-then-Run Web sequence is allowed. Polling/refresh must remain inside the
+active Data Update, ResearchRun, or DailyTrack module rather than a Shell-level
+or global loop.
 
 ## Comments
