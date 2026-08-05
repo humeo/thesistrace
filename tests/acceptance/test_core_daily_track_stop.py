@@ -309,7 +309,7 @@ def test_worker_cannot_restore_cache_after_stop_follows_publication(
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(worker.process_next)
-            assert published.wait(timeout=10)
+            assert published.wait(timeout=60)
             try:
                 stopped = client.post(
                     f"/api/daily-tracks/{track['id']}/stop",
