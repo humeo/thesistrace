@@ -44,6 +44,8 @@ from thesistrace.research_kernel import (
     advance_continuation,
     continuation_snapshot,
     empty_continuation,
+    equivalence_bytes,
+    first_divergence,
     run,
 )
 from thesistrace.research_kernel.canonical_state import (
@@ -76,6 +78,21 @@ class DailyTrackFenced(RuntimeError):
 
 class DailyTrackProgressionFailed(RuntimeError):
     pass
+
+
+class DailyTrackEquivalenceMismatch(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class DailyTrackEquivalenceEvidence:
+    status: str
+    track_id: str
+    head_release_id: str
+    release_sequence: tuple[str, ...]
+    checkpoint_count: int
+    checkpoint_evidence_sha256s: tuple[str, ...]
+    final_evidence_sha256: str
 
 
 @dataclass(frozen=True)
@@ -260,6 +277,163 @@ class DailyTrackService:
                 (track_id,),
             ).fetchone()
         return None if row is None else _summary(row)
+
+    def verify_persisted_equivalence(
+        self,
+        track_id: str,
+    ) -> DailyTrackEquivalenceEvidence:
+        """Replay one immutable Checkpoint chain without changing durable state."""
+        if self._publication is None or self._load_canonical is None:
+            raise RuntimeError("DailyTrack equivalence dependencies are not configured")
+        with self._database.transaction() as transaction:
+            track = transaction.execute(
+                """
+                SELECT id, origin, current_release_id, current_strategy_session,
+                       head_manifest_sha256
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+            rows = transaction.execute(
+                """
+                SELECT target_release_id, predecessor_release_id,
+                       manifest_sha256, provenance, strategy_session
+                FROM daily_tracks.checkpoints
+                WHERE track_id = %s
+                """,
+                (track_id,),
+            ).fetchall()
+        if track is None:
+            raise KeyError(track_id)
+        origin = TrackingOrigin.model_validate(track["origin"])
+        head_release_id = str(track["current_release_id"])
+        chain = _ordered_checkpoint_chain(
+            rows,
+            seed_release_id=origin.seed_release_id,
+            head_release_id=head_release_id,
+        )
+        expected_head_manifest = None if not chain else str(chain[-1]["manifest_sha256"])
+        _assert_equivalent(
+            track["head_manifest_sha256"],
+            expected_head_manifest,
+            "$.tracking_head.manifest_sha256",
+        )
+
+        seed = self._load_canonical(origin.seed_release_id)
+        seed_sessions = canonical_sessions(seed, "Seed Dataset Release")
+        if len(seed_sessions) < 756:
+            raise RuntimeError("Seed Dataset Release has fewer than 756 sessions")
+        state = run(
+            _kernel_input(
+                origin,
+                slice_canonical_sessions(seed, seed_sessions[-756:]),
+            )
+        ).track_state
+        _assert_equivalent(
+            state.boundary_session,
+            origin.initial_strategy_state.session,
+            "$.tracking_origin.strategy_session",
+        )
+
+        origin_sha256 = hashlib.sha256(
+            canonical_json_bytes(origin.model_dump(mode="json"))
+        ).hexdigest()
+        release_sequence = [origin.seed_release_id]
+        evidence_sha256s: list[str] = []
+        predecessor_manifest: str | None = None
+        for row in chain:
+            target_release_id = str(row["target_release_id"])
+            target = self._load_canonical(target_release_id)
+            prior_sessions = canonical_sessions(state.canonical_snapshot(), "Reference state")
+            target_sessions = canonical_sessions(target, "Dataset Release")
+            if target_sessions[: len(prior_sessions)] != prior_sessions:
+                raise DailyTrackEquivalenceMismatch(
+                    f"EQUIVALENCE_MISMATCH at $.checkpoints.{target_release_id}.research_calendar"
+                )
+            appended_sessions = target_sessions[len(prior_sessions) :]
+            if not appended_sessions:
+                raise DailyTrackEquivalenceMismatch(
+                    f"EQUIVALENCE_MISMATCH at $.checkpoints.{target_release_id}.appended_sessions"
+                )
+            prior_boundary = state.boundary_session
+            state = self._advance_kernel(
+                AdvanceInput(
+                    prior_state=state,
+                    target_canonical_release=target,
+                    appended_sessions=appended_sessions,
+                    continuation=continuation_snapshot(state),
+                )
+            )
+            expected_provenance = {
+                "schema_version": "daily-track-checkpoint-v1",
+                "daily_track_id": track_id,
+                "tracking_origin_sha256": origin_sha256,
+                "predecessor": (
+                    {
+                        "kind": "tracking.origin",
+                        "seed_release_id": origin.seed_release_id,
+                        "seed_result_checksum_sha256": (
+                            origin.verified_result.result_checksum_sha256
+                        ),
+                    }
+                    if predecessor_manifest is None
+                    else {
+                        "kind": "daily-track.checkpoint",
+                        "manifest_sha256": predecessor_manifest,
+                        "release_id": str(row["predecessor_release_id"]),
+                    }
+                ),
+                "target_release_id": target_release_id,
+                "target_predecessor_id": str(row["predecessor_release_id"]),
+                "calculation_contracts": origin.calculation_contracts,
+            }
+            coordinate = f"$.checkpoints.{target_release_id}"
+            _assert_equivalent(row["provenance"], expected_provenance, f"{coordinate}.provenance")
+            bundle = self._publication.read(
+                PublishedRef(
+                    manifest_sha256=str(row["manifest_sha256"]),
+                    kind="daily-track.checkpoint",
+                    provenance=dict(row["provenance"]),
+                )
+            )
+            payload = bundle.payloads.get("checkpoint")
+            if payload is None or payload.media_type != "application/json":
+                raise DailyTrackEquivalenceMismatch(f"EQUIVALENCE_MISMATCH at {coordinate}.payload")
+            actual = json.loads(payload.content)
+            expected = _state_payload(
+                state,
+                retained_strategy_sessions=[prior_boundary, *appended_sessions],
+            )
+            _assert_equivalent(actual, expected, f"{coordinate}.state")
+            _assert_equivalent(
+                row["strategy_session"],
+                state.boundary_session,
+                f"{coordinate}.strategy_session",
+            )
+            evidence_sha256s.append(hashlib.sha256(equivalence_bytes(expected)).hexdigest())
+            release_sequence.append(target_release_id)
+            predecessor_manifest = str(row["manifest_sha256"])
+
+        _assert_equivalent(
+            track["current_strategy_session"],
+            state.boundary_session,
+            "$.tracking_head.strategy_session",
+        )
+        final_evidence = (
+            evidence_sha256s[-1]
+            if evidence_sha256s
+            else hashlib.sha256(equivalence_bytes(state.output_snapshot())).hexdigest()
+        )
+        return DailyTrackEquivalenceEvidence(
+            status="equivalent",
+            track_id=track_id,
+            head_release_id=head_release_id,
+            release_sequence=tuple(release_sequence),
+            checkpoint_count=len(chain),
+            checkpoint_evidence_sha256s=tuple(evidence_sha256s),
+            final_evidence_sha256=final_evidence,
+        )
 
     def _claim_next(self) -> _ProgressionClaim | None:
         assert self._next_release is not None
@@ -896,6 +1070,40 @@ def _summary(row: object) -> DailyTrackSummary:
         result_checksum_sha256=verified_result.result_checksum_sha256,
         strategy_session=str(row["current_strategy_session"]),
     )
+
+
+def _ordered_checkpoint_chain(
+    rows: list[Mapping[str, object]],
+    *,
+    seed_release_id: str,
+    head_release_id: str,
+) -> list[Mapping[str, object]]:
+    by_target = {str(row["target_release_id"]): row for row in rows}
+    if len(by_target) != len(rows):
+        raise DailyTrackEquivalenceMismatch("EQUIVALENCE_MISMATCH at $.checkpoints.identity")
+    ordered_desc: list[Mapping[str, object]] = []
+    visited: set[str] = set()
+    cursor = head_release_id
+    while cursor != seed_release_id:
+        if cursor in visited:
+            raise DailyTrackEquivalenceMismatch("EQUIVALENCE_MISMATCH at $.checkpoints.cycle")
+        visited.add(cursor)
+        row = by_target.get(cursor)
+        if row is None:
+            raise DailyTrackEquivalenceMismatch(f"EQUIVALENCE_MISMATCH at $.checkpoints.{cursor}")
+        ordered_desc.append(row)
+        cursor = str(row["predecessor_release_id"])
+    if len(ordered_desc) != len(rows):
+        raise DailyTrackEquivalenceMismatch("EQUIVALENCE_MISMATCH at $.checkpoints.length")
+    return list(reversed(ordered_desc))
+
+
+def _assert_equivalent(actual: object, expected: object, coordinate: str) -> None:
+    divergence = first_divergence(actual, expected)
+    if not divergence:
+        return
+    suffix = divergence[1:] if divergence.startswith("$") else divergence
+    raise DailyTrackEquivalenceMismatch(f"EQUIVALENCE_MISMATCH at {coordinate}{suffix}")
 
 
 def _kernel_input(origin: TrackingOrigin, canonical: dict[str, object]) -> RunInput:
