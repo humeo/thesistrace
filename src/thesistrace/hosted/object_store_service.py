@@ -33,7 +33,7 @@ from thesistrace.storage_admission import (
     StorageAdmissionError,
 )
 
-MAINTENANCE_ROLES = {"api", "compute", "data"}
+MAINTENANCE_ROLES = {"api"}
 LEASE_SECONDS = 30.0
 logger = logging.getLogger(__name__)
 
@@ -211,14 +211,10 @@ def create_object_store_app(
     ),
     disk_used_bytes: Callable[[], int] | None = None,
 ) -> FastAPI:
-    if set(role_tokens) != {"api", "compute", "data"} or any(
+    if set(role_tokens) != {"api"} or any(
         not token for token in role_tokens.values()
     ):
-        raise ValueError(
-            "ObjectStore requires distinct api, compute, and data tokens"
-        )
-    if len(set(role_tokens.values())) != len(role_tokens):
-        raise ValueError("ObjectStore role tokens must be distinct")
+        raise ValueError("ObjectStore requires one API token")
     store = ImmutableObjectStore(root)
     disk_policy = DiskPressurePolicy(
         disk_capacity_bytes,
@@ -242,7 +238,7 @@ def create_object_store_app(
         decision = disk_policy.evaluate(
             used_bytes=int(disk_used_bytes()),
             candidate_bytes=candidate_bytes,
-            private_growth=role != "data",
+            private_growth=True,
         )
         if decision.warning:
             logger.warning(
@@ -331,13 +327,11 @@ def create_object_store_app(
         operation: str = "write",
     ) -> None:
         write_prefixes = {
-            "api": ("track_",),
-            "compute": ("run_", "advance_"),
-            "data": ("dsp_",),
+            "api": ("track_", "run_", "advance_", "dsp_"),
         }
         recover_prefixes = {
             **write_prefixes,
-            "api": ("track_", "run_"),
+            "api": ("track_", "run_", "advance_", "dsp_"),
         }
         prefixes = (
             recover_prefixes
@@ -354,9 +348,7 @@ def create_object_store_app(
         resource_id: str,
     ) -> None:
         allowed_prefixes = {
-            "api": ("checkpoint_",),
-            "compute": ("result_", "checkpoint_"),
-            "data": ("dsr_",),
+            "api": ("result_", "checkpoint_", "dsr_"),
         }
         if not path_identity(resource_id).startswith(
             allowed_prefixes.get(role, ())
@@ -429,14 +421,14 @@ def create_object_store_app(
 
     @app.put("/v1/objects/json")
     async def put_json(request: Request) -> dict[str, object]:
-        role = require_role(request, {"compute", "data"})
+        role = require_role(request, {"api"})
         payload = await request.body()
         admit_object_payload(role, store, payload, suffix=".json")
         return store.put_canonical_json_bytes(payload)
 
     @app.put("/v1/objects/parquet")
     async def put_parquet(request: Request) -> dict[str, object]:
-        role = require_role(request, {"compute", "data"})
+        role = require_role(request, {"api"})
         payload = await request.body()
         admit_object_payload(role, store, payload, suffix=".parquet")
         return store.put_parquet_bytes(payload)
@@ -446,7 +438,7 @@ def create_object_store_app(
         resource_id: str,
         request: Request,
     ) -> dict[str, str]:
-        role = require_role(request, {"compute", "data"})
+        role = require_role(request, {"api"})
         require_manifest_role(role, resource_id)
         payload = await request.body()
         value = decode_canonical_json(payload)

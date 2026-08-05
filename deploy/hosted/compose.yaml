@@ -146,7 +146,7 @@ services:
         condition: service_healthy
       volume-permissions:
         condition: service_completed_successfully
-    networks: [control, execution]
+    networks: [control]
     secrets:
       - postgres_password
       - api_database_password
@@ -462,7 +462,6 @@ services:
     networks:
       - edge
       - control
-      - execution
       - observability
       - storage
       - tushare-egress
@@ -684,10 +683,6 @@ secrets:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_tokens
   object_store_api_token:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_api_token
-  object_store_compute_token:
-    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_compute_token
-  object_store_data_token:
-    file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/object_store_data_token
   tushare_token:
     file: ${THESISTRACE_SECRET_DIR:-.hosted/secrets}/tushare_token
   backup_passphrase:
@@ -701,9 +696,6 @@ networks:
   operator:
     driver: bridge
   control:
-    driver: bridge
-    internal: true
-  execution:
     driver: bridge
     internal: true
   observability:

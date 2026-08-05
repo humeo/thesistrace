@@ -247,6 +247,9 @@ def test_hosted_execution_and_temporal_are_absent_from_the_active_tree() -> None
         "workflow_capacity",
         "workflow_running",
         "tracking-generation-rebuild",
+        "object_store_compute_token",
+        "object_store_data_token",
+        "compute_workers",
     )
     for path in inventory_files:
         source = path.read_text().lower()

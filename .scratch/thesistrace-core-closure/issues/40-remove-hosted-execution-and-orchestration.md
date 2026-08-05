@@ -75,7 +75,7 @@ for removed_path in \
 done
 
 ! rg -n \
-  'temporal|thesistrace-execution-relay|execution-relay|execution_relay|execution_outbox|compute-worker|data-worker|thesistrace-recovery-probe|recovery-probe|recovery_probe|dispatch-probe|dispatch_probe|hosted-local-smoke|local_workflow_acceptance|thesistrace_relay|workflow_capacity|workflow_running|tracking-generation-rebuild|hosted-local-acceptance|hosted-release-acceptance|acceptance-record-launch' \
+  'temporal|thesistrace-execution-relay|execution-relay|execution_relay|execution_outbox|compute-worker|data-worker|thesistrace-recovery-probe|recovery-probe|recovery_probe|dispatch-probe|dispatch_probe|hosted-local-smoke|local_workflow_acceptance|thesistrace_relay|workflow_capacity|workflow_running|tracking-generation-rebuild|hosted-local-acceptance|hosted-release-acceptance|acceptance-record-launch|object_store_compute_token|object_store_data_token|compute_workers' \
   pyproject.toml uv.lock Makefile src/thesistrace/config.py \
   src/thesistrace/capacity.py src/thesistrace/launch.py \
   src/thesistrace/hosted scripts deploy/hosted \

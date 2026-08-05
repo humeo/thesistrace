@@ -18,8 +18,6 @@ from thesistrace.objects import (
 
 TOKENS = {
     "api": "api-object-token",
-    "compute": "compute-object-token",
-    "data": "data-object-token",
 }
 
 
@@ -108,7 +106,7 @@ def test_private_object_store_retries_transient_read_disconnects(
     monkeypatch.setattr(time, "sleep", sleeps.append)
     objects = RemoteObjectStore(
         "http://object-store",
-        TOKENS["compute"],
+        TOKENS["api"],
         client=Client(),
     )
 
@@ -139,7 +137,7 @@ def test_private_object_store_bounds_persistent_read_disconnects(
     monkeypatch.setattr(time, "sleep", sleeps.append)
     objects = RemoteObjectStore(
         "http://object-store",
-        TOKENS["compute"],
+        TOKENS["api"],
         client=Client(),
     )
 
@@ -154,7 +152,7 @@ def test_private_object_store_bounds_persistent_read_disconnects(
 def test_private_object_store_preserves_typed_object_contract(
     tmp_path: Path,
 ) -> None:
-    objects, client = remote(tmp_path, role="compute")
+    objects, client = remote(tmp_path, role="api")
     try:
         json_object = objects.put_json({"value": "canonical"})
         parquet_object = objects.put_parquet_rows(
@@ -183,7 +181,7 @@ def test_private_object_store_preserves_typed_object_contract(
 def test_remote_stage_promotes_and_recovers_atomically(
     tmp_path: Path,
 ) -> None:
-    objects, client = remote(tmp_path, role="compute")
+    objects, client = remote(tmp_path, role="api")
     try:
         with objects.publication_guard("run_success"):
             with objects.stage(
@@ -242,222 +240,12 @@ def test_remote_stage_promotes_and_recovers_atomically(
         client.close()
 
 
-def test_object_store_tokens_are_role_scoped_and_non_interchangeable(
-    tmp_path: Path,
-) -> None:
-    api_objects, api_client = remote(tmp_path, role="api")
-    compute_objects = RemoteObjectStore(
-        "http://object-store",
-        TOKENS["compute"],
-        client=api_client,
-    )
-    try:
-        assert api_objects.probe()
-        assert not RemoteObjectStore(
-            "http://object-store",
-            "wrong-token",
-            client=api_client,
-        ).probe()
-        stored = compute_objects.put_json({"visible": True})
-        assert api_objects.read_json(str(stored["sha256"])) == {
-            "visible": True
-        }
-        with api_objects.publication_guard("run_api_cancel"):
-            pass
-        with pytest.raises(ParquetContractError):
-            api_objects.put_json({"forbidden": True})
-
-        with api_objects.stage(
-            "track_activation",
-            "activation_attempt",
-            cleanup_uncommitted_payloads=True,
-        ) as stage:
-            activation = stage.put_json({"kind": "activation"})
-            observations = stage.put_parquet_rows(
-                [{"session": "2026-07-01", "value": 1}],
-                contract(),
-            )
-            checkpoint = stage.put_json(
-                {
-                    "activation": activation,
-                    "observations": observations,
-                }
-            )
-            stage.put_manifest(
-                "checkpoint_activation",
-                {"checkpoint": checkpoint},
-            )
-            with stage.publication(
-                manifest_sha256=str(checkpoint["sha256"])
-            ):
-                pass
-        assert api_objects.read_json(str(activation["sha256"])) == {
-            "kind": "activation"
-        }
-        assert api_objects.read_parquet(
-            str(observations["sha256"]),
-            contract(),
-        ).to_pylist() == [
-            {"session": "2026-07-01", "value": 1}
-        ]
-        with pytest.raises(RuntimeError, match="cancelled"):
-            with compute_objects.stage(
-                "run_cancelled",
-                "attempt_cancelled",
-                cleanup_uncommitted_payloads=True,
-            ) as stage:
-                candidate = stage.put_json({"status": "abandoned"})
-                manifest = stage.put_json(
-                    {"candidate": candidate}
-                )
-                with stage.publication(
-                    manifest_sha256=str(manifest["sha256"])
-                ):
-                    raise RuntimeError("cancelled")
-        assert api_objects.recover_staged_publication(
-            "run_cancelled",
-            committed_manifest_sha256=None,
-        )
-        with pytest.raises(ParquetContractError):
-            api_objects.staged_publication_ids(prefix="run_")
-    finally:
-        api_client.close()
 
 
-def test_only_api_role_can_delete_accounted_storage_objects(
-    tmp_path: Path,
-) -> None:
-    compute_objects, client = remote(tmp_path, role="compute")
-    api_objects = RemoteObjectStore(
-        "http://object-store",
-        TOKENS["api"],
-        client=client,
-    )
-    try:
-        stored = compute_objects.put_json({"delete": True})
-        compute_objects.put_manifest(
-            "result_delete_boundary",
-            {"stored": stored},
-        )
-
-        with pytest.raises(ParquetContractError):
-            compute_objects.delete_storage_object(
-                f"sha256:{stored['sha256']}"
-            )
-
-        assert api_objects.delete_storage_object(
-            "manifest:result_delete_boundary"
-        )
-        assert api_objects.delete_storage_object(
-            f"sha256:{stored['sha256']}"
-        )
-        assert not api_objects.delete_storage_object(
-            f"sha256:{stored['sha256']}"
-        )
-        with pytest.raises(ParquetContractError):
-            api_objects.read_json(str(stored["sha256"]))
-    finally:
-        client.close()
 
 
-def test_active_stage_is_locked_and_owned_by_its_role(
-    tmp_path: Path,
-) -> None:
-    compute_objects, client = remote(tmp_path, role="compute")
-    data_objects = RemoteObjectStore(
-        "http://object-store",
-        TOKENS["data"],
-        client=client,
-    )
-    try:
-        with compute_objects.stage(
-            "run_active",
-            "attempt_active",
-            cleanup_uncommitted_payloads=True,
-        ) as stage:
-            candidate = stage.put_json({"status": "writing"})
-            assert not compute_objects.recover_staged_publication(
-                "run_active",
-                committed_manifest_sha256=None,
-            )
-            assert compute_objects.staged_publication_ids(
-                prefix="run_"
-            ) == ["run_active"]
-            with pytest.raises(ParquetContractError):
-                data_objects.recover_staged_publication(
-                    "run_active",
-                    committed_manifest_sha256=None,
-                )
-            with pytest.raises(ParquetContractError):
-                data_objects.staged_publication_ids(prefix="run_")
-            with pytest.raises(ParquetContractError):
-                data_objects.wait_for_staged_publication("run_active")
-            with pytest.raises(ParquetContractError):
-                data_objects.stage(
-                    "run_active",
-                    "attempt_active",
-                ).__enter__()
-            with pytest.raises(ParquetContractError):
-                compute_objects.stage(
-                    "run_active",
-                    "attempt_active",
-                ).__enter__()
-            stage.put_json({"status": "still-writing"})
-        with pytest.raises(ParquetContractError):
-            compute_objects.read_json(str(candidate["sha256"]))
-    finally:
-        client.close()
 
 
-def test_manifest_namespaces_are_role_scoped(
-    tmp_path: Path,
-) -> None:
-    compute_objects, client = remote(tmp_path, role="compute")
-    data_objects = RemoteObjectStore(
-        "http://object-store",
-        TOKENS["data"],
-        client=client,
-    )
-    try:
-        with pytest.raises(ParquetContractError):
-            compute_objects.put_manifest(
-                "dsr_poison",
-                {"role": "compute"},
-            )
-        with pytest.raises(ParquetContractError):
-            data_objects.put_manifest(
-                "result_poison",
-                {"role": "data"},
-            )
-        with compute_objects.stage(
-            "run_manifest",
-            "attempt_manifest",
-        ) as stage:
-            with pytest.raises(ParquetContractError):
-                stage.put_manifest(
-                    "dsr_staged_poison",
-                    {"role": "compute"},
-                )
-
-        with data_objects.stage(
-            "dsp_publication",
-            "dpa_publication",
-        ) as stage:
-            payload = stage.put_json({"kind": "dataset"})
-            manifest = stage.put_json({"payload": payload})
-            stage.put_manifest(
-                "dsr_release",
-                {"payload": payload},
-            )
-            with stage.publication(
-                manifest_sha256=str(manifest["sha256"])
-            ):
-                pass
-        assert data_objects.read_json(str(payload["sha256"])) == {
-            "kind": "dataset"
-        }
-    finally:
-        client.close()
 
 
 def test_crashed_stage_lease_expires_and_becomes_recoverable(
@@ -476,7 +264,7 @@ def test_crashed_stage_lease_expires_and_becomes_recoverable(
             disk_used_bytes=lambda: 0,
         )
     )
-    headers = {"Authorization": f"Bearer {TOKENS['compute']}"}
+    headers = {"Authorization": f"Bearer {TOKENS['api']}"}
     try:
         opened = client.post(
             "/v1/stages/run_crashed/attempts/attempt_crashed",
@@ -486,7 +274,7 @@ def test_crashed_stage_lease_expires_and_becomes_recoverable(
         assert opened.status_code == 200
         crashed_objects = RemoteObjectStore(
             "http://object-store",
-            TOKENS["compute"],
+            TOKENS["api"],
             client=client,
         )
         crashed_objects.wait_for_staged_publication("run_crashed")
