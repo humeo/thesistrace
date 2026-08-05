@@ -8,6 +8,7 @@ from pathlib import Path
 from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
+from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_kernel import kernel_advance, kernel_run, strategy
@@ -74,6 +75,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "daily_track": {"_postgres", "data", "publication", "research_kernel"},
         "research_run": {"_postgres", "daily_track", "publication", "research_kernel"},
         "definition": {"_postgres", "data", "research_kernel", "research_run"},
+        "fixture": {"data"},
         "adapters": {"data", "fixture"},
         "entrypoints": {
             "_postgres",
@@ -87,31 +89,28 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         },
     }
 
+    graph: dict[str, set[str]] = {}
     for package, allowed_dependencies in allowed.items():
         dependencies: set[str] = set()
-        for path in (ROOT / "src" / "thesistrace" / package).rglob("*.py"):
+        source = ROOT / "src" / "thesistrace" / package
+        if not source.exists() and source.with_suffix(".py").is_file():
+            source = source.with_suffix(".py")
+        paths = [source] if source.is_file() else list(source.rglob("*.py"))
+        for path in paths:
             tree = ast.parse(path.read_text())
-            imports = [
-                node.module or ""
-                for node in ast.walk(tree)
-                if isinstance(node, ast.ImportFrom)
-            ]
-            imports.extend(
-                alias.name
-                for node in ast.walk(tree)
-                if isinstance(node, ast.Import)
-                for alias in node.names
-            )
-            dependencies.update(
-                imported.split(".")[1]
-                for imported in imports
-                if imported.startswith("thesistrace.")
-                and imported.split(".")[1] != package
-            )
+            dependencies.update(_internal_dependencies(path, tree) - {package})
+        graph[package] = dependencies
         assert dependencies <= allowed_dependencies, (
             f"{package} imports outward dependencies: "
             f"{sorted(dependencies - allowed_dependencies)}"
         )
+    assert set(graph) == set(allowed)
+    assert all(
+        dependency in graph
+        for dependencies in graph.values()
+        for dependency in dependencies
+    )
+    _assert_acyclic(graph)
 
 
 def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
@@ -141,11 +140,14 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
     }
 
     for module, owned_schema in PRODUCT_SCHEMAS.items():
-        service = ROOT / "src" / "thesistrace" / module / "service.py"
-        service_strings = _string_literals(service)
+        active_strings = "\n".join(
+            _string_literals(path)
+            for path in (ROOT / "src" / "thesistrace" / module).rglob("*.py")
+            if path.name != "migrations.py"
+        )
         for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
-            assert f"{foreign_schema}." not in service_strings, (
-                f"{module} service contains cross-schema SQL for {foreign_schema}"
+            assert f"{foreign_schema}." not in active_strings, (
+                f"{module} source contains cross-schema SQL for {foreign_schema}"
             )
 
         plan = MIGRATION_PLANS[module]
@@ -154,13 +156,15 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
         for table in lifecycle_tables[module]:
             assert table in statements
         for migration in plan.migrations:
+            statement = migration.statement
             if (
                 module == "research_run"
                 and migration.name == "0007_import_legacy_start_tracking_receipts"
             ):
-                assert "daily_tracks.activation_receipts" in migration.statement
-                continue
-            statement = migration.statement
+                assert "daily_tracks.activation_receipts" in statement
+                assert "daily_tracks.tracks" in statement
+                statement = statement.replace("daily_tracks.activation_receipts", "")
+                statement = statement.replace("daily_tracks.tracks", "")
             if module == "research_run" and migration.name == "0001_queued_research_runs":
                 assert statement.count("REFERENCES data.releases(id)") == 1
                 statement = statement.replace("REFERENCES data.releases(id)", "")
@@ -814,22 +818,63 @@ def _string_literals(path: Path) -> str:
     )
 
 
+def _internal_dependencies(path: Path, tree: ast.AST) -> set[str]:
+    root = ROOT / "src" / "thesistrace"
+    package_parts = ["thesistrace", *path.relative_to(root).parent.parts]
+    dependencies: set[str] = set()
+    for node in ast.walk(tree):
+        targets: list[list[str]] = []
+        if isinstance(node, ast.Import):
+            targets.extend(alias.name.split(".") for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = package_parts[: len(package_parts) - node.level + 1]
+                if node.module:
+                    targets.append([*base, *node.module.split(".")])
+                else:
+                    targets.extend([*base, alias.name] for alias in node.names)
+            elif node.module == "thesistrace":
+                targets.extend(["thesistrace", alias.name] for alias in node.names)
+            elif node.module:
+                targets.append(node.module.split("."))
+        dependencies.update(
+            target[1]
+            for target in targets
+            if len(target) > 1 and target[0] == "thesistrace"
+        )
+    return dependencies
+
+
+def _assert_acyclic(graph: dict[str, set[str]]) -> None:
+    visited: set[str] = set()
+    visiting: list[str] = []
+
+    def visit(node: str) -> None:
+        if node in visited:
+            return
+        assert node not in visiting, f"Core import cycle: {' -> '.join([*visiting, node])}"
+        visiting.append(node)
+        for dependency in sorted(graph[node]):
+            visit(dependency)
+        visiting.pop()
+        visited.add(node)
+
+    for node in sorted(graph):
+        visit(node)
+
+
 def _http_routes() -> set[tuple[str, str]]:
-    tree = ast.parse(
-        (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
-    )
-    return {
-        (decorator.func.attr, decorator.args[0].value)
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        for decorator in node.decorator_list
-        if isinstance(decorator, ast.Call)
-        and isinstance(decorator.func, ast.Attribute)
-        and decorator.func.attr in {"get", "post", "put", "delete"}
-        and decorator.args
-        and isinstance(decorator.args[0], ast.Constant)
-        and isinstance(decorator.args[0].value, str)
-    }
+    inventory: set[tuple[str, str]] = set()
+    for route in create_app().routes:
+        path = getattr(route, "path", "")
+        if not path.startswith("/api/") and path != "/api":
+            continue
+        methods = getattr(route, "methods", None)
+        assert methods is not None, f"mounted or non-HTTP Core route is not allowed: {path}"
+        product_methods = set(methods) - {"HEAD", "OPTIONS"}
+        assert product_methods, f"Core route has no explicit product method: {path}"
+        inventory.update((method.lower(), path) for method in product_methods)
+    return inventory
 
 
 def _make_recipe(target: str) -> str:
