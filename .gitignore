@@ -9,6 +9,8 @@ __pycache__/
 *.py[cod]
 web/dist/
 web/node_modules/
+node_modules/
+.pnpm-store/
 test-results/
 
 .idea/

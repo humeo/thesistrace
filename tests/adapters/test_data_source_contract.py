@@ -1,5 +1,7 @@
+import json
 from dataclasses import fields
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -88,14 +90,15 @@ def test_product_data_contract_has_no_provider_or_collection_modes() -> None:
 
 
 def test_live_tushare_gate_is_separate_from_the_default_gate() -> None:
-    makefile = (__import__("pathlib").Path(__file__).resolve().parents[2] / "Makefile").read_text()
-    default_gate, live_gate = makefile.split("\ncheck-live-tushare:\n", maxsplit=1)
+    package = json.loads((Path(__file__).resolve().parents[2] / "package.json").read_text())
+    default_gate = package["scripts"]["check"]
+    live_gate = package["scripts"]["check:live-tushare"]
 
     assert "scripts/check_live_tushare.py" not in default_gate
     assert "uv run python scripts/check_live_tushare.py" in live_gate
 
     script = (
-        __import__("pathlib").Path(__file__).resolve().parents[2]
+        Path(__file__).resolve().parents[2]
         / "scripts"
         / "check_live_tushare.py"
     ).read_text()

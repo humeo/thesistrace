@@ -321,16 +321,16 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
 
 
 def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
-    core_gate = _make_recipe("check")
-    live_gate = _make_recipe("check-live-tushare")
+    core_gate = _package_script("check")
+    live_gate = _package_script("check:live-tushare")
 
     for command in (
         "uv run ruff check src tests",
         "uv run pytest -q tests/kernel tests/architecture tests/adapters",
-        "bun run --cwd web typecheck",
-        "bun run --cwd web build",
+        "pnpm --dir web typecheck",
+        "pnpm --dir web build",
         "uv run pytest -q tests/integration tests/acceptance",
-        "bun run --cwd web test:e2e",
+        "pnpm --dir web test:e2e",
     ):
         assert command in core_gate
     for deferred in (
@@ -343,6 +343,31 @@ def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
     ):
         assert deferred not in core_gate.lower()
     assert live_gate == "uv run python scripts/check_live_tushare.py"
+
+
+def test_fast_host_gate_excludes_compose_and_expensive_work() -> None:
+    fast_gate = _package_script("test")
+
+    for command in (
+        "uv run ruff check src tests",
+        "uv run pytest -q tests/kernel tests/architecture tests/adapters",
+        "pnpm --dir web typecheck",
+        "pnpm --dir web test:shell",
+    ):
+        assert command in fast_gate
+    for excluded in (
+        "docker",
+        "compose",
+        "core-test-runtime",
+        "tests/integration",
+        "tests/acceptance",
+        "test:e2e",
+        "check-live-tushare",
+        "check_live_tushare",
+        "hosted",
+        "production",
+    ):
+        assert excluded not in fast_gate.lower()
 
 
 def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
@@ -381,9 +406,11 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         assert not (ROOT / removed_path).exists()
 
     active_files = [
+        ROOT / ".mise.toml",
+        ROOT / "package.json",
+        ROOT / "pnpm-workspace.yaml",
         ROOT / "pyproject.toml",
         ROOT / "uv.lock",
-        ROOT / "Makefile",
     ]
     for active_root in (ROOT / "src", ROOT / "scripts", ROOT / "tests", ROOT / "web"):
         active_files.extend(
@@ -877,12 +904,6 @@ def _http_routes() -> set[tuple[str, str]]:
     return inventory
 
 
-def _make_recipe(target: str) -> str:
-    lines = (ROOT / "Makefile").read_text().splitlines()
-    start = lines.index(f"{target}:") + 1
-    recipe: list[str] = []
-    for line in lines[start:]:
-        if not line.startswith("\t"):
-            break
-        recipe.append(line.strip())
-    return "\n".join(recipe)
+def _package_script(name: str) -> str:
+    package = json.loads((ROOT / "package.json").read_text())
+    return package["scripts"][name]
