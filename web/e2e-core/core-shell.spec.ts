@@ -1413,8 +1413,9 @@ test("runs valid content and shows its bounded ResearchRun result", async ({ pag
 
   await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
   await expect(page.getByRole("heading", { name: "ResearchRun" })).toBeVisible();
+  // The worker may claim the admitted run before the browser finishes navigation.
   await expect(page.getByRole("region", { name: "Research Runs" })).toContainText(
-    "Status queued",
+    /Status (?:queued|running)/,
   );
   await expect(page.getByRole("link", { name: "Revision 1" })).toBeVisible();
   expect(writes).toEqual(["/api/definitions/run"]);
