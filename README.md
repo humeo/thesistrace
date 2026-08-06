@@ -8,24 +8,31 @@ The active implementation is the module-first Core described in
 
 ## Local development
 
-Install the backend and frontend dependencies once:
+Install [mise](https://mise.jdx.dev/), [uv](https://docs.astral.sh/uv/), and
+Docker with Compose support. Then install the pinned Node.js and pnpm versions,
+sync host dependencies, validate Compose, and build the local images:
 
 ```sh
-uv sync
-bun install --cwd web
+mise install
+mise exec -- pnpm bootstrap
 ```
 
-Docker must be available for the development PostgreSQL and S3-compatible
-object store. Start those dependencies, the API, worker, and Web UI together:
+Start the complete Development topology with Compose Watch:
 
 ```sh
-make dev
+mise exec -- pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`. Development uses the same PostgreSQL and standard
-S3 interfaces as every future deployment; there is no local product runtime or
-SQLite fallback. Use `make dev-reset` to clear the development data or
-`make dev-down` to stop and remove it.
+Open `http://127.0.0.1:5173`. Web, API, Worker, PostgreSQL, RustFS, and the
+one-shot Migration service all belong to the canonical Compose project. For a
+detached start use `mise exec -- pnpm dev:up`; use
+`mise exec -- pnpm dev:stop` to stop services without deleting data, and
+`mise exec -- pnpm dev:reset` only when the Development data should be erased.
+
+The complete command contract, Test isolation rules, and failure evidence are
+documented in the [local lifecycle guide](docs/runbook/local-lifecycle.md).
+Only local Development and local Test exist today. Local checks are not
+Production readiness.
 
 The current Tushare adapter has a separate
 [credential verification guide](docs/runbook/tushare-live-bootstrap.md).
@@ -33,5 +40,5 @@ The current Tushare adapter has a separate
 Run the current backend, frontend, and browser acceptance checks with:
 
 ```sh
-make check
+mise exec -- pnpm check
 ```

@@ -642,3 +642,66 @@ def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
         assert f"resources {project}_default {project}_postgres-data" in commands
         assert f"bucket={project}" in commands
     assert "thesistrace-dev" not in commands
+
+
+def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None:
+    readme = (ROOT / "README.md").read_text()
+    guide = (ROOT / "docs" / "runbook" / "local-lifecycle.md").read_text()
+    tushare = (ROOT / "docs" / "runbook" / "tushare-live-bootstrap.md").read_text()
+    active_docs = "\n".join((readme, guide, tushare))
+
+    for command in (
+        "mise exec -- pnpm bootstrap",
+        "mise exec -- pnpm dev",
+        "mise exec -- pnpm dev:up",
+        "mise exec -- pnpm dev:logs",
+        "mise exec -- pnpm dev:stop",
+        "mise exec -- pnpm dev:reset",
+        "mise exec -- pnpm test",
+        "mise exec -- pnpm test:integration",
+        "mise exec -- pnpm test:e2e",
+        "mise exec -- pnpm check",
+    ):
+        assert command in active_docs
+    assert "Node.js 24.14.0" in guide
+    assert "pnpm 11.9.0" in guide
+    assert "uv" in guide
+    assert ".local/test-runs/<run-id>/" in guide
+    assert "--keep-environment" in guide
+    assert "only local Development and local Test" in guide
+    assert "not Production readiness" in active_docs
+    for retired in (
+        "Makefile",
+        "make dev",
+        "make check",
+        "dev:down",
+        "core-test-runtime",
+        "compose.test.yaml",
+    ):
+        assert retired not in active_docs
+
+
+def test_full_compose_lifecycle_decision_is_recorded_without_glossary_drift() -> None:
+    adr = (
+        ROOT
+        / "docs"
+        / "adr"
+        / "0152-use-one-full-compose-topology-for-local-development-and-test.md"
+    ).read_text()
+    glossary = (ROOT / "CONTEXT.md").read_text()
+
+    assert "status: accepted" in adr
+    assert "Web, API, Worker, PostgreSQL, RustFS" in adr
+    assert "one-shot Migration" in adr
+    assert "hybrid" in adr
+    assert "host test runners" in adr
+    assert "not Production readiness" in adr
+    for engineering_term in (
+        "Compose Watch",
+        "Development environment",
+        "Test environment",
+        "pnpm bootstrap",
+        "test:integration",
+        "test:e2e",
+    ):
+        assert engineering_term not in glossary

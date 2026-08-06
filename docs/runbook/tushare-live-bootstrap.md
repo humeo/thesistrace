@@ -9,7 +9,7 @@ contracts without publishing a Dataset Release:
 
 ```sh
 export TUSHARE_TOKEN='...'
-make check-live-tushare
+mise exec -- pnpm check:live-tushare
 ```
 
 The command performs provider preflight, deterministic collection, and
@@ -18,6 +18,6 @@ range, and Research Session count. The token is sent only in Tushare request
 bodies and is not written to product state, Publication objects, logs, or test
 evidence.
 
-This credential-dependent command is deliberately outside `make check`. A
+This credential-dependent command is deliberately outside `pnpm check`. A
 successful run proves adapter access and source coverage; it does not publish
 through a hidden runtime or prove a production schedule.

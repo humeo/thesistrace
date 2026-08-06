@@ -10,10 +10,13 @@ Login, tenancy, hosted deployment, collaboration, and production operations are
 deferred. They must not add branches or dependencies to the Core while this
 loop is being built.
 
-There is one ThesisTrace product and one canonical runtime. Development and a
-future hosted deployment use the same Core implementation. Deployment may
-change credentials, process counts, and S3 endpoint configuration; it does not
-select a `local` or `hosted` product mode.
+There is one ThesisTrace product and one canonical runtime implementation. The
+active lifecycle has exactly two environments: persistent local Development
+and disposable local Test. Both use one base Compose topology containing Web,
+API, Worker, PostgreSQL, RustFS, and a one-shot Migration service; overlays
+change lifecycle and isolation, not product behavior. No Production environment
+or readiness contract exists in the active repository phase, and local evidence
+must not be reported as Production readiness.
 
 ## Product loop
 
@@ -565,24 +568,29 @@ change resource shapes, actions, or URLs.
 
 ## Verification
 
-The default Core gate has three seams:
+The default Core gate, `mise exec -- pnpm check`, has three seams in increasing
+cost order:
 
-1. Pure Kernel tests cover numeric rules, operator behavior, and once-versus-
-   chunked equivalence.
-2. Product integration tests use real PostgreSQL and real pinned RustFS. They
-   cover transactions, revision conflicts, idempotency, claims, retries,
-   fencing, publication failure, and restart recovery.
-3. Desktop browser acceptance drives the real Core runtime with Fixture data
-   through Data Update, Save, Run, Result, Rerun, DailyTrack start, later Data
-   Update, automatic advance, blocked Retry, and Stop.
+1. `pnpm test` keeps lint, pure Python tests, TypeScript checking, and the Web
+   shell test on the host for fast feedback.
+2. `pnpm test:integration` creates an isolated Compose Test project with real
+   PostgreSQL and pinned RustFS. It covers transactions, revision conflicts,
+   idempotency, claims, retries, fencing, publication failure, and restart
+   recovery.
+3. `pnpm test:e2e` creates the complete disposable Compose topology and drives
+   it from host Playwright through Data Update, Save, Run, Result, Rerun,
+   DailyTrack start, later Data Update, automatic advance, blocked Retry, and
+   Stop.
 
 The complete gate also proves that an invalid Run saves the Definition without
 creating a ResearchRun; Rerun keeps the original input and Release; Cancel
 rejects late results; and a succeeded Result Bundle stays within one MiB.
 
-`make check` must contain only Core tests and the Core browser flow. Live
+`pnpm check` must contain only Core tests and the Core browser flow. Live
 Tushare verification is an explicit separate gate. Hosted, login, tenancy,
 deployment, and archived Hosted V2 tests are absent from the default gate.
+Lifecycle operation and evidence handling are documented in the
+[local lifecycle guide](../runbook/local-lifecycle.md).
 
 ## Deferred and removed scope
 
