@@ -9,9 +9,72 @@ services:
       - 127.0.0.1:${THESISTRACE_DEV_S3_CONSOLE_PORT}:9001
 
   api:
+    command:
+      - uvicorn
+      - thesistrace.entrypoints.http:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8100"
+      - --reload
+      - --reload-dir
+      - /app/src
     ports:
       - 127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100
+    develop:
+      watch:
+        - path: ../../src
+          action: sync
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/worker.py
+        - path: ../../pyproject.toml
+          action: rebuild
+        - path: ../../uv.lock
+          action: rebuild
+        - path: ./Dockerfile.backend
+          action: rebuild
+
+  worker:
+    develop:
+      watch:
+        - path: ../../src
+          action: sync+restart
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/http.py
+            - thesistrace/entrypoints/migrate.py
+        - path: ../../pyproject.toml
+          action: rebuild
+        - path: ../../uv.lock
+          action: rebuild
+        - path: ./Dockerfile.backend
+          action: rebuild
 
   web:
     ports:
       - 127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:5173
+    develop:
+      watch:
+        - path: ../../web
+          action: sync
+          target: /app/web
+          initial_sync: true
+          ignore:
+            - package.json
+            - node_modules/
+            - dist/
+            - test-results/
+            - playwright-report/
+        - path: ../../package.json
+          action: rebuild
+        - path: ../../pnpm-lock.yaml
+          action: rebuild
+        - path: ../../pnpm-workspace.yaml
+          action: rebuild
+        - path: ../../web/package.json
+          action: rebuild
+        - path: ./Dockerfile.web
+          action: rebuild

@@ -8,7 +8,8 @@
   },
   "scripts": {
     "bootstrap": "./scripts/dev-runtime bootstrap",
-    "dev": "./scripts/dev-runtime up",
+    "dev": "./scripts/dev-runtime watch",
+    "dev:logs": "./scripts/dev-runtime logs",
     "dev:up": "./scripts/dev-runtime up",
     "dev:reset": "./scripts/dev-runtime reset",
     "dev:stop": "./scripts/dev-runtime stop",

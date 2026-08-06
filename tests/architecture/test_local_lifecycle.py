@@ -15,6 +15,8 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     scripts = package["scripts"]
 
     assert scripts["bootstrap"] == "./scripts/dev-runtime bootstrap"
+    assert scripts["dev"] == "./scripts/dev-runtime watch"
+    assert scripts["dev:logs"] == "./scripts/dev-runtime logs"
     assert scripts["dev:up"] == "./scripts/dev-runtime up"
     assert scripts["dev:reset"] == "./scripts/dev-runtime reset"
     assert scripts["dev:stop"] == "./scripts/dev-runtime stop"
@@ -24,6 +26,9 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     assert "project_name=thesistrace-dev" in lifecycle
     assert "mise exec -- pnpm install --frozen-lockfile" in lifecycle
     assert "compose up --detach --build --wait --wait-timeout 300" in lifecycle
+    assert "compose up --watch" in lifecycle
+    assert "compose logs --follow --timestamps" in lifecycle
+    assert "panic: close of closed channel" in lifecycle
     assert "compose stop" in lifecycle
 
 
@@ -71,8 +76,22 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
     web = (ROOT / "deploy" / "core" / "Dockerfile.web").read_text()
 
     assert ".venv" in dockerignore
+    assert "node_modules" in dockerignore
     assert "web/node_modules" in dockerignore
     assert "node_modules" not in backend
     assert "node_modules" not in web
     assert "node:24.14.0-bookworm-slim" in web
     assert "pnpm@11.9.0" in web
+
+
+def test_development_watch_assigns_service_appropriate_actions() -> None:
+    development = (ROOT / "deploy" / "core" / "compose.dev.yaml").read_text()
+
+    assert "thesistrace.entrypoints.http:app" in development
+    assert "--reload-dir" in development
+    assert "action: sync+restart" in development
+    assert "action: sync" in development
+    assert "action: rebuild" in development
+    assert "node_modules/" in development
+    assert "target: /app/src" in development
+    assert "target: /app/web" in development

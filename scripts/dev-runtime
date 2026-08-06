@@ -34,6 +34,31 @@ start() {
   compose up --detach --build --wait --wait-timeout 300
 }
 
+watch_runtime() {
+  watch_state=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-dev-watch.XXXXXX")
+  watch_error="$watch_state/stderr"
+  interrupted=false
+  trap 'interrupted=true' INT TERM
+
+  set +e
+  compose up --watch 2>"$watch_error"
+  watch_status=$?
+  set -e
+  trap - INT TERM
+
+  if [ "$interrupted" = true ] \
+    && [ "$watch_status" -eq 2 ] \
+    && grep -q "panic: close of closed channel" "$watch_error"; then
+    watch_status=0
+  fi
+  if [ "$watch_status" -ne 0 ]; then
+    cat "$watch_error" >&2
+  fi
+  rm -f -- "$watch_error"
+  rmdir -- "$watch_state"
+  return "$watch_status"
+}
+
 validate_project
 
 case "${1:-}" in
@@ -49,9 +74,17 @@ case "${1:-}" in
   up)
     start
     ;;
+  watch)
+    validate_compose
+    watch_runtime
+    ;;
   stop)
     validate_compose
     compose stop
+    ;;
+  logs)
+    validate_compose
+    compose logs --follow --timestamps
     ;;
   reset)
     validate_compose
@@ -59,7 +92,7 @@ case "${1:-}" in
     start
     ;;
   *)
-    echo "usage: $0 {bootstrap|up|stop|reset}" >&2
+    echo "usage: $0 {bootstrap|up|watch|stop|reset|logs}" >&2
     exit 2
     ;;
 esac

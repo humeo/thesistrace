@@ -86,9 +86,6 @@ services:
       dockerfile: deploy/core/Dockerfile.web
     environment:
       THESISTRACE_API_ORIGIN: http://api:8100
-    depends_on:
-      api:
-        condition: service_healthy
     healthcheck:
       test:
         - CMD
