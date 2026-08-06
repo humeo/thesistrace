@@ -3,13 +3,13 @@ from dataclasses import replace
 
 import boto3
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.data import CollectionPlan, DataService
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,

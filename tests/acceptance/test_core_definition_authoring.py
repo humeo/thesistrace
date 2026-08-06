@@ -1,9 +1,9 @@
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.fields import AUTHORABLE_FIELDS
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.research_kernel.alpha_expression import operator_catalog
 

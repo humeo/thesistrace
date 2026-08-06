@@ -5,12 +5,12 @@ import json
 from collections.abc import Mapping
 
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource, _append_session
 from thesistrace.data.source import CanonicalSourceBatch, CollectionPlan
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import (
     CoreRuntime,
     CoreSettings,

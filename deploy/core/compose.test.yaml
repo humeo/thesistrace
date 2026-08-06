@@ -12,7 +12,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U thesistrace -d thesistrace"]
       interval: 1s
       timeout: 5s
-      retries: 30
+      retries: 180
     volumes:
       - ${THESISTRACE_CORE_TEST_DATA_ROOT:-/private/tmp/thesistrace-core-test-data}/postgres:/var/lib/postgresql/data
 

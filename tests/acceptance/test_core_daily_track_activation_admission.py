@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 from test_core_daily_track_activation import (
@@ -13,7 +14,6 @@ from test_core_daily_track_activation import (
     _stored_seed,
 )
 
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import JsonPayload, PublishedRef
 from thesistrace.research_run import ResearchRunTrackingUnavailable

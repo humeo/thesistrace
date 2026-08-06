@@ -10,25 +10,16 @@ from tempfile import TemporaryDirectory
 
 import boto3
 
-from thesistrace._postgres import (
-    MigrationPlan,
-    PostgresDatabase,
-    apply_migrations,
-    verify_migrations,
-)
+from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.daily_track import DailyTrackService
-from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
 from thesistrace.data import DataService, authorable_field_bindings
-from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.definition import DefinitionService
-from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
+from thesistrace.entrypoints.migrations import verify_core_migrations
 from thesistrace.publication import Publication
-from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
 from thesistrace.research_kernel import operator_catalog
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_run import ResearchRunService
-from thesistrace.research_run.migrations import MIGRATIONS as RESEARCH_RUN_MIGRATIONS
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -36,13 +27,6 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_ACCESS_KEY_ID",
     "THESISTRACE_S3_SECRET_ACCESS_KEY",
     "THESISTRACE_S3_BUCKET",
-)
-CORE_MIGRATION_PLANS: tuple[MigrationPlan, ...] = (
-    PUBLICATION_MIGRATIONS,
-    DATA_MIGRATIONS,
-    DEFINITION_MIGRATIONS,
-    RESEARCH_RUN_MIGRATIONS,
-    DAILY_TRACK_MIGRATIONS,
 )
 
 
@@ -101,24 +85,6 @@ class CoreRuntime:
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
     publication: Publication
-
-
-def migrate_core(database_url: str) -> tuple[str, ...]:
-    database = PostgresDatabase(database_url)
-    database.open()
-    try:
-        return tuple(
-            f"{plan.schema}.{migration}"
-            for plan in CORE_MIGRATION_PLANS
-            for migration in apply_migrations(database, plan)
-        )
-    finally:
-        database.close()
-
-
-def verify_core_migrations(database: PostgresDatabase) -> None:
-    for plan in CORE_MIGRATION_PLANS:
-        verify_migrations(database, plan)
 
 
 @contextmanager

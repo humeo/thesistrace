@@ -12,12 +12,12 @@ from uuid import uuid4
 import boto3
 import pytest
 from botocore.exceptions import ClientError
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.data import CanonicalSourceBatch, CollectionPlan, DataService
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import (
     CoreRuntime,
     CoreSettings,

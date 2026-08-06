@@ -5,6 +5,7 @@ from pathlib import Path
 from threading import Event
 
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 from test_core_daily_track_retry import (
     _admit_and_execute,
@@ -15,7 +16,6 @@ from test_core_daily_track_retry import (
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import DailyTrackService
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.worker import _process_once
 from thesistrace.research_kernel import KernelRunError

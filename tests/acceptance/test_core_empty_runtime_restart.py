@@ -43,10 +43,22 @@ def _request_json(url: str) -> object:
 def test_http_and_worker_process_restarts_preserve_empty_data() -> None:
     _drop_product_schemas(CoreSettings.from_environment())
     environment = {**os.environ, "THESISTRACE_LOG_LEVEL": "warning"}
+    migration_command = shutil.which("thesistrace-migrate")
     api_command = shutil.which("thesistrace-api")
     worker_command = shutil.which("thesistrace-worker")
+    assert migration_command is not None
     assert api_command is not None
     assert worker_command is not None
+    migration = subprocess.run(
+        [migration_command],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert migration.returncode == 0, migration.stderr
     expected_overview = {
         "status": "idle",
         "latest_release": None,

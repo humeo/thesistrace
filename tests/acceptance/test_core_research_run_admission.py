@@ -3,11 +3,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.definition import DefinitionRunCommand
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 
 

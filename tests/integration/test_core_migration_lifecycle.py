@@ -7,11 +7,10 @@ from fastapi.testclient import TestClient
 
 from thesistrace._postgres import MigrationError, PostgresDatabase
 from thesistrace.entrypoints.http import create_app
+from thesistrace.entrypoints.migrations import CORE_MIGRATION_PLANS
 from thesistrace.entrypoints.runtime import (
-    CORE_MIGRATION_PLANS,
     CoreSettings,
     core_environment_is_configured,
-    migrate_core,
 )
 
 
@@ -36,14 +35,12 @@ def test_explicit_migration_is_idempotent_and_required_before_startup() -> None:
     assert missing_worker.returncode != 0
     assert "missing migration ledger" in missing_worker.stderr
 
-    first_applied = migrate_core(settings.database_url)
-    assert first_applied == tuple(
-        f"{plan.schema}.{migration.name}"
-        for plan in CORE_MIGRATION_PLANS
-        for migration in plan.migrations
-    )
+    first_migration = _run_migration_command()
+    assert first_migration.returncode == 0, first_migration.stderr
     before_startup = _migration_ledger(settings.database_url)
-    assert migrate_core(settings.database_url) == ()
+    repeated_migration = _run_migration_command()
+    assert repeated_migration.returncode == 0, repeated_migration.stderr
+    assert _migration_ledger(settings.database_url) == before_startup
 
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/data").status_code == 200
@@ -57,6 +54,15 @@ def test_explicit_migration_is_idempotent_and_required_before_startup() -> None:
     assert _migration_ledger(settings.database_url) == before_startup
 
 
+def _run_migration_command() -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["uv", "run", "thesistrace-migrate"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+
 def _drop_product_schemas(database_url: str) -> None:
     database = PostgresDatabase(database_url)
     database.open()
@@ -68,18 +74,20 @@ def _drop_product_schemas(database_url: str) -> None:
         database.close()
 
 
-def _migration_ledger(database_url: str) -> tuple[tuple[str, str, object], ...]:
+def _migration_ledger(database_url: str) -> tuple[tuple[str, str, str, object], ...]:
     database = PostgresDatabase(database_url)
     database.open()
     try:
-        rows: list[tuple[str, str, object]] = []
+        rows: list[tuple[str, str, str, object]] = []
         with database.transaction() as transaction:
             for plan in CORE_MIGRATION_PLANS:
                 for row in transaction.execute(
                     f'SELECT name, sha256, applied_at FROM "{plan.schema}".'
                     f'"{plan.ledger_table}" ORDER BY name'
                 ).fetchall():
-                    rows.append((plan.schema, row["name"], row["applied_at"]))
+                    rows.append(
+                        (plan.schema, row["name"], row["sha256"], row["applied_at"])
+                    )
         return tuple(rows)
     finally:
         database.close()

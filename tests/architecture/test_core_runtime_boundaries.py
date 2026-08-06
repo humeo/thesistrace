@@ -194,11 +194,15 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
 def test_long_running_runtime_verifies_but_does_not_apply_migrations() -> None:
     runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
     migration_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "migrate.py").read_text()
+    orchestration_source = (
+        ROOT / "src" / "thesistrace" / "entrypoints" / "migrations.py"
+    ).read_text()
     runtime_body = runtime_source.split("def open_core_runtime", maxsplit=1)[1]
 
     assert "verify_core_migrations(database)" in runtime_body
     assert "apply_migrations(" not in runtime_body
     assert "migrate_core(database_url)" in migration_source
+    assert "apply_migrations(database, plan)" in orchestration_source
 
 
 def test_current_runtime_migrates_before_starting_long_running_processes() -> None:

@@ -2,11 +2,12 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.service import DataUpdateConflict
-from thesistrace.entrypoints.http import create_app
+from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
@@ -150,6 +151,7 @@ def test_malformed_and_conflicting_update_requests_create_no_new_work() -> None:
 def test_postgresql_admits_only_one_concurrent_data_update() -> None:
     settings = CoreSettings.from_environment()
     _reset_core_schemas(settings)
+    migrate_core(settings.database_url)
     with open_core_runtime(settings) as runtime:
         barrier = Barrier(6)
 

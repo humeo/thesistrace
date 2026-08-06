@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from thesistrace.entrypoints.runtime import migrate_core
+from thesistrace.entrypoints.migrations import migrate_core
 
 
 def main() -> None:

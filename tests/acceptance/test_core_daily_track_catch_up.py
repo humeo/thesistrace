@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.worker import _process_once
 from thesistrace.publication import PublishedRef
