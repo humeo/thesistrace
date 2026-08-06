@@ -206,12 +206,20 @@ def test_long_running_runtime_verifies_but_does_not_apply_migrations() -> None:
 
 
 def test_current_runtime_migrates_before_starting_long_running_processes() -> None:
-    lifecycle = (ROOT / "scripts" / "core-test-runtime").read_text()
-    up_body = lifecycle.split("  up)", maxsplit=1)[1].split("    ;;", maxsplit=1)[0]
-    reset_body = lifecycle.split("  reset)", maxsplit=1)[1].split("    ;;", maxsplit=1)[0]
+    compose = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
+    migrate_service = compose.split("  migrate:\n", maxsplit=1)[1].split(
+        "  api:\n", maxsplit=1
+    )[0]
+    api_service = compose.split("  api:\n", maxsplit=1)[1].split(
+        "  worker:\n", maxsplit=1
+    )[0]
+    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split(
+        "  web:\n", maxsplit=1
+    )[0]
 
-    assert "compose up --detach --wait\n    migrate" in up_body
-    assert "compose up --detach --wait\n    migrate" in reset_body
+    assert 'command: ["thesistrace-migrate"]' in migrate_service
+    assert "condition: service_completed_successfully" in api_service
+    assert "condition: service_completed_successfully" in worker_service
 
     script = """
 import json
@@ -261,8 +269,8 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
     assert "CREATE TABLE data.releases" in data_migrations
 
 
-def test_isolated_runtime_pins_only_postgres_and_rustfs() -> None:
-    compose = (ROOT / "deploy" / "core" / "compose.test.yaml").read_text()
+def test_canonical_compose_pins_external_infrastructure_images() -> None:
+    compose = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
     assert "postgres:16.10-alpine" in compose
     assert "rustfs/rustfs:1.0.0-beta.12" in compose
     assert ":latest" not in compose
@@ -351,15 +359,7 @@ def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
     core_gate = _package_script("check")
     live_gate = _package_script("check:live-tushare")
 
-    for command in (
-        "uv run ruff check src tests",
-        "uv run pytest -q tests/kernel tests/architecture tests/adapters",
-        "pnpm --dir web typecheck",
-        "pnpm --dir web build",
-        "uv run pytest -q tests/integration tests/acceptance",
-        "pnpm --dir web test:e2e",
-    ):
-        assert command in core_gate
+    assert core_gate == "pnpm test && pnpm test:integration && pnpm test:e2e"
     for deferred in (
         "hosted",
         "login",
@@ -386,6 +386,7 @@ def test_fast_host_gate_excludes_compose_and_expensive_work() -> None:
         "docker",
         "compose",
         "core-test-runtime",
+        "test-runtime",
         "tests/integration",
         "tests/acceptance",
         "test:e2e",

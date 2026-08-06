@@ -424,6 +424,46 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "down --volumes --remove-orphans" in commands
 
 
+def test_complete_gate_delegates_to_canonical_constituents_in_cost_order() -> None:
+    package = json.loads((ROOT / "package.json").read_text())
+    scripts = package["scripts"]
+
+    assert scripts["check"] == "pnpm test && pnpm test:integration && pnpm test:e2e"
+    assert scripts["check"].split(" && ") == [
+        "pnpm test",
+        "pnpm test:integration",
+        "pnpm test:e2e",
+    ]
+    assert scripts["test:integration"] == "./scripts/test-runtime integration"
+    assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
+
+
+def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:
+    package = json.loads((ROOT / "package.json").read_text())
+    test_runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    active_sources = "\n".join(
+        (
+            package["scripts"]["test"],
+            package["scripts"]["test:integration"],
+            package["scripts"]["test:e2e"],
+            package["scripts"]["check"],
+            test_runtime,
+        )
+    )
+
+    assert not (ROOT / "Makefile").exists()
+    assert not (ROOT / "scripts" / "core-test-runtime").exists()
+    assert not (ROOT / "deploy" / "core" / "compose.test.yaml").exists()
+    assert "project_name=thesistrace-dev" not in test_runtime
+    assert "--project-name thesistrace-dev" not in test_runtime
+    for host_application in (
+        "uv run thesistrace-core-api",
+        "uv run thesistrace-core-worker",
+        "vite --host",
+    ):
+        assert host_application not in active_sources
+
+
 def test_failed_e2e_groups_playwright_and_compose_evidence_before_cleanup(
     tmp_path: Path,
 ) -> None:
