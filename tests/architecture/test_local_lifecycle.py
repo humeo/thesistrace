@@ -41,7 +41,7 @@ def test_development_reset_rejects_every_noncanonical_project(project_name: str)
     environment = {**os.environ, "THESISTRACE_DEV_PROJECT_NAME": project_name}
 
     completed = subprocess.run(
-        [str(ROOT / "scripts" / "dev-runtime"), "reset"],
+        ["mise", "exec", "--", "pnpm", "dev:reset"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
