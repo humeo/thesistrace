@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 from pathlib import Path
 
@@ -28,7 +29,6 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     assert "compose up --detach --build --wait --wait-timeout 300" in lifecycle
     assert "compose up --watch" in lifecycle
     assert "compose logs --follow --timestamps" in lifecycle
-    assert "panic: close of closed channel" in lifecycle
     assert "compose stop" in lifecycle
 
 
@@ -95,3 +95,64 @@ def test_development_watch_assigns_service_appropriate_actions() -> None:
     assert "node_modules/" in development
     assert "target: /app/src" in development
     assert "target: /app/web" in development
+
+
+@pytest.mark.parametrize("wrapper_signal", (signal.SIGINT, signal.SIGTERM))
+def test_development_watch_streams_stderr_and_forwards_termination(
+    tmp_path: Path,
+    wrapper_signal: signal.Signals,
+) -> None:
+    signal_file = tmp_path / "watch-signal"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        """#!/usr/bin/env python3
+import os
+import signal
+import sys
+
+arguments = " ".join(sys.argv[1:])
+if "config --quiet" in arguments:
+    raise SystemExit(0)
+if "up --watch" not in arguments:
+    raise SystemExit(2)
+
+def terminate(_signum, _frame):
+    with open(os.environ["WATCH_SIGNAL_FILE"], "w") as signal_file:
+        signal_file.write("TERM")
+    print("panic: close of closed channel", file=sys.stderr, flush=True)
+    print("watch panic trace", file=sys.stderr, flush=True)
+    raise SystemExit(2)
+
+signal.signal(signal.SIGTERM, terminate)
+print("watch-warning", file=sys.stderr, flush=True)
+signal.pause()
+"""
+    )
+    docker.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "WATCH_SIGNAL_FILE": str(signal_file),
+    }
+
+    process = subprocess.Popen(
+        [ROOT / "scripts" / "dev-runtime", "watch"],
+        cwd=ROOT,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert process.stderr is not None
+        assert process.stderr.readline() == "watch-warning\n"
+        process.send_signal(wrapper_signal)
+        _, remaining_stderr = process.communicate(timeout=5)
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.communicate()
+
+    assert process.returncode == 0
+    assert signal_file.read_text() == "TERM"
+    assert "panic: close of closed channel" not in remaining_stderr

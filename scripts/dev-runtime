@@ -36,25 +36,62 @@ start() {
 
 watch_runtime() {
   watch_state=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-dev-watch.XXXXXX")
-  watch_error="$watch_state/stderr"
-  interrupted=false
-  trap 'interrupted=true' INT TERM
+  watch_stderr="$watch_state/stderr"
+  watch_panic="$watch_state/panic"
+  mkfifo "$watch_stderr"
+  : >"$watch_panic"
 
+  interrupted=false
+  watch_pid=
+  trap 'interrupted=true; if [ -n "$watch_pid" ]; then kill -TERM "-$watch_pid" 2>/dev/null || kill -TERM "$watch_pid" 2>/dev/null || true; fi' INT TERM
+
+  (
+    buffering=false
+    while IFS= read -r line; do
+      if [ "$line" = "panic: close of closed channel" ]; then
+        buffering=true
+      fi
+      if [ "$buffering" = true ]; then
+        printf '%s\n' "$line" >>"$watch_panic"
+      else
+        printf '%s\n' "$line" >&2
+      fi
+    done <"$watch_stderr"
+  ) &
+  watch_reader_pid=$!
+
+  set -m
+  (
+    trap '' INT
+    compose up --watch 2>"$watch_stderr"
+  ) &
+  watch_pid=$!
+  set +m
   set +e
-  compose up --watch 2>"$watch_error"
+  wait "$watch_pid" 2>/dev/null
   watch_status=$?
+  wait "$watch_reader_pid"
+  watch_reader_status=$?
   set -e
   trap - INT TERM
 
-  if [ "$interrupted" = true ] \
-    && [ "$watch_status" -eq 2 ] \
-    && grep -q "panic: close of closed channel" "$watch_error"; then
-    watch_status=0
+  if [ "$watch_reader_status" -ne 0 ] && [ "$watch_status" -eq 0 ]; then
+    watch_status=$watch_reader_status
   fi
-  if [ "$watch_status" -ne 0 ]; then
-    cat "$watch_error" >&2
+  if [ "$interrupted" = true ]; then
+    case "$watch_status" in
+      0 | 130 | 143) watch_status=0 ;;
+      2)
+        if grep -q "panic: close of closed channel" "$watch_panic"; then
+          watch_status=0
+        fi
+        ;;
+    esac
   fi
-  rm -f -- "$watch_error"
+  if [ "$watch_status" -ne 0 ] && [ -s "$watch_panic" ]; then
+    cat "$watch_panic" >&2
+  fi
+  rm -f -- "$watch_stderr" "$watch_panic"
   rmdir -- "$watch_state"
   return "$watch_status"
 }
