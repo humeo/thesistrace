@@ -436,6 +436,7 @@ def test_complete_gate_delegates_to_canonical_constituents_in_cost_order() -> No
     ]
     assert scripts["test:integration"] == "./scripts/test-runtime integration"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
+    assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
 
 
 def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:
@@ -668,6 +669,11 @@ def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None
     assert "uv" in guide
     assert ".local/test-runs/<run-id>/" in guide
     assert "--keep-environment" in guide
+    assert "mise exec -- pnpm test:integration --keep-environment" in guide
+    assert "mise exec -- pnpm test:e2e --keep-environment" in guide
+    assert "mise exec -- pnpm test:cleanup" in guide
+    assert "./scripts/test-runtime cleanup" not in guide
+    assert " -- --keep-environment" not in guide
     assert "only local Development and local Test" in guide
     assert "not Production readiness" in active_docs
     for retired in (

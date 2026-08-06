@@ -116,8 +116,8 @@ the same by default after evidence capture. To keep only a failing environment
 for interactive inspection, append the diagnostic escape hatch:
 
 ```sh
-mise exec -- pnpm test:integration -- --keep-environment
-mise exec -- pnpm test:e2e -- --keep-environment
+mise exec -- pnpm test:integration --keep-environment
+mise exec -- pnpm test:e2e --keep-environment
 ```
 
 The command prints the exact Test project name. After inspection, clean that
@@ -125,9 +125,23 @@ project through its metadata-bound safety check:
 
 ```sh
 THESISTRACE_TEST_PROJECT_NAME=thesistrace-test-<run-id> \
-  mise exec -- ./scripts/test-runtime cleanup
+  mise exec -- pnpm test:cleanup
 ```
 
 The keep option has no effect on a successful run. Cleanup refuses Development,
 malformed Test identities, and Test identities without matching `run.txt`
 metadata.
+
+## Local change workflow
+
+Use Local Markdown Specs and Issues under `.scratch/` for non-trivial work; keep
+small bounded fixes proportional and avoid unnecessary planning files. Work on
+a short-lived feature, fix, or chore branch and implement vertically through the
+public product or lifecycle seam.
+
+Run focused checks during implementation, the relevant real-service milestone
+gate when behavior crosses Compose, and `mise exec -- pnpm check` before merge.
+Complete local Standards and Spec review against a fixed point, resolve its
+findings, then fast-forward the verified branch. A GitHub Pull Request may be
+used for collaboration, but it is not a required gate in the current local-only
+phase.

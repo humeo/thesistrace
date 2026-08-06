@@ -516,9 +516,8 @@ distributed transaction.
 
 The application uses an existing S3-compatible implementation through a
 standard client. It does not implement an object-store server, custom storage
-tokens, or HTTP proxy. Development and continuous integration use one pinned
-RustFS container. A future deployment changes the endpoint and credentials,
-not application code.
+tokens, or HTTP proxy. Local Development and local Test use one pinned RustFS
+container. No alternate storage endpoint is part of the active lifecycle.
 
 ## Worker implementation
 
