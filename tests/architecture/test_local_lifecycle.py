@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -15,24 +16,62 @@ def _fake_test_runtime_commands(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     command_log = tmp_path / "commands.log"
     docker = tmp_path / "docker"
     docker.write_text(
-        """#!/bin/sh
-printf 'docker %s\\n' "$*" >> "$TEST_COMMAND_LOG"
-case " $* " in
-  *" port postgres 5432 ") printf '127.0.0.1:40101\\n' ;;
-  *" port rustfs 9000 ") printf '127.0.0.1:40102\\n' ;;
-  *" ps --all --quiet ") printf 'container-test-id\\n' ;;
-  *" ps --all ") printf 'test services\\n' ;;
-  *" logs --no-color --timestamps ") printf 'test logs\\n' ;;
-esac
-if [ "${1:-}" = inspect ]; then
-  printf 'container inspection\\n'
-fi
+        """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+import time
+
+arguments = sys.argv[1:]
+log = Path(os.environ["TEST_COMMAND_LOG"])
+with log.open("a") as stream:
+    stream.write(f"docker {' '.join(arguments)}\\n")
+if arguments[0] == "inspect":
+    print("container inspection")
+    raise SystemExit(0)
+
+project = arguments[arguments.index("--project-name") + 1]
+if "up" in arguments:
+    with log.open("a") as stream:
+        stream.write(
+            f"resources {project}_default {project}_postgres-data "
+            f"{project}_rustfs-data\\n"
+        )
+if "port" in arguments:
+    mapping_path = Path(os.environ["TEST_PORT_MAP"])
+    lock_path = mapping_path.with_suffix(".lock")
+    while True:
+        try:
+            lock_path.mkdir()
+            break
+        except FileExistsError:
+            time.sleep(0.01)
+    try:
+        mapping = json.loads(mapping_path.read_text()) if mapping_path.exists() else {}
+        if project not in mapping:
+            mapping[project] = 41000 + len(mapping) * 4
+            mapping_path.write_text(json.dumps(mapping))
+        base_port = mapping[project]
+    finally:
+        lock_path.rmdir()
+    service = arguments[arguments.index("port") + 1]
+    print(f"127.0.0.1:{base_port + (1 if service == 'postgres' else 2)}")
+elif "ps" in arguments and "--quiet" in arguments:
+    print("container-test-id")
+elif "ps" in arguments:
+    print("test services")
+elif "logs" in arguments:
+    print("test logs")
+if "down" in arguments:
+    raise SystemExit(int(os.environ.get("FAKE_CLEANUP_STATUS", "0")))
 """
     )
     docker.chmod(0o755)
     uv = tmp_path / "uv"
     uv.write_text(
         """#!/bin/sh
+trap 'if [ -n "${TEST_SIGNAL_FILE:-}" ]; then printf TERM > "$TEST_SIGNAL_FILE"; fi; exit 143' TERM
 printf 'uv %s db=%s s3=%s bucket=%s\\n' \
   "$*" "$THESISTRACE_DATABASE_URL" "$THESISTRACE_S3_ENDPOINT_URL" \
   "$THESISTRACE_S3_BUCKET" >> "$TEST_COMMAND_LOG"
@@ -45,6 +84,7 @@ for argument in "$@"; do
       ;;
   esac
 done
+sleep "${FAKE_PYTEST_DELAY:-0}"
 exit "${FAKE_PYTEST_STATUS:-0}"
 """
     )
@@ -53,6 +93,7 @@ exit "${FAKE_PYTEST_STATUS:-0}"
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "TEST_COMMAND_LOG": str(command_log),
+        "TEST_PORT_MAP": str(tmp_path / "ports.json"),
         "THESISTRACE_TEST_STATE_ROOT": str(tmp_path / "runs"),
     }
     return command_log, environment
@@ -246,6 +287,7 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
         "thesistrace-core-test",
         "thesistrace-test-production",
         "thesistrace-test-release-1",
+        "thesistrace-test-20260806t120000z-123-abcdef12",
         "ThesisTrace-test-run-1",
         "unrelated-project",
     ),
@@ -274,8 +316,40 @@ def test_test_cleanup_rejects_unsafe_project_identities(
     )
 
     assert completed.returncode == 2
-    assert "refusing non-canonical Test project" in completed.stderr
+    assert "refusing" in completed.stderr
     assert not marker.exists()
+
+
+def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
+    tmp_path: Path,
+) -> None:
+    project_name = "thesistrace-test-20260806t120000z-123-abcdef12"
+    run_id = project_name.removeprefix("thesistrace-test-")
+    run_root = tmp_path / "runs" / run_id
+    run_root.mkdir(parents=True)
+    (run_root / "run.txt").write_text(f"run_id={run_id}\nproject_name={project_name}\n")
+    marker = tmp_path / "docker-invoked"
+    docker = tmp_path / "docker"
+    docker.write_text(f"#!/bin/sh\nprintf invoked > '{marker}'\n")
+    docker.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "THESISTRACE_TEST_PROJECT_NAME": project_name,
+        "THESISTRACE_TEST_STATE_ROOT": str(tmp_path / "runs"),
+    }
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "cleanup"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert marker.exists()
 
 
 def test_integration_runtime_validates_starts_host_tests_and_cleans(
@@ -297,8 +371,8 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert commands.index("config --quiet") < commands.index("up --detach")
     assert "up --detach --build --wait --wait-timeout 300 postgres rustfs migrate" in commands
     assert "uv run pytest -q tests/integration tests/acceptance" in commands
-    assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:40101" in commands
-    assert "s3=http://127.0.0.1:40102" in commands
+    assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:41001" in commands
+    assert "s3=http://127.0.0.1:41002" in commands
     assert "down --volumes --remove-orphans" in commands
 
 
@@ -328,6 +402,30 @@ def test_failed_integration_captures_evidence_before_default_cleanup(
     assert commands.index("ps --all") < commands.index("down --volumes")
 
 
+def test_cleanup_failure_is_reported_without_masking_the_test_failure(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_PYTEST_STATUS"] = "7"
+    environment["FAKE_CLEANUP_STATUS"] = "5"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 7
+    assert "cleanup failed for Test project" in completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text()
+    assert "cleanup_status=5" in metadata
+    assert metadata.endswith("status=7\n")
+
+
 def test_keep_environment_preserves_only_a_failing_test_project(
     tmp_path: Path,
 ) -> None:
@@ -350,3 +448,78 @@ def test_keep_environment_preserves_only_a_failing_test_project(
     assert completed.returncode == 9
     assert "preserved failing Test project thesistrace-test-" in completed.stderr
     assert "down --volumes --remove-orphans" not in command_log.read_text()
+
+
+def test_test_runtime_forwards_termination_before_evidence_and_cleanup(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    signal_file = tmp_path / "pytest-signal"
+    environment["FAKE_PYTEST_DELAY"] = "30"
+    environment["TEST_SIGNAL_FILE"] = str(signal_file)
+    process = subprocess.Popen(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if command_log.exists() and "uv run pytest" in command_log.read_text():
+            break
+        time.sleep(0.05)
+    else:
+        process.kill()
+        process.communicate()
+        pytest.fail("the fake Pytest child did not start")
+
+    process.terminate()
+    process.communicate(timeout=10)
+
+    assert process.returncode == 143
+    assert signal_file.read_text() == "TERM"
+    commands = command_log.read_text()
+    assert commands.index("uv run pytest") < commands.index("ps --all")
+    assert commands.index("ps --all") < commands.index("down --volumes")
+
+
+def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_PYTEST_DELAY"] = "0.3"
+    processes = [
+        subprocess.Popen(
+            [ROOT / "scripts" / "test-runtime", "integration"],
+            cwd=ROOT,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    ]
+
+    results = [process.communicate(timeout=10) for process in processes]
+    assert [process.returncode for process in processes] == [0, 0], results
+
+    run_directories = sorted((tmp_path / "runs").iterdir())
+    assert len(run_directories) == 2
+    records = []
+    for run_directory in run_directories:
+        record = dict(
+            line.split("=", maxsplit=1)
+            for line in (run_directory / "run.txt").read_text().splitlines()
+        )
+        records.append(record)
+    assert len({record["project_name"] for record in records}) == 2
+    assert len({(record["postgres_port"], record["s3_port"]) for record in records}) == 2
+
+    commands = command_log.read_text()
+    for record in records:
+        project = record["project_name"]
+        assert f"resources {project}_default {project}_postgres-data" in commands
+        assert f"bucket={project}" in commands
+    assert "thesistrace-dev" not in commands
