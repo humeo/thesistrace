@@ -56,7 +56,8 @@ if "port" in arguments:
     finally:
         lock_path.rmdir()
     service = arguments[arguments.index("port") + 1]
-    print(f"127.0.0.1:{base_port + (1 if service == 'postgres' else 2)}")
+    offset = {"postgres": 1, "rustfs": 2, "api": 3, "web": 4}[service]
+    print(f"127.0.0.1:{base_port + offset}")
 elif "ps" in arguments and "--quiet" in arguments:
     print("container-test-id")
 elif "ps" in arguments:
@@ -89,6 +90,26 @@ exit "${FAKE_PYTEST_STATUS:-0}"
 """
     )
     uv.chmod(0o755)
+    pnpm = tmp_path / "pnpm"
+    pnpm.write_text(
+        """#!/bin/sh
+printf 'pnpm %s origin=%s evidence=%s\\n' \
+  "$*" "$THESISTRACE_TEST_WEB_ORIGIN" "$THESISTRACE_TEST_EVIDENCE_DIR" \
+  >> "$TEST_COMMAND_LOG"
+mkdir -p "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-report"
+printf '<html>report</html>\\n' \
+  > "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-report/index.html"
+if [ "${FAKE_PLAYWRIGHT_STATUS:-0}" -ne 0 ]; then
+  mkdir -p "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-results/failure"
+  printf trace > "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-results/failure/trace.zip"
+  printf screenshot \
+    > "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-results/failure/test-failed-1.png"
+  printf video > "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-results/failure/video.webm"
+fi
+exit "${FAKE_PLAYWRIGHT_STATUS:-0}"
+"""
+    )
+    pnpm.chmod(0o755)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
@@ -374,6 +395,64 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:41001" in commands
     assert "s3=http://127.0.0.1:41002" in commands
     assert "down --volumes --remove-orphans" in commands
+
+
+def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
+    tmp_path: Path,
+) -> None:
+    package = json.loads((ROOT / "package.json").read_text())
+    assert package["scripts"]["test:e2e"] == "./scripts/test-runtime e2e"
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "e2e"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    commands = command_log.read_text()
+    assert commands.index("config --quiet") < commands.index("up --detach")
+    assert "up --detach --build --wait --wait-timeout 300\n" in commands
+    assert "pnpm --dir web test:e2e origin=http://127.0.0.1:41004" in commands
+    assert "thesistrace-api" not in commands
+    assert "thesistrace-worker" not in commands
+    assert "vite --host" not in commands
+    assert "down --volumes --remove-orphans" in commands
+
+
+def test_failed_e2e_groups_playwright_and_compose_evidence_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_PLAYWRIGHT_STATUS"] = "6"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "e2e"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 6
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    evidence = tmp_path / "runs" / run_id / "evidence"
+    assert (evidence / "playwright-report" / "index.html").exists()
+    failure = evidence / "playwright-results" / "failure"
+    assert (failure / "trace.zip").exists()
+    assert (failure / "test-failed-1.png").exists()
+    assert (failure / "video.webm").exists()
+    assert (evidence / "compose-ps.txt").exists()
+    assert (evidence / "compose-logs.txt").exists()
+    assert (evidence / "container-inspect.txt").exists()
+    commands = command_log.read_text()
+    assert commands.index("pnpm --dir web test:e2e") < commands.index("ps --all")
+    assert commands.index("ps --all") < commands.index("down --volumes")
 
 
 def test_failed_integration_captures_evidence_before_default_cleanup(

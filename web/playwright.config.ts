@@ -1,24 +1,26 @@
 import { defineConfig } from "@playwright/test";
 
-const webPort = process.env.THESISTRACE_WEB_PORT ?? "5274";
-const baseURL = `http://127.0.0.1:${webPort}`;
+const baseURL = process.env.THESISTRACE_TEST_WEB_ORIGIN;
+const evidenceDir = process.env.THESISTRACE_TEST_EVIDENCE_DIR;
+
+if (!baseURL || !evidenceDir) {
+  throw new Error(
+    "Playwright requires THESISTRACE_TEST_WEB_ORIGIN and THESISTRACE_TEST_EVIDENCE_DIR",
+  );
+}
 
 export default defineConfig({
   testDir: "./e2e-core",
   workers: 1,
-  use: { baseURL },
-  webServer: [
-    {
-      command: `THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE=1,2,3 concurrently -k -n api,worker "../.venv/bin/thesistrace-api --port 8101" "../.venv/bin/thesistrace-worker"`,
-      url: "http://127.0.0.1:8101/api/data",
-      reuseExistingServer: false,
-      timeout: 30_000,
-    },
-    {
-      command: `THESISTRACE_API_PORT=8101 vite --host 127.0.0.1 --port ${webPort}`,
-      url: `${baseURL}/data`,
-      reuseExistingServer: false,
-      timeout: 30_000,
-    },
+  outputDir: `${evidenceDir}/playwright-results`,
+  reporter: [
+    ["line"],
+    ["html", { open: "never", outputFolder: `${evidenceDir}/playwright-report` }],
   ],
+  use: {
+    baseURL,
+    screenshot: "only-on-failure",
+    trace: "retain-on-failure",
+    video: "retain-on-failure",
+  },
 });

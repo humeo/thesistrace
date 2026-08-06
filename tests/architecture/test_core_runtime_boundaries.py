@@ -288,7 +288,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     assert "history.replaceState" in main
     for inactive in ('from "./App"', "HostedAuthBoundary", "isCoreRoute"):
         assert inactive not in main
-    assert package["scripts"]["test:e2e"] == "playwright test --reporter=line"
+    assert package["scripts"]["test:e2e"] == "playwright test"
     assert set(package["scripts"]) == {
         "build",
         "dev",
@@ -296,10 +296,13 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
         "test:shell",
         "typecheck",
     }
-    assert "thesistrace-api --port 8101" in browser
-    assert "thesistrace-worker" in browser
-    assert "thesistrace-core-api" not in browser
-    assert "thesistrace-core-worker" not in browser
+    assert "THESISTRACE_TEST_WEB_ORIGIN" in browser
+    assert "THESISTRACE_TEST_EVIDENCE_DIR" in browser
+    assert "retain-on-failure" in browser
+    assert "webServer" not in browser
+    assert "thesistrace-api" not in browser
+    assert "thesistrace-worker" not in browser
+    assert "vite --host" not in browser
     assert 'new URL("./index.html"' in vite
     assert 'new URL("./core.html"' not in vite
     assert 'pathname === "/core.html"' in vite

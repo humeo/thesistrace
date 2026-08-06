@@ -23,12 +23,16 @@ services:
     environment: *test-environment
 
   api:
-    environment: *test-environment
+    environment:
+      <<: *test-environment
+      THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE: 1,2,3
     ports:
       - 127.0.0.1::8100
 
   worker:
-    environment: *test-environment
+    environment:
+      <<: *test-environment
+      THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE: 1,2,3
 
   web:
     ports:
