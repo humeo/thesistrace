@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -12,6 +16,7 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
 
     assert scripts["bootstrap"] == "./scripts/dev-runtime bootstrap"
     assert scripts["dev:up"] == "./scripts/dev-runtime up"
+    assert scripts["dev:reset"] == "./scripts/dev-runtime reset"
     assert scripts["dev:stop"] == "./scripts/dev-runtime stop"
     assert "dev:down" not in scripts
 
@@ -20,7 +25,32 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     assert "mise exec -- pnpm install --frozen-lockfile" in lifecycle
     assert "compose up --detach --build --wait --wait-timeout 300" in lifecycle
     assert "compose stop" in lifecycle
-    assert "down --volumes" not in lifecycle
+
+
+@pytest.mark.parametrize(
+    "project_name",
+    (
+        "",
+        "thesistrace-test-run-123",
+        "thesistrace-production",
+        "ThesisTrace-Dev",
+        "unrelated-project",
+    ),
+)
+def test_development_reset_rejects_every_noncanonical_project(project_name: str) -> None:
+    environment = {**os.environ, "THESISTRACE_DEV_PROJECT_NAME": project_name}
+
+    completed = subprocess.run(
+        [str(ROOT / "scripts" / "dev-runtime"), "reset"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "refusing non-canonical Development project" in completed.stderr
 
 
 def test_development_topology_declares_every_core_service_and_pinned_infrastructure() -> None:

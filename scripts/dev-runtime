@@ -2,7 +2,8 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-project_name=thesistrace-dev
+canonical_project_name=thesistrace-dev
+project_name=${THESISTRACE_DEV_PROJECT_NAME-$canonical_project_name}
 base_file="$repo_root/deploy/core/compose.yaml"
 development_file="$repo_root/deploy/core/compose.dev.yaml"
 environment_file="$repo_root/deploy/core/dev.env"
@@ -16,9 +17,24 @@ compose() {
     "$@"
 }
 
+validate_project() {
+  if [ "$project_name" != "$canonical_project_name" ]; then
+    shown_name=${project_name:-<empty>}
+    echo "refusing non-canonical Development project: $shown_name" >&2
+    exit 2
+  fi
+}
+
 validate_compose() {
   compose config --quiet
 }
+
+start() {
+  validate_compose
+  compose up --detach --build --wait --wait-timeout 300
+}
+
+validate_project
 
 case "${1:-}" in
   bootstrap)
@@ -31,15 +47,19 @@ case "${1:-}" in
     compose build
     ;;
   up)
-    validate_compose
-    compose up --detach --build --wait --wait-timeout 300
+    start
     ;;
   stop)
     validate_compose
     compose stop
     ;;
+  reset)
+    validate_compose
+    compose down --volumes --remove-orphans
+    start
+    ;;
   *)
-    echo "usage: $0 {bootstrap|up|stop}" >&2
+    echo "usage: $0 {bootstrap|up|stop|reset}" >&2
     exit 2
     ;;
 esac

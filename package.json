@@ -10,6 +10,7 @@
     "bootstrap": "./scripts/dev-runtime bootstrap",
     "dev": "./scripts/dev-runtime up",
     "dev:up": "./scripts/dev-runtime up",
+    "dev:reset": "./scripts/dev-runtime reset",
     "dev:stop": "./scripts/dev-runtime stop",
     "test": "uv run ruff check src tests && uv run pytest -q tests/kernel tests/architecture tests/adapters && pnpm --dir web typecheck && pnpm --dir web test:shell",
     "check": "uv run ruff check src tests && uv run pytest -q tests/kernel tests/architecture tests/adapters && pnpm --dir web typecheck && pnpm --dir web build && ./scripts/core-test-runtime reset && ./scripts/core-test-runtime run uv run pytest -q tests/integration tests/acceptance && ./scripts/core-test-runtime reset && ./scripts/core-test-runtime run pnpm --dir web test:e2e && ./scripts/core-test-runtime down",
