@@ -25,7 +25,7 @@ case "${1:-}" in
     cd "$repo_root"
     mise install
     uv sync --frozen
-    pnpm install --frozen-lockfile
+    mise exec -- pnpm install --frozen-lockfile
     validate_compose
     compose pull postgres rustfs
     compose build

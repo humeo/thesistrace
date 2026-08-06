@@ -17,6 +17,7 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
 
     lifecycle = (ROOT / "scripts" / "dev-runtime").read_text()
     assert "project_name=thesistrace-dev" in lifecycle
+    assert "mise exec -- pnpm install --frozen-lockfile" in lifecycle
     assert "compose up --detach --build --wait --wait-timeout 300" in lifecycle
     assert "compose stop" in lifecycle
     assert "down --volumes" not in lifecycle

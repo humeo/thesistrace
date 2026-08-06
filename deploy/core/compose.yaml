@@ -51,7 +51,6 @@ services:
 
   api:
     <<: *backend
-    command: ["thesistrace-core-api", "--host", "0.0.0.0", "--port", "8100"]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -87,7 +86,6 @@ services:
       dockerfile: deploy/core/Dockerfile.web
     environment:
       THESISTRACE_API_ORIGIN: http://api:8100
-    command: ["pnpm", "--dir", "web", "exec", "vite", "--host", "0.0.0.0", "--port", "5173"]
     depends_on:
       api:
         condition: service_healthy
