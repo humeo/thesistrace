@@ -6,19 +6,30 @@ state without risking any unrelated environment.
 
 **Blocked by:** 03 — Boot the persistent Development Core through Compose.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] `pnpm dev:reset` validates the exact canonical Development project
+- [x] `pnpm dev:reset` validates the exact canonical Development project
       identity before issuing any destructive Compose operation.
-- [ ] The reset command refuses empty, malformed, Test, Production-like, and
+- [x] The reset command refuses empty, malformed, Test, Production-like, and
       unrelated project identities before deleting containers, volumes, or
       local state.
-- [ ] A successful reset removes only canonical Development data, recreates the
+- [x] A successful reset removes only canonical Development data, recreates the
       environment, completes migration, and waits for health.
-- [ ] After reset, the Web and HTTP interface expose the canonical empty Core
+- [x] After reset, the Web and HTTP interface expose the canonical empty Core
       with no Dataset Release, Research Definition, ResearchRun, or DailyTrack.
-- [ ] Reset does not automatically execute Data Update or publish Fixture data.
-- [ ] Ordinary `pnpm dev:up` and `pnpm dev:stop` never invoke destructive reset
+- [x] Reset does not automatically execute Data Update or publish Fixture data.
+- [x] Ordinary `pnpm dev:up` and `pnpm dev:stop` never invoke destructive reset
       behavior.
-- [ ] Safety tests exercise all accepted and rejected project-identity classes
+- [x] Safety tests exercise all accepted and rejected project-identity classes
       through the public reset command.
+
+## Comments
+
+- Implemented in `3170aee`; public-command review coverage fixed in `a4512d8`.
+- Verified the public pnpm command rejects empty, Test, Production-like,
+  malformed, and unrelated identities before reaching Compose.
+- Live reset removed the canonical Development volumes, reran migration, waited
+  for health, and returned all four HTTP resources plus the browser Data view to
+  an empty state without automatic publication.
+- Two review rounds used the fixed point `61525f0`; final Standards and Spec
+  reviews reported no findings.
