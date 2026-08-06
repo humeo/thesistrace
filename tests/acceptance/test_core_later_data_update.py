@@ -10,6 +10,7 @@ from thesistrace._postgres import PostgresDatabase, apply_migrations
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.data import CollectionPlan, DataService
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
+from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
@@ -205,6 +206,7 @@ def test_existing_v1_release_remains_readable_after_head_migration() -> None:
     finally:
         database.close()
 
+    migrate_core(settings.database_url)
     with open_core_runtime(settings) as runtime:
         assert [release.id for release in runtime.data.list_releases().items] == [
             later_id,

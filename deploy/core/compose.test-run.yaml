@@ -1,0 +1,35 @@
+x-test-environment: &test-environment
+  THESISTRACE_DATABASE_URL: postgresql://thesistrace:thesistrace-test@postgres:5432/thesistrace
+  THESISTRACE_S3_ENDPOINT_URL: http://rustfs:9000
+  THESISTRACE_S3_ACCESS_KEY_ID: rustfsadmin
+  THESISTRACE_S3_SECRET_ACCESS_KEY: rustfsadmin
+  THESISTRACE_S3_BUCKET: ${THESISTRACE_TEST_BUCKET:-thesistrace-test}
+  THESISTRACE_S3_REGION: us-east-1
+
+services:
+  postgres:
+    environment:
+      POSTGRES_DB: thesistrace
+      POSTGRES_USER: thesistrace
+      POSTGRES_PASSWORD: thesistrace-test
+    ports:
+      - 127.0.0.1::5432
+
+  rustfs:
+    ports:
+      - 127.0.0.1::9000
+
+  migrate:
+    environment: *test-environment
+
+  api:
+    environment: *test-environment
+    ports:
+      - 127.0.0.1::8100
+
+  worker:
+    environment: *test-environment
+
+  web:
+    ports:
+      - 127.0.0.1::5173

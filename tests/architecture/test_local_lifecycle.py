@@ -11,6 +11,53 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _fake_test_runtime_commands(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+    command_log = tmp_path / "commands.log"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        """#!/bin/sh
+printf 'docker %s\\n' "$*" >> "$TEST_COMMAND_LOG"
+case " $* " in
+  *" port postgres 5432 ") printf '127.0.0.1:40101\\n' ;;
+  *" port rustfs 9000 ") printf '127.0.0.1:40102\\n' ;;
+  *" ps --all --quiet ") printf 'container-test-id\\n' ;;
+  *" ps --all ") printf 'test services\\n' ;;
+  *" logs --no-color --timestamps ") printf 'test logs\\n' ;;
+esac
+if [ "${1:-}" = inspect ]; then
+  printf 'container inspection\\n'
+fi
+"""
+    )
+    docker.chmod(0o755)
+    uv = tmp_path / "uv"
+    uv.write_text(
+        """#!/bin/sh
+printf 'uv %s db=%s s3=%s bucket=%s\\n' \
+  "$*" "$THESISTRACE_DATABASE_URL" "$THESISTRACE_S3_ENDPOINT_URL" \
+  "$THESISTRACE_S3_BUCKET" >> "$TEST_COMMAND_LOG"
+for argument in "$@"; do
+  case "$argument" in
+    --junitxml=*)
+      report=${argument#--junitxml=}
+      mkdir -p "$(dirname "$report")"
+      printf '<testsuite />\\n' > "$report"
+      ;;
+  esac
+done
+exit "${FAKE_PYTEST_STATUS:-0}"
+"""
+    )
+    uv.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "TEST_COMMAND_LOG": str(command_log),
+        "THESISTRACE_TEST_STATE_ROOT": str(tmp_path / "runs"),
+    }
+    return command_log, environment
+
+
 def test_development_commands_use_the_canonical_compose_runtime() -> None:
     package = json.loads((ROOT / "package.json").read_text())
     scripts = package["scripts"]
@@ -156,3 +203,150 @@ signal.pause()
     assert process.returncode == 0
     assert signal_file.read_text() == "TERM"
     assert "panic: close of closed channel" not in remaining_stderr
+
+
+def test_integration_command_generates_unique_test_identities() -> None:
+    package = json.loads((ROOT / "package.json").read_text())
+    assert package["scripts"]["test:integration"] == "./scripts/test-runtime integration"
+
+    projects = {
+        subprocess.run(
+            [ROOT / "scripts" / "test-runtime", "identity"],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        for _ in range(2)
+    }
+
+    assert len(projects) == 2
+    assert all(project.startswith("thesistrace-test-") for project in projects)
+    assert "thesistrace-dev" not in projects
+
+
+def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() -> None:
+    overlay = (ROOT / "deploy" / "core" / "compose.test-run.yaml").read_text()
+    base = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
+
+    for port in (5432, 9000, 8100, 5173):
+        assert f"127.0.0.1::{port}" in overlay
+    for development_port in (55432, 59010, 8101, 5274):
+        assert str(development_port) not in overlay
+    assert "postgres-data:" in base
+    assert "rustfs-data:" in base
+    assert "name:" not in base.split("volumes:", maxsplit=1)[1]
+
+
+@pytest.mark.parametrize(
+    "project_name",
+    (
+        "",
+        "thesistrace-dev",
+        "thesistrace-core-test",
+        "thesistrace-test-production",
+        "thesistrace-test-release-1",
+        "ThesisTrace-test-run-1",
+        "unrelated-project",
+    ),
+)
+def test_test_cleanup_rejects_unsafe_project_identities(
+    tmp_path: Path,
+    project_name: str,
+) -> None:
+    marker = tmp_path / "docker-invoked"
+    docker = tmp_path / "docker"
+    docker.write_text(f"#!/bin/sh\nprintf invoked > '{marker}'\n")
+    docker.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "THESISTRACE_TEST_PROJECT_NAME": project_name,
+    }
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "cleanup"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "refusing non-canonical Test project" in completed.stderr
+    assert not marker.exists()
+
+
+def test_integration_runtime_validates_starts_host_tests_and_cleans(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    commands = command_log.read_text()
+    assert commands.index("config --quiet") < commands.index("up --detach")
+    assert "up --detach --build --wait --wait-timeout 300 postgres rustfs migrate" in commands
+    assert "uv run pytest -q tests/integration tests/acceptance" in commands
+    assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:40101" in commands
+    assert "s3=http://127.0.0.1:40102" in commands
+    assert "down --volumes --remove-orphans" in commands
+
+
+def test_failed_integration_captures_evidence_before_default_cleanup(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_PYTEST_STATUS"] = "7"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 7
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    evidence = tmp_path / "runs" / run_id / "evidence"
+    assert (evidence / "pytest.xml").exists()
+    assert (evidence / "compose-ps.txt").read_text().strip() == "test services"
+    assert (evidence / "compose-logs.txt").read_text().strip() == "test logs"
+    assert "container inspection" in (evidence / "container-inspect.txt").read_text()
+    commands = command_log.read_text()
+    assert commands.index("ps --all") < commands.index("down --volumes")
+
+
+def test_keep_environment_preserves_only_a_failing_test_project(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_PYTEST_STATUS"] = "9"
+
+    completed = subprocess.run(
+        [
+            ROOT / "scripts" / "test-runtime",
+            "integration",
+            "--keep-environment",
+        ],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 9
+    assert "preserved failing Test project thesistrace-test-" in completed.stderr
+    assert "down --volumes --remove-orphans" not in command_log.read_text()

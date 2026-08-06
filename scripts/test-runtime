@@ -1,0 +1,166 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+base_file="$repo_root/deploy/core/compose.yaml"
+test_file="$repo_root/deploy/core/compose.test-run.yaml"
+state_root=${THESISTRACE_TEST_STATE_ROOT:-"$repo_root/.local/test-runs"}
+canonical_prefix=thesistrace-test-
+
+new_run_id() {
+  timestamp=$(date -u +%Y%m%dt%H%M%Sz)
+  random_suffix=$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')
+  printf '%s-%s-%s\n' "$timestamp" "$$" "$random_suffix"
+}
+
+refuse_project() {
+  shown_name=${project_name:-<empty>}
+  echo "refusing non-canonical Test project: $shown_name" >&2
+  exit 2
+}
+
+validate_test_project() {
+  case "$project_name" in
+    "$canonical_prefix"*) ;;
+    *) refuse_project ;;
+  esac
+  case "$project_name" in
+    *[!a-z0-9-]* | *--* | *- | *production* | *prod* | *staging* | *release*)
+      refuse_project
+      ;;
+  esac
+  test "$project_name" != "thesistrace-dev" || refuse_project
+}
+
+compose() {
+  validate_test_project
+  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain THESISTRACE_TEST_BUCKET="$bucket_name" \
+    docker compose \
+    --project-name "$project_name" \
+    --file "$base_file" \
+    --file "$test_file" \
+    "$@"
+}
+
+mapped_port() {
+  service=$1
+  container_port=$2
+  address=$(compose port "$service" "$container_port")
+  port=${address##*:}
+  case "$port" in
+    '' | *[!0-9]*)
+      echo "could not resolve $service port from: $address" >&2
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$port"
+}
+
+run_with_environment() {
+  THESISTRACE_DATABASE_URL="postgresql://thesistrace:thesistrace-test@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
+  THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+  THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+  THESISTRACE_S3_BUCKET="$bucket_name" \
+  THESISTRACE_S3_REGION=us-east-1 \
+    "$@"
+}
+
+capture_evidence() {
+  mkdir -p "$evidence_dir"
+  compose ps --all >"$evidence_dir/compose-ps.txt" 2>&1 || true
+  compose logs --no-color --timestamps >"$evidence_dir/compose-logs.txt" 2>&1 || true
+  compose ps --all --quiet | while IFS= read -r container_id; do
+    test -n "$container_id" || continue
+    docker inspect "$container_id" || true
+  done >"$evidence_dir/container-inspect.txt" 2>&1
+}
+
+cleanup_project() {
+  validate_test_project
+  compose down --volumes --remove-orphans
+}
+
+finish() {
+  status=$?
+  trap - EXIT INT TERM
+  set +e
+  if [ "$status" -ne 0 ]; then
+    capture_evidence
+  fi
+  if [ "$status" -ne 0 ] && [ "$keep_environment" = true ]; then
+    echo "preserved failing Test project $project_name" >&2
+  else
+    cleanup_project
+    cleanup_status=$?
+    if [ "$status" -eq 0 ] && [ "$cleanup_status" -ne 0 ]; then
+      status=$cleanup_status
+    fi
+  fi
+  printf 'status=%s\n' "$status" >>"$run_metadata"
+  exit "$status"
+}
+
+command=${1:-}
+case "$command" in
+  identity)
+    printf '%s%s\n' "$canonical_prefix" "$(new_run_id)"
+    exit 0
+    ;;
+  cleanup)
+    project_name=${THESISTRACE_TEST_PROJECT_NAME-}
+    bucket_name=${project_name#"$canonical_prefix"}
+    validate_test_project
+    cleanup_project
+    exit 0
+    ;;
+  integration) ;;
+  *)
+    echo "usage: $0 {identity|cleanup|integration [--keep-environment]}" >&2
+    exit 2
+    ;;
+esac
+shift
+
+keep_environment=false
+case "${1:-}" in
+  '') ;;
+  --keep-environment)
+    keep_environment=true
+    shift
+    ;;
+  *)
+    echo "unknown integration option: $1" >&2
+    exit 2
+    ;;
+esac
+test "$#" -eq 0 || {
+  echo "integration accepts only --keep-environment" >&2
+  exit 2
+}
+
+run_id=$(new_run_id)
+project_name="$canonical_prefix$run_id"
+bucket_name="$canonical_prefix$run_id"
+run_root="$state_root/$run_id"
+evidence_dir="$run_root/evidence"
+pytest_report="$evidence_dir/pytest.xml"
+run_metadata="$run_root/run.txt"
+validate_test_project
+mkdir -p "$evidence_dir"
+printf 'run_id=%s\nproject_name=%s\n' "$run_id" "$project_name" >"$run_metadata"
+echo "Test run: $run_id"
+echo "Compose project: $project_name"
+
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+compose config --quiet
+compose up --detach --build --wait --wait-timeout 300 postgres rustfs migrate
+postgres_port=$(mapped_port postgres 5432)
+s3_port=$(mapped_port rustfs 9000)
+printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
+
+run_with_environment uv run pytest -q tests/integration tests/acceptance \
+  --junitxml="$pytest_report"
