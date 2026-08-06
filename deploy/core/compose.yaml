@@ -1,0 +1,106 @@
+x-core-environment: &core-environment
+  THESISTRACE_DATABASE_URL: postgresql://thesistrace:thesistrace-local@postgres:5432/thesistrace
+  THESISTRACE_S3_ENDPOINT_URL: http://rustfs:9000
+  THESISTRACE_S3_ACCESS_KEY_ID: rustfsadmin
+  THESISTRACE_S3_SECRET_ACCESS_KEY: rustfsadmin
+  THESISTRACE_S3_BUCKET: thesistrace-local
+  THESISTRACE_S3_REGION: us-east-1
+
+x-backend: &backend
+  build:
+    context: ../..
+    dockerfile: deploy/core/Dockerfile.backend
+  environment: *core-environment
+  init: true
+
+services:
+  postgres:
+    image: postgres:16.10-alpine
+    environment:
+      POSTGRES_DB: thesistrace
+      POSTGRES_USER: thesistrace
+      POSTGRES_PASSWORD: thesistrace-local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U thesistrace -d thesistrace"]
+      interval: 1s
+      timeout: 5s
+      retries: 180
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0-beta.12
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health"]
+      interval: 1s
+      timeout: 5s
+      retries: 180
+    volumes:
+      - rustfs-data:/data
+
+  migrate:
+    <<: *backend
+    command: ["thesistrace-migrate"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *backend
+    command: ["thesistrace-core-api", "--host", "0.0.0.0", "--port", "8100"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/api/data', timeout=2).read()
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+  worker:
+    <<: *backend
+    command: ["thesistrace-core-worker"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "thesistrace-core-worker", "--healthcheck"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/core/Dockerfile.web
+    environment:
+      THESISTRACE_API_ORIGIN: http://api:8100
+    command: ["pnpm", "--dir", "web", "exec", "vite", "--host", "0.0.0.0", "--port", "5173"]
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:5173/data').then(r => { if (!r.ok) process.exit(1) }).catch(() => process.exit(1))
+      interval: 2s
+      timeout: 5s
+      retries: 60
+
+volumes:
+  postgres-data:
+  rustfs-data:

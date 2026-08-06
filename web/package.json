@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "THESISTRACE_API_PORT=8100 concurrently -k -n api,worker,web \"uv run --project .. thesistrace-api --port 8100\" \"uv run --project .. thesistrace-worker\" \"vite --host 127.0.0.1\"",
+    "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "test:shell": "vitest run src/shell/AppShell.test.tsx",
@@ -20,7 +20,6 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.4",
-    "concurrently": "^9.1.2",
     "typescript": "~5.7.2",
     "vite": "^6.0.5",
     "vitest": "^3.2.4"

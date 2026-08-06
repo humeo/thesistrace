@@ -15,10 +15,13 @@ ABANDONED_UPDATE_AFTER = timedelta(minutes=15)
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the canonical ThesisTrace Core worker")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--healthcheck", action="store_true")
     arguments = parser.parse_args()
     settings = CoreSettings.from_environment()
 
     with open_core_runtime(settings) as runtime:
+        if arguments.healthcheck:
+            return
         _process_once(runtime)
         if arguments.once:
             return

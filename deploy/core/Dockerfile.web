@@ -1,0 +1,12 @@
+FROM node:24.14.0-bookworm-slim
+
+WORKDIR /app
+RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY web/package.json ./web/package.json
+RUN pnpm install --frozen-lockfile
+
+COPY web ./web
+
+CMD ["pnpm", "--dir", "web", "exec", "vite", "--host", "0.0.0.0", "--port", "5173"]

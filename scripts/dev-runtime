@@ -1,0 +1,45 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+project_name=thesistrace-dev
+base_file="$repo_root/deploy/core/compose.yaml"
+development_file="$repo_root/deploy/core/compose.dev.yaml"
+environment_file="$repo_root/deploy/core/dev.env"
+
+compose() {
+  docker compose \
+    --project-name "$project_name" \
+    --env-file "$environment_file" \
+    --file "$base_file" \
+    --file "$development_file" \
+    "$@"
+}
+
+validate_compose() {
+  compose config --quiet
+}
+
+case "${1:-}" in
+  bootstrap)
+    cd "$repo_root"
+    mise install
+    uv sync --frozen
+    pnpm install --frozen-lockfile
+    validate_compose
+    compose pull postgres rustfs
+    compose build
+    ;;
+  up)
+    validate_compose
+    compose up --detach --build --wait --wait-timeout 300
+    ;;
+  stop)
+    validate_compose
+    compose stop
+    ;;
+  *)
+    echo "usage: $0 {bootstrap|up|stop}" >&2
+    exit 2
+    ;;
+esac

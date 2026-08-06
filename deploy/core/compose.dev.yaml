@@ -1,0 +1,17 @@
+services:
+  postgres:
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_POSTGRES_PORT}:5432
+
+  rustfs:
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_S3_PORT}:9000
+      - 127.0.0.1:${THESISTRACE_DEV_S3_CONSOLE_PORT}:9001
+
+  api:
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_API_PORT}:8100
+
+  web:
+    ports:
+      - 127.0.0.1:${THESISTRACE_DEV_WEB_PORT}:5173
