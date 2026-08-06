@@ -1498,21 +1498,42 @@ test("runs valid content and shows its bounded ResearchRun result", async ({ pag
   await page.goto(`/research-runs/${firstRunId}`);
   await expect(page.getByRole("heading", { name: "Factor Evaluation" })).toBeVisible();
 
-  await page.route("**/api/research-runs/*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    await route.continue();
-  }, { times: 1 });
+  let releaseReload!: () => void;
+  const reloadGate = new Promise<void>((resolve) => {
+    releaseReload = resolve;
+  });
+  const holdReload = async (route: import("@playwright/test").Route) => {
+    await reloadGate;
+    try {
+      await route.continue();
+    } catch (error) {
+      // React StrictMode can abort its first effect request during remount.
+      if (!(error instanceof Error) || !error.message.includes("Route is already handled")) {
+        throw error;
+      }
+    }
+  };
+  await page.route("**/api/research-runs/*", holdReload);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.getByText("Loading ResearchRun…", { exact: true })).toBeVisible();
+  releaseReload();
   await expect(page.getByRole("heading", { name: "Factor Evaluation" })).toBeVisible();
+  await page.unroute("**/api/research-runs/*", holdReload);
 
-  await page.route("**/api/research-runs/*", async (route) => {
-    await new Promise((resolve) => setTimeout(resolve, 300));
+  let releaseRefresh!: () => void;
+  const refreshGate = new Promise<void>((resolve) => {
+    releaseRefresh = resolve;
+  });
+  const holdRefresh = async (route: import("@playwright/test").Route) => {
+    await refreshGate;
     await route.continue();
-  }, { times: 1 });
+  };
+  await page.route("**/api/research-runs/*", holdRefresh);
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByRole("status")).toHaveText("Refreshing ResearchRun…");
+  releaseRefresh();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
+  await page.unroute("**/api/research-runs/*", holdRefresh);
 
   await page.route("**/api/research-runs/*", async (route) => {
     await route.fulfill({
