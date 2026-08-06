@@ -10,7 +10,12 @@ from tempfile import TemporaryDirectory
 
 import boto3
 
-from thesistrace._postgres import PostgresDatabase, apply_migrations
+from thesistrace._postgres import (
+    MigrationPlan,
+    PostgresDatabase,
+    apply_migrations,
+    verify_migrations,
+)
 from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.daily_track import DailyTrackService
 from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
@@ -31,6 +36,13 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_ACCESS_KEY_ID",
     "THESISTRACE_S3_SECRET_ACCESS_KEY",
     "THESISTRACE_S3_BUCKET",
+)
+CORE_MIGRATION_PLANS: tuple[MigrationPlan, ...] = (
+    PUBLICATION_MIGRATIONS,
+    DATA_MIGRATIONS,
+    DEFINITION_MIGRATIONS,
+    RESEARCH_RUN_MIGRATIONS,
+    DAILY_TRACK_MIGRATIONS,
 )
 
 
@@ -91,17 +103,31 @@ class CoreRuntime:
     publication: Publication
 
 
+def migrate_core(database_url: str) -> tuple[str, ...]:
+    database = PostgresDatabase(database_url)
+    database.open()
+    try:
+        return tuple(
+            f"{plan.schema}.{migration}"
+            for plan in CORE_MIGRATION_PLANS
+            for migration in apply_migrations(database, plan)
+        )
+    finally:
+        database.close()
+
+
+def verify_core_migrations(database: PostgresDatabase) -> None:
+    for plan in CORE_MIGRATION_PLANS:
+        verify_migrations(database, plan)
+
+
 @contextmanager
 def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
     working_cache = TemporaryDirectory(prefix="thesistrace-core-working-cache-")
     database = PostgresDatabase(settings.database_url)
     try:
         database.open()
-        apply_migrations(database, PUBLICATION_MIGRATIONS)
-        apply_migrations(database, DATA_MIGRATIONS)
-        apply_migrations(database, DEFINITION_MIGRATIONS)
-        apply_migrations(database, RESEARCH_RUN_MIGRATIONS)
-        apply_migrations(database, DAILY_TRACK_MIGRATIONS)
+        verify_core_migrations(database)
         s3 = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,

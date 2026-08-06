@@ -187,7 +187,27 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
         "thesistrace-core-worker": "thesistrace.entrypoints.worker:main",
         "thesistrace-api": "thesistrace.entrypoints.http:main",
         "thesistrace-worker": "thesistrace.entrypoints.worker:main",
+        "thesistrace-migrate": "thesistrace.entrypoints.migrate:main",
     }
+
+
+def test_long_running_runtime_verifies_but_does_not_apply_migrations() -> None:
+    runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
+    migration_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "migrate.py").read_text()
+    runtime_body = runtime_source.split("def open_core_runtime", maxsplit=1)[1]
+
+    assert "verify_core_migrations(database)" in runtime_body
+    assert "apply_migrations(" not in runtime_body
+    assert "migrate_core(database_url)" in migration_source
+
+
+def test_current_runtime_migrates_before_starting_long_running_processes() -> None:
+    lifecycle = (ROOT / "scripts" / "core-test-runtime").read_text()
+    up_body = lifecycle.split("  up)", maxsplit=1)[1].split("    ;;", maxsplit=1)[0]
+    reset_body = lifecycle.split("  reset)", maxsplit=1)[1].split("    ;;", maxsplit=1)[0]
+
+    assert "compose up --detach --wait\n    migrate" in up_body
+    assert "compose up --detach --wait\n    migrate" in reset_body
 
     script = """
 import json

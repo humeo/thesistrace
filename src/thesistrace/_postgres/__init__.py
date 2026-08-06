@@ -4,6 +4,7 @@ from thesistrace._postgres.migrations import (
     MigrationError,
     MigrationPlan,
     apply_migrations,
+    verify_migrations,
 )
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "PostgresDatabase",
     "PostgresTransaction",
     "apply_migrations",
+    "verify_migrations",
 ]

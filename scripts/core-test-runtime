@@ -49,16 +49,22 @@ run_with_environment() {
     "$@"
 }
 
+migrate() {
+  run_with_environment uv run thesistrace-migrate
+}
+
 case "${1:-}" in
   up)
     prepare_data_root
     compose up --detach --wait
+    migrate
     ;;
   reset)
     compose down --volumes --remove-orphans
     clear_data_root
     prepare_data_root
     compose up --detach --wait
+    migrate
     ;;
   down)
     compose down --volumes --remove-orphans
