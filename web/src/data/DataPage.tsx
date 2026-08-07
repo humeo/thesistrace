@@ -69,42 +69,56 @@ export function DataPage() {
   }
 
   if (error) return (
-    <section aria-label="Data">
+    <section aria-label="Data" className="page-section state-section">
       <p role="alert">{error}</p>
       <button onClick={() => void refresh()}>Retry</button>
     </section>
   );
-  if (!overview) return <section aria-label="Data"><p>Loading Data…</p></section>;
+  if (!overview) return <section aria-label="Data" className="page-section state-section"><p>Loading Data…</p></section>;
 
   const release = overview.latest_release;
   return (
-    <section aria-label="Data">
-      <h1>Data</h1>
-      <button disabled={overview.status === "updating"} onClick={() => void updateData()}>
-        Update Data
-      </button>
-      <button onClick={() => void refresh()}>Refresh</button>
-      {overview.status === "updating" && <p role="status">Updating canonical data…</p>}
-      {overview.status === "failed" && <p role="alert">Data Update failed</p>}
+    <section aria-label="Data" className="page-section data-page">
+      <header className="page-hero">
+        <div>
+          <p className="eyebrow">The source ledger</p>
+          <h1>Data room</h1>
+          <p className="hero-copy">A quiet, versioned record of the market sessions your research can stand on.</p>
+        </div>
+        <div className="hero-actions">
+          <button className="button button-primary" disabled={overview.status === "updating"} onClick={() => void updateData()}>
+            <span className="button-glyph">＋</span> Update data
+          </button>
+          <button className="button button-quiet" onClick={() => void refresh()}>Refresh ↻</button>
+        </div>
+      </header>
+      <div className="signal-strip" aria-label="Data status">
+        <span className="signal-strip-label"><span className="health-dot" /> Canonical source</span>
+        <strong>{overview.status === "updating" ? "Syncing now" : overview.status === "failed" ? "Attention needed" : "Ready for research"}</strong>
+        <span className="signal-strip-note">{overview.latest_update_outcome === "no_change" ? "No new completed session" : "The latest release is immutable"}</span>
+      </div>
+      {overview.status === "updating" && <p className="inline-status" role="status">Updating canonical data…</p>}
+      {overview.status === "failed" && <p className="inline-status inline-status-error" role="alert">Data update failed. Check the source connection and retry.</p>}
       {overview.status === "idle" && overview.latest_update_outcome === "no_change" && (
-        <p role="status">No new completed Research Session. Latest Release unchanged.</p>
+        <p className="inline-status" role="status">No new completed research session. Latest release unchanged.</p>
       )}
-      {!release && overview.status !== "updating" && <p>No Dataset Releases yet.</p>}
+      {!release && overview.status !== "updating" && <p className="empty-state">No dataset releases yet.</p>}
       {release && (
-        <article>
-          <h2>Latest Dataset Release</h2>
-          <p>{release.id}</p>
-          <p>{release.session_count} Research Sessions</p>
-          <p>{release.covered_session_range.start} — {release.covered_session_range.end}</p>
-          <p>{release.predecessor_id === null ? "First Release" : "Later Release"}</p>
+        <article className="release-card">
+          <div className="release-card-heading"><div><p className="eyebrow">Latest release</p><h2>{release.id}</h2></div><span className="release-badge">{release.predecessor_id === null ? "First release" : "Published"}</span></div>
+          <div className="release-stats">
+            <div><span>Research sessions</span><strong>{release.session_count}</strong></div>
+            <div><span>Covered range</span><strong>{release.covered_session_range.start} <i>→</i> {release.covered_session_range.end}</strong></div>
+          </div>
         </article>
       )}
-      <h2>Release History</h2>
-      <ol aria-label="Dataset Release history">
+      <div className="section-heading history-heading"><div><p className="eyebrow">Chain of custody</p><h2>Release history</h2></div><span>{history.length} releases</span></div>
+      <ol className="release-list" aria-label="Dataset Release history">
         {history.map((item) => (
           <li key={item.id}>
-            <span>{item.id}</span>
-            <span> · {item.session_count} sessions</span>
+            <span className="release-list-id">{item.id}</span>
+            <span>{item.session_count} sessions</span>
+            <span>{item.covered_session_range.start} — {item.covered_session_range.end}</span>
           </li>
         ))}
       </ol>
