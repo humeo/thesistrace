@@ -2,6 +2,7 @@
 .local/
 .hosted/
 .test-workspace/
+.worktrees/
 .pytest_cache/
 .ruff_cache/
 .venv/
