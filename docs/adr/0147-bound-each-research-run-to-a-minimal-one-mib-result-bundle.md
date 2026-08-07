@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0153
 ---
 
 # Bound each ResearchRun to a minimal one-MiB Result Bundle

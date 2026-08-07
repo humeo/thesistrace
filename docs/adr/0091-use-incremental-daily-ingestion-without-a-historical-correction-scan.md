@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0155
 ---
 
 # Use incremental daily ingestion without a historical-correction scan

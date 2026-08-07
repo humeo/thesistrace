@@ -40,6 +40,7 @@ FIELD_BINDINGS = {
 
 def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     definition = accepted_calculation_case["definition"]
@@ -47,7 +48,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
-    prior = run(_run_input(canonical, definition)).track_state
+    prior = accepted_kernel_state
     prior_output = prior.output_snapshot()
     advance_input = AdvanceInput(
         prior_state=prior,
@@ -171,6 +172,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
 
 def test_kernel_advance_rejects_static_contract_replacement(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
@@ -178,7 +180,7 @@ def test_kernel_advance_rejects_static_contract_replacement(
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
     complete["field_catalog"] = [{"field_id": "replacement"}]
-    prior = run(_run_input(canonical, definition)).track_state
+    prior = accepted_kernel_state
 
     with pytest.raises(ValueError, match="cannot replace pinned static table"):
         advance(
@@ -192,13 +194,14 @@ def test_kernel_advance_rejects_static_contract_replacement(
 
 def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
-    prior = run(_run_input(canonical, definition)).track_state
+    prior = accepted_kernel_state
     expected = advance(
         AdvanceInput(
             prior_state=prior,
@@ -270,13 +273,14 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
 
 def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
-    prior = run(_run_input(canonical, definition)).track_state
+    prior = accepted_kernel_state
     expected = advance(
         AdvanceInput(
             prior_state=prior,
@@ -299,6 +303,7 @@ def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
 
 def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
@@ -311,7 +316,7 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
         row for row in corrected["prices"] if row["session"] == historical_session
     )
     corrected_price["close_adj"] = float(corrected_price["close_adj"]) * 1.25
-    prior = run(_run_input(canonical, definition)).track_state
+    prior = accepted_kernel_state
     appended_sessions = list(appended["research_calendar"])
 
     uncorrected_ordinary = advance(
@@ -343,12 +348,13 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
 
 def test_kernel_rebuild_warms_from_empty_with_fixed_525_session_tail(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
-    state = run(_run_input(canonical, definition)).track_state
+    state = accepted_kernel_state
     calendar = list(canonical["research_calendar"])
 
     rebuilt = advance_continuation(
@@ -363,6 +369,7 @@ def test_kernel_rebuild_warms_from_empty_with_fixed_525_session_tail(
 
 def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
@@ -373,7 +380,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     for row in complete["prices"]:
         if row["session"] == appended_session:
             row["open_adj"] = float(row["open_adj"]) * 1.02
-    prior = run(_run_input(canonical, definition)).track_state
+    prior = accepted_kernel_state
     advanced = advance(
         AdvanceInput(
             prior_state=prior,
@@ -446,13 +453,14 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
 
 def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
-    prior = run(_run_input(canonical, definition)).track_state
+    prior = accepted_kernel_state
     prior_canonical = prior.canonical_snapshot()
     instruments = copy.deepcopy(canonical["instruments"])
     assert isinstance(instruments, list)

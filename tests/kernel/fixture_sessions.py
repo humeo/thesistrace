@@ -6,6 +6,11 @@ def append_fixture_session(
     canonical: dict[str, object],
 ) -> tuple[dict[str, object], dict[str, object]]:
     complete = copy.deepcopy(canonical)
+    appended = _append_fixture_session_in_place(complete)
+    return complete, appended
+
+
+def _append_fixture_session_in_place(complete: dict[str, object]) -> dict[str, object]:
     calendar = complete["research_calendar"]
     assert isinstance(calendar, list)
     prior_session = str(calendar[-1])
@@ -48,7 +53,7 @@ def append_fixture_session(
         rows.append(new_row)
         appended_universes[str(name)] = [copy.deepcopy(new_row)]
     appended["liquidity_universes"] = appended_universes
-    return complete, appended
+    return appended
 
 
 def extend_fixture_sessions(
@@ -59,7 +64,7 @@ def extend_fixture_sessions(
     complete = copy.deepcopy(canonical)
     new_sessions: list[str] = []
     for _ in range(count):
-        complete, appended = append_fixture_session(complete)
+        appended = _append_fixture_session_in_place(complete)
         sessions = appended["research_calendar"]
         assert isinstance(sessions, list)
         new_sessions.append(str(sessions[0]))

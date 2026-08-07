@@ -3,11 +3,13 @@ from pathlib import Path
 import pytest
 
 from thesistrace.adapters.fixture_data import FixtureDataSource
-from thesistrace.data import CollectionPlan, DataSourceError
+from thesistrace.data import CanonicalSourceBatch, CollectionPlan, DataSourceError
 
 
-def test_fixture_implements_only_the_canonical_collection_contract() -> None:
-    batch = FixtureDataSource().collect(CollectionPlan.bootstrap())
+def test_fixture_implements_only_the_canonical_collection_contract(
+    fixture_bootstrap_batch: CanonicalSourceBatch,
+) -> None:
+    batch = fixture_bootstrap_batch
 
     assert batch.collection_kind == "bootstrap"
     assert batch.source_name == "fixture"
@@ -28,8 +30,10 @@ def test_fixture_implements_only_the_canonical_collection_contract() -> None:
         assert forbidden not in source.lower()
 
 
-def test_fixture_collects_direct_and_wider_incremental_source_gaps() -> None:
-    root = FixtureDataSource().collect(CollectionPlan.bootstrap())
+def test_fixture_collects_direct_and_wider_incremental_source_gaps(
+    fixture_bootstrap_batch: CanonicalSourceBatch,
+) -> None:
+    root = fixture_bootstrap_batch
     frontier = root.covered_session_range[1]
 
     direct = FixtureDataSource().collect(CollectionPlan.incremental(frontier))

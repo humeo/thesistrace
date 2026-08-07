@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0155
 ---
 
 # Publish a validated Dataset Release after each session

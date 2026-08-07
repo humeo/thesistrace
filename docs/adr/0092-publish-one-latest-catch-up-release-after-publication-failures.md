@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0155
 ---
 
 # Publish one latest catch-up release after publication failures

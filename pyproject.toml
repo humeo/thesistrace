@@ -23,6 +23,7 @@ thesistrace-migrate = "thesistrace.entrypoints.migrate:main"
 [dependency-groups]
 dev = [
   "pytest>=8.4.1,<9",
+  "pytest-xdist>=3.8,<4",
   "ruff>=0.12.7,<1",
 ]
 

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0153
 ---
 
 # Use 756 input sessions and a 504-session report window

@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0153
 ---
 
 # Start the Backtest from an all-cash Research Window baseline

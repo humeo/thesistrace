@@ -17,12 +17,9 @@ FIELD_BINDINGS = {
 
 def test_kernel_run_matches_the_complete_characterization_baseline(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_run: RunOutput,
 ) -> None:
-    definition = accepted_calculation_case["definition"]
-    assert isinstance(definition, dict)
-    run_input = _run_input(accepted_calculation_case["canonical"], definition)
-
-    run_output = run(run_input)
+    run_output = accepted_kernel_run
     output = run_output.artifacts_snapshot()
 
     assert isinstance(run_output, RunOutput)
@@ -41,13 +38,14 @@ def test_kernel_run_matches_the_complete_characterization_baseline(
 
 def test_kernel_run_input_snapshots_values_and_has_no_product_context(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_run: RunOutput,
 ) -> None:
     canonical = copy.deepcopy(accepted_calculation_case["canonical"])
     definition = copy.deepcopy(accepted_calculation_case["definition"])
     assert isinstance(canonical, dict)
     assert isinstance(definition, dict)
     run_input = _run_input(canonical, definition)
-    expected = run(run_input).artifacts_snapshot()
+    expected = accepted_kernel_run.artifacts_snapshot()
 
     canonical["research_calendar"] = []
     definition["universe"] = "top3000"
@@ -73,6 +71,7 @@ def test_kernel_run_input_snapshots_values_and_has_no_product_context(
 
 def test_kernel_run_input_does_not_expose_mutable_expression_state(
     accepted_calculation_case: dict[str, object],
+    accepted_kernel_run: RunOutput,
 ) -> None:
     canonical = accepted_calculation_case["canonical"]
     definition = copy.deepcopy(accepted_calculation_case["definition"])
@@ -87,7 +86,7 @@ def test_kernel_run_input_does_not_expose_mutable_expression_state(
         }
     }
     run_input = _run_input(canonical, definition)
-    expected = run(run_input).artifacts_snapshot()
+    expected = accepted_kernel_run.artifacts_snapshot()
 
     exposed = run_input.alpha_expression_snapshot()
     assert isinstance(exposed, dict)

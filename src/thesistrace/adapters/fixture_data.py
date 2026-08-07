@@ -34,9 +34,12 @@ class FixtureDataSource:
         if plan.kind == "incremental":
             if plan.after_session is None:
                 raise ValueError("Fixture incremental collection requires a frontier")
+            calendar = canonical["research_calendar"]
+            assert isinstance(calendar, list)
             selected_sessions_after_bootstrap = _next_available_session_count(
                 plan.after_session,
                 self._availability_sequence,
+                calendar,
             )
             for _ in range(selected_sessions_after_bootstrap):
                 _append_session(canonical)
@@ -69,15 +72,14 @@ class FixtureDataSource:
 def _next_available_session_count(
     after_session: str,
     availability_sequence: tuple[int, ...],
+    bootstrap_calendar: list[object],
 ) -> int:
-    _source, probe = build_fixture()
     boundaries: dict[int, str] = {}
+    boundary = str(bootstrap_calendar[-1])
     for count in range(1, availability_sequence[-1] + 1):
-        _append_session(probe)
-        calendar = probe["research_calendar"]
-        assert isinstance(calendar, list)
-        boundaries[count] = str(calendar[-1])
-    if after_session not in probe["research_calendar"]:
+        boundary = _next_research_session(boundary)
+        boundaries[count] = boundary
+    if after_session not in bootstrap_calendar and after_session not in boundaries.values():
         raise DataSourceError(
             "invalid_source_data",
             detail_code="FRONTIER_NOT_RESEARCH_SESSION",
@@ -88,14 +90,18 @@ def _next_available_session_count(
     )
 
 
+def _next_research_session(prior_session: str) -> str:
+    candidate = date.fromisoformat(prior_session) + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate.isoformat()
+
+
 def _append_session(canonical: dict[str, object]) -> None:
     calendar = canonical["research_calendar"]
     assert isinstance(calendar, list)
     prior_session = str(calendar[-1])
-    candidate = date.fromisoformat(prior_session) + timedelta(days=1)
-    while candidate.weekday() >= 5:
-        candidate += timedelta(days=1)
-    new_session = candidate.isoformat()
+    new_session = _next_research_session(prior_session)
     calendar.append(new_session)
     for table, session_field in (
         ("prices", "session"),

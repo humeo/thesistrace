@@ -136,7 +136,7 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     assert "project_name=thesistrace-dev" in lifecycle
     assert "mise exec -- pnpm install --frozen-lockfile" in lifecycle
     assert "compose up --detach --build --wait --wait-timeout 300" in lifecycle
-    assert "compose up --watch" in lifecycle
+    assert "compose_exec up --watch" in lifecycle
     assert "compose logs --follow --timestamps" in lifecycle
     assert "compose stop" in lifecycle
 
@@ -212,6 +212,7 @@ def test_development_watch_streams_stderr_and_forwards_termination(
     wrapper_signal: signal.Signals,
 ) -> None:
     signal_file = tmp_path / "watch-signal"
+    stop_file = tmp_path / "watch-stop"
     docker = tmp_path / "docker"
     docker.write_text(
         """#!/usr/bin/env python3
@@ -222,16 +223,21 @@ import sys
 arguments = " ".join(sys.argv[1:])
 if "config --quiet" in arguments:
     raise SystemExit(0)
+if "stop" in arguments:
+    with open(os.environ["WATCH_STOP_FILE"], "w") as stop_file:
+        stop_file.write("stop")
+    raise SystemExit(0)
 if "up --watch" not in arguments:
     raise SystemExit(2)
 
-def terminate(_signum, _frame):
+def terminate(signum, _frame):
     with open(os.environ["WATCH_SIGNAL_FILE"], "w") as signal_file:
-        signal_file.write("TERM")
+        signal_file.write(signal.Signals(signum).name)
     print("panic: close of closed channel", file=sys.stderr, flush=True)
     print("watch panic trace", file=sys.stderr, flush=True)
     raise SystemExit(2)
 
+signal.signal(signal.SIGINT, terminate)
 signal.signal(signal.SIGTERM, terminate)
 print("watch-warning", file=sys.stderr, flush=True)
 signal.pause()
@@ -242,6 +248,7 @@ signal.pause()
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
         "WATCH_SIGNAL_FILE": str(signal_file),
+        "WATCH_STOP_FILE": str(stop_file),
     }
 
     process = subprocess.Popen(
@@ -263,8 +270,68 @@ signal.pause()
             process.communicate()
 
     assert process.returncode == 0
-    assert signal_file.read_text() == "TERM"
+    assert signal_file.read_text() == wrapper_signal.name
+    assert stop_file.read_text() == "stop"
     assert "panic: close of closed channel" not in remaining_stderr
+
+
+def test_development_watch_keeps_compose_in_the_wrapper_process_group(
+    tmp_path: Path,
+) -> None:
+    process_group_file = tmp_path / "watch-process-group.json"
+    docker = tmp_path / "docker"
+    docker.write_text(
+        """#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import signal
+import sys
+
+arguments = " ".join(sys.argv[1:])
+if "config --quiet" in arguments:
+    raise SystemExit(0)
+if "up --watch" not in arguments:
+    raise SystemExit(2)
+
+Path(os.environ["WATCH_PROCESS_GROUP_FILE"]).write_text(
+    json.dumps(
+        {
+            "process_group": os.getpgrp(),
+            "wrapper_process_group": os.getpgid(os.getppid()),
+        }
+    )
+)
+signal.pause()
+"""
+    )
+    docker.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "WATCH_PROCESS_GROUP_FILE": str(process_group_file),
+    }
+
+    process_id, terminal = os.forkpty()
+    if process_id == 0:
+        os.chdir(ROOT)
+        os.execve(ROOT / "scripts" / "dev-runtime", ["dev-runtime", "watch"], environment)
+
+    try:
+        deadline = time.monotonic() + 5
+        while not process_group_file.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert process_group_file.exists()
+        process_groups = json.loads(process_group_file.read_text())
+        assert process_groups["process_group"] == process_groups["wrapper_process_group"]
+    finally:
+        if process_group_file.exists():
+            process_group = json.loads(process_group_file.read_text())["process_group"]
+            os.killpg(process_group, signal.SIGKILL)
+        else:
+            os.kill(process_id, signal.SIGKILL)
+        os.waitpid(process_id, 0)
+        os.close(terminal)
 
 
 def test_integration_command_generates_unique_test_identities() -> None:

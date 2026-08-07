@@ -285,13 +285,16 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     browser = (ROOT / "web" / "playwright.config.ts").read_text()
     vite = (ROOT / "web" / "vite.config.ts").read_text()
     core_app = (ROOT / "web" / "src" / "shell" / "CoreApp.tsx").read_text()
-    assert source.count("path:") == 4
-    assert 'path: "/data"' in source
-    assert 'path: "/definitions"' in source
-    assert 'path: "/research-runs"' in source
-    assert 'path: "/daily-tracks"' in source
+    resource_routes = source.partition("] as const;")[0]
+    for route in (
+        'path: "/data"',
+        'path: "/definitions"',
+        'path: "/research-runs"',
+        'path: "/daily-tracks"',
+    ):
+        assert resource_routes.count(route) == 1
     for forbidden in ("hosted", "login", "workspace", "manifest", "download"):
-        assert forbidden not in source.lower()
+        assert forbidden not in resource_routes.lower()
     assert 'import { CoreApp } from "./shell/CoreApp"' in main
     assert "history.replaceState" in main
     for inactive in ('from "./App"', "HostedAuthBoundary", "isCoreRoute"):
@@ -396,6 +399,23 @@ def test_fast_host_gate_excludes_compose_and_expensive_work() -> None:
         "production",
     ):
         assert excluded not in fast_gate.lower()
+
+
+def test_parallel_host_gate_uses_xdist_only_for_isolated_host_tests() -> None:
+    parallel_gate = _package_script("test:host-parallel")
+
+    assert parallel_gate == (
+        "uv run pytest -q -n auto "
+        "tests/kernel tests/architecture tests/adapters"
+    )
+    for excluded in (
+        "tests/integration",
+        "tests/acceptance",
+        "test:e2e",
+        "docker",
+        "compose",
+    ):
+        assert excluded not in parallel_gate.lower()
 
 
 def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:

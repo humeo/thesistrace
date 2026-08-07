@@ -17,6 +17,15 @@ compose() {
     "$@"
 }
 
+compose_exec() {
+  exec docker compose \
+    --project-name "$project_name" \
+    --env-file "$environment_file" \
+    --file "$base_file" \
+    --file "$development_file" \
+    "$@"
+}
+
 validate_project() {
   if [ "$project_name" != "$canonical_project_name" ]; then
     shown_name=${project_name:-<empty>}
@@ -43,7 +52,8 @@ watch_runtime() {
 
   interrupted=false
   watch_pid=
-  trap 'interrupted=true; if [ -n "$watch_pid" ]; then kill -TERM "-$watch_pid" 2>/dev/null || kill -TERM "$watch_pid" 2>/dev/null || true; fi' INT TERM
+  trap 'interrupted=true; if [ -n "$watch_pid" ]; then kill -INT "$watch_pid" 2>/dev/null || true; fi' INT
+  trap 'interrupted=true; if [ -n "$watch_pid" ]; then kill -TERM "$watch_pid" 2>/dev/null || true; fi' TERM
 
   (
     buffering=false
@@ -60,13 +70,8 @@ watch_runtime() {
   ) &
   watch_reader_pid=$!
 
-  set -m
-  (
-    trap '' INT
-    compose up --watch 2>"$watch_stderr"
-  ) &
+  compose_exec up --watch 2>"$watch_stderr" &
   watch_pid=$!
-  set +m
   set +e
   wait "$watch_pid" 2>/dev/null
   watch_status=$?
@@ -75,6 +80,9 @@ watch_runtime() {
   set -e
   trap - INT TERM
 
+  if [ "$interrupted" = true ]; then
+    compose stop
+  fi
   if [ "$watch_reader_status" -ne 0 ] && [ "$watch_status" -eq 0 ]; then
     watch_status=$watch_reader_status
   fi

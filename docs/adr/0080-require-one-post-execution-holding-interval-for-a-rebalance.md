@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0153
 ---
 
 # Require one post-execution holding interval for a Rebalance

@@ -30,7 +30,17 @@ def first_divergence(actual: object, expected: object, path: str = "$") -> str:
             if divergence:
                 return divergence
         return ""
-    return "" if equivalence_bytes(actual) == equivalence_bytes(expected) else path
+    return "" if _scalar_equivalent(actual, expected) else path
+
+
+def _scalar_equivalent(actual: object, expected: object) -> bool:
+    if isinstance(actual, float):
+        return canonical_binary64_bytes(actual) == canonical_binary64_bytes(expected)
+    if isinstance(actual, Decimal):
+        return canonical_decimal(actual) == canonical_decimal(expected)
+    if actual is None or isinstance(actual, (bool, int, str)):
+        return actual == expected
+    return equivalence_bytes(actual) == equivalence_bytes(expected)
 
 
 def equivalence_bytes(value: object) -> bytes:

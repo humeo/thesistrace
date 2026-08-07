@@ -1,6 +1,6 @@
 # ThesisTrace
 
-ThesisTrace turns investment hypotheses into reproducible Alpha evaluations,
+ThesisTrace turns investment hypotheses into auditable Alpha evaluations,
 strategy backtests, and continuous daily research tracking.
 
 ## Language
@@ -70,23 +70,23 @@ _Avoid_: Hosted Local Acceptance, smoke test, build verification
 **System Health**:
 The operational truth of whether the hosted services can safely accept,
 schedule, execute, persist, and serve work. It covers Auth, API, PostgreSQL,
-object storage, Temporal, workers, Dataset Publication, Activity heartbeats and
+object storage, Temporal, workers, Data Refresh, Activity heartbeats and
 timeouts, Task Queues, and capacity pressure rather than host metrics alone.
 _Avoid_: Host monitoring alone, Data Health, Quantitative Semantic Health
 
 **Data Health**:
-The quality and timeliness of the path from Tushare inputs to an immutable
-Dataset Release. It covers freshness, expected coverage, schema validity,
-calendar consistency, duplicates, unexplained gaps, lineage, checksums, and
-publication delay.
+The quality and timeliness of the path from Tushare inputs to the current
+Dataset Head. It covers readiness, freshness, expected coverage, schema
+validity, calendar consistency, duplicates, unexplained gaps, checksums, and
+refresh delay.
 _Avoid_: Successful HTTP request, System Health, Alpha performance
 
 **Quantitative Semantic Health**:
-The evidence that research computation continues to honor its frozen domain,
-numeric, and reproducibility contracts across Alpha Matrix, Factor Evaluation,
-Strategy Backtest, and Daily Tracking. It covers deterministic regression,
+The evidence that research computation continues to honor its frozen domain
+and numeric contracts across Alpha Matrix, Factor Evaluation, Strategy
+Backtest, and Daily Tracking. It covers deterministic same-input regression,
 accounting, checksum, missingness, and Batch-Incremental Equivalence evidence
-without promising that an Alpha remains profitable.
+without promising either historical input retention or Alpha profitability.
 _Avoid_: Investment-performance guarantee, System Health, Data Health
 
 ### Research and Alpha
@@ -134,9 +134,10 @@ _Avoid_: Decimal Alpha arithmetic, sample rolling standard deviation,
 implementation-default rounding
 
 **Numeric Execution Contract**:
-The versioned V1 numeric contract pinned by a ResearchRun's immutable input and
-by a DailyTrack. It fixes integer, 34-digit half-even Decimal, binary64,
-residual, and canonical-checksum semantics independently of UI formatting.
+The versioned V1 numeric contract frozen by a ResearchRun and by a DailyTrack.
+It fixes integer, 34-digit half-even Decimal, binary64, residual, and
+canonical-checksum semantics independently of UI formatting or the selected
+Data Generation.
 _Avoid_: Runtime default precision, report formatting, tolerance-based equality
 
 **Effective Alpha Lookback**:
@@ -175,48 +176,49 @@ A stopped Track does not count toward it.
 _Avoid_: Quota Profile, total DailyTrack history, Compute concurrency
 
 **Daily Tracking**:
-The V1 process that incrementally advances an explicitly active DailyTrack
-after each successful Dataset Release. It publishes immutable summaries,
-retained Strategy observations, and terminal state without full replay,
-notifications, or real trading.
+The forward-only simulated-portfolio process that advances an explicitly active
+DailyTrack through every later Research Session available at the Dataset Head.
+It publishes summaries, retained Strategy observations, and terminal state
+without rewriting past results, correction notifications, or real trading.
 _Avoid_: Full daily batch replay, persisted Alpha history, live trading,
 alerting product
 
 **DailyTrack**:
 The stable identity of one continuous, fixed-inception Daily Tracking stream
-explicitly started from a successful seed ResearchRun. It is active while
-following Dataset Releases, blocked when its current target cannot complete,
-and terminally stopped only by an explicit Stop; editing or rerunning research
-never mutates it.
+explicitly started from a successful seed ResearchRun. It freezes the complete
+Research Definition, carries cash, holdings, NAV, and Strategy phase, catches
+up to the Dataset Head, and then continues forward. It is blocked when its
+current target cannot complete and terminally stopped only by an explicit Stop;
+editing or rerunning research never mutates it.
 _Avoid_: ResearchRun, rolling backtest, mutable latest Definition
 
 **Working Cache**:
 The latest-only, non-authoritative Pending Alpha and rolling Factor aggregate
 state used to advance one active DailyTrack incrementally. It is bounded,
-fenced, rebuildable from immutable truth, and deleted when the Track stops.
+fenced, rebuildable from the latest successful Tracking Checkpoint plus
+currently available Canonical Market Data, and deleted when the Track stops.
 _Avoid_: Tracking Checkpoint, Result Bundle, Factor curve, permanent Alpha store
 
 **Tracking Origin**:
-The seed ResearchRun's original `R1` Research Session coordinate, all-cash
-baseline, Research Window schedule anchor, and immutable research semantics from
-which the DailyTrack reference oracle begins. Its market data follows the
-ordered Dataset Release sequence bound by Checkpoints rather than rolling
-forward with the latest Research Window.
+The successful seed ResearchRun together with its frozen Research Definition,
+Research Period, and Terminal Strategy State from which the continuous
+simulation continues rather than starting a new rolling backtest.
 _Avoid_: Activation date only, latest rolling R1, Tracking Head
 
 **Activation Checkpoint**:
-Generation 0's root immutable DailyTrack state. It has no predecessor, binds
-the seed Run's Dataset Release, references the seed Result Bundle, and carries
-its Terminal Strategy State, Rebalance phase, and any bounded scheduled
-final-session signal, but no Alpha or Label history.
+Generation 0's root immutable DailyTrack state. It has no predecessor,
+references the seed Result Bundle, records the seed Attempt's Data Generation
+metadata for audit, and carries its Terminal Strategy State, Rebalance phase,
+and any bounded scheduled final-session signal, but no Alpha or Label history.
 _Avoid_: New all-cash baseline, copied Result Bundle, pending Label store,
 historical fake Update
 
 **Tracking Advance**:
-One idempotent execution for a `(DailyTrack, Tracking Generation, target
-Dataset Release)`. It survives failed Attempts, processes new Research Sessions
-in order, and publishes one Tracking Checkpoint only on complete success.
-_Avoid_: ResearchRun rerun, Dataset Publication, partial result
+One idempotent execution that extends a `(DailyTrack, Tracking Generation)`
+through one or more later Research Sessions. Its Attempt pins the current Data
+Generation, processes sessions in order, survives failure, and publishes one
+Tracking Checkpoint only on complete success.
+_Avoid_: ResearchRun rerun, Data Refresh, partial result
 
 **Tracking Advance Attempt**:
 One execution attempt under a persistent Tracking Advance, with
@@ -226,9 +228,9 @@ _Avoid_: New Tracking Advance, ResearchRun Attempt, partial Checkpoint
 
 **Tracking Checkpoint**:
 The immutable authoritative manifest and state published by a successful
-Tracking Advance. It binds provenance, the ordered Dataset Release sequence,
-Factor Summary Snapshot, retained Strategy deltas, and Terminal Strategy State
-without Alpha Values, stock-level Labels, raw orders, or fills.
+Tracking Advance. It records the Data Generation used for newly calculated
+sessions and retains the Factor Summary Snapshot, Strategy deltas, and Terminal
+Strategy State without Alpha Values, stock-level Labels, raw orders, or fills.
 _Avoid_: Mutable tracker row, attempt log, Result Bundle extension
 
 **Tracking Head**:
@@ -239,29 +241,20 @@ _Avoid_: Result truth, mutable Checkpoint, Dataset latest
 
 **Tracking Generation**:
 One immutable DailyTrack result branch whose Advances share one calculation
-kernel and Numeric Execution Contract. Historical data corrections remain
-within it, while a result-changing kernel correction creates a new fully
-executed Generation without mutating the prior branch.
-_Avoid_: Dataset correction boundary, partial patch, Dataset Release
-
-**Tracking Correction Boundary**:
-A successful Tracking Advance whose target Dataset Release contains an
-accepted historical correction that affects the DailyTrack's dependency
-closure. It continues in the same Generation, preserves prior results, and
-applies the correction only to results first calculated at or after that
-visible boundary.
-_Avoid_: New Tracking Generation, corrected backtest, in-place mutation
+kernel and Numeric Execution Contract. Data changes never rewrite it, while a
+result-changing kernel correction creates a new fully executed Generation
+without mutating the prior branch.
+_Avoid_: Data Generation, partial patch, Dataset Head
 
 **Batch-Incremental Equivalence**:
 The core V1 correctness invariant that a reference execution and
-session-by-session Daily Tracking from the same Tracking Origin, research
-semantics, ordered Advance Dataset Release sequence, Generation-pinned
-calculation kernel, and DailyTrack-pinned Numeric Execution Contract produce
-canonically exact retained results. An explicit verification may regenerate
-intermediates, but neither a latest-Release-only replay nor a rolling
-ResearchRun is the correction-aware comparator.
-_Avoid_: Persisted-intermediate requirement, latest-Release-only replay,
-tolerance-only comparison, latest rolling Run, two calculation kernels
+session-by-session Daily Tracking from the same Tracking Origin, frozen
+Research Definition, initial account state, per-session Canonical Market Data,
+calculation kernel, and Numeric Execution Contract produce canonically exact
+retained results. It is an engineering comparison over supplied inputs, not a
+promise that ThesisTrace permanently retains every historical input.
+_Avoid_: Persisted-input requirement, tolerance-only comparison, latest rolling
+Run, two calculation kernels
 
 ### Strategy Execution
 
@@ -281,16 +274,16 @@ across Factor quantiles.
 _Avoid_: Database row order, source-response order, Factor average rank
 
 **Holdings Count**:
-The explicit integer `holdings_count` from 1 through 100 in a ResearchRun's
-immutable input, bounded by the selected Liquidity Universe size and defining
-the maximum number of Top-N equal-weight targets. Fewer eligible candidates
-produce fewer targets and residual cash.
+The explicit integer `holdings_count` from 1 through 100 in a frozen Research
+Definition, bounded by the selected Liquidity Universe size and defining the
+maximum number of Top-N equal-weight targets. Fewer eligible candidates produce
+fewer targets and residual cash.
 _Avoid_: Runtime default, percentage cutoff, guaranteed filled positions
 
 **Initial Cash**:
 The CNY 10,000,000 recorded as both Gross NAV and Net NAV at the first Research
-Window open, with no Actual Holdings. V1 fixes and records the amount in the
-ResearchRun's immutable input; first deployment occurs at the next Research
+Period open, with no Actual Holdings. V1 fixes and records the amount in the
+ResearchRun's frozen Definition; first deployment occurs at the next Research
 Session's open, and no later contribution, withdrawal, borrowing, leverage, or
 negative cash is permitted.
 _Avoid_: Runtime default, portfolio NAV, deployable cash after trades
@@ -299,7 +292,7 @@ _Avoid_: Runtime default, portfolio NAV, deployable cash after trades
 A scheduled Strategy decision that recalculates the complete Top-N equal-weight
 target from that signal session's Alpha Values and first attempts the resulting
 orders at the next session's open, provided both that open and one later
-holding-valuation open remain inside the Research Window. Intermediate Alpha
+holding-valuation open remain inside the Research Period. Intermediate Alpha
 snapshots remain Factor Evaluation inputs rather than queued or overlapping
 Strategy cohorts.
 _Avoid_: Delayed execution of every signal, daily signal cohort, Factor label
@@ -371,9 +364,9 @@ _Avoid_: Forward fill, synthetic market bar, executable price
 The conservative Strategy accounting event applied only when an Actual Holding
 has no required daily Open, is not governed by confirmed full-session
 suspension, and has explicit effective terminal-delisting evidence in the
-pinned Dataset Release. It removes the position at zero value and zero proceeds
-without creating an order, fill, Transaction Cost, Turnover, Market Rejection,
-or observed zero-price trade.
+Attempt's pinned Data Generation. It removes the position at zero value and
+zero proceeds without creating an order, fill, Transaction Cost, Turnover,
+Market Rejection, or observed zero-price trade.
 _Avoid_: Forced sell, suspended-price carry, unexplained missing-data fallback
 
 **Terminal Delisting Return**:
@@ -425,8 +418,8 @@ initial deployment, then reports its event mean and
 _Avoid_: Order count, target-weight change, filled-notional double count
 
 **Rebalance Interval**:
-The explicit `rebalance_every_sessions` integer in a ResearchRun's immutable
-input. It may be any value from 1 through 20 and determines the distance between
+The explicit `rebalance_every_sessions` integer in a frozen Research Definition.
+It may be any value from 1 through 20 and determines the distance between
 scheduled Strategy signal sessions.
 _Avoid_: Natural-day interval, fixed 1/5/20 enumeration, holding cohort
 
@@ -487,64 +480,72 @@ _Avoid_: New-buy eligibility, immediate forced sale, permanent eligibility
 
 **Research Definition**:
 The mutable, saved authoring record for one research, containing one Alpha and
-its configurable research choices. It may be incomplete between Save actions;
-Run saves its current content and, when valid, embeds an immutable input in a
-new ResearchRun.
+its configurable research choices, including required natural-date `start_date`
+and `end_date`. It may be incomplete between Save actions; Run saves its
+current content and, when valid, freezes that content in a new ResearchRun.
 _Avoid_: Draft, frozen Definition resource, ResearchSpec, compiled plan
 
 **Run Action**:
 The Research Definition action that saves the submitted current content and
-attempts to create a ResearchRun against the latest Dataset Release. Rejected
-content remains saved but creates no ResearchRun.
+attempts to create a ResearchRun. Rejected content remains saved but creates no
+ResearchRun, and accepted content does not select data until an Attempt starts.
 _Avoid_: Save followed by Run, Rerun, execution Attempt
 
 **ResearchRun**:
-One execution of immutable Research Definition content pinned to one Dataset
-Release that produces Factor Evaluation and Strategy Backtest conclusions. It
-has a durable lifecycle, treats infrastructure retries as Attempts, and may
-seed a DailyTrack only after publishing a complete Result Bundle.
+One durable execution request over frozen Research Definition content and
+Requested Research Dates. Its successful Attempt produces Factor Evaluation
+and Strategy Backtest conclusions and may seed a DailyTrack only after
+publishing a complete Result Bundle.
 _Avoid_: Research Definition, factor evaluation, backtest
 
 **Rerun**:
 The user action that creates a new ResearchRun with the selected Run's same
-immutable input and same Dataset Release. It ignores current Definition edits
-and newer Dataset Releases.
+frozen Research Definition and Requested Research Dates. It ignores current
+Definition edits, while the new Run's Attempt independently selects the latest
+Dataset Head when it starts.
 _Avoid_: ResearchRun Attempt, Run Action, modified research
 
 **ResearchRun Attempt**:
 One infrastructure execution attempt belonging to an existing ResearchRun,
-whose transient retry may create another Attempt without changing the Run
-identity or frozen inputs. A user-requested rerun is a new ResearchRun rather
-than another Attempt.
+which pins the latest Data Generation when it starts and recomputes the whole
+Run from the beginning. A retry creates another Attempt, may select a newer
+Generation, and never mixes partial artifacts; a user-requested rerun is a new
+ResearchRun.
 _Avoid_: ResearchRun, user rerun, modified run input
 
 **Result Bundle**:
-The immutable, minimal, at-most-`1,048,576`-byte authoritative result of one
-successful ResearchRun. It retains Factor summaries, Strategy results and
-continuation state while excluding Alpha Values, stock-level Labels, daily
-Factor observations, and raw execution details.
+The immutable, minimal authoritative result of one successful ResearchRun. It
+retains exactly `factor_summary`, `strategy_summary`,
+`strategy_daily_observations`, and `terminal_strategy_state`. Its byte budget is
+`ceil(research_period_session_count / 504) * 1 MiB`; Alpha Values, stock-level
+Labels, daily Factor observations, orders, fills, and position history remain
+excluded.
 _Avoid_: Alpha store, UI cache, partial report, mutable result, attempt
 diagnostics
 
 **Result Manifest**:
 The immutable index and provenance record at the root of a Result Bundle. It
-identifies every required result object and checksum so the bundle can be
-validated and reproduced.
-_Avoid_: Dataset Release manifest, HTML report, job log
+identifies every required result object and checksum and records the successful
+Attempt's Data Generation and data-through session so the bundle can be
+validated and audited without promising that the input bytes remain available.
+_Avoid_: Data Generation manifest, HTML report, job log
 
 **Factor Evaluation**:
-The immutable summary that assesses whether an Alpha has predictive and ranking
-value independently of a Strategy's realized portfolio outcome. V1 evaluates
-the same transient Alpha Values at fixed 1-, 5-, and 20-market-session
-horizons and retains summary statistics and coverage counts, but no daily
-Factor observations, Alpha Values, or Forward Return Labels.
+The Research-Period-bounded summary that assesses whether an Alpha has
+predictive and ranking value independently of a Strategy's realized portfolio
+outcome. V1 evaluates the same transient Alpha Values at fixed 1-, 5-, and
+20-market-session horizons and retains summary statistics and coverage counts,
+but no daily Factor observations, Alpha Values, or Forward Return Labels. A
+short valid period may produce `null` summary metrics and zero valid-session
+counts without failing the ResearchRun or fabricating a numeric zero.
 _Avoid_: Factor curve, Alpha Matrix, Strategy Backtest, factor return
 
 **Label Maturation**:
 The calculation point when one pending signal-session and horizon Label becomes
-resolvable because its nominal exit Research Session has entered the pinned
-Dataset Release. Daily Tracking consumes its governed outcome to update a
-Factor Summary Snapshot without persisting a stock-level event.
+resolvable because its nominal exit Research Session is available to the
+calculation. A ResearchRun never reads after its Research Period end; Daily
+Tracking may consume later sessions to update a Factor Summary Snapshot without
+persisting a stock-level event.
 _Avoid_: Stored Label row, in-place Label update, signal-date rewrite
 
 **Factor Summary Snapshot**:
@@ -681,7 +682,7 @@ _Avoid_: Annualized Return difference, Gross NAV comparison, daily alpha
 
 **Maximum Drawdown**:
 The largest value of `1 - Net NAV / running_peak_Net_NAV` over the reported
-Research Window. V1 reports the non-negative loss magnitude plus its peak,
+Research Period. V1 reports the non-negative loss magnitude plus its peak,
 trough, and recovery dates; an unfinished recovery is `unrecovered`.
 _Avoid_: Gross drawdown, negative signed value, single-day loss
 
@@ -713,13 +714,13 @@ return connects consecutive post-trade open NAV observations.
 _Avoid_: Close NAV, pre-trade return series, intraday marking
 
 **Backtest Start Baseline**:
-The all-cash observation at the first Research Window open: Gross NAV and Net
+The all-cash observation at the first Research Period open: Gross NAV and Net
 NAV are Initial Cash, Benchmark NAV is 1, and Actual Holdings are empty. The
 first close supplies the first signal and the next Open the first deployment.
 _Avoid_: Warm-up position, pre-cost starting NAV, first holding return
 
 **Terminal Valuation**:
-The final Research Window open, when V1 values carried Actual Holdings and
+The final Research Period open, when V1 values carried Actual Holdings and
 records the final Strategy Daily Observation and Terminal Strategy State
 without a Rebalance, forced liquidation, or hypothetical exit costs. It ends a
 finite ResearchRun while an active DailyTrack continues beyond it.
@@ -754,54 +755,90 @@ One completed date in the Research Calendar. A date when only one supported
 exchange is open does not form a V1 cross-market research observation.
 _Avoid_: Calendar day, source row, intraday session
 
-**Research Window**:
-The final 504 completed Research Sessions reported by V1 Factor Evaluation and
-Strategy Backtest, following 252 calculation-only warm-up sessions whose Alpha
-Values never create Strategy orders and any earlier release-owned Adjustment
-Anchors. It ends at Strategy Terminal Valuation, retains Factor signals
-according to Label availability, and remains a fixed ResearchRun window rather
-than rolling a DailyTrack away from its original Tracking Origin.
-_Avoid_: Complete market history, warm-up period, unbounded date range
+**Requested Research Dates**:
+The required natural-date `start_date` and `end_date` saved in a Research
+Definition and frozen by a ResearchRun. They form an inclusive range and need
+not themselves be Research Sessions; a reversed range or one containing no
+Research Session is invalid.
+_Avoid_: Session indexes, inferred default dates, Calculation Warm-up
 
-**Research Input History**:
-The exact 756 completed Research Sessions consumed by a V1 ResearchRun: 252
-warm-up sessions followed by the 504-session Research Window.
-_Avoid_: Research Window, complete market history, report period
+**Research Period**:
+The ordered Research Sessions from the first through the last valid session
+inside the Requested Research Dates. It may contain any positive number of
+sessions and is the only period reported by Factor Evaluation and Strategy
+Backtest; its final session is the Terminal Valuation boundary.
+_Avoid_: Fixed 504-session window, complete market history, Calculation Warm-up
 
-**Dataset Release**:
-A Data-owned, immutable manifest for one validated market-data snapshot. It
-binds one cumulative logical snapshot, its predecessor and correction
-change-set, and the immutable data identities used by ResearchRuns and Tracking
-Advances.
-_Avoid_: Mutable dataset, latest dataset, runtime cache
+**Calculation Warm-up**:
+The completed Research Sessions before a Research Period needed solely to
+evaluate the Alpha Expression's Effective Alpha Lookback. Its length is derived
+from the expression, never exceeds 252 sessions, and contributes no signal,
+order, Factor observation, or Strategy result. If the selected Data Generation
+cannot supply it, the Attempt fails without shifting Requested Research Dates.
+_Avoid_: Fixed 252-session prefix, Research Period, partial rolling calculation
 
-**Data Update**:
-The product action that brings Data to the latest completed Research Session.
-It performs the first Bootstrap or a later incremental publication internally,
-and creates no Dataset Release when no new session is available.
-_Avoid_: Publish Fixture, Publish Live, manual Bootstrap mode, DailyTrack Advance
+**Mounted Canonical Data Store**:
+The persistent directory that contains validated Canonical Market Data and the
+current Dataset Head. Runtime startup reads this store and never downloads data;
+an empty development store must be bootstrapped explicitly, while a deployment
+may mount a previously prepared store.
+_Avoid_: Runtime cache, Result Bundle store, startup download
 
-**Dataset Publication**:
-The Data-owned process invoked by Data Update to atomically publish validated
-Bootstrap, incremental, or catch-up data and accepted corrections. It creates
-nothing when no newly completed Research Session extends the latest Release and
-never waits for independent DailyTrack Advances.
-_Avoid_: Data fetch, partial update, in-place dataset mutation,
-correction-only release
+**Dataset Head**:
+The atomic pointer to the one current validated Data Generation. It is the data
+source selected when a ResearchRun Attempt or Tracking Advance Attempt starts,
+not an immutable user-visible version history.
+_Avoid_: Dataset Release chain, ResearchRun result, permanent snapshot catalog
+
+**Data Generation**:
+A complete validated consistency boundary created beside the active data and
+then selected by the Dataset Head. An active execution pins one Generation for
+its duration and records its identity for audit, but old Generations and their
+market-data bytes may be collected after no execution references them.
+_Avoid_: Permanent Dataset Release, user-selectable version, Result Bundle
+
+**Dataset Coverage**:
+The inclusive range from the earliest Research Session through the
+data-through session available in the current Dataset Head. Advancing the Head
+does not reset its Coverage Start.
+_Avoid_: Requested Research Dates, Calculation Warm-up, source request window
+
+**Data Overview**:
+The read-only user product view of current Dataset Coverage, data-through
+session, last refresh time, and readiness. It contains no update control,
+Generation history, or operator job status.
+_Avoid_: Data Refresh control, operations console, Dataset Release browser
+
+**Data Operator**:
+The trusted operational authority that may inspect and start a Data Refresh
+through the private operations surface. It is not an ordinary product user or
+a Worker service identity.
+_Avoid_: Ordinary user, research owner, Worker identity
+
+**Data Refresh**:
+The private, manually triggered operator action that builds and validates a
+candidate Data Generation before atomically moving the Dataset Head. It is not
+exposed through the ordinary user API or Web interface and has no automatic V1
+schedule. A later refresh requests a 20-Research-Session overlap plus every new
+session. Returned values replace matching values, and ordinary absence in the
+overlap preserves current data. Explicit governing trading-state or lifecycle
+evidence takes precedence and invalidates any conflicting stored price or
+turnover observation.
+_Avoid_: User product action, in-place partial mutation, automatic scheduler
 
 **Dataset Bootstrap**:
-The initial ingestion that fetches the complete three-year Research Input
-History and every required earlier dependency before the first V1 Dataset
-Release can be published. Later Dataset Publication is incremental and does not
-repeat this full historical fetch merely to scan for corrections.
-_Avoid_: Daily publication, correction scan, Dataset Release
+The explicit operator initialization of an empty Mounted Canonical Data Store.
+The current development default fetches the latest one natural year; that
+operational default is not a ResearchRun length rule, and normal service startup
+never repeats it.
+_Avoid_: Automatic startup download, fixed research history, Data Refresh retry
 
 **Canonical Market Data**:
 The source-neutral fields and time semantics produced from validated upstream
-responses and published through a Dataset Release, using stable system names,
-types, and normalized units rather than Tushare's transport representation.
-Research Definitions depend on this contract rather than vendor field names or
-transport.
+responses and held in the Mounted Canonical Data Store, using stable system
+names, types, and normalized units rather than Tushare's transport
+representation. Research Definitions depend on this contract rather than
+vendor field names or transport.
 _Avoid_: Tushare response, vendor schema, runtime API data
 
 **Canonical EOD Price**:
@@ -821,24 +858,24 @@ _Avoid_: Adjusted Research Price, qfq price, hfq price
 **Adjusted Research Price**:
 A corporate-action-continuous, per-instrument price coordinate derived from Raw
 Market Price and Source Adjustment Factor using the fixed Adjustment Anchor
-bound by Dataset Release. The anchor has an Adjustment Scale of `1` and never
-moves with the rolling Research Window; price-based Alphas and returns use this
-coordinate.
+held in the selected Data Generation. The anchor has an Adjustment Scale of `1`
+and never moves with the requested Research Period; price-based Alphas and
+returns use this coordinate.
 _Avoid_: Raw Market Price, CNY quote, dynamic qfq, hfq history
 
 **Adjustment Anchor**:
-The immutable per-instrument record of `instrument_id`, `anchor_session`, and
-`anchor_adjustment_factor` bound by Dataset Release, using the first post-listing
-session with both a valid raw daily bar and Source Adjustment Factor. It may
-predate Research Input History and belongs to neither Strategy nor Research
-Window.
+The per-instrument record of `instrument_id`, `anchor_session`, and
+`anchor_adjustment_factor` held in Canonical Market Data, using the first
+post-listing session with both a valid raw daily bar and Source Adjustment
+Factor. It may predate Calculation Warm-up and belongs to neither Strategy nor
+the requested Research Period.
 _Avoid_: Rolling-window base date, Strategy parameter, import timestamp
 
 **Source Adjustment Factor**:
 The positive, finite, dimensionless decimal `adj_factor` value accepted from
 Tushare in the dated `equity.adjustment_factor` Dataset Family and used as an
 input to Adjustment Scale rather than as an adjusted market price. Its valid
-same-session presence is required for every daily bar in Dataset Publication.
+same-session presence is required for every daily bar accepted by Data Refresh.
 _Avoid_: Adjustment Scale, adjusted price
 
 **Adjustment Scale**:
@@ -849,14 +886,14 @@ _Avoid_: Source Adjustment Factor, dynamic qfq scale, rolling-window anchor
 
 **Tushare Upstream**:
 The sole external data source for every Dataset Family supported by
-ThesisTrace. Dataset Publication does not blend, reconcile, or fall back to
-another provider; unavailable or invalid required Tushare inputs prevent
-publication.
+ThesisTrace. Data Refresh does not blend, reconcile, or fall back to another
+provider; unavailable or invalid required Tushare inputs prevent the candidate
+Generation from becoming the Dataset Head.
 _Avoid_: Multi-provider abstraction, fallback source, cross-source consensus
 
 **Field Catalog**:
 The Data-owned inventory of stable Canonical Market Data fields and their
-meaning, type, unit, availability semantics, and Release presence. Research
+meaning, type, unit, availability semantics, and current Head presence. Research
 authoring exposes only its Alpha-authorable subset together with the supported
 Alpha Operator Set.
 _Avoid_: Dataset Schema selector, source documentation, physical table browser
@@ -865,7 +902,7 @@ _Avoid_: Dataset Schema selector, source documentation, physical table browser
 The immutable meaning of one stable `field_id`, including its type, unit,
 primary-key grain, and information-availability semantics. Adding a field
 creates a new Dataset Schema version, correcting values preserves the definition
-in a later Dataset Release, and changing meaning requires a new `field_id`.
+in a later Data Generation, and changing meaning requires a new `field_id`.
 _Avoid_: Mutable field meaning, source column name, corrected data value
 
 **Field Reference**:
@@ -876,14 +913,16 @@ _Avoid_: Vendor field name, manually typed identifier, compiled plan
 
 **Dataset Schema**:
 The internal, versioned contract for one Dataset Family's keys and fields. A
-Dataset Release binds its exact version; a user does not select it separately.
-_Avoid_: Field Catalog, Dataset Release, Research Definition parameter
+Data Generation records its exact version; a user does not select it
+separately.
+_Avoid_: Field Catalog, Dataset Head, Research Definition parameter
 
 **Physical Data Object**:
-An immutable data partition or content-addressed object identified by its exact
-bytes under the recorded writer contract. Dataset Releases reuse it rather than
-duplicating unchanged history.
-_Avoid_: Dataset Release, mutable latest table, full daily copy
+An immutable-while-referenced data partition identified by its exact bytes
+under the recorded writer contract. Data Generations may reuse unchanged
+objects, and garbage collection may remove an object after no active Generation
+or execution references it.
+_Avoid_: Data Generation, mutable partial file, permanent historical promise
 
 **Dataset Family**:
 A versioned Canonical Market Data contract whose fields share an asset
@@ -906,9 +945,9 @@ general provider registry
 The future non-V1 `equity.financial_pit` Dataset Family, separate from
 `equity.eod_price` and keyed by availability time so research sees only facts
 available by each session, with date-only disclosures becoming available on the
-next market session. It retains Tushare-provided versions without overwriting
-earlier Dataset Releases and marks revision coverage incomplete when Tushare
-lacks the required history.
+next market session. It retains Tushare-provided versions and their availability
+times within Canonical Market Data and marks revision coverage incomplete when
+Tushare lacks the required history.
 _Avoid_: Current financial snapshot, future backfill, invented revision history,
 OHLCV extension
 
@@ -931,7 +970,7 @@ _Avoid_: Financial-data implementation, non-equity asset ingestion, intraday dat
 ### Universe and Industry
 
 **Universe Base Pool**:
-The point-in-time ordinary-A-share membership snapshot that Dataset Publication
+The point-in-time ordinary-A-share membership snapshot that Data Refresh
 produces for an `as_of_date` before liquidity ranking, covering the SSE Main
 Board, SZSE Main Board, ChiNext, and STAR Market while excluding B-shares,
 Chinese depositary receipts, Beijing Stock Exchange securities, funds, bonds,
@@ -948,9 +987,9 @@ A versioned rule that ranks instruments in the Universe Base Pool by their mean
 daily turnover amount over the trailing 20 completed market sessions and
 selects the top 300, 1000, 2000, or 3000 active instruments with sufficient
 history, ordering mean descending and exact ties by `instrument_id` ascending.
-Its membership is recalculated after each market session closes, while ST,
-suspension, and price-limit policies remain downstream research or execution
-constraints.
+Only Dataset Bootstrap Expansion permits a shorter window. Membership is
+recalculated after each market session closes, while ST, suspension, and
+price-limit policies remain downstream research or execution constraints.
 _Avoid_: Static stock list, index constituents, research eligibility filter,
 tradability filter
 
@@ -963,11 +1002,20 @@ nested.
 _Avoid_: Shared rank, source-response order, independent Top-N sorts
 
 **Liquidity Observation Window**:
-The 20 completed market sessions ending on a Universe snapshot's `as_of_date`.
-A confirmed full-session suspension contributes zero turnover, a partial
-suspension contributes its observed amount, an unexplained missing observation
-remains invalid, and fewer than 20 post-listing sessions prevent ranking.
-_Avoid_: Last 20 non-missing observations, silent zero fill, variable lookback
+The target 20 completed market sessions ending on a Universe snapshot's
+`as_of_date`. A confirmed full-session suspension contributes zero turnover, a
+partial suspension contributes its observed amount, an unexplained missing
+observation remains invalid, and an instrument listed after Dataset Coverage
+Start cannot rank until it has all 20 governed observations.
+_Avoid_: Last 20 non-missing observations, silent zero fill, new-listing expansion
+
+**Dataset Bootstrap Expansion**:
+The sole liquidity-window exception during the first nineteen sessions of the
+entire Dataset Coverage. An instrument already listed at Coverage Start uses
+the one through nineteen Dataset sessions then available; from the twentieth
+Dataset session onward every instrument requires the full Liquidity Observation
+Window. Data Refresh and later listings never restart expansion.
+_Avoid_: New-listing grace period, rolling partial window, refresh reset
 
 **Universe Membership**:
 The ranked instruments produced by one Liquidity Universe for one
@@ -986,7 +1034,7 @@ backfill
 
 **Industry Classification**:
 The SW2021 L1, L2, and L3 industries assigned to an instrument for a historical
-market session, retained by Dataset Release as versioned
+market session, retained in Canonical Market Data as versioned
 `[valid_from, valid_to_exclusive)` intervals with exactly one path per
 instrument-date and no gap backfill. Research never applies current
 classification to history, and V1 Industry Neutralization always uses L1.

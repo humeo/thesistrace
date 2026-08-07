@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0155
 ---
 
 # Do not publish correction-only Dataset Releases

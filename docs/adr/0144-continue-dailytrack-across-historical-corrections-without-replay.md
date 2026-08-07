@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0154
 ---
 
 # Continue DailyTrack across historical corrections without replay
