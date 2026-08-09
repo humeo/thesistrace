@@ -274,10 +274,21 @@ MIGRATIONS = MigrationPlan(
                     status text NOT NULL CHECK (
                         status IN ('accepted', 'running', 'succeeded', 'failed')
                     ),
+                    owner_token text NULL CHECK (
+                        owner_token IS NULL
+                        OR (owner_token <> '' AND owner_token = btrim(owner_token))
+                    ),
+                    lease_expires_at timestamptz NULL,
+                    attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
                     outcome text NULL CHECK (
                         outcome IS NULL OR outcome IN ('published', 'no_change')
                     ),
                     as_of timestamptz NOT NULL,
+                    expected_generation_manifest_sha256 text NULL CHECK (
+                        expected_generation_manifest_sha256 IS NULL
+                        OR expected_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
+                    candidate_prepared_at timestamptz NULL,
                     generation_manifest_sha256 text NULL CHECK (
                         generation_manifest_sha256 IS NULL
                         OR generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
@@ -290,9 +301,15 @@ MIGRATIONS = MigrationPlan(
                     finished_at timestamptz NULL,
                     updated_at timestamptz NOT NULL DEFAULT now(),
                     CHECK (
-                        (status = 'accepted' AND outcome IS NULL AND failure_code IS NULL)
+                        (
+                            status = 'accepted' AND owner_token IS NULL
+                            AND lease_expires_at IS NULL
+                            AND outcome IS NULL AND failure_code IS NULL
+                        )
                         OR (
                             status = 'running' AND outcome IS NULL
+                            AND owner_token IS NOT NULL AND lease_expires_at IS NOT NULL
+                            AND attempt_count > 0
                             AND failure_code IS NULL AND started_at IS NOT NULL
                         )
                         OR (

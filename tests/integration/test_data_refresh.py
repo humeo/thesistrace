@@ -5,6 +5,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from thesistrace.data import (
     DatasetOverviewService,
     MountedGenerationStore,
 )
+from thesistrace.data.source import DataSourceError
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -49,6 +52,11 @@ class RecordingRefreshSource:
             canonical=copy.deepcopy(self.candidate),
             covered_session_range=(str(calendar[0]), str(calendar[-1])),
         )
+
+
+class UnavailableRefreshSource:
+    def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
+        raise DataSourceError("unavailable", detail_code="UPSTREAM_UNAVAILABLE")
 
 
 def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
@@ -224,6 +232,279 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at is not None
+    finally:
+        database.close()
+
+
+def test_concurrent_workers_publish_one_authoritative_refresh(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingSource(RecordingRefreshSource):
+        def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
+            started.set()
+            assert release.wait(timeout=10)
+            return super().collect(plan)
+
+    try:
+        current = _twenty_session_canonical()
+        original = _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        source = BlockingSource(candidate)
+        first = DataRefreshService(database, tmp_path, heartbeat_seconds=1)
+        second = DataRefreshService(database, tmp_path, heartbeat_seconds=1)
+        first.submit(idempotency_key="concurrent-workers", as_of=AS_OF)
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(first.process_next, source)
+            assert started.wait(timeout=10)
+            assert second.process_next(source) is False
+            release.set()
+            assert future.result(timeout=10) is True
+
+        terminal = first.inspect("concurrent-workers")
+        assert terminal.status == "succeeded"
+        assert terminal.attempt_count == 1
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 != original
+        assert head.generation.canonical == candidate
+    finally:
+        release.set()
+        database.close()
+
+
+def test_refresh_submission_replay_and_conflicts_cannot_duplicate_work(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = DataRefreshService(database, tmp_path)
+
+        accepted = refresh.submit(idempotency_key="submission-replay", as_of=AS_OF)
+        assert refresh.submit(idempotency_key="submission-replay", as_of=AS_OF) == accepted
+        with pytest.raises(DataRefreshError) as conflicting_reuse:
+            refresh.submit(
+                idempotency_key="submission-replay",
+                as_of=AS_OF.replace(hour=10),
+            )
+        assert conflicting_reuse.value.code == "IDEMPOTENCY_KEY_CONFLICT"
+        with pytest.raises(DataRefreshError) as second_operation:
+            refresh.submit(idempotency_key="another-refresh", as_of=AS_OF)
+        assert second_operation.value.code == "REFRESH_ALREADY_ACTIVE"
+
+        assert refresh.process_next(RecordingRefreshSource(current)) is True
+        assert refresh.inspect("submission-replay").status == "succeeded"
+        with database.transaction() as transaction:
+            count = transaction.execute(
+                """
+                SELECT count(*) AS count FROM data.refresh_operations
+                WHERE idempotency_key IN ('submission-replay', 'another-refresh')
+                """
+            ).fetchone()
+        assert count == {"count": 1}
+    finally:
+        database.close()
+
+
+def test_unavailable_refresh_retries_are_bounded_and_sanitized(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        refresh = DataRefreshService(database, tmp_path, max_attempts=2)
+        refresh.submit(idempotency_key="bounded-retry", as_of=AS_OF)
+
+        with pytest.raises(DataRefreshError) as first:
+            refresh.process_next(UnavailableRefreshSource())
+        assert first.value.code == "SOURCE_UNAVAILABLE"
+        retrying = refresh.inspect("bounded-retry")
+        assert retrying.status == "accepted"
+        assert retrying.attempt_count == 1
+        assert retrying.failure_code is None
+
+        with pytest.raises(DataRefreshError) as second:
+            refresh.process_next(UnavailableRefreshSource())
+        assert second.value.code == "SOURCE_UNAVAILABLE"
+        terminal = refresh.inspect("bounded-retry")
+        assert terminal.status == "failed"
+        assert terminal.failure_code == "RETRY_EXHAUSTED"
+        assert terminal.attempt_count == 2
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+            prior_refresh_at
+        )
+    finally:
+        database.close()
+
+
+def test_expired_worker_is_fenced_and_recovered_from_a_new_attempt(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = DataRefreshService(database, tmp_path, max_attempts=3)
+        refresh.submit(idempotency_key="lost-worker", as_of=AS_OF)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.refresh_operations
+                SET status = 'running', owner_token = 'lost-owner',
+                    lease_expires_at = now() - interval '1 second',
+                    attempt_count = 1, started_at = now()
+                WHERE idempotency_key = 'lost-worker'
+                """
+            )
+
+        assert refresh.process_next(RecordingRefreshSource(current)) is True
+
+        terminal = refresh.inspect("lost-worker")
+        assert terminal.status == "succeeded"
+        assert terminal.outcome == "no_change"
+        assert terminal.attempt_count == 2
+        with database.transaction() as transaction:
+            stale_write = transaction.execute(
+                """
+                UPDATE data.refresh_operations SET failure_code = 'STALE_WRITE'
+                WHERE idempotency_key = 'lost-worker'
+                  AND status = 'running' AND owner_token = 'lost-owner'
+                """
+            )
+        assert stale_write.rowcount == 0
+        assert refresh.inspect("lost-worker") == terminal
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("failure_stage", ("generation_write", "head_cas"))
+def test_precommit_infrastructure_failure_keeps_the_prior_head_readable(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        if failure_stage == "generation_write":
+            monkeypatch.setattr(
+                MountedGenerationStore,
+                "materialize",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("injected write")),
+            )
+        else:
+            monkeypatch.setattr(
+                DatasetLifecycle,
+                "compare_and_swap_head",
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("injected cas")),
+            )
+        refresh = DataRefreshService(database, tmp_path, max_attempts=1)
+        refresh.submit(idempotency_key=f"failure-{failure_stage}", as_of=AS_OF)
+
+        with pytest.raises(DataRefreshError) as failure:
+            refresh.process_next(RecordingRefreshSource(candidate))
+
+        assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
+        terminal = refresh.inspect(f"failure-{failure_stage}")
+        assert terminal.status == "failed"
+        assert terminal.failure_code == "RETRY_EXHAUSTED"
+        assert terminal.attempt_count == 1
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+            prior_refresh_at
+        )
+    finally:
+        database.close()
+
+
+def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        original = _establish_head(database, tmp_path, current)
+        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        refresh = DataRefreshService(database, tmp_path)
+        refresh.submit(idempotency_key="completion-crash", as_of=AS_OF)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_refresh_completion() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected Refresh completion failure';
+                END
+                $$;
+                CREATE TRIGGER reject_refresh_completion
+                BEFORE UPDATE OF status ON data.refresh_operations
+                FOR EACH ROW
+                WHEN (
+                    OLD.idempotency_key = 'completion-crash'
+                    AND NEW.status = 'succeeded'
+                )
+                EXECUTE FUNCTION data.reject_refresh_completion();
+                """
+            )
+        try:
+            with pytest.raises(DataRefreshError) as failure:
+                refresh.process_next(RecordingRefreshSource(candidate))
+            assert failure.value.code == "REFRESH_COMPLETION_PENDING"
+        finally:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    DROP TRIGGER reject_refresh_completion ON data.refresh_operations;
+                    DROP FUNCTION data.reject_refresh_completion();
+                    """
+                )
+
+        moved = DatasetLifecycle(database, tmp_path).current_head()
+        assert moved is not None
+        assert moved.generation_manifest_sha256 != original
+        assert MountedGenerationStore(tmp_path).open_generation(original).canonical == current
+        assert refresh.inspect("completion-crash").status == "running"
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+            prior_refresh_at
+        )
+        manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
+
+        reopened = DataRefreshService(database, tmp_path)
+        assert reopened.process_next(RecordingRefreshSource(candidate)) is True
+
+        terminal = reopened.inspect("completion-crash")
+        assert terminal.status == "succeeded"
+        assert terminal.outcome == "published"
+        assert terminal.attempt_count == 1
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at is not None
+        assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == manifests_before
     finally:
         database.close()
 
