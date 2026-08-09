@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Mapping
-from datetime import date, datetime, time
+from datetime import date
 from typing import Protocol
-from zoneinfo import ZoneInfo
 
 from thesistrace.adapters.tushare_provider import (
     SOURCE_CONTRACT_VERSION,
@@ -18,7 +17,6 @@ from thesistrace.data.source import (
     CanonicalSourceBatch,
     CollectionPlan,
     DataSourceError,
-    bootstrap_collection_plan,
 )
 
 
@@ -51,54 +49,47 @@ class TushareDataSource:
 
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
         try:
-            if plan.kind == "bootstrap":
-                selected = self._clock()
-                return self.collect_bootstrap(
-                    bootstrap_collection_plan(
-                        datetime.combine(
-                            selected,
-                            time(23, 59),
-                            ZoneInfo("Asia/Shanghai"),
-                        )
-                    )
+            if plan.kind != "incremental":
+                raise DataSourceError(
+                    "invalid_source_data",
+                    detail_code="INCREMENTAL_PLAN_REQUIRED",
                 )
-            else:
-                previous = plan.previous_canonical
-                if previous is None or plan.after_session is None:
-                    raise DataSourceError(
-                        "invalid_source_data",
-                        detail_code="PREVIOUS_CANONICAL_REQUIRED",
-                    )
-                instruments = previous.get("instruments")
-                if not isinstance(instruments, list):
-                    raise DataSourceError(
-                        "invalid_source_data",
-                        detail_code="INVALID_PREVIOUS_CANONICAL",
-                    )
-                known_codes = {
-                    str(item["ts_code"])
-                    for item in instruments
-                    if isinstance(item, dict) and "ts_code" in item
+            previous = plan.previous_canonical
+            if previous is None or plan.after_session is None:
+                raise DataSourceError(
+                    "invalid_source_data",
+                    detail_code="PREVIOUS_CANONICAL_REQUIRED",
+                )
+            instruments = previous.get("instruments")
+            if not isinstance(instruments, list):
+                raise DataSourceError(
+                    "invalid_source_data",
+                    detail_code="INVALID_PREVIOUS_CANONICAL",
+                )
+            known_codes = {
+                str(item["ts_code"])
+                for item in instruments
+                if isinstance(item, dict) and "ts_code" in item
+            }
+            snapshot = self._provider.collect_incremental_snapshot(
+                last_session=plan.after_session,
+                known_ts_codes=known_codes,
+                as_of=self._clock(),
+            )
+            try:
+                lineage, delta = normalize_tushare_increment(snapshot, previous)
+            except TushareSourceError as error:
+                if error.reason_code != "NO_NEW_RESEARCH_SESSION":
+                    raise
+                lineage = {
+                    "source": "tushare",
+                    "source_contract_version": SOURCE_CONTRACT_VERSION,
+                    "responses": {key: value for key, value in sorted(snapshot.items())},
+                    "no_change": True,
                 }
-                snapshot = self._provider.collect_incremental_snapshot(
-                    last_session=plan.after_session,
-                    known_ts_codes=known_codes,
-                    as_of=self._clock(),
-                )
-                try:
-                    lineage, delta = normalize_tushare_increment(snapshot, previous)
-                except TushareSourceError as error:
-                    if error.reason_code != "NO_NEW_RESEARCH_SESSION":
-                        raise
-                    lineage = {
-                        "source": "tushare",
-                        "source_contract_version": SOURCE_CONTRACT_VERSION,
-                        "responses": {key: value for key, value in sorted(snapshot.items())},
-                        "no_change": True,
-                    }
-                    canonical = copy.deepcopy(dict(previous))
-                else:
-                    canonical = _materialize_increment(previous, delta)
+                canonical = copy.deepcopy(dict(previous))
+            else:
+                canonical = _materialize_increment(previous, delta)
         except TushareSourceError as error:
             raise DataSourceError(
                 _error_category(error.reason_code),

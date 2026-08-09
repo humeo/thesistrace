@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +27,7 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 
 AS_OF = datetime(2026, 8, 3, 10, tzinfo=UTC)
 PREPARED_AT = datetime(2026, 8, 9, 12, tzinfo=UTC)
+COMPLETED_AT = datetime(2026, 8, 9, 12, 5, tzinfo=UTC)
 
 
 class RecordingBootstrapSource:
@@ -53,7 +56,8 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
     database = _database(core_settings)
     try:
         source = RecordingBootstrapSource()
-        operator = DataOperator(database, tmp_path, source, clock=lambda: PREPARED_AT)
+        times = iter((PREPARED_AT, COMPLETED_AT))
+        operator = DataOperator(database, tmp_path, source, clock=times.__next__)
 
         first = operator.bootstrap(idempotency_key="bootstrap-once", as_of=AS_OF)
         repeated = operator.bootstrap(idempotency_key="bootstrap-once", as_of=AS_OF)
@@ -62,11 +66,12 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
         assert len(source.plans) == 1
         assert source.plans[0].start_date.isoformat() == "2025-08-03"
         assert source.plans[0].completed_through_date.isoformat() == "2026-08-03"
-        assert first.prepared_at == PREPARED_AT.isoformat()
+        assert first.prepared_at == COMPLETED_AT.isoformat()
         head = DatasetLifecycle(database, tmp_path).current_head()
         assert head is not None
         assert head.generation_manifest_sha256 == first.generation_manifest_sha256
         assert head.generation.canonical == build_minimal_canonical_fixture()
+        assert head.generation.preparation["prepared_at"] == PREPARED_AT.isoformat()
 
         with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
             operator.bootstrap(idempotency_key="cannot-overwrite", as_of=AS_OF)
@@ -161,6 +166,103 @@ def test_validation_failure_and_head_cas_loser_never_replace_the_winner(
         database.close()
 
 
+def test_expired_bootstrap_attempt_is_fenced_and_taken_over_without_sleep(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    entered_source = threading.Event()
+    release_source = threading.Event()
+
+    class BlockingSource(RecordingBootstrapSource):
+        def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+            entered_source.set()
+            assert release_source.wait(timeout=10)
+            return super().collect_bootstrap(plan)
+
+    first = DataOperator(database, tmp_path, BlockingSource(), clock=lambda: PREPARED_AT)
+    winner_source = RecordingBootstrapSource()
+    winner_times = iter((PREPARED_AT, COMPLETED_AT))
+    winner = DataOperator(database, tmp_path, winner_source, clock=winner_times.__next__)
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        stale = executor.submit(first.bootstrap, idempotency_key="take-over", as_of=AS_OF)
+        assert entered_source.wait(timeout=10)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.bootstrap_operations
+                SET lease_expires_at = now() - interval '1 second'
+                WHERE idempotency_key = 'take-over'
+                """
+            )
+
+        outcome = winner.bootstrap(idempotency_key="take-over", as_of=AS_OF)
+        release_source.set()
+        with pytest.raises(DataOperatorError) as stale_failure:
+            stale.result(timeout=10)
+
+        assert stale_failure.value.code == "BOOTSTRAP_INFRASTRUCTURE_FAILURE"
+        assert DatasetLifecycle(database, tmp_path).current_head() is not None
+        assert outcome.prepared_at == COMPLETED_AT.isoformat()
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT status, generation_manifest_sha256
+                FROM data.bootstrap_operations
+                WHERE idempotency_key = 'take-over'
+                """
+            ).fetchone()
+        assert row == {
+            "status": "succeeded",
+            "generation_manifest_sha256": outcome.generation_manifest_sha256,
+        }
+    finally:
+        release_source.set()
+        executor.shutdown(wait=True)
+        database.close()
+
+
+def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+
+    class ProcessLostAfterHead(DataOperator):
+        def _complete(self, *args: object, **kwargs: object) -> None:
+            raise KeyboardInterrupt("simulated process loss")
+
+    source = RecordingBootstrapSource()
+    times = iter((PREPARED_AT, COMPLETED_AT))
+    with pytest.raises(KeyboardInterrupt, match="simulated process loss"):
+        ProcessLostAfterHead(database, tmp_path, source, clock=times.__next__).bootstrap(
+            idempotency_key="head-committed",
+            as_of=AS_OF,
+        )
+    committed = DatasetLifecycle(database, tmp_path).current_head()
+    assert committed is not None
+    with database.transaction() as transaction:
+        transaction.execute(
+            """
+            UPDATE data.bootstrap_operations
+            SET lease_expires_at = now() - interval '1 second'
+            WHERE idempotency_key = 'head-committed'
+            """
+        )
+
+    reopened_source = RecordingBootstrapSource()
+    recovered = DataOperator(database, tmp_path, reopened_source).bootstrap(
+        idempotency_key="head-committed",
+        as_of=AS_OF,
+    )
+
+    assert recovered.generation_manifest_sha256 == committed.generation_manifest_sha256
+    assert recovered.prepared_at == COMPLETED_AT.isoformat()
+    assert reopened_source.plans == []
+    database.close()
+
+
 def test_real_private_command_bootstraps_from_tushare_replay(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -243,6 +345,27 @@ def test_real_private_command_bootstraps_from_tushare_replay(
     assert failed.returncode == 2
     assert json.loads(failed.stderr) == {"status": "failed", "code": "OPERATOR_FAILURE"}
     assert "must-not-leak" not in failed.stderr
+
+    database_failure_environment = {
+        **environment,
+        "THESISTRACE_DATABASE_URL": (
+            "postgresql://operator:SUPERSECRET@127.0.0.1:1/unreachable"
+        ),
+    }
+    database_failed = subprocess.run(
+        command,
+        env=database_failure_environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    assert database_failed.returncode == 2
+    assert json.loads(database_failed.stderr) == {
+        "status": "failed",
+        "code": "OPERATOR_FAILURE",
+    }
+    assert "SUPERSECRET" not in database_failed.stderr
 
 
 def _database(settings: CoreSettings) -> PostgresDatabase:

@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+base_file="$repo_root/deploy/core/compose.yaml"
+test_file="$repo_root/deploy/core/compose.test-run.yaml"
+replay="$repo_root/tests/fixtures/tushare-bootstrap-replay-v1.json"
+project_name="thesistrace-test-operator-image-$$"
+bucket_name="$project_name"
+
+compose() {
+  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain THESISTRACE_TEST_BUCKET="$bucket_name" \
+    docker compose \
+    --project-name "$project_name" \
+    --file "$base_file" \
+    --file "$test_file" \
+    "$@"
+}
+
+cleanup() {
+  status=$?
+  trap - EXIT INT TERM
+  compose down --volumes --remove-orphans
+  exit "$status"
+}
+
+trap cleanup EXIT INT TERM
+compose config --quiet
+compose up --detach --build --wait --wait-timeout 300 postgres rustfs migrate
+compose run --rm --no-deps \
+  --volume "$replay:/operator/bootstrap-replay.json:ro" \
+  api thesistrace-data-operator-v1 bootstrap \
+  --idempotency-key image-bootstrap-v1 \
+  --as-of 2026-08-03T18:00:00+08:00 \
+  --replay /operator/bootstrap-replay.json
+compose run --rm --no-deps \
+  --volume "$replay:/operator/bootstrap-replay.json:ro" \
+  api thesistrace-data-operator-v1 bootstrap \
+  --idempotency-key image-bootstrap-v1 \
+  --as-of 2026-08-03T18:00:00+08:00 \
+  --replay /operator/bootstrap-replay.json
+compose up --detach --wait --wait-timeout 300 api worker
+compose restart api worker
+compose up --detach --wait --wait-timeout 300 api worker
+compose exec --no-TTY api python -c \
+  "from thesistrace.data import MountedDatasetHeadStore; h = MountedDatasetHeadStore('/var/lib/thesistrace/canonical-data').current(); assert h is not None and h.data_through_session == '2026-08-03'"

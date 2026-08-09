@@ -34,3 +34,11 @@ thesistrace-data-operator-v1 bootstrap \
 Bootstrap records internal preparation time in the Head but does not set a
 successful Refresh timestamp. Repeating the same key and request returns the
 same outcome. A different key cannot overwrite an existing Head.
+
+The narrow Production Image smoke builds the backend image, runs the versioned
+operator twice through the shared named mount, and then starts and restarts the
+API and Worker without source credentials:
+
+```sh
+./scripts/smoke-data-operator-image
+```

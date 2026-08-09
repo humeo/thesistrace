@@ -2,17 +2,16 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from psycopg.errors import UniqueViolation
-
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.canonical_mapping import liquidity_universes
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
-from thesistrace.data.head_store import DatasetHeadConflict
+from thesistrace.data.head_store import DatasetHead, DatasetHeadConflict
 from thesistrace.data.lifecycle import DatasetLifecycle
 from thesistrace.data.source import (
     BootstrapCollectionPlan,
@@ -37,6 +36,15 @@ class BootstrapOutcome:
     generation_manifest_sha256: str
     data_through_session: str
     prepared_at: str
+
+
+@dataclass(frozen=True)
+class _BootstrapClaim:
+    owner_token: str | None
+    row: dict[str, object] | None
+
+
+_BOOTSTRAP_LEASE_SECONDS = 900
 
 
 class DataOperator:
@@ -69,114 +77,164 @@ class DataOperator:
                 }
             )
         ).hexdigest()
-        existing = self._claim(key, fingerprint, plan)
-        if existing is not None:
-            return self._reopen(existing, fingerprint)
+        claim = self._claim(key, fingerprint, plan)
+        if claim.owner_token is None:
+            assert claim.row is not None
+            return self._reopen(claim.row, fingerprint)
 
-        operation_id = _operation_id(key)
+        owner_token = claim.owner_token
+        operation_id = _operation_id(key, owner_token)
         candidate_manifest: str | None = None
         candidate_live = False
         try:
-            if self._lifecycle.current_head() is not None:
+            current_head = self._lifecycle.current_head()
+            prior_manifest = None if claim.row is None else claim.row.get(
+                "generation_manifest_sha256"
+            )
+            if (
+                current_head is not None
+                and prior_manifest
+                and current_head.generation_manifest_sha256 == prior_manifest
+            ):
+                outcome = _outcome(current_head)
+                self._lifecycle.release_candidate(
+                    operation_id=_operation_id(key, str(claim.row["owner_token"]))
+                )
+                self._complete(key, owner_token, outcome)
+                return outcome
+            if current_head is not None:
                 raise DataOperatorError("HEAD_ALREADY_EXISTS")
             batch = self._source.collect_bootstrap(plan)
             expanded = _apply_bootstrap_expansion(batch)
             validate_bootstrap_batch(expanded)
-            prepared_at = self._clock()
-            if prepared_at.tzinfo is None:
-                raise DataOperatorError("INVALID_PREPARATION_TIME")
+            materialized_at = self._operator_time()
             generation = self._generations.materialize(
                 expanded.canonical,
-                prepared_at=prepared_at,
+                prepared_at=materialized_at,
                 source_name=expanded.source_name,
                 source_lineage=expanded.source_lineage,
             )
             candidate_manifest = generation.manifest_sha256
-            self._record_candidate(key, candidate_manifest)
+            self._record_candidate(key, owner_token, candidate_manifest)
             self._lifecycle.protect_candidate(
                 operation_id=operation_id,
                 generation_manifest_sha256=candidate_manifest,
-                lease_seconds=900,
+                lease_seconds=_BOOTSTRAP_LEASE_SECONDS,
             )
             candidate_live = True
             try:
+                completed_at = self._operator_time()
                 head = self._lifecycle.compare_and_swap_head(
                     expected_generation_manifest_sha256=None,
                     candidate_generation_manifest_sha256=candidate_manifest,
                     operation_id=operation_id,
+                    prepared_at=completed_at,
                 )
                 candidate_live = False
             except DatasetHeadConflict as error:
                 self._lifecycle.release_candidate(operation_id=operation_id)
                 candidate_live = False
                 raise DataOperatorError("HEAD_ALREADY_EXISTS") from error
-            outcome = BootstrapOutcome(
-                status="succeeded",
-                generation_manifest_sha256=head.generation_manifest_sha256,
-                data_through_session=head.data_through_session,
-                prepared_at=head.prepared_at,
-            )
+            outcome = _outcome(head)
             try:
-                self._complete(key, outcome)
+                self._complete(key, owner_token, outcome)
             except RuntimeError as error:
                 raise DataOperatorError("BOOTSTRAP_COMPLETION_PENDING") from error
             return outcome
         except DataOperatorError as error:
             if error.code == "BOOTSTRAP_COMPLETION_PENDING":
                 raise
-            self._fail(key, error.code)
+            self._fail(key, owner_token, error.code)
             raise
         except DataSourceError as error:
             code = f"SOURCE_{error.category.upper()}"
-            self._fail(key, code)
+            self._fail(key, owner_token, code)
             raise DataOperatorError(code) from error
         except (GenerationStoreError, ValueError) as error:
-            self._fail(key, "INVALID_CANONICAL_DATA")
+            self._fail(key, owner_token, "INVALID_CANONICAL_DATA")
             raise DataOperatorError("INVALID_CANONICAL_DATA") from error
         except (OSError, RuntimeError) as error:
             if candidate_live:
                 self._lifecycle.release_candidate(operation_id=operation_id)
-            self._fail(key, "BOOTSTRAP_INFRASTRUCTURE_FAILURE")
+            self._fail(key, owner_token, "BOOTSTRAP_INFRASTRUCTURE_FAILURE")
             raise DataOperatorError("BOOTSTRAP_INFRASTRUCTURE_FAILURE") from error
+
+    def _operator_time(self) -> datetime:
+        selected = self._clock()
+        if selected.tzinfo is None:
+            raise DataOperatorError("INVALID_PREPARATION_TIME")
+        return selected
 
     def _claim(
         self,
         key: str,
         fingerprint: str,
         plan: BootstrapCollectionPlan,
-    ) -> dict[str, object] | None:
-        try:
-            with self._database.transaction() as transaction:
-                row = transaction.execute(
-                    "SELECT * FROM data.bootstrap_operations WHERE idempotency_key = %s",
-                    (key,),
-                ).fetchone()
-                if row is not None:
-                    return row
-                transaction.execute(
-                    """
-                    INSERT INTO data.bootstrap_operations (
-                        idempotency_key, fingerprint, status, as_of,
-                        request_start, request_end
-                    ) VALUES (%s, %s, 'running', %s, %s, %s)
-                    """,
-                    (
-                        key,
-                        fingerprint,
-                        plan.as_of,
-                        plan.start_date,
-                        plan.completed_through_date,
-                    ),
+    ) -> _BootstrapClaim:
+        owner_token = secrets.token_hex(16)
+        with self._database.transaction() as transaction:
+            inserted = transaction.execute(
+                """
+                INSERT INTO data.bootstrap_operations (
+                    idempotency_key, fingerprint, status, owner_token,
+                    lease_expires_at, as_of, request_start, request_end
+                ) VALUES (
+                    %s, %s, 'running', %s,
+                    now() + make_interval(secs => %s), %s, %s, %s
                 )
-                return None
-        except UniqueViolation:
-            with self._database.transaction() as transaction:
-                row = transaction.execute(
-                    "SELECT * FROM data.bootstrap_operations WHERE idempotency_key = %s",
-                    (key,),
-                ).fetchone()
+                ON CONFLICT (idempotency_key) DO NOTHING
+                RETURNING *
+                """,
+                (
+                    key,
+                    fingerprint,
+                    owner_token,
+                    _BOOTSTRAP_LEASE_SECONDS,
+                    plan.as_of,
+                    plan.start_date,
+                    plan.completed_through_date,
+                ),
+            ).fetchone()
+            if inserted is not None:
+                return _BootstrapClaim(owner_token=owner_token, row=None)
+            row = transaction.execute(
+                """
+                SELECT *, lease_expires_at <= now() AS lease_expired
+                FROM data.bootstrap_operations
+                WHERE idempotency_key = %s
+                FOR UPDATE
+                """,
+                (key,),
+            ).fetchone()
             assert row is not None
-            return row
+            if (
+                row["fingerprint"] != fingerprint
+                or row["status"] != "running"
+                or not row["lease_expired"]
+            ):
+                return _BootstrapClaim(owner_token=None, row=row)
+            reclaimed = transaction.execute(
+                """
+                UPDATE data.bootstrap_operations
+                SET owner_token = %s,
+                    lease_expires_at = now() + make_interval(secs => %s),
+                    updated_at = now()
+                WHERE idempotency_key = %s
+                  AND status = 'running'
+                  AND owner_token = %s
+                  AND lease_expires_at <= now()
+                RETURNING *
+                """,
+                (
+                    owner_token,
+                    _BOOTSTRAP_LEASE_SECONDS,
+                    key,
+                    row["owner_token"],
+                ),
+            ).fetchone()
+            if reclaimed is None:
+                raise RuntimeError("Bootstrap operation lease changed during claim")
+            return _BootstrapClaim(owner_token=owner_token, row=row)
 
     def _reopen(self, row: dict[str, object], fingerprint: str) -> BootstrapOutcome:
         if row["fingerprint"] != fingerprint:
@@ -187,16 +245,18 @@ class DataOperator:
         if row["status"] == "running" and manifest:
             head = self._lifecycle.current_head()
             if head is not None and head.generation_manifest_sha256 == manifest:
-                outcome = BootstrapOutcome(
-                    status="succeeded",
-                    generation_manifest_sha256=head.generation_manifest_sha256,
-                    data_through_session=head.data_through_session,
-                    prepared_at=head.prepared_at,
-                )
+                outcome = _outcome(head)
                 self._lifecycle.release_candidate(
-                    operation_id=_operation_id(str(row["idempotency_key"]))
+                    operation_id=_operation_id(
+                        str(row["idempotency_key"]),
+                        str(row["owner_token"]),
+                    )
                 )
-                self._complete(str(row["idempotency_key"]), outcome)
+                self._complete(
+                    str(row["idempotency_key"]),
+                    str(row["owner_token"]),
+                    outcome,
+                )
                 return outcome
         if row["status"] == "running":
             raise DataOperatorError("BOOTSTRAP_IN_PROGRESS")
@@ -207,20 +267,24 @@ class DataOperator:
             prepared_at=row["prepared_at"].isoformat(),
         )
 
-    def _record_candidate(self, key: str, manifest: str) -> None:
+    def _record_candidate(self, key: str, owner_token: str, manifest: str) -> None:
         with self._database.transaction() as transaction:
             result = transaction.execute(
                 """
                 UPDATE data.bootstrap_operations
-                SET generation_manifest_sha256 = %s, updated_at = now()
-                WHERE idempotency_key = %s AND status = 'running'
+                SET generation_manifest_sha256 = %s,
+                    lease_expires_at = now() + make_interval(secs => %s),
+                    updated_at = now()
+                WHERE idempotency_key = %s
+                  AND status = 'running'
+                  AND owner_token = %s
                 """,
-                (manifest, key),
+                (manifest, _BOOTSTRAP_LEASE_SECONDS, key, owner_token),
             )
             if result.rowcount != 1:
                 raise RuntimeError("Bootstrap operation lost candidate ownership")
 
-    def _complete(self, key: str, outcome: BootstrapOutcome) -> None:
+    def _complete(self, key: str, owner_token: str, outcome: BootstrapOutcome) -> None:
         with self._database.transaction() as transaction:
             result = transaction.execute(
                 """
@@ -228,27 +292,39 @@ class DataOperator:
                 SET status = 'succeeded', generation_manifest_sha256 = %s,
                     data_through_session = %s, prepared_at = %s,
                     failure_code = NULL, updated_at = now()
-                WHERE idempotency_key = %s AND status = 'running'
+                WHERE idempotency_key = %s
+                  AND status = 'running'
+                  AND owner_token = %s
                 """,
                 (
                     outcome.generation_manifest_sha256,
                     outcome.data_through_session,
                     outcome.prepared_at,
                     key,
+                    owner_token,
                 ),
             )
-            if result.rowcount != 1:
-                raise RuntimeError("Bootstrap operation completion lost ownership")
+            if result.rowcount == 1:
+                return
+            row = transaction.execute(
+                "SELECT * FROM data.bootstrap_operations WHERE idempotency_key = %s",
+                (key,),
+            ).fetchone()
+            if row is not None and _row_matches_outcome(row, outcome):
+                return
+            raise RuntimeError("Bootstrap operation completion lost ownership")
 
-    def _fail(self, key: str, code: str) -> None:
+    def _fail(self, key: str, owner_token: str, code: str) -> None:
         with self._database.transaction() as transaction:
             transaction.execute(
                 """
                 UPDATE data.bootstrap_operations
                 SET status = 'failed', failure_code = %s, updated_at = now()
-                WHERE idempotency_key = %s AND status = 'running'
+                WHERE idempotency_key = %s
+                  AND status = 'running'
+                  AND owner_token = %s
                 """,
-                (code, key),
+                (code, key, owner_token),
             )
 
 
@@ -282,8 +358,29 @@ def _identity(value: str, subject: str) -> str:
     return normalized
 
 
-def _operation_id(idempotency_key: str) -> str:
-    return f"bootstrap:{hashlib.sha256(idempotency_key.encode()).hexdigest()[:32]}"
+def _operation_id(idempotency_key: str, owner_token: str) -> str:
+    identity = f"{idempotency_key}:{owner_token}".encode()
+    return f"bootstrap:{hashlib.sha256(identity).hexdigest()[:32]}"
+
+
+def _outcome(head: DatasetHead) -> BootstrapOutcome:
+    return BootstrapOutcome(
+        status="succeeded",
+        generation_manifest_sha256=str(head.generation_manifest_sha256),
+        data_through_session=str(head.data_through_session),
+        prepared_at=str(head.prepared_at),
+    )
+
+
+def _row_matches_outcome(row: dict[str, object], outcome: BootstrapOutcome) -> bool:
+    prepared_at = row.get("prepared_at")
+    return (
+        row.get("status") == "succeeded"
+        and row.get("generation_manifest_sha256") == outcome.generation_manifest_sha256
+        and str(row.get("data_through_session")) == outcome.data_through_session
+        and isinstance(prepared_at, datetime)
+        and prepared_at.isoformat() == outcome.prepared_at
+    )
 
 
 __all__ = ("BootstrapOutcome", "DataOperator", "DataOperatorError")

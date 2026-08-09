@@ -228,6 +228,10 @@ MIGRATIONS = MigrationPlan(
                     status text NOT NULL CHECK (
                         status IN ('running', 'succeeded', 'failed')
                     ),
+                    owner_token text NOT NULL CHECK (
+                        owner_token <> '' AND owner_token = btrim(owner_token)
+                    ),
+                    lease_expires_at timestamptz NOT NULL,
                     as_of timestamptz NOT NULL,
                     request_start date NOT NULL,
                     request_end date NOT NULL,

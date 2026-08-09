@@ -8,7 +8,7 @@ import stat
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from thesistrace.data.generation_store import MountedGeneration, MountedGenerationStore
@@ -85,7 +85,10 @@ class MountedDatasetHeadStore:
             generation = self._generations.open_generation(pointer.generation_manifest_sha256)
         except RuntimeError as error:
             raise DatasetHeadError("Dataset Head Generation is missing or invalid") from error
-        expected = _head_from_generation(generation)
+        expected = _head_from_generation(
+            generation,
+            prepared_at=datetime.fromisoformat(pointer.prepared_at),
+        )
         if pointer != _pointer_from_head(expected):
             raise DatasetHeadError("Dataset Head projection is incompatible")
         return expected
@@ -95,11 +98,13 @@ class MountedDatasetHeadStore:
         *,
         expected_generation_manifest_sha256: str | None,
         candidate_generation_manifest_sha256: str,
+        prepared_at: datetime | None = None,
     ) -> DatasetHead:
         with self.resolved_candidate(candidate_generation_manifest_sha256) as candidate:
             return self.compare_and_swap_resolved(
                 expected_generation_manifest_sha256=expected_generation_manifest_sha256,
                 candidate=candidate,
+                prepared_at=prepared_at,
             )
 
     @contextmanager
@@ -117,11 +122,12 @@ class MountedDatasetHeadStore:
         *,
         expected_generation_manifest_sha256: str | None,
         candidate: _ResolvedHeadCandidate,
+        prepared_at: datetime | None = None,
     ) -> DatasetHead:
         generation = self._resolved_candidates.pop(candidate, None)
         if generation is None:
             raise DatasetHeadError("Dataset Head candidate belongs to another mounted store")
-        candidate_head = _head_from_generation(generation)
+        candidate_head = _head_from_generation(generation, prepared_at=prepared_at)
         content = _head_bytes(candidate_head)
         root_fd = self._open_root()
         lock_fd: int | None = None
@@ -156,16 +162,25 @@ class MountedDatasetHeadStore:
             raise DatasetHeadError("Mounted Canonical Data Store is missing or unsafe") from error
 
 
-def _head_from_generation(generation: MountedGeneration) -> DatasetHead:
-    prepared_at = generation.preparation.get("prepared_at", "")
-    if not prepared_at:
+def _head_from_generation(
+    generation: MountedGeneration,
+    *,
+    prepared_at: datetime | None = None,
+) -> DatasetHead:
+    if prepared_at is None:
+        prepared_at_value = generation.preparation.get("prepared_at", "")
+    elif prepared_at.tzinfo is None:
+        raise DatasetHeadError("Dataset Head preparation time must include a timezone")
+    else:
+        prepared_at_value = prepared_at.astimezone(UTC).isoformat()
+    if not prepared_at_value:
         raise DatasetHeadError("Dataset Head preparation metadata is missing")
     return DatasetHead(
         generation_manifest_sha256=generation.manifest_sha256,
         data_identity=generation.data_identity,
         dataset_coverage=dict(generation.dataset_coverage),
         data_through_session=generation.data_through_session,
-        prepared_at=prepared_at,
+        prepared_at=prepared_at_value,
         generation=generation,
     )
 

@@ -116,6 +116,7 @@ class DatasetLifecycle:
         expected_generation_manifest_sha256: str | None,
         candidate_generation_manifest_sha256: str,
         operation_id: str,
+        prepared_at: datetime | None = None,
     ) -> DatasetHead:
         with self._heads.resolved_candidate(candidate_generation_manifest_sha256) as resolved:
             with self._database.transaction() as transaction:
@@ -137,6 +138,7 @@ class DatasetLifecycle:
                 head = self._heads.compare_and_swap_resolved(
                     expected_generation_manifest_sha256=expected_generation_manifest_sha256,
                     candidate=resolved,
+                    prepared_at=prepared_at,
                 )
                 transaction.execute(
                     """

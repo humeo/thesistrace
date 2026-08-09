@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from datetime import date
 from pathlib import Path
 
@@ -11,8 +13,26 @@ _REPLAY_MAX_BYTES = 128 * 1024 * 1024
 
 class ReplayTushareProvider:
     def __init__(self, path: Path | str) -> None:
-        with Path(path).open("rb") as stream:
-            content = stream.read(_REPLAY_MAX_BYTES + 1)
+        flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(Path(path), flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("Tushare replay must be a regular file")
+            if metadata.st_size > _REPLAY_MAX_BYTES:
+                raise ValueError("Tushare replay exceeds its byte bound")
+            content = bytearray()
+            while chunk := os.read(
+                descriptor,
+                min(64 * 1024, _REPLAY_MAX_BYTES + 1 - len(content)),
+            ):
+                content.extend(chunk)
+                if len(content) > _REPLAY_MAX_BYTES:
+                    raise ValueError("Tushare replay exceeds its byte bound")
+            if len(content) != metadata.st_size:
+                raise ValueError("Tushare replay changed while reading")
+        finally:
+            os.close(descriptor)
         if len(content) > _REPLAY_MAX_BYTES:
             raise ValueError("Tushare replay exceeds its byte bound")
         value = json.loads(content)

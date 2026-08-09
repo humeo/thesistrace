@@ -53,6 +53,26 @@ def test_empty_store_and_atomic_compare_and_swap_survive_restart(tmp_path: Path)
     assert reopened is not None and reopened.prepared_at == "2026-08-09T00:02:00+00:00"
 
 
+def test_head_owns_the_atomic_publication_time_independently_of_generation(
+    tmp_path: Path,
+) -> None:
+    generations = MountedGenerationStore(tmp_path)
+    manifest = _materialize(generations, ordinal=1)
+    completed_at = datetime(2026, 8, 9, 1, 30, tzinfo=UTC)
+
+    established = MountedDatasetHeadStore(tmp_path).compare_and_swap(
+        expected_generation_manifest_sha256=None,
+        candidate_generation_manifest_sha256=manifest,
+        prepared_at=completed_at,
+    )
+    reopened = MountedDatasetHeadStore(tmp_path).current()
+
+    assert established.prepared_at == completed_at.isoformat()
+    assert reopened == established
+    assert reopened is not None
+    assert reopened.generation.preparation["prepared_at"] == "2026-08-09T00:01:00+00:00"
+
+
 def test_concurrent_head_movers_cannot_both_win(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
