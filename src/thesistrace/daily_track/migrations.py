@@ -227,6 +227,7 @@ MIGRATIONS = MigrationPlan(
                     UNIQUE (track_id, boundary_session),
                     UNIQUE (track_id, manifest_sha256),
                     UNIQUE (track_id, boundary_session, manifest_sha256),
+                    UNIQUE (track_id, progression_id, manifest_sha256),
                     FOREIGN KEY (track_id, predecessor_manifest_sha256)
                         REFERENCES daily_tracks.session_checkpoints(
                             track_id, manifest_sha256
@@ -330,6 +331,13 @@ MIGRATIONS = MigrationPlan(
                     FOREIGN KEY (track_id, progression_id, boundary_session)
                     REFERENCES daily_tracks.session_progressions(
                         track_id, id, target_end_session
+                    );
+
+                ALTER TABLE daily_tracks.session_progressions
+                    ADD CONSTRAINT session_progression_checkpoint_fk
+                    FOREIGN KEY (track_id, id, checkpoint_manifest_sha256)
+                    REFERENCES daily_tracks.session_checkpoints(
+                        track_id, progression_id, manifest_sha256
                     );
             """,
         ),

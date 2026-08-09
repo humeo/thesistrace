@@ -145,6 +145,19 @@ class TerminalStrategyStateValue(TerminalStateModel):
     last_daily_observation: LastDailyObservation
     metric_state: StrategyMetricState
 
+    @model_validator(mode="after")
+    def continuation_sessions_must_match_boundary(self) -> TerminalStrategyStateValue:
+        if (
+            self.last_daily_observation.session != self.session
+            or self.metric_state.last_session != self.session
+            or (
+                self.pending_signal is not None
+                and self.pending_signal.signal_session != self.session
+            )
+        ):
+            raise ValueError("Terminal continuation sessions do not match")
+        return self
+
 
 LAST_DAILY_OBSERVATION_KEYS = frozenset(LastDailyObservation.model_fields)
 METRIC_STATE_KEYS = frozenset(StrategyMetricState.model_fields)

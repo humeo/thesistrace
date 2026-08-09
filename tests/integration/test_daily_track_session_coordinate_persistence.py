@@ -3,6 +3,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from threading import Event
 
@@ -21,9 +22,10 @@ from thesistrace.entrypoints.runtime import (
     core_environment_is_configured,
     open_core_runtime,
 )
+from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 from thesistrace.research_kernel.terminal_state_schema import (
     LAST_DAILY_OBSERVATION_KEYS,
-    METRIC_STATE_KEYS,
+    OPTIONAL_METRIC_ACCUMULATORS,
 )
 
 
@@ -100,6 +102,9 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
     assert snapshot.track.terminal_strategy_state == _strategy_state(
         "2026-08-05", "10001000"
     )
+    metric_state = snapshot.track.terminal_strategy_state["metric_state"]
+    assert isinstance(metric_state, dict)
+    assert OPTIONAL_METRIC_ACCUMULATORS.isdisjoint(metric_state)
     assert len(snapshot.progressions) == 1
     assert snapshot.progressions[0].predecessor_checkpoint_session == date(2026, 8, 3)
     assert snapshot.progressions[0].target_sessions == (
@@ -247,17 +252,24 @@ def test_terminal_state_validation_rolls_back_activation_and_publication() -> No
                 data_through_session=date(2026, 8, 4),
                 lease_seconds=30,
             )
-        with pytest.raises(SessionCoordinateConflict):
-            with database.transaction() as transaction:
-                repository.publish_checkpoint(
-                    transaction,
-                    progression_id="progression_state_validation",
-                    attempt_id="attempt_state_validation",
-                    fence=1,
-                    checkpoint_manifest_sha256="b" * 64,
-                    terminal_strategy_state={"session": "2026-08-04"},
-                    provenance={"kind": "invalid-checkpoint"},
-                )
+        malformed_states = [
+            {"session": "2026-08-04"},
+            _state_with_mismatched_coordinate("last_daily_observation"),
+            _state_with_mismatched_coordinate("metric_state"),
+            _state_with_mismatched_coordinate("pending_signal"),
+        ]
+        for malformed_state in malformed_states:
+            with pytest.raises(SessionCoordinateConflict):
+                with database.transaction() as transaction:
+                    repository.publish_checkpoint(
+                        transaction,
+                        progression_id="progression_state_validation",
+                        attempt_id="attempt_state_validation",
+                        fence=1,
+                        checkpoint_manifest_sha256="b" * 64,
+                        terminal_strategy_state=malformed_state,
+                        provenance={"kind": "invalid-checkpoint"},
+                    )
         assert _session_counts(database, "track_state_validation") == {
             "states": 1,
             "progressions": 1,
@@ -429,6 +441,21 @@ def test_relational_coordinates_cannot_disagree_with_checkpoint_ancestry() -> No
                     """,
                     (date(2026, 8, 2), "track_relational_coordinate"),
                 )
+        with pytest.raises(ForeignKeyViolation):
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET status = 'succeeded',
+                        checkpoint_manifest_sha256 = %s,
+                        finished_at = now()
+                    WHERE id = %s
+                    """,
+                    (
+                        "c" * 64,
+                        "progression_relational_coordinate",
+                    ),
+                )
         snapshot = repository.load("track_relational_coordinate")
         assert snapshot.track.origin_session == date(2026, 8, 3)
         assert snapshot.track.current_checkpoint_session == date(2026, 8, 3)
@@ -548,28 +575,12 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
             "valuation_events": [],
         }
     )
-    metric_state = {name: 0 for name in METRIC_STATE_KEYS}
-    metric_state.update(
-        {
-            "contract": "strategy-metric-state-v1",
-            "first_gross_nav": "10000000",
-            "first_net_nav": "10000000",
-            "first_benchmark_nav": "1",
-            "peak_net_nav": net_nav,
-            "peak_session": session,
-            "worst_drawdown": "0",
-            "worst_peak_nav": net_nav,
-            "worst_peak_session": session,
-            "worst_trough_session": session,
-            "worst_recovery_session": None,
-            "weight_maximum_session": session,
-            "cash_maximum_session": session,
-            "last_gross_nav": net_nav,
-            "last_net_nav": net_nav,
-            "last_benchmark_nav": "1",
-            "last_session": session,
-            "cumulative_cost": "0",
-        }
+    metric_state = advance_strategy_metric_state(
+        None,
+        daily=[last_daily],
+        turnover_events=[],
+        cumulative_cost=Decimal(0),
+        rejections=[],
     )
     return {
         "session": session,
@@ -590,6 +601,22 @@ def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
         "last_daily_observation": last_daily,
         "metric_state": metric_state,
     }
+
+
+def _state_with_mismatched_coordinate(coordinate: str) -> dict[str, object]:
+    state = _strategy_state("2026-08-04", "10001000")
+    if coordinate == "pending_signal":
+        state["pending_signal"] = {
+            "signal_session": "2026-08-03",
+            "execution": "next_research_session_open",
+        }
+        return state
+    nested = state[coordinate]
+    assert isinstance(nested, dict)
+    nested["session" if coordinate == "last_daily_observation" else "last_session"] = (
+        "2026-08-03"
+    )
+    return state
 
 
 def _session_counts(database: PostgresDatabase, track_id: str) -> dict[str, int]:
