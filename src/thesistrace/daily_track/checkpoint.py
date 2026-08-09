@@ -8,12 +8,20 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
+from thesistrace.daily_track.models import TrackingOrigin
+from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.canonical_state import canonical_sessions
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
 from thesistrace.research_kernel.kernel_run import KernelRunError, KernelState, RunInput
 from thesistrace.research_kernel.numeric import canonical_decimal
 from thesistrace.research_kernel.serialization import canonical_json_bytes
-from thesistrace.research_kernel.strategy import advance_strategy_metric_state
+from thesistrace.research_kernel.strategy import (
+    advance_strategy_metric_state,
+    strategy_metrics_from_state,
+)
+from thesistrace.research_kernel.terminal_state_schema import (
+    TerminalStrategyStateValue,
+)
 
 
 def project_tracking_checkpoint(
@@ -153,6 +161,146 @@ def restore_tracking_checkpoint(
             "metric_state": dict(metric_state),
         },
         origin_session=str(value["origin_session"]),
+    )
+
+
+def restore_tracking_origin(
+    origin: TrackingOrigin,
+    terminal_value: Mapping[str, object],
+    canonical: dict[str, object],
+) -> KernelState:
+    """Build the first forward-only Kernel state without replaying the seed Run."""
+    terminal = TerminalStrategyStateValue.model_validate(terminal_value)
+    run_input = _origin_run_input(origin, canonical)
+    parsed_alpha = validate_normalized_alpha(
+        run_input.alpha_expression_snapshot(),
+        field_bindings=run_input.field_bindings_snapshot(),
+    )
+    metric_state = terminal.metric_state.model_dump(mode="json", exclude_unset=True)
+    last_daily = terminal.last_daily_observation.model_dump(mode="json")
+    positions = [item.model_dump(mode="json") for item in terminal.positions]
+    factor_horizons = {
+        str(horizon): {
+            "horizon": horizon,
+            "summary": {},
+            "coverage": {
+                "signal_session_count": 0,
+                "ic_valid_session_count": 0,
+                "rank_ic_valid_session_count": 0,
+                "quantile_valid_session_count": 0,
+            },
+            "daily": [],
+        }
+        for horizon in (1, 5, 20)
+    }
+    return KernelState(
+        run_input=run_input,
+        output={
+            "alpha_matrix": {
+                "expression": run_input.alpha_expression_snapshot(),
+                "effective_lookback": parsed_alpha.effective_lookback,
+                "neutralization": run_input.neutralization,
+                "sessions": [],
+            },
+            "forward_labels": {"horizons": {}},
+            "factor_evaluation": {"horizons": factor_horizons},
+            "strategy_backtest": {
+                "daily": [last_daily],
+                "positions": positions,
+                "metrics": strategy_metrics_from_state(metric_state),
+                "metric_state": metric_state,
+                "orders": [],
+                "child_orders": [],
+                "fills": [],
+                "rebalance_events": [],
+                "rejections": [],
+                "diagnostics": [],
+            },
+            "strategy_time_series": {"daily": []},
+            "strategy_events": {},
+            "diagnostics": {},
+        },
+        strategy_resume={
+            "daily": [last_daily],
+            "positions": positions,
+            "report_session_count": terminal.rebalance_phase.report_session_count,
+            "metric_state": metric_state,
+        },
+        origin_session=terminal.rebalance_phase.origin_session,
+    )
+
+
+def terminal_strategy_state(state: KernelState) -> dict[str, object]:
+    """Project the finalized account boundary used by durable session coordinates."""
+    strategy = _mapping(
+        state.output_snapshot().get("strategy_backtest"),
+        "Strategy Backtest",
+    )
+    daily = _rows(strategy.get("daily"), "Strategy daily observations")
+    positions = _rows(strategy.get("positions"), "Strategy positions")
+    metric_state = _mapping(strategy.get("metric_state"), "Strategy metric state")
+    terminal = daily[-1]
+    session_count = int(metric_state["session_count"])
+    rebalance_interval = state.run_input_with_canonical(
+        state.canonical_snapshot()
+    ).rebalance_interval
+    return {
+        "session": str(terminal["session"]),
+        "gross_cash": str(terminal["gross_cash"]),
+        "net_cash": str(terminal["net_cash"]),
+        "gross_nav": str(terminal["gross_nav"]),
+        "net_nav": str(terminal["net_nav"]),
+        "benchmark_nav": str(terminal["benchmark_nav"]),
+        "cumulative_transaction_cost": str(
+            terminal["cumulative_transaction_cost"]
+        ),
+        "positions": [copy.deepcopy(dict(item)) for item in positions],
+        "rebalance_phase": {
+            "origin_session": state.origin_session,
+            "report_session_count": session_count,
+            "rebalance_interval": rebalance_interval,
+            "completed_intervals": session_count - 1,
+        },
+        "pending_signal": (
+            {
+                "signal_session": str(terminal["session"]),
+                "execution": "next_research_session_open",
+            }
+            if (session_count - 1) % rebalance_interval == 0
+            else None
+        ),
+        "last_daily_observation": copy.deepcopy(dict(terminal)),
+        "metric_state": copy.deepcopy(dict(metric_state)),
+    }
+
+
+def _origin_run_input(
+    origin: TrackingOrigin,
+    canonical: dict[str, object],
+) -> RunInput:
+    immutable_input = origin.immutable_input
+    definition = _mapping(immutable_input.get("definition"), "Tracking Definition")
+    content = _mapping(definition.get("content"), "Tracking Definition content")
+    alpha = _mapping(content.get("alpha"), "Tracking Alpha")
+    strategy = _mapping(immutable_input.get("strategy"), "Tracking Strategy")
+    costs = _mapping(immutable_input.get("costs"), "Tracking Costs")
+    field_bindings = _mapping(
+        immutable_input.get("field_bindings"),
+        "Tracking field bindings",
+    )
+    return RunInput(
+        canonical_data=canonical,
+        alpha_expression=dict(alpha),
+        field_bindings={str(key): str(value) for key, value in field_bindings.items()},
+        universe=str(content["universe"]),
+        neutralization=str(content["neutralization"]),
+        holdings_count=int(strategy["holdings_count"]),
+        rebalance_interval=int(strategy["rebalance_every_sessions"]),
+        initial_cash_cny=str(strategy["initial_cash_cny"]),
+        commission_rate_all_in=str(costs["commission_rate_all_in"]),
+        commission_min_cny=str(costs["commission_min_cny"]),
+        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+        transfer_fee_rate=str(costs["transfer_fee_rate"]),
     )
 
 

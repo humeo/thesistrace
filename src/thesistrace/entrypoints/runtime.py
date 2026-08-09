@@ -123,10 +123,12 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         data_overview.validate_startup()
         dataset_admission = DatasetAdmissionService(database, settings.data_mount)
         dataset_lifecycle = DatasetLifecycle(database, settings.data_mount)
+        generation_store = MountedGenerationStore(settings.data_mount)
         daily_tracks = DailyTrackService(
             database,
             publication=publication,
             dataset_lifecycle=dataset_lifecycle,
+            generation_store=generation_store,
             next_release=data.next_release,
             load_canonical=data.load_canonical,
             read_result_bundle=read_result_bundle,
@@ -135,7 +137,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         research_runs = ResearchRunService(
             database,
             dataset_lifecycle=dataset_lifecycle,
-            generation_store=MountedGenerationStore(settings.data_mount),
+            generation_store=generation_store,
             publication=publication,
             activate_track=daily_tracks.activate,
         )

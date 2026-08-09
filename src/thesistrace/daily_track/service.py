@@ -18,6 +18,8 @@ from thesistrace.daily_track.cache import _DailyTrackWorkingCache
 from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
     restore_tracking_checkpoint,
+    restore_tracking_origin,
+    terminal_strategy_state,
 )
 from thesistrace.daily_track.models import (
     DailyTrackDetail,
@@ -29,7 +31,7 @@ from thesistrace.daily_track.models import (
     TrackingOrigin,
 )
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
-from thesistrace.data import DatasetLifecycle, NextRelease
+from thesistrace.data import DatasetLifecycle, MountedGenerationStore, NextRelease
 from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
@@ -71,7 +73,7 @@ ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
 MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3
 ACTIVE_DAILY_TRACK_LIMIT = 10
-PUBLIC_BLOCKED_REASON = "DailyTrack could not process this Dataset Release."
+PUBLIC_BLOCKED_REASON = "DailyTrack could not process the current dataset."
 # 504 rolling signal sessions plus the 21-session maximum label maturity tail.
 # The query reads one extra predecessor Checkpoint; _select_rebuild_steps then
 # trims the selected Release suffix to this many actual Research Sessions.
@@ -137,6 +139,23 @@ class _ProgressionClaim:
     target: NextRelease
 
 
+@dataclass(frozen=True)
+class _SessionProgressionClaim:
+    track_id: str
+    progression_id: str
+    attempt_id: str
+    fence: int
+    generation_pin_id: str
+    data_generation_id: str
+    data_through_session: str
+    origin: TrackingOrigin
+    predecessor_manifest_sha256: str
+    predecessor_provenance: dict[str, object]
+    current_session: str
+    target_sessions: tuple[str, ...]
+    canonical: dict[str, object]
+
+
 class DailyTrackService:
     def __init__(
         self,
@@ -144,6 +163,7 @@ class DailyTrackService:
         *,
         publication: Publication | None = None,
         dataset_lifecycle: DatasetLifecycle | None = None,
+        generation_store: MountedGenerationStore | None = None,
         next_release: NextReleaseLookup | None = None,
         load_canonical: CanonicalLoader | None = None,
         read_result_bundle: ResultBundleReader,
@@ -158,6 +178,7 @@ class DailyTrackService:
         self._database = database
         self._publication = publication
         self._dataset_lifecycle = dataset_lifecycle
+        self._generation_store = generation_store
         self._next_release = next_release
         self._load_canonical = load_canonical
         self._read_result_bundle = read_result_bundle
@@ -286,6 +307,26 @@ class DailyTrackService:
         return row
 
     def process_next(self) -> bool:
+        current_claim = self._claim_current()
+        if current_claim is not None:
+            self._progress(
+                "claimed",
+                current_claim.track_id,
+                current_claim.data_generation_id,
+            )
+            prepared, provenance, state = self._execute_current(current_claim)
+            self._progress(
+                "prepared",
+                current_claim.track_id,
+                current_claim.data_generation_id,
+            )
+            self._publish_current(current_claim, prepared, provenance, state)
+            self._progress(
+                "published",
+                current_claim.track_id,
+                current_claim.data_generation_id,
+            )
+            return True
         self._require_progression_dependencies()
         claim = self._claim_next()
         if claim is None:
@@ -629,17 +670,60 @@ class DailyTrackService:
             calendar = canonical_sessions(head.generation.canonical, "Dataset Head")
             current_session = snapshot.track.current_checkpoint_session.isoformat()
             current_index = calendar.index(current_session)
-            factor = _public_factor(
-                _mapping_value(seed_result.get("factor_summary"), "Factor Summary")
+            factor_value = _mapping_value(
+                seed_result.get("factor_summary"),
+                "Factor Summary",
             )
             strategy_summary = _mapping_value(
                 seed_result.get("strategy_summary"),
                 "Strategy Summary",
             )
-            observations = _mapping_rows(
+            seed_observations = _mapping_rows(
                 seed_result.get("strategy_daily_observations"),
                 "Strategy observations",
             )
+            observations_by_session = {
+                str(item["session"]): dict(item) for item in seed_observations
+            }
+            projected_strategy_summary: Mapping[str, object] = {
+                name: value
+                for name, value in strategy_summary.items()
+                if name != "benchmark"
+            }
+            for checkpoint in snapshot.checkpoints[1:]:
+                value = _read_publication_json(
+                    self._publication,
+                    PublishedRef(
+                        manifest_sha256=checkpoint.manifest_sha256,
+                        kind="daily-track.checkpoint",
+                        provenance=checkpoint.provenance,
+                    ),
+                    payload_name="checkpoint",
+                )
+                factor_value = _mapping_value(
+                    value.get("factor_summary"),
+                    "Checkpoint Factor Summary",
+                )
+                strategy_state = _mapping_value(
+                    value.get("strategy_state"),
+                    "Checkpoint Strategy State",
+                )
+                projected_strategy_summary = {
+                    "metrics": dict(
+                        _mapping_value(
+                            strategy_state.get("summary"),
+                            "Checkpoint Strategy Summary",
+                        )
+                    )
+                }
+                for observation in _mapping_rows(
+                    strategy_state.get("retained_delta"),
+                    "Checkpoint Strategy observations",
+                ):
+                    observations_by_session[str(observation["session"])] = dict(
+                        observation
+                    )
+            factor = _public_factor(factor_value)
             universe = _origin_universe(origin)
             return DailyTrackDetail.model_validate(
                 {
@@ -660,16 +744,15 @@ class DailyTrackService:
                     "blocked_reason": row["blocked_reason"],
                     "factor": factor,
                     "strategy": {
-                        "summary": {
-                            name: value
-                            for name, value in strategy_summary.items()
-                            if name != "benchmark"
-                        },
+                        "summary": projected_strategy_summary,
                         "benchmark": {
                             "universe": universe,
                             "methodology": "selected_universe_equal_weight",
                         },
-                        "observations": [dict(item) for item in observations],
+                        "observations": [
+                            observations_by_session[session]
+                            for session in sorted(observations_by_session)
+                        ],
                     },
                 }
             )
@@ -986,6 +1069,254 @@ class DailyTrackService:
             checkpoint_evidence_sha256s=tuple(evidence_sha256s),
             final_evidence_sha256=final_evidence,
         )
+
+    def _claim_current(self) -> _SessionProgressionClaim | None:
+        if self._dataset_lifecycle is None or self._generation_store is None:
+            return None
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT track.id, track.origin, track.execution_fence,
+                       checkpoint.boundary_session,
+                       checkpoint.manifest_sha256,
+                       checkpoint.provenance
+                FROM daily_tracks.tracks AS track
+                JOIN daily_tracks.session_tracking_states AS state
+                  ON state.track_id = track.id
+                JOIN daily_tracks.session_checkpoints AS checkpoint
+                  ON checkpoint.track_id = state.track_id
+                 AND checkpoint.manifest_sha256 =
+                        state.current_checkpoint_manifest_sha256
+                WHERE track.status = 'active'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM daily_tracks.session_progressions AS progression
+                      WHERE progression.track_id = track.id
+                        AND progression.status IN ('running', 'blocked')
+                  )
+                ORDER BY track.created_at, track.id
+                FOR UPDATE OF track, state SKIP LOCKED
+                """
+            ).fetchall()
+            for row in rows:
+                attempt_id = f"track_attempt_{uuid4().hex[:20]}"
+                pin = self._dataset_lifecycle.pin_current_in_transaction(
+                    transaction,
+                    owner_kind="tracking_advance_attempt",
+                    owner_id=attempt_id,
+                    lease_seconds=self._lease_seconds,
+                )
+                generation = self._generation_store.open_generation(
+                    pin.generation_manifest_sha256
+                )
+                calendar = canonical_sessions(generation.canonical, "Data Generation")
+                current_session = row["boundary_session"].isoformat()
+                try:
+                    current_index = calendar.index(current_session)
+                except ValueError as error:
+                    raise RuntimeError(
+                        "DailyTrack Checkpoint is outside current data"
+                    ) from error
+                target_sessions = tuple(calendar[current_index + 1 :])
+                if not target_sessions:
+                    self._dataset_lifecycle.release_pin_in_transaction(
+                        transaction,
+                        pin.id,
+                        owner_id=attempt_id,
+                    )
+                    continue
+                fence = int(row["execution_fence"]) + 1
+                progression_id = f"track_progression_{uuid4().hex[:20]}"
+                self._session_coordinates.start_progression(
+                    transaction,
+                    progression_id=progression_id,
+                    track_id=str(row["id"]),
+                    expected_checkpoint_manifest_sha256=str(
+                        row["manifest_sha256"]
+                    ),
+                    generation_sessions=tuple(_session_date(value) for value in calendar),
+                    target_sessions=tuple(
+                        _session_date(value) for value in target_sessions
+                    ),
+                    data_generation_id=pin.generation_manifest_sha256,
+                    provenance={
+                        "schema_version": "daily-track-progression-v1",
+                        "target_start_session": target_sessions[0],
+                        "target_end_session": target_sessions[-1],
+                    },
+                )
+                self._session_coordinates.start_attempt(
+                    transaction,
+                    attempt_id=attempt_id,
+                    progression_id=progression_id,
+                    ordinal=1,
+                    fence=fence,
+                    generation_pin_id=pin.id,
+                    data_generation_id=pin.generation_manifest_sha256,
+                    data_through_session=_session_date(generation.data_through_session),
+                    lease_seconds=self._lease_seconds,
+                )
+                updated = transaction.execute(
+                    """
+                    UPDATE daily_tracks.tracks
+                    SET execution_fence = %s
+                    WHERE id = %s AND execution_fence = %s
+                    """,
+                    (fence, row["id"], fence - 1),
+                )
+                if updated.rowcount != 1:
+                    raise DailyTrackFenced
+                return _SessionProgressionClaim(
+                    track_id=str(row["id"]),
+                    progression_id=progression_id,
+                    attempt_id=attempt_id,
+                    fence=fence,
+                    generation_pin_id=pin.id,
+                    data_generation_id=pin.generation_manifest_sha256,
+                    data_through_session=generation.data_through_session,
+                    origin=TrackingOrigin.model_validate(row["origin"]),
+                    predecessor_manifest_sha256=str(row["manifest_sha256"]),
+                    predecessor_provenance=dict(row["provenance"]),
+                    current_session=current_session,
+                    target_sessions=target_sessions,
+                    canonical=generation.canonical,
+                )
+        return None
+
+    def _execute_current(
+        self,
+        claim: _SessionProgressionClaim,
+    ) -> tuple[PreparedPublication, dict[str, object], KernelState]:
+        assert self._publication is not None
+        calendar = canonical_sessions(claim.canonical, "Data Generation")
+        current_index = calendar.index(claim.current_session)
+        prior_canonical = slice_canonical_sessions(
+            claim.canonical,
+            calendar[: current_index + 1],
+        )
+        predecessor = _read_publication_json(
+            self._publication,
+            PublishedRef(
+                manifest_sha256=claim.predecessor_manifest_sha256,
+                kind="daily-track.checkpoint",
+                provenance=claim.predecessor_provenance,
+            ),
+            payload_name="checkpoint",
+        )
+        if predecessor.get("schema_version") == (
+            "daily-track-activation-checkpoint-v1"
+        ):
+            terminal = _mapping_value(
+                predecessor.get("terminal_strategy_state"),
+                "Activation Terminal Strategy State",
+            )
+            prior = restore_tracking_origin(claim.origin, terminal, prior_canonical)
+        else:
+            prior = _state_from_payload(predecessor, prior_canonical)
+        rebuild_sessions = canonical_sessions(prior_canonical, "Tracking prior data")[-504:]
+        continuation = advance_continuation(
+            run_input=prior.run_input_with_canonical(prior_canonical),
+            prior_continuation=empty_continuation(),
+            target_canonical=prior_canonical,
+            appended_sessions=rebuild_sessions,
+        )
+        state = self._advance_kernel(
+            AdvanceInput(
+                prior_state=prior,
+                target_canonical_release=claim.canonical,
+                appended_sessions=list(claim.target_sessions),
+                continuation=continuation,
+            )
+        )
+        if state.boundary_session != claim.target_sessions[-1]:
+            raise RuntimeError("DailyTrack Advance returned an invalid boundary")
+        provenance = {
+            "schema_version": "daily-track-checkpoint-v2",
+            "daily_track_id": claim.track_id,
+            "predecessor_manifest_sha256": claim.predecessor_manifest_sha256,
+            "boundary_session": state.boundary_session,
+            "data_generation_id": claim.data_generation_id,
+            "data_through_session": claim.data_through_session,
+            "calculation_contracts": claim.origin.calculation_contracts,
+        }
+        prepared = self._publication.prepare(
+            kind="daily-track.checkpoint",
+            payloads={
+                "checkpoint": JsonPayload(
+                    _state_payload(
+                        state,
+                        retained_strategy_sessions=[
+                            claim.current_session,
+                            *claim.target_sessions,
+                        ],
+                    )
+                )
+            },
+            provenance=provenance,
+        )
+        return prepared, provenance, state
+
+    def _publish_current(
+        self,
+        claim: _SessionProgressionClaim,
+        prepared: PreparedPublication,
+        provenance: dict[str, object],
+        state: KernelState,
+    ) -> None:
+        assert self._publication is not None
+        assert self._dataset_lifecycle is not None
+        published_state = terminal_strategy_state(state)
+        with self._database.transaction() as transaction:
+            track = transaction.execute(
+                """
+                SELECT status, head_manifest_sha256, execution_fence
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (claim.track_id,),
+            ).fetchone()
+            if track != {
+                "status": "active",
+                "head_manifest_sha256": claim.predecessor_manifest_sha256,
+                "execution_fence": claim.fence,
+            }:
+                raise DailyTrackFenced
+            published = self._publication.record(transaction, prepared)
+            self._session_coordinates.publish_checkpoint(
+                transaction,
+                progression_id=claim.progression_id,
+                attempt_id=claim.attempt_id,
+                fence=claim.fence,
+                checkpoint_manifest_sha256=published.manifest_sha256,
+                terminal_strategy_state=published_state,
+                provenance=provenance,
+            )
+            moved = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET current_release_id = %s,
+                    current_strategy_session = %s,
+                    head_manifest_sha256 = %s
+                WHERE id = %s AND head_manifest_sha256 = %s
+                  AND execution_fence = %s
+                """,
+                (
+                    claim.data_generation_id,
+                    state.boundary_session,
+                    published.manifest_sha256,
+                    claim.track_id,
+                    claim.predecessor_manifest_sha256,
+                    claim.fence,
+                ),
+            )
+            if moved.rowcount != 1:
+                raise DailyTrackFenced
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                claim.generation_pin_id,
+                owner_id=claim.attempt_id,
+            )
 
     def _claim_next(self) -> _ProgressionClaim | None:
         assert self._next_release is not None

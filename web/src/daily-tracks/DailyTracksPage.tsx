@@ -9,11 +9,10 @@ type DailyTrackSummary = {
   id: string;
   status: "active" | "blocked" | "stopped";
   seed_run_id: string;
-  seed_release_id: string;
-  current_release_id: string;
   definition_id: string;
   definition_revision: number;
   result_checksum_sha256: string;
+  origin_session: string;
   strategy_session: string;
 };
 
@@ -22,15 +21,14 @@ type DailyTrackDetail = {
   status: "active" | "blocked" | "stopped";
   origin: {
     seed_run_id: string;
-    seed_release_id: string;
     definition_id: string;
     definition_revision: number;
     result_checksum_sha256: string;
     strategy_session: string;
   };
-  head_release_id: string;
   strategy_session: string;
-  lag_releases: number;
+  data_through_session: string;
+  lag_sessions: number;
   blocked_reason: string | null;
   factor: DailyTrackAnalysis["factor"];
   strategy: DailyTrackAnalysis["strategy"];
@@ -201,12 +199,12 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         ) : null}
         <div className="research-run-facts">
           <p><strong>Status</strong> {track.status}</p>
-          <p><strong>Head Release</strong> {track.head_release_id}</p>
+          <p><strong>Data through</strong> {track.data_through_session}</p>
           <p>
             <strong>Lag</strong>{" "}
-            {track.lag_releases === 0
+            {track.lag_sessions === 0
               ? "Up to date"
-              : `${track.lag_releases} ${track.lag_releases === 1 ? "Release" : "Releases"} behind`}
+              : `${track.lag_sessions} ${track.lag_sessions === 1 ? "session" : "sessions"} behind`}
           </p>
           <p><strong>Strategy session</strong> {track.strategy_session}</p>
           {track.blocked_reason ? (
@@ -226,7 +224,6 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
                 {track.origin.seed_run_id}
               </a>
             </p>
-            <p><strong>Seed Release</strong> {track.origin.seed_release_id}</p>
             <p>
               <strong>Definition</strong>{" "}
               <a href={`/definitions/${track.origin.definition_id}`}>

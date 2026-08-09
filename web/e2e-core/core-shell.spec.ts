@@ -271,11 +271,10 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
     id: "track_4444dddd",
     status: "active",
     seed_run_id: run.id,
-    seed_release_id: run.dataset_release_id,
-    current_release_id: run.dataset_release_id,
     definition_id: run.definition_id,
     definition_revision: run.definition_revision,
     result_checksum_sha256: "a".repeat(64),
+    origin_session: "2025-12-31",
     strategy_session: "2025-12-31",
   };
   const factorHorizon = (horizon: 1 | 5 | 20) => ({
@@ -298,15 +297,14 @@ test("starts and reopens one DailyTrack from a succeeded Run", async ({ page }) 
     status: track.status,
     origin: {
       seed_run_id: track.seed_run_id,
-      seed_release_id: track.seed_release_id,
       definition_id: track.definition_id,
       definition_revision: track.definition_revision,
       result_checksum_sha256: track.result_checksum_sha256,
       strategy_session: track.strategy_session,
     },
-    head_release_id: track.current_release_id,
     strategy_session: track.strategy_session,
-    lag_releases: 0,
+    data_through_session: track.strategy_session,
+    lag_sessions: 0,
     blocked_reason: null,
     factor: {
       horizons: { "1": factorHorizon(1), "5": factorHorizon(5), "20": factorHorizon(20) },
@@ -375,11 +373,10 @@ test("handles Start Tracking replay and active limit", async ({ page }) => {
     id: "track_a11ce001",
     status: "active",
     seed_run_id: replayRun.id,
-    seed_release_id: replayRun.dataset_release_id,
-    current_release_id: replayRun.dataset_release_id,
     definition_id: replayRun.definition_id,
     definition_revision: replayRun.definition_revision,
     result_checksum_sha256: "e".repeat(64),
+    origin_session: "2025-12-31",
     strategy_session: "2025-12-31",
   };
   let acceptedRequestId: string | null = null;
@@ -484,15 +481,14 @@ test("shows recent and cumulative DailyTrack analysis", async ({ page }) => {
     status: "active",
     origin: {
       seed_run_id: "run_analysis",
-      seed_release_id: "release_origin",
       definition_id: "def_analysis",
       definition_revision: 7,
       result_checksum_sha256: "a".repeat(64),
       strategy_session: "2025-12-31",
     },
-    head_release_id: "release_head",
     strategy_session: observations.at(-1)?.session,
-    lag_releases: 2,
+    data_through_session: "2027-12-31",
+    lag_sessions: 2,
     blocked_reason: null,
     factor: { horizons: { "1": horizon(1), "5": horizon(5), "20": horizon(20) } },
     strategy: {
@@ -555,8 +551,8 @@ test("shows recent and cumulative DailyTrack analysis", async ({ page }) => {
   await navigation;
   await expect(page.getByRole("heading", { name: "DailyTrack" })).toBeVisible();
   await expect(page.getByText("Status active", { exact: true })).toBeVisible();
-  await expect(page.getByText("Head Release release_head", { exact: true })).toBeVisible();
-  await expect(page.getByText("Lag 2 Releases behind", { exact: true })).toBeVisible();
+  await expect(page.getByText("Data through 2027-12-31", { exact: true })).toBeVisible();
+  await expect(page.getByText("Lag 2 sessions behind", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Tracking Origin" })).toBeVisible();
   await expect(page.getByRole("link", { name: "run_analysis" })).toHaveAttribute(
     "href",
@@ -644,7 +640,6 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
   };
   const origin = {
     seed_run_id: "run_failure_isolation",
-    seed_release_id: "release_seed",
     definition_id: "def_failure_isolation",
     definition_revision: 2,
     result_checksum_sha256: "b".repeat(64),
@@ -654,19 +649,18 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
     id: "track_b10c0ed",
     status: "blocked",
     origin,
-    head_release_id: "release_seed",
     strategy_session: "2025-12-31",
-    lag_releases: 2,
-    blocked_reason: "DailyTrack could not process this Dataset Release.",
+    data_through_session: "2026-01-02",
+    lag_sessions: 2,
+    blocked_reason: "DailyTrack could not process the current dataset.",
     ...analysis,
   };
   const active = {
     ...blocked,
     id: "track_ac71ae",
     status: "active",
-    head_release_id: "release_latest",
     strategy_session: "2026-01-02",
-    lag_releases: 0,
+    lag_sessions: 0,
     blocked_reason: null,
   };
   await page.route("**/api/daily-tracks/track_b10c0ed", (route) =>
@@ -678,10 +672,10 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
 
   await page.goto("/daily-tracks/track_b10c0ed");
   await expect(page.getByText("Status blocked", { exact: true })).toBeVisible();
-  await expect(page.getByText("Head Release release_seed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Data through 2026-01-02", { exact: true })).toBeVisible();
   await expect(
     page.getByText(
-      "Blocked DailyTrack could not process this Dataset Release.",
+      "Blocked DailyTrack could not process the current dataset.",
       { exact: true },
     ),
   ).toBeVisible();
@@ -692,7 +686,7 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
 
   await page.goto("/daily-tracks/track_ac71ae");
   await expect(page.getByText("Status active", { exact: true })).toBeVisible();
-  await expect(page.getByText("Head Release release_latest", { exact: true })).toBeVisible();
+  await expect(page.getByText("Data through 2026-01-02", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
 
 });
@@ -741,7 +735,6 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
   };
   const origin = {
     seed_run_id: "run_retry",
-    seed_release_id: "release_seed",
     definition_id: "def_retry",
     definition_revision: 3,
     result_checksum_sha256: "c".repeat(64),
@@ -750,17 +743,17 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
   const detail = (
     id: string,
     status: "active" | "blocked",
-    headRelease: string,
+    dataThroughSession: string,
   ) => ({
     id,
     status,
     origin,
-    head_release_id: headRelease,
+    data_through_session: dataThroughSession,
     strategy_session: "2025-12-31",
-    lag_releases: headRelease === "release_latest" ? 0 : 2,
+    lag_sessions: dataThroughSession === "2026-01-02" ? 0 : 2,
     blocked_reason:
       status === "blocked"
-        ? "DailyTrack could not process this Dataset Release."
+        ? "DailyTrack could not process the current dataset."
         : null,
     ...analysis,
   });
@@ -768,11 +761,10 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
     id,
     status: "active",
     seed_run_id: origin.seed_run_id,
-    seed_release_id: origin.seed_release_id,
-    current_release_id: "release_seed",
     definition_id: origin.definition_id,
     definition_revision: origin.definition_revision,
     result_checksum_sha256: origin.result_checksum_sha256,
+    origin_session: origin.strategy_session,
     strategy_session: origin.strategy_session,
   });
   let successfulPhase: "blocked" | "accepted" | "first-target" | "latest" = "blocked";
@@ -783,19 +775,19 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
   await page.route(`**/api/daily-tracks/${successfulId}`, (route) => {
     const projected =
       successfulPhase === "blocked"
-        ? detail(successfulId, "blocked", "release_seed")
+        ? detail(successfulId, "blocked", "2026-01-02")
         : successfulPhase === "first-target"
-          ? detail(successfulId, "active", "release_failed_target")
+          ? detail(successfulId, "active", "2026-01-01")
           : successfulPhase === "latest"
-            ? detail(successfulId, "active", "release_latest")
-            : detail(successfulId, "active", "release_seed");
+            ? detail(successfulId, "active", "2026-01-02")
+            : detail(successfulId, "active", "2026-01-02");
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(projected) });
   });
   await page.route(`**/api/daily-tracks/${repeatedId}`, (route) => {
     const projected =
       repeatedPhase === "accepted"
-        ? detail(repeatedId, "active", "release_seed")
-        : detail(repeatedId, "blocked", "release_seed");
+        ? detail(repeatedId, "active", "2026-01-02")
+        : detail(repeatedId, "blocked", "2026-01-02");
     return route.fulfill({ contentType: "application/json", body: JSON.stringify(projected) });
   });
   await page.route(`**/api/daily-tracks/${successfulId}/retry`, async (route) => {
@@ -823,15 +815,15 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
   await page.getByRole("button", { name: "Retry blocked target" }).click();
   await expect(page.getByRole("status")).toHaveText("Retry accepted for the blocked target.");
   await expect(page.getByText("Status active", { exact: true })).toBeVisible();
-  await expect(page.getByText("Head Release release_seed", { exact: true })).toBeVisible();
+  await expect(page.getByText("Data through 2026-01-02", { exact: true })).toBeVisible();
   successfulPhase = "first-target";
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(
-    page.getByText("Head Release release_failed_target", { exact: true }),
+    page.getByText("Data through 2026-01-01", { exact: true }),
   ).toBeVisible();
   successfulPhase = "latest";
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Head Release release_latest", { exact: true })).toBeVisible();
+  await expect(page.getByText("Data through 2026-01-02", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry blocked target" })).toHaveCount(0);
 
   await page.goto(`/daily-tracks/${repeatedId}`);
@@ -841,7 +833,7 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByText("Status blocked", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Blocked DailyTrack could not process this Dataset Release.", {
+    page.getByText("Blocked DailyTrack could not process the current dataset.", {
       exact: true,
     }),
   ).toBeVisible();
@@ -873,15 +865,14 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
     status: stopped ? "stopped" : "active",
     origin: {
       seed_run_id: "run_stop",
-      seed_release_id: "release_seed",
       definition_id: "def_stop",
       definition_revision: 1,
       result_checksum_sha256: "d".repeat(64),
       strategy_session: "2025-12-31",
     },
-    head_release_id: "release_committed_head",
     strategy_session: "2026-01-01",
-    lag_releases: stopped ? 1 : 0,
+    data_through_session: "2026-01-02",
+    lag_sessions: stopped ? 1 : 0,
     blocked_reason: null,
     factor: { horizons: { "1": horizon(1), "5": horizon(5), "20": horizon(20) } },
     strategy: {
@@ -913,11 +904,10 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
         id,
         status: "stopped",
         seed_run_id: "run_stop",
-        seed_release_id: "release_seed",
-        current_release_id: "release_committed_head",
         definition_id: "def_stop",
         definition_revision: 1,
         result_checksum_sha256: "d".repeat(64),
+        origin_session: "2025-12-31",
         strategy_session: "2026-01-01",
       }),
     });
@@ -933,19 +923,19 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
   await expect(page).toHaveURL(stableUrl);
   await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Head Release release_committed_head", { exact: true }),
+    page.getByText("Data through 2026-01-02", { exact: true }),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop DailyTrack" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Retry blocked target" })).toHaveCount(0);
   await page.goto(stableUrl);
   await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Head Release release_committed_head", { exact: true }),
+    page.getByText("Data through 2026-01-02", { exact: true }),
   ).toBeVisible();
   await page.reload();
   await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("Head Release release_committed_head", { exact: true }),
+    page.getByText("Data through 2026-01-02", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });

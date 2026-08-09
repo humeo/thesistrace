@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,12 +17,30 @@ from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.daily_track import DailyTrackService, TrackingOrigin
+from thesistrace.daily_track.checkpoint import (
+    project_tracking_checkpoint,
+    restore_tracking_checkpoint,
+    restore_tracking_origin,
+    terminal_strategy_state,
+)
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
-from thesistrace.research_kernel import RunInput, run
+from thesistrace.research_kernel import (
+    AdvanceInput,
+    RunInput,
+    advance,
+    advance_continuation,
+    empty_continuation,
+    run,
+)
+from thesistrace.research_kernel.canonical_state import (
+    canonical_sessions,
+    slice_canonical_sessions,
+)
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 
@@ -110,6 +129,143 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert activation["checkpoint_count"] == 1
         assert activation["progression_count"] == 0
         assert activation["terminal_strategy_state"]["session"] == sessions[-1]
+        replay = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "attempt-start-head-track"},
+        )
+        assert replay.status_code == 201
+        assert replay.json() == track
+
+        extended_sessions = (*sessions, "2026-08-06", "2026-08-07")
+        head_c = _publish_head(
+            settings,
+            sessions=extended_sessions,
+            price_offset=2,
+            expected_manifest=head_b,
+        )
+        claimed = Event()
+        continue_advance = Event()
+        runtime = client.app.state.core_runtime
+
+        def tracking_barrier(stage: str, _track_id: str, _target: str) -> None:
+            if stage == "claimed":
+                claimed.set()
+                assert continue_advance.wait(timeout=10)
+
+        processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(
+                runtime.database,
+                settings.data_mount,
+            ),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
+            progress=tracking_barrier,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(processor.process_next)
+            assert claimed.wait(timeout=10)
+            latest_sessions = (*extended_sessions, "2026-08-10")
+            head_d = _publish_head(
+                settings,
+                sessions=latest_sessions,
+                price_offset=3,
+                expected_manifest=head_c,
+            )
+            continue_advance.set()
+            assert future.result(timeout=20) is True
+
+        pinned_detail = client.get(f"/api/daily-tracks/{track['id']}").json()
+        assert pinned_detail["strategy_session"] == extended_sessions[-1]
+        assert pinned_detail["data_through_session"] == latest_sessions[-1]
+        assert pinned_detail["lag_sessions"] == 1
+
+        assert runtime.daily_tracks.process_next() is True
+        assert client.app.state.core_runtime.daily_tracks.process_next() is False
+
+        caught_up = client.get(f"/api/daily-tracks/{track['id']}")
+        assert caught_up.status_code == 200
+        caught_up_detail = caught_up.json()
+        assert caught_up_detail["strategy_session"] == latest_sessions[-1]
+        assert caught_up_detail["data_through_session"] == latest_sessions[-1]
+        assert caught_up_detail["lag_sessions"] == 0
+        assert [
+            observation["session"]
+            for observation in caught_up_detail["strategy"]["observations"]
+        ] == list(latest_sessions)
+        assert "release" not in caught_up.text.lower()
+        assert "generation" not in caught_up.text.lower()
+        progressed = _stored_tracking_activation(settings, track["id"])
+        assert progressed["current_checkpoint_session"].isoformat() == (
+            latest_sessions[-1]
+        )
+        assert progressed["checkpoint_count"] == 3
+        assert progressed["progression_count"] == 2
+        assert progressed["active_pin_count"] == 0
+        origin = TrackingOrigin.model_validate(progressed["origin"])
+        store = MountedGenerationStore(settings.data_mount)
+        canonical_c = store.open_generation(head_c).canonical
+        calendar_c = canonical_sessions(canonical_c, "reference Head C")
+        prior_c = slice_canonical_sessions(canonical_c, calendar_c[: len(sessions)])
+        reference_origin = restore_tracking_origin(
+            origin,
+            activation["terminal_strategy_state"],
+            prior_c,
+        )
+        reference_c = advance(
+            AdvanceInput(
+                prior_state=reference_origin,
+                target_canonical_release=canonical_c,
+                appended_sessions=list(extended_sessions[len(sessions) :]),
+                continuation=advance_continuation(
+                    run_input=reference_origin.run_input_with_canonical(prior_c),
+                    prior_continuation=empty_continuation(),
+                    target_canonical=prior_c,
+                    appended_sessions=calendar_c[: len(sessions)],
+                ),
+            )
+        )
+        checkpoint_c = project_tracking_checkpoint(
+            reference_c,
+            retained_strategy_sessions=[sessions[-1], *extended_sessions[len(sessions) :]],
+        )
+        canonical_d = store.open_generation(head_d).canonical
+        calendar_d = canonical_sessions(canonical_d, "reference Head D")
+        prior_d = slice_canonical_sessions(canonical_d, calendar_d[:-1])
+        restored_c = restore_tracking_checkpoint(checkpoint_c, canonical=prior_d)
+        reference_d = advance(
+            AdvanceInput(
+                prior_state=restored_c,
+                target_canonical_release=canonical_d,
+                appended_sessions=[latest_sessions[-1]],
+                continuation=advance_continuation(
+                    run_input=restored_c.run_input_with_canonical(prior_d),
+                    prior_continuation=empty_continuation(),
+                    target_canonical=prior_d,
+                    appended_sessions=calendar_d[:-1],
+                ),
+            )
+        )
+        assert progressed["terminal_strategy_state"] == terminal_strategy_state(
+            reference_d
+        )
+
+        stopped = client.post(
+            f"/api/daily-tracks/{track['id']}/stop",
+            json={"request_id": "attempt-start-head-track-stop"},
+        )
+        assert stopped.status_code == 202
+        assert stopped.json()["status"] == "stopped"
+        stopped_replay = client.post(
+            f"/api/daily-tracks/{track['id']}/stop",
+            json={"request_id": "attempt-start-head-track-stop"},
+        )
+        assert stopped_replay.status_code == 202
+        assert stopped_replay.json() == stopped.json()
+        assert runtime.daily_tracks.process_next() is False
 
     with TestClient(create_app(settings)) as restarted:
         reopened = restarted.get(f"/api/research-runs/{run_id}")
@@ -585,7 +741,7 @@ def _publish_head(
     database.open()
     try:
         lifecycle = DatasetLifecycle(database, settings.data_mount)
-        operation_id = f"attempt-execution-{price_offset}"
+        operation_id = f"attempt-execution-{price_offset}-{len(sessions)}"
         lifecycle.protect_candidate(
             operation_id=operation_id,
             generation_manifest_sha256=generation.manifest_sha256,
@@ -665,6 +821,7 @@ def _stored_tracking_activation(
             row = transaction.execute(
                 """
                 SELECT state.origin_session,
+                       track.origin,
                        checkpoint.boundary_session AS current_checkpoint_session,
                        checkpoint.terminal_strategy_state,
                        (SELECT count(*)
@@ -672,8 +829,12 @@ def _stored_tracking_activation(
                         WHERE track_id = state.track_id) AS checkpoint_count,
                        (SELECT count(*)
                         FROM daily_tracks.session_progressions
-                        WHERE track_id = state.track_id) AS progression_count
+                        WHERE track_id = state.track_id) AS progression_count,
+                       (SELECT count(*)
+                        FROM data.generation_pins
+                        WHERE status = 'active') AS active_pin_count
                 FROM daily_tracks.session_tracking_states AS state
+                JOIN daily_tracks.tracks AS track ON track.id = state.track_id
                 JOIN daily_tracks.session_checkpoints AS checkpoint
                   ON checkpoint.track_id = state.track_id
                  AND checkpoint.manifest_sha256 =
