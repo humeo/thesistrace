@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from psycopg.errors import RaiseException
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import (
@@ -228,39 +229,53 @@ def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
     tmp_path: Path,
 ) -> None:
     database = _database(core_settings)
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_bootstrap_completion()
+                RETURNS trigger LANGUAGE plpgsql AS $function$
+                BEGIN
+                    IF NEW.status = 'succeeded' THEN
+                        RAISE EXCEPTION 'simulated process loss after Head commit';
+                    END IF;
+                    RETURN NEW;
+                END
+                $function$;
+                CREATE TRIGGER reject_bootstrap_completion
+                BEFORE UPDATE ON data.bootstrap_operations
+                FOR EACH ROW EXECUTE FUNCTION data.reject_bootstrap_completion();
+                """
+            )
 
-    class ProcessLostAfterHead(DataOperator):
-        def _complete(self, *args: object, **kwargs: object) -> None:
-            raise KeyboardInterrupt("simulated process loss")
+        source = RecordingBootstrapSource()
+        times = iter((PREPARED_AT, COMPLETED_AT))
+        with pytest.raises(RaiseException, match="simulated process loss"):
+            DataOperator(database, tmp_path, source, clock=times.__next__).bootstrap(
+                idempotency_key="head-committed",
+                as_of=AS_OF,
+            )
+        committed = DatasetLifecycle(database, tmp_path).current_head()
+        assert committed is not None
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_bootstrap_completion ON data.bootstrap_operations;
+                DROP FUNCTION data.reject_bootstrap_completion();
+                """
+            )
 
-    source = RecordingBootstrapSource()
-    times = iter((PREPARED_AT, COMPLETED_AT))
-    with pytest.raises(KeyboardInterrupt, match="simulated process loss"):
-        ProcessLostAfterHead(database, tmp_path, source, clock=times.__next__).bootstrap(
+        reopened_source = RecordingBootstrapSource()
+        recovered = DataOperator(database, tmp_path, reopened_source).bootstrap(
             idempotency_key="head-committed",
             as_of=AS_OF,
         )
-    committed = DatasetLifecycle(database, tmp_path).current_head()
-    assert committed is not None
-    with database.transaction() as transaction:
-        transaction.execute(
-            """
-            UPDATE data.bootstrap_operations
-            SET lease_expires_at = now() - interval '1 second'
-            WHERE idempotency_key = 'head-committed'
-            """
-        )
 
-    reopened_source = RecordingBootstrapSource()
-    recovered = DataOperator(database, tmp_path, reopened_source).bootstrap(
-        idempotency_key="head-committed",
-        as_of=AS_OF,
-    )
-
-    assert recovered.generation_manifest_sha256 == committed.generation_manifest_sha256
-    assert recovered.prepared_at == COMPLETED_AT.isoformat()
-    assert reopened_source.plans == []
-    database.close()
+        assert recovered.generation_manifest_sha256 == committed.generation_manifest_sha256
+        assert recovered.prepared_at == COMPLETED_AT.isoformat()
+        assert reopened_source.plans == []
+    finally:
+        database.close()
 
 
 def test_real_private_command_bootstraps_from_tushare_replay(
