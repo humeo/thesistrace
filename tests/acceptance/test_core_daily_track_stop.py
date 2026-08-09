@@ -7,6 +7,7 @@ from threading import Event
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import latest_fixture_release
 from test_core_daily_track_retry import (
     _admit_and_execute,
     _publish_successor,
@@ -151,7 +152,7 @@ def test_active_and_blocked_tracks_stop_without_moving_their_heads(
 
         later = _publish_successor(client, available_sessions=2)
         _process_once(runtime)
-        assert client.get("/api/data").json()["latest_release"]["id"] == later["id"]
+        assert latest_fixture_release(client)["id"] == later["id"]
         assert (
             client.get(f"/api/daily-tracks/{active['id']}").json()["head_release_id"]
             == first_release["id"]

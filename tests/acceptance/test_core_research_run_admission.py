@@ -5,8 +5,10 @@ from collections.abc import Callable
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.definition import DefinitionRunCommand
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 
@@ -23,12 +25,13 @@ def test_valid_run_admission_is_atomic_immutable_and_replayable(
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        runtime.data.update("ticket-19-release")
-        assert runtime.data.process_next_update() is True
-        first_release_id = client.get("/api/data").json()["latest_release"]["id"]
-        runtime.data.update("ticket-19-later-release")
-        assert runtime.data.process_next_update() is True
-        release_id = client.get("/api/data").json()["latest_release"]["id"]
+        first_release_id = str(publish_fixture_release(client)["id"])
+        release_id = str(
+            publish_fixture_release(
+                client,
+                source=FixtureDataSource(sessions_after_bootstrap=2),
+            )["id"]
+        )
         assert release_id != first_release_id
 
         command = _valid_command("ticket-19-first", name="First immutable run")
@@ -184,9 +187,7 @@ def test_run_rejects_an_alpha_field_absent_from_the_latest_release() -> None:
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        runtime.data.update("ticket-19-field-release")
-        assert runtime.data.process_next_update() is True
-        release_id = client.get("/api/data").json()["latest_release"]["id"]
+        release_id = str(publish_fixture_release(client)["id"])
         with runtime.database.transaction() as transaction:
             transaction.execute(
                 """

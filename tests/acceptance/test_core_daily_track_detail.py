@@ -7,10 +7,11 @@ from collections.abc import Mapping
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import latest_fixture_release, publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource, _append_session
-from thesistrace.data.source import CanonicalSourceBatch, CollectionPlan
+from thesistrace.data.source import CanonicalSourceBatch, CollectionPlan, DataSource
 from thesistrace.entrypoints.runtime import (
     CoreRuntime,
     CoreSettings,
@@ -55,18 +56,21 @@ def test_daily_track_detail_keeps_recent_windows_and_origin_metrics() -> None:
         assert seed_detail.json()["lag_releases"] == 0
         assert len(seed_detail.json()["strategy"]["observations"]) == 504
 
-        runtime.data._source = _WideFixtureDataSource(appended_session_count=300)
         first_wide_release = _publish_successor(
             client,
             request_id="ticket-32-first-wide-release",
+            source=_WideFixtureDataSource(appended_session_count=300),
         )
         lagging = client.get(f"/api/daily-tracks/{track_id}").json()
         assert lagging["head_release_id"] == track["seed_release_id"]
         assert lagging["lag_releases"] == 1
 
         assert runtime.daily_tracks.process_next() is True
-        runtime.data._source = _WideFixtureDataSource(appended_session_count=205)
-        wide_release = _publish_successor(client, request_id="ticket-32-second-wide-release")
+        wide_release = _publish_successor(
+            client,
+            request_id="ticket-32-second-wide-release",
+            source=_WideFixtureDataSource(appended_session_count=205),
+        )
         assert wide_release["predecessor_id"] == first_wide_release["id"]
         assert runtime.daily_tracks.process_next() is True
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
@@ -169,8 +173,11 @@ def test_daily_track_detail_keeps_recent_windows_and_origin_metrics() -> None:
         isolated = client.get(f"/api/daily-tracks/{track_id}").json()
         assert isolated["strategy"]["benchmark"]["universe"] == "top1000"
 
-        runtime.data._source = _WideFixtureDataSource(appended_session_count=1)
-        latest_release = _publish_successor(client, request_id="ticket-32-lag-release")
+        latest_release = _publish_successor(
+            client,
+            request_id="ticket-32-lag-release",
+            source=_WideFixtureDataSource(appended_session_count=1),
+        )
         before_restart = client.get(f"/api/daily-tracks/{track_id}").json()
         assert before_restart["head_release_id"] == wide_release["id"]
         assert before_restart["lag_releases"] == 1
@@ -228,9 +235,8 @@ def _admit_and_execute(
     universe: str,
 ) -> dict[str, object]:
     runtime = client.app.state.core_runtime
-    if client.get("/api/data").json()["latest_release"] is None:
-        runtime.data.update(f"{request_id}-seed-release")
-        assert runtime.data.process_next_update() is True
+    if latest_fixture_release(client) is None:
+        publish_fixture_release(client)
     response = client.post(
         "/api/definitions/run",
         json={
@@ -257,18 +263,14 @@ def _admit_and_execute(
     return completed
 
 
-def _publish_successor(client: TestClient, *, request_id: str) -> dict[str, object]:
-    response = client.post(
-        "/api/data/update",
-        headers={"Idempotency-Key": request_id},
-        json={},
-    )
-    assert response.status_code == 202
-    runtime = client.app.state.core_runtime
-    assert runtime.data.process_next_update() is True
-    latest = client.get("/api/data").json()["latest_release"]
-    assert latest is not None
-    return latest
+def _publish_successor(
+    client: TestClient,
+    *,
+    request_id: str,
+    source: DataSource,
+) -> dict[str, object]:
+    del request_id
+    return publish_fixture_release(client, source=source)
 
 
 def _recent_checkpoint_observations(

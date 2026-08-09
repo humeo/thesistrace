@@ -5,6 +5,7 @@ import json
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource
@@ -126,8 +127,7 @@ def test_equivalence_mismatch_is_read_only_and_reports_first_semantic_path(
 
 def _seed_track(client: TestClient) -> dict[str, object]:
     runtime = client.app.state.core_runtime
-    runtime.data.update("ticket-31-seed-release")
-    assert runtime.data.process_next_update() is True
+    publish_fixture_release(client)
     admitted = client.post(
         "/api/definitions/run",
         json={
@@ -158,18 +158,10 @@ def _seed_track(client: TestClient) -> dict[str, object]:
 
 
 def _publish_successor(client: TestClient, available_sessions: int) -> dict[str, object]:
-    runtime = client.app.state.core_runtime
-    runtime.data._source = FixtureDataSource(sessions_after_bootstrap=available_sessions)
-    response = client.post(
-        "/api/data/update",
-        headers={"Idempotency-Key": f"ticket-31-release-{available_sessions}"},
-        json={},
+    return publish_fixture_release(
+        client,
+        source=FixtureDataSource(sessions_after_bootstrap=available_sessions),
     )
-    assert response.status_code == 202
-    assert runtime.data.process_next_update() is True
-    latest = client.get("/api/data").json()["latest_release"]
-    assert latest is not None
-    return latest
 
 
 def _durable_evidence(database: PostgresDatabase, track_id: str) -> dict[str, object]:

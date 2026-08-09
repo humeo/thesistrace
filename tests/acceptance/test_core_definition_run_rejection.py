@@ -4,6 +4,7 @@ from threading import Barrier
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
@@ -124,9 +125,7 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
         ]
         assert data_rejected.json()["definition"]["hypothesis"] is None
 
-        runtime = client.app.state.core_runtime
-        runtime.data.update("publish-after-rejected-run")
-        assert runtime.data.process_next_update() is True
+        publish_fixture_release(client)
         replay_after_data_changed = client.post(
             "/api/definitions/run",
             json=complete_without_hypothesis,

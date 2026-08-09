@@ -6,6 +6,7 @@ from threading import Event
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import latest_fixture_release, publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
@@ -276,10 +277,8 @@ def _permanent_failure(_run_input: RunInput) -> RunOutput:
 
 
 def _admit_run(client: TestClient, *, request_id: str) -> str:
-    runtime = client.app.state.core_runtime
-    if runtime.data.overview().latest_release is None:
-        runtime.data.update(f"{request_id}-release")
-        assert runtime.data.process_next_update() is True
+    if latest_fixture_release(client) is None:
+        publish_fixture_release(client)
     accepted = client.post(
         "/api/definitions/run",
         json={

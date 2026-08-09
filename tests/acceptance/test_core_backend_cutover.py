@@ -7,16 +7,15 @@ import subprocess
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 from test_core_daily_track_activation import _drop_product_schemas
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 
 PUBLIC_ROUTES = {
     ("GET", "/api/data"),
-    ("GET", "/api/data/releases"),
-    ("GET", "/api/data/releases/{release_id}"),
-    ("POST", "/api/data/update"),
     ("GET", "/api/definitions"),
     ("POST", "/api/definitions"),
     ("GET", "/api/definitions/authoring-options"),
@@ -52,14 +51,9 @@ def test_default_backend_preserves_all_resources_and_publications_across_restart
 
     with TestClient(create_app(settings)) as client:
         assert _public_routes(client) == PUBLIC_ROUTES
-        first_update = client.post(
-            "/api/data/update",
-            headers={"Idempotency-Key": "ticket-37-first-release"},
-            json={},
-        )
-        assert first_update.status_code == 202
-        _run_default_worker(settings, fixture_availability="1")
-        assert client.get("/api/data").json()["latest_update_outcome"] == "published"
+        publish_fixture_release(client)
+        _run_default_worker(settings)
+        assert client.get("/api/data").json()["readiness"] is False
 
         admitted = client.post(
             "/api/definitions/run",
@@ -81,7 +75,7 @@ def test_default_backend_preserves_all_resources_and_publications_across_restart
         assert admitted.status_code == 200
         run = admitted.json()["run"]
         assert run["status"] == "queued"
-        _run_default_worker(settings, fixture_availability="1")
+        _run_default_worker(settings)
         run = client.get(f"/api/research-runs/{run['id']}").json()
         assert run["status"] == "succeeded"
 
@@ -91,19 +85,17 @@ def test_default_backend_preserves_all_resources_and_publications_across_restart
         )
         assert started.status_code == 201
         track = started.json()
-        later_update = client.post(
-            "/api/data/update",
-            headers={"Idempotency-Key": "ticket-37-later-release"},
-            json={},
+        publish_fixture_release(
+            client,
+            source=FixtureDataSource(sessions_after_bootstrap=2),
         )
-        assert later_update.status_code == 202
-        _run_default_worker(settings, fixture_availability="2")
+        _run_default_worker(settings)
         advanced = client.get(f"/api/daily-tracks/{track['id']}").json()
         assert advanced["head_release_id"] != track["seed_release_id"]
         before = _resource_snapshot(client, run_id=run["id"], track_id=track["id"])
         authoritative_before = _authoritative_snapshot(settings)
 
-    _run_default_worker(settings, fixture_availability="2")
+    _run_default_worker(settings)
 
     with TestClient(create_app(settings)) as restarted:
         assert _public_routes(restarted) == PUBLIC_ROUTES
@@ -130,15 +122,9 @@ def _resource_snapshot(
     run_id: object,
     track_id: object,
 ) -> dict[str, object]:
-    release_history = client.get("/api/data/releases").json()
     definitions = client.get("/api/definitions").json()
     return {
         "data": client.get("/api/data").json(),
-        "releases": release_history,
-        "release_details": [
-            client.get(f"/api/data/releases/{release['id']}").json()
-            for release in release_history["items"]
-        ],
         "definitions": definitions,
         "definition_details": [
             client.get(f"/api/definitions/{definition['id']}").json()
@@ -210,7 +196,7 @@ def _authoritative_snapshot(settings: CoreSettings) -> dict[str, object]:
         database.close()
 
 
-def _run_default_worker(settings: CoreSettings, *, fixture_availability: str) -> None:
+def _run_default_worker(settings: CoreSettings) -> None:
     worker = shutil.which("thesistrace-worker")
     assert worker is not None
     completed = subprocess.run(
@@ -226,7 +212,6 @@ def _run_default_worker(settings: CoreSettings, *, fixture_availability: str) ->
             "THESISTRACE_S3_SECRET_ACCESS_KEY": settings.s3_secret_access_key,
             "THESISTRACE_S3_BUCKET": settings.s3_bucket,
             "THESISTRACE_S3_REGION": settings.s3_region,
-            "THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE": fixture_availability,
         },
         timeout=60,
     )

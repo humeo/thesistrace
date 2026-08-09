@@ -6,6 +6,7 @@ from collections.abc import Callable
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 
 import thesistrace.research_run.service as research_run_service_module
 from thesistrace._postgres import PostgresDatabase
@@ -306,8 +307,7 @@ def test_stale_execution_fence_cannot_publish_or_record_success() -> None:
 
 def _admit_run(client: TestClient, *, request_id: str) -> tuple[str, dict[str, object]]:
     runtime = client.app.state.core_runtime
-    runtime.data.update(f"{request_id}-release")
-    assert runtime.data.process_next_update() is True
+    publish_fixture_release(client)
     accepted = client.post(
         "/api/definitions/run",
         json={

@@ -11,6 +11,7 @@ from threading import Barrier
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import latest_fixture_release, publish_fixture_release
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase
@@ -289,10 +290,8 @@ def _admit_and_execute(client: TestClient, *, request_id: str) -> dict[str, obje
 
 
 def _admit(client: TestClient, *, request_id: str) -> dict[str, object]:
-    runtime = client.app.state.core_runtime
-    if client.get("/api/data").json()["latest_release"] is None:
-        runtime.data.update(f"{request_id}-release")
-        assert runtime.data.process_next_update() is True
+    if latest_fixture_release(client) is None:
+        publish_fixture_release(client)
     response = client.post(
         "/api/definitions/run",
         json={

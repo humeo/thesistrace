@@ -5,6 +5,7 @@ import json
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import DailyTrackProgressionFailed
@@ -191,8 +192,7 @@ def test_active_track_advances_only_to_one_direct_successor(
 
 def _admit_and_execute(client: TestClient) -> dict[str, object]:
     runtime = client.app.state.core_runtime
-    runtime.data.update("ticket-27-seed-release")
-    assert runtime.data.process_next_update() is True
+    publish_fixture_release(client)
     response = client.post(
         "/api/definitions/run",
         json={
@@ -220,17 +220,8 @@ def _admit_and_execute(client: TestClient) -> dict[str, object]:
 
 
 def _publish_successor(client: TestClient, request_id: str) -> str:
-    response = client.post(
-        "/api/data/update",
-        headers={"Idempotency-Key": request_id},
-        json={},
-    )
-    assert response.status_code == 202
-    runtime = client.app.state.core_runtime
-    assert runtime.data.process_next_update() is True
-    latest = client.get("/api/data").json()["latest_release"]
-    assert latest is not None
-    return str(latest["id"])
+    del request_id
+    return str(publish_fixture_release(client)["id"])
 
 
 def _track_state(settings: CoreSettings, track_id: str) -> dict[str, object]:

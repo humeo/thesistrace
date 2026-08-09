@@ -8,6 +8,7 @@ from threading import Event
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.adapters.fixture_data import FixtureDataSource
@@ -323,8 +324,7 @@ def _lose_process(stage: str) -> None:
 
 def _seed_track(client: TestClient, request_id: str) -> dict[str, object]:
     runtime = client.app.state.core_runtime
-    runtime.data.update(f"{request_id}-seed-release")
-    assert runtime.data.process_next_update() is True
+    publish_fixture_release(client)
     admitted = client.post(
         "/api/definitions/run",
         json={
@@ -376,18 +376,10 @@ def _rerun_track(
 
 
 def _publish_successor(client: TestClient, available_sessions: int) -> dict[str, object]:
-    runtime = client.app.state.core_runtime
-    runtime.data._source = FixtureDataSource(sessions_after_bootstrap=available_sessions)
-    accepted = client.post(
-        "/api/data/update",
-        headers={"Idempotency-Key": f"ticket-29-release-{available_sessions}"},
-        json={},
+    return publish_fixture_release(
+        client,
+        source=FixtureDataSource(sessions_after_bootstrap=available_sessions),
     )
-    assert accepted.status_code == 202
-    assert runtime.data.process_next_update() is True
-    latest = client.get("/api/data").json()["latest_release"]
-    assert latest is not None
-    return latest
 
 
 def _expire_live_attempt(database: PostgresDatabase, track_id: str) -> None:

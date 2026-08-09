@@ -5,6 +5,7 @@ import json
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import latest_fixture_release, publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource
@@ -105,7 +106,7 @@ def test_one_failed_track_blocks_without_stalling_data_or_another_track(
 
         second_target = _publish_successor(first_process, available_sessions=2)
         _process_once(runtime)
-        assert first_process.get("/api/data").json()["latest_release"]["id"] == second_target["id"]
+        assert latest_fixture_release(first_process)["id"] == second_target["id"]
         assert (
             first_process.get(f"/api/daily-tracks/{other_track['id']}").json()[
                 "head_release_id"
@@ -251,8 +252,7 @@ def _expire_latest_running_attempt(database: PostgresDatabase, track_id: str) ->
 
 def _admit_and_execute(client: TestClient) -> dict[str, object]:
     runtime = client.app.state.core_runtime
-    runtime.data.update("ticket-33-seed-release")
-    assert runtime.data.process_next_update() is True
+    publish_fixture_release(client)
     response = client.post(
         "/api/definitions/run",
         json={
@@ -303,19 +303,10 @@ def _start_track(client: TestClient, run_id: str, request_id: str) -> dict[str, 
 
 
 def _publish_successor(client: TestClient, *, available_sessions: int) -> dict[str, object]:
-    runtime = client.app.state.core_runtime
-    runtime.data._source = FixtureDataSource(sessions_after_bootstrap=available_sessions)
-    request_id = f"ticket-33-release-{available_sessions}"
-    response = client.post(
-        "/api/data/update",
-        headers={"Idempotency-Key": request_id},
-        json={},
+    return publish_fixture_release(
+        client,
+        source=FixtureDataSource(sessions_after_bootstrap=available_sessions),
     )
-    assert response.status_code == 202
-    assert runtime.data.process_next_update() is True
-    latest = client.get("/api/data").json()["latest_release"]
-    assert latest is not None
-    return latest
 
 
 def _drop_product_schemas(settings: CoreSettings) -> None:

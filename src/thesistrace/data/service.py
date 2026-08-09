@@ -10,7 +10,7 @@ from thesistrace.publication import Publication, PublishedRef
 
 @dataclass(frozen=True)
 class ReleaseReference:
-    """Temporary private reference used by consumers not yet moved to Dataset Head."""
+    """Private immutable input reference for a research consumer."""
 
     id: str
     field_bindings: dict[str, str]
@@ -18,7 +18,7 @@ class ReleaseReference:
 
 @dataclass(frozen=True)
 class NextRelease:
-    """Temporary private successor used by DailyTrack until its Head migration."""
+    """Private direct-successor reference for DailyTrack progression."""
 
     id: str
     predecessor_id: str
@@ -27,7 +27,7 @@ class NextRelease:
 
 
 class DataService:
-    """Read-only legacy consumer seam during the Release-to-Head cutover."""
+    """Read-only canonical-data access for research consumers."""
 
     def __init__(self, database: PostgresDatabase, publication: Publication) -> None:
         self._database = database

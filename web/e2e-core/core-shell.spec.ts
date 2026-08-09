@@ -10,7 +10,7 @@ test("uses the four-resource shell as the only active product", async ({ page })
   const navigation = page.getByRole("navigation", { name: "Product resources" });
   await expect(navigation.getByRole("link")).toHaveCount(4);
   for (const [name, path, heading] of [
-    ["Data", "/data", "Data"],
+    ["Data", "/data", "Data overview"],
     ["Definitions", "/definitions", "Definitions"],
     ["Research Runs", "/research-runs", "Research Runs"],
     ["Daily Tracks", "/daily-tracks", "Daily Tracks"],
@@ -33,171 +33,16 @@ test("uses the four-resource shell as the only active product", async ({ page })
   expect(removedEntry.status()).toBe(404);
 });
 
-test("publishes the first Dataset Release through the real Core", async ({ page }) => {
-  test.setTimeout(180_000);
-  for (const forbidden of [
-    "attempt_id",
-    "lease_expires_at",
-    "execution_fence",
-    "progression_id",
-    "manifest_sha256",
-    "object_key",
-    "worker_id",
-    "working_cache",
-    "working-cache",
-    "working_cache_root",
-    "physical_path",
-    "failure_reason",
-  ]) {
-    expect(internalDailyTrackMechanics.test(forbidden)).toBe(true);
-  }
-  expect(internalDailyTrackMechanics.test("Current Dataset Release")).toBe(false);
+test("shows current data as a read-only resource", async ({ page }) => {
   await page.goto("/data");
 
-  const navigation = page.getByRole("navigation", { name: "Product resources" });
-  await expect(navigation.getByRole("link")).toHaveCount(4);
-  await expect(navigation.getByRole("link", { name: "Data" })).toHaveAttribute(
-    "aria-current",
-    "page",
-  );
-  await expect(navigation.getByRole("link", { name: "Definitions" })).toHaveAttribute(
-    "href",
-    "/definitions",
-  );
-  await expect(navigation.getByRole("link", { name: "Research Runs" })).toHaveAttribute(
-    "href",
-    "/research-runs",
-  );
-  await expect(navigation.getByRole("link", { name: "Daily Tracks" })).toHaveAttribute(
-    "href",
-    "/daily-tracks",
-  );
-  await expect(page.getByText("No Dataset Releases yet.")).toBeVisible();
-  await page.getByRole("button", { name: "Update Data" }).click();
-  await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
-  await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible({
-    timeout: 60_000,
-  });
-  await expect(page.getByText("756 Research Sessions")).toBeVisible();
-  await expect(page.getByText("First Release")).toBeVisible();
-  const seedRunResponse = await page.request.post("/api/definitions/run", {
-    data: {
-      request_id: "core-browser-track-seed",
-      name: "Core browser Track seed",
-      alpha: {
-        operator_id: "ts_mean",
-        operands: [
-          { field_id: "price.close.adjusted" },
-          { literal: 20 },
-        ],
-      },
-      universe: "top1000",
-      neutralization: "industry",
-      holdings_count: 30,
-      rebalance_every_sessions: 5,
-    },
-  });
-  expect(seedRunResponse.ok()).toBe(true);
-  const seedRun = (await seedRunResponse.json()).run as {
-    id: string;
-    dataset_release_id: string;
-  };
-  await expect.poll(async () => {
-    const response = await page.request.get(`/api/research-runs/${seedRun.id}`);
-    return (await response.json()).status;
-  }, { timeout: 60_000 }).toBe("succeeded");
-  const trackResponse = await page.request.post(
-    `/api/research-runs/${seedRun.id}/daily-tracks`,
-    { data: { request_id: "core-browser-start-track" } },
-  );
-  expect(trackResponse.status()).toBe(201);
-  const seededTrack = (await trackResponse.json()) as {
-    id: string;
-    current_release_id: string;
-  };
-  expect(seededTrack.current_release_id).toBe(seedRun.dataset_release_id);
-  const expectedTrackKeys = [
-    "current_release_id",
-    "definition_id",
-    "definition_revision",
-    "id",
-    "result_checksum_sha256",
-    "seed_release_id",
-    "seed_run_id",
-    "status",
-    "strategy_session",
-  ];
-  const trackDetail = await (
-    await page.request.get(`/api/daily-tracks/${seededTrack.id}`)
-  ).json();
-  expect(Object.keys(trackDetail).sort()).toEqual([
-    "blocked_reason",
-    "factor",
-    "head_release_id",
-    "id",
-    "lag_releases",
-    "origin",
-    "status",
-    "strategy",
-    "strategy_session",
-  ]);
-  const trackList = await (await page.request.get("/api/daily-tracks")).json();
-  expect(Object.keys(trackList).sort()).toEqual(["items", "next_cursor"]);
-  expect(trackList.items).toHaveLength(1);
-  expect(Object.keys(trackList.items[0]).sort()).toEqual(expectedTrackKeys);
-  await page.goto("/daily-tracks");
-  await expect(page.getByRole("heading", { name: "Daily Tracks" })).toBeVisible();
-  await expect(page.getByRole("link", { name: seededTrack.id })).toBeVisible();
-  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
-  await page.goto("/data");
-  const firstRelease = await page
-    .getByRole("list", { name: "Dataset Release history" })
-    .getByRole("listitem")
-    .first()
-    .textContent();
-  const releaseHistory = page.getByRole("list", { name: "Dataset Release history" });
-  const observedTrackHeads: string[] = [];
-  for (const [index, sessionCount] of [757, 758, 759].entries()) {
-    await page.getByRole("button", { name: "Update Data" }).click();
-    await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
-    await expect(page.getByText(`${sessionCount} Research Sessions`)).toBeVisible({
-      timeout: 60_000,
-    });
-    await expect(releaseHistory.getByRole("listitem")).toHaveCount(index + 2);
-    await expect(releaseHistory).toContainText(firstRelease ?? "missing-root-release");
-    await expect(page.getByText("Later Release")).toBeVisible();
-    const latestData = await (await page.request.get("/api/data")).json();
-    const successorReleaseId = latestData.latest_release.id as string;
-    observedTrackHeads.push(successorReleaseId);
-    await expect.poll(async () => {
-      const response = await page.request.get(`/api/daily-tracks/${seededTrack.id}`);
-      return (await response.json()).head_release_id;
-    }, { timeout: 60_000 }).toBe(successorReleaseId);
-    await page.goto(`/daily-tracks/${seededTrack.id}`);
-    await expect(
-      page.getByText(`Head Release ${successorReleaseId}`, { exact: true }),
-    ).toBeVisible();
-    await expect(page.getByRole("button", { name: /advance|catch up/i })).toHaveCount(0);
-    await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
-    await page.goto("/data");
-  }
-  expect(new Set(observedTrackHeads).size).toBe(3);
-  const latestRelease = await page
-    .getByRole("heading", { name: "Latest Dataset Release" })
-    .locator("..")
-    .textContent();
-  await page.getByRole("button", { name: "Update Data" }).click();
-  await expect(page.getByRole("status")).toHaveText("Updating canonical data…");
-  await expect(page.getByRole("status")).toHaveText(
-    "No new completed Research Session. Latest Release unchanged.",
-    { timeout: 60_000 },
-  );
-  await expect(releaseHistory.getByRole("listitem")).toHaveCount(4);
-  await expect(
-    page.getByRole("heading", { name: "Latest Dataset Release" }).locator(".."),
-  ).toHaveText(latestRelease ?? "missing-latest-release");
-  await expect(page.getByText("manifest_sha256")).toHaveCount(0);
-  await expect(page.getByText("object_key")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
+  await expect(page.getByText("Data not ready")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh ↻" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /update/i })).toHaveCount(0);
+  await expect(page.getByText(/Release|Generation|operator|history/i)).toHaveCount(0);
+  expect((await page.request.post("/api/data/update")).status()).toBe(404);
+  expect((await page.request.get("/api/data/releases")).status()).toBe(404);
 });
 
 test("shows one sanitized terminal ResearchRun failure", async ({ page }) => {
@@ -822,33 +667,11 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
     lag_releases: 0,
     blocked_reason: null,
   };
-  const latestRelease = {
-    id: "release_latest",
-    predecessor_id: "release_failed_target",
-    session_count: 758,
-    covered_session_range: { start: "2023-01-03", end: "2026-01-02" },
-  };
   await page.route("**/api/daily-tracks/track_b10c0ed", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(blocked) }),
   );
   await page.route("**/api/daily-tracks/track_ac71ae", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(active) }),
-  );
-  await page.route("**/api/data", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        status: "idle",
-        latest_release: latestRelease,
-        latest_update_outcome: "published",
-      }),
-    }),
-  );
-  await page.route("**/api/data/releases", (route) =>
-    route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ items: [latestRelease], next_cursor: null }),
-    }),
   );
 
   await page.goto("/daily-tracks/track_b10c0ed");
@@ -870,13 +693,6 @@ test("blocks one failed DailyTrack independently", async ({ page }) => {
   await expect(page.getByText("Head Release release_latest", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: /retry/i })).toHaveCount(0);
 
-  await page.goto("/data");
-  await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible();
-  await expect(
-    page.getByRole("article").getByText("release_latest", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("758 Research Sessions", { exact: true })).toBeVisible();
-  await expect(page.getByText(internalDailyTrackMechanics)).toHaveCount(0);
 });
 
 test("retries the same blocked DailyTrack target", async ({ page }) => {
@@ -1035,19 +851,6 @@ test("retries the same blocked DailyTrack target", async ({ page }) => {
 test("stops a DailyTrack irreversibly", async ({ page }) => {
   const id = "track_570aaed";
   let stopped = false;
-  let laterReleasePublished = false;
-  const committedHeadRelease = {
-    id: "release_committed_head",
-    predecessor_id: "release_seed",
-    session_count: 757,
-    covered_session_range: { start: "2023-01-03", end: "2026-01-01" },
-  };
-  const laterRelease = {
-    id: "release_later_than_stopped_head",
-    predecessor_id: "release_committed_head",
-    session_count: 758,
-    covered_session_range: { start: "2023-01-03", end: "2026-01-02" },
-  };
   const horizon = (value: 1 | 5 | 20) => ({
     horizon: value,
     summary: {
@@ -1117,26 +920,6 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
       }),
     });
   });
-  await page.route("**/api/data", (route) => {
-    const latestRelease = laterReleasePublished ? laterRelease : committedHeadRelease;
-    return route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({
-        status: "idle",
-        latest_release: latestRelease,
-        latest_update_outcome: "published",
-      }),
-    });
-  });
-  await page.route("**/api/data/releases", (route) => {
-    const releases = laterReleasePublished
-      ? [laterRelease, committedHeadRelease]
-      : [committedHeadRelease];
-    return route.fulfill({
-      contentType: "application/json",
-      body: JSON.stringify({ items: releases, next_cursor: null }),
-    });
-  });
 
   await page.goto(`/daily-tracks/${id}`);
   const stableUrl = page.url();
@@ -1152,13 +935,6 @@ test("stops a DailyTrack irreversibly", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Stop DailyTrack" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Retry blocked target" })).toHaveCount(0);
-  laterReleasePublished = true;
-  await page.goto("/data");
-  await expect(page.getByRole("heading", { name: "Latest Dataset Release" })).toBeVisible();
-  await expect(
-    page.getByRole("article").getByText(laterRelease.id, { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText("Later Release", { exact: true })).toBeVisible();
   await page.goto(stableUrl);
   await expect(page.getByText("Status stopped", { exact: true })).toBeVisible();
   await expect(

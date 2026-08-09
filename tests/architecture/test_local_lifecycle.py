@@ -416,6 +416,8 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
     run_root = tmp_path / "runs" / run_id
     run_root.mkdir(parents=True)
     (run_root / "run.txt").write_text(f"run_id={run_id}\nproject_name={project_name}\n")
+    (run_root / "canonical-data").mkdir()
+    (run_root / "canonical-data" / "HEAD.json").write_text("test data")
     marker = tmp_path / "docker-invoked"
     docker = tmp_path / "docker"
     docker.write_text(f"#!/bin/sh\nprintf invoked > '{marker}'\n")
@@ -438,6 +440,7 @@ def test_test_cleanup_accepts_only_an_identity_with_matching_run_metadata(
 
     assert completed.returncode == 0, completed.stderr
     assert marker.exists()
+    assert not (run_root / "canonical-data").exists()
 
 
 def test_integration_runtime_validates_starts_host_tests_and_cleans(
@@ -455,6 +458,8 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     )
 
     assert completed.returncode == 0, completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    assert not (tmp_path / "runs" / run_id / "canonical-data").exists()
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
     assert "up --detach --build --wait --wait-timeout 300 postgres rustfs migrate" in commands

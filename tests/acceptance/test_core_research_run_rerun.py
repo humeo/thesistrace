@@ -5,8 +5,10 @@ import hashlib
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication.serialization import canonical_json_bytes
 
@@ -21,9 +23,7 @@ def test_rerun_uses_the_selected_runs_exact_immutable_input() -> None:
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        runtime.data.update("ticket-25-original-release")
-        assert runtime.data.process_next_update() is True
-        original_release_id = client.get("/api/data").json()["latest_release"]["id"]
+        original_release_id = str(publish_fixture_release(client)["id"])
 
         admitted = client.post(
             "/api/definitions/run",
@@ -49,9 +49,12 @@ def test_rerun_uses_the_selected_runs_exact_immutable_input() -> None:
         assert edited.json()["revision"] == original["definition_revision"] + 1
         assert edited.json()["holdings_count"] == 40
 
-        runtime.data.update("ticket-25-newer-release")
-        assert runtime.data.process_next_update() is True
-        latest_release_id = client.get("/api/data").json()["latest_release"]["id"]
+        latest_release_id = str(
+            publish_fixture_release(
+                client,
+                source=FixtureDataSource(sessions_after_bootstrap=2),
+            )["id"]
+        )
         assert latest_release_id != original_release_id
 
         rerun_command = {"request_id": "ticket-25-rerun"}

@@ -5,6 +5,7 @@ import json
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
+from fixture_release import latest_fixture_release, publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import FixtureDataSource
@@ -37,7 +38,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
             releases[0]["id"],
             releases[1]["id"],
         ]
-        assert client.get("/api/data").json()["latest_release"]["id"] == releases[-1]["id"]
+        assert latest_fixture_release(client)["id"] == releases[-1]["id"]
 
         observed_heads: list[str] = []
         for release in releases:
@@ -103,17 +104,12 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
         ] == [releases[0]["id"]]
         assert _unfinished_target(settings, failed_track["id"]) == releases[1]["id"]
         assert runtime.daily_tracks.process_next() is False
-        runtime.data._source = FixtureDataSource(sessions_after_bootstrap=4)
-        accepted = client.post(
-            "/api/data/update",
-            headers={"Idempotency-Key": "ticket-28-after-track-failure"},
-            json={},
+        publish_fixture_release(
+            client,
+            source=FixtureDataSource(sessions_after_bootstrap=4),
         )
-        assert accepted.status_code == 202
         _process_once(runtime)
-        assert (
-            client.get("/api/data").json()["latest_release"]["predecessor_id"] == releases[-1]["id"]
-        )
+        assert latest_fixture_release(client)["predecessor_id"] == releases[-1]["id"]
         assert (
             client.get(f"/api/daily-tracks/{failed_track['id']}").json()["head_release_id"]
             == releases[0]["id"]
@@ -128,8 +124,7 @@ def test_lagging_tracks_catch_up_every_direct_successor_in_order(
 
 def _admit_and_execute(client: TestClient) -> dict[str, object]:
     runtime = client.app.state.core_runtime
-    runtime.data.update("ticket-28-seed-release")
-    assert runtime.data.process_next_update() is True
+    publish_fixture_release(client)
     response = client.post(
         "/api/definitions/run",
         json={
@@ -180,19 +175,10 @@ def _start_track(client: TestClient, run_id: str, request_id: str) -> dict[str, 
 
 
 def _publish_successor(client: TestClient, *, available_sessions: int) -> dict[str, object]:
-    runtime = client.app.state.core_runtime
-    runtime.data._source = FixtureDataSource(sessions_after_bootstrap=available_sessions)
-    request_id = f"ticket-28-release-{available_sessions}"
-    response = client.post(
-        "/api/data/update",
-        headers={"Idempotency-Key": request_id},
-        json={},
+    return publish_fixture_release(
+        client,
+        source=FixtureDataSource(sessions_after_bootstrap=available_sessions),
     )
-    assert response.status_code == 202
-    assert runtime.data.process_next_update() is True
-    latest = client.get("/api/data").json()["latest_release"]
-    assert latest is not None
-    return latest
 
 
 def _checkpoint_rows(settings: CoreSettings, track_id: str) -> list[dict[str, object]]:
