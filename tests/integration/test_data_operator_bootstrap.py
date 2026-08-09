@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -181,7 +182,13 @@ def test_expired_bootstrap_attempt_is_fenced_and_taken_over_without_sleep(
             assert release_source.wait(timeout=10)
             return super().collect_bootstrap(plan)
 
-    first = DataOperator(database, tmp_path, BlockingSource(), clock=lambda: PREPARED_AT)
+    first = DataOperator(
+        database,
+        tmp_path,
+        BlockingSource(),
+        clock=lambda: PREPARED_AT,
+        heartbeat_seconds=600,
+    )
     winner_source = RecordingBootstrapSource()
     winner_times = iter((PREPARED_AT, COMPLETED_AT))
     winner = DataOperator(database, tmp_path, winner_source, clock=winner_times.__next__)
@@ -224,11 +231,165 @@ def test_expired_bootstrap_attempt_is_fenced_and_taken_over_without_sleep(
         database.close()
 
 
+def test_active_bootstrap_heartbeat_prevents_lease_takeover(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    entered_source = threading.Event()
+    release_source = threading.Event()
+
+    class BlockingSource(RecordingBootstrapSource):
+        def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+            entered_source.set()
+            assert release_source.wait(timeout=10)
+            return super().collect_bootstrap(plan)
+
+    times = iter((PREPARED_AT, COMPLETED_AT))
+    active = DataOperator(
+        database,
+        tmp_path,
+        BlockingSource(),
+        clock=times.__next__,
+        lease_seconds=2,
+        heartbeat_seconds=0.05,
+    )
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        future = executor.submit(active.bootstrap, idempotency_key="heartbeat", as_of=AS_OF)
+        assert entered_source.wait(timeout=10)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.bootstrap_operations
+                SET lease_expires_at = now() - interval '1 second'
+                WHERE idempotency_key = 'heartbeat'
+                """
+            )
+        deadline = time.monotonic() + 5
+        renewed = False
+        while time.monotonic() < deadline:
+            with database.transaction() as transaction:
+                row = transaction.execute(
+                    """
+                    SELECT lease_expires_at > now() AS renewed
+                    FROM data.bootstrap_operations
+                    WHERE idempotency_key = 'heartbeat'
+                    """
+                ).fetchone()
+            if row is not None and row["renewed"]:
+                renewed = True
+                break
+        assert renewed
+        with pytest.raises(DataOperatorError) as duplicate:
+            DataOperator(database, tmp_path, RecordingBootstrapSource()).bootstrap(
+                idempotency_key="heartbeat",
+                as_of=AS_OF,
+            )
+        assert duplicate.value.code == "BOOTSTRAP_IN_PROGRESS"
+
+        release_source.set()
+        assert future.result(timeout=10).status == "succeeded"
+    finally:
+        release_source.set()
+        executor.shutdown(wait=True)
+        database.close()
+
+
+def test_takeover_revokes_an_old_protected_candidate_before_head_cas(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    stale_at_cas = threading.Event()
+    release_stale = threading.Event()
+    call_lock = threading.Lock()
+    first_call = True
+    original_cas = DatasetLifecycle.compare_and_swap_head
+
+    def barrier_cas(self: DatasetLifecycle, **kwargs: object):
+        nonlocal first_call
+        with call_lock:
+            should_pause = first_call
+            first_call = False
+        if should_pause:
+            stale_at_cas.set()
+            assert release_stale.wait(timeout=10)
+        return original_cas(self, **kwargs)
+
+    monkeypatch.setattr(DatasetLifecycle, "compare_and_swap_head", barrier_cas)
+    stale_times = iter((PREPARED_AT, COMPLETED_AT))
+    stale_operator = DataOperator(
+        database,
+        tmp_path,
+        RecordingBootstrapSource(),
+        clock=stale_times.__next__,
+        heartbeat_seconds=600,
+    )
+    winner_times = iter((PREPARED_AT, COMPLETED_AT))
+    winner_operator = DataOperator(
+        database,
+        tmp_path,
+        RecordingBootstrapSource(),
+        clock=winner_times.__next__,
+    )
+    executor = ThreadPoolExecutor(max_workers=1)
+    try:
+        stale = executor.submit(
+            stale_operator.bootstrap,
+            idempotency_key="protected-takeover",
+            as_of=AS_OF,
+        )
+        assert stale_at_cas.wait(timeout=10)
+        with database.transaction() as transaction:
+            live_before = transaction.execute(
+                "SELECT count(*) AS count FROM data.generation_candidates WHERE status = 'live'"
+            ).fetchone()
+            transaction.execute(
+                """
+                UPDATE data.bootstrap_operations
+                SET lease_expires_at = now() - interval '1 second'
+                WHERE idempotency_key = 'protected-takeover'
+                """
+            )
+        assert live_before == {"count": 1}
+
+        winner = winner_operator.bootstrap(
+            idempotency_key="protected-takeover",
+            as_of=AS_OF,
+        )
+        release_stale.set()
+        with pytest.raises(DataOperatorError) as stale_failure:
+            stale.result(timeout=10)
+        assert stale_failure.value.code == "BOOTSTRAP_INFRASTRUCTURE_FAILURE"
+
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == winner.generation_manifest_sha256
+        with database.transaction() as transaction:
+            state = transaction.execute(
+                """
+                SELECT operation.status,
+                       (SELECT count(*) FROM data.generation_candidates
+                        WHERE status = 'live') AS live_candidates
+                FROM data.bootstrap_operations AS operation
+                WHERE idempotency_key = 'protected-takeover'
+                """
+            ).fetchone()
+        assert state == {"status": "succeeded", "live_candidates": 0}
+    finally:
+        release_stale.set()
+        executor.shutdown(wait=True)
+        database.close()
+
+
 def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
     database = _database(core_settings)
+    fault_installed = False
     try:
         with database.transaction() as transaction:
             transaction.execute(
@@ -247,6 +408,7 @@ def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
                 FOR EACH ROW EXECUTE FUNCTION data.reject_bootstrap_completion();
                 """
             )
+        fault_installed = True
 
         source = RecordingBootstrapSource()
         times = iter((PREPARED_AT, COMPLETED_AT))
@@ -264,6 +426,7 @@ def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
                 DROP FUNCTION data.reject_bootstrap_completion();
                 """
             )
+        fault_installed = False
 
         reopened_source = RecordingBootstrapSource()
         recovered = DataOperator(database, tmp_path, reopened_source).bootstrap(
@@ -275,6 +438,15 @@ def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
         assert recovered.prepared_at == COMPLETED_AT.isoformat()
         assert reopened_source.plans == []
     finally:
+        if fault_installed:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    DROP TRIGGER IF EXISTS reject_bootstrap_completion
+                    ON data.bootstrap_operations;
+                    DROP FUNCTION IF EXISTS data.reject_bootstrap_completion();
+                    """
+                )
         database.close()
 
 

@@ -2,17 +2,24 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.canonical_mapping import liquidity_universes
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import DatasetHead, DatasetHeadConflict
-from thesistrace.data.lifecycle import DatasetLifecycle
+from thesistrace.data.lifecycle import (
+    DatasetLifecycle,
+    lock_data_lifecycle,
+    release_generation_candidate,
+)
 from thesistrace.data.source import (
     BootstrapCollectionPlan,
     BootstrapDataSource,
@@ -45,6 +52,17 @@ class _BootstrapClaim:
 
 
 _BOOTSTRAP_LEASE_SECONDS = 900
+_BOOTSTRAP_HEARTBEAT_SECONDS = 30
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _BootstrapHeartbeat:
+    failed: Event
+
+    def assert_owned(self) -> None:
+        if self.failed.is_set():
+            raise RuntimeError("Bootstrap operation heartbeat lost ownership")
 
 
 class DataOperator:
@@ -57,12 +75,18 @@ class DataOperator:
         source: BootstrapDataSource,
         *,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        lease_seconds: float = _BOOTSTRAP_LEASE_SECONDS,
+        heartbeat_seconds: float = _BOOTSTRAP_HEARTBEAT_SECONDS,
     ) -> None:
+        if lease_seconds <= 0 or heartbeat_seconds <= 0 or heartbeat_seconds >= lease_seconds:
+            raise ValueError("Bootstrap lease and heartbeat intervals are invalid")
         self._database = database
         self._source = source
         self._clock = clock
         self._lifecycle = DatasetLifecycle(database, mount_root)
         self._generations = MountedGenerationStore(mount_root)
+        self._lease_seconds = lease_seconds
+        self._heartbeat_seconds = heartbeat_seconds
 
     def bootstrap(self, *, idempotency_key: str, as_of: datetime) -> BootstrapOutcome:
         key = _identity(idempotency_key, "Bootstrap idempotency key")
@@ -87,60 +111,65 @@ class DataOperator:
         candidate_manifest: str | None = None
         candidate_live = False
         try:
-            current_head = self._lifecycle.current_head()
-            prior_manifest = None if claim.row is None else claim.row.get(
-                "generation_manifest_sha256"
-            )
-            if (
-                current_head is not None
-                and prior_manifest
-                and current_head.generation_manifest_sha256 == prior_manifest
-            ):
-                outcome = _outcome(current_head)
-                self._lifecycle.release_candidate(
-                    operation_id=_operation_id(key, str(claim.row["owner_token"]))
+            with self._maintain_claim(key, owner_token) as heartbeat:
+                current_head = self._lifecycle.current_head()
+                prior_manifest = None if claim.row is None else claim.row.get(
+                    "generation_manifest_sha256"
                 )
-                self._complete(key, owner_token, outcome)
-                return outcome
-            if current_head is not None:
-                raise DataOperatorError("HEAD_ALREADY_EXISTS")
-            batch = self._source.collect_bootstrap(plan)
-            expanded = _apply_bootstrap_expansion(batch)
-            validate_bootstrap_batch(expanded)
-            materialized_at = self._operator_time()
-            generation = self._generations.materialize(
-                expanded.canonical,
-                prepared_at=materialized_at,
-                source_name=expanded.source_name,
-                source_lineage=expanded.source_lineage,
-            )
-            candidate_manifest = generation.manifest_sha256
-            self._record_candidate(key, owner_token, candidate_manifest)
-            self._lifecycle.protect_candidate(
-                operation_id=operation_id,
-                generation_manifest_sha256=candidate_manifest,
-                lease_seconds=_BOOTSTRAP_LEASE_SECONDS,
-            )
-            candidate_live = True
-            try:
-                completed_at = self._operator_time()
-                head = self._lifecycle.compare_and_swap_head(
-                    expected_generation_manifest_sha256=None,
-                    candidate_generation_manifest_sha256=candidate_manifest,
+                if (
+                    current_head is not None
+                    and prior_manifest
+                    and current_head.generation_manifest_sha256 == prior_manifest
+                ):
+                    outcome = _outcome(current_head)
+                    self._lifecycle.release_candidate(
+                        operation_id=_operation_id(key, str(claim.row["owner_token"]))
+                    )
+                    self._complete(key, owner_token, outcome)
+                    return outcome
+                if current_head is not None:
+                    raise DataOperatorError("HEAD_ALREADY_EXISTS")
+                batch = self._source.collect_bootstrap(plan)
+                heartbeat.assert_owned()
+                expanded = _apply_bootstrap_expansion(batch)
+                validate_bootstrap_batch(expanded)
+                heartbeat.assert_owned()
+                materialized_at = self._operator_time()
+                generation = self._generations.materialize(
+                    expanded.canonical,
+                    prepared_at=materialized_at,
+                    source_name=expanded.source_name,
+                    source_lineage=expanded.source_lineage,
+                )
+                heartbeat.assert_owned()
+                candidate_manifest = generation.manifest_sha256
+                self._lifecycle.protect_candidate(
                     operation_id=operation_id,
-                    prepared_at=completed_at,
+                    generation_manifest_sha256=candidate_manifest,
+                    lease_seconds=self._lease_seconds,
                 )
-                candidate_live = False
-            except DatasetHeadConflict as error:
-                self._lifecycle.release_candidate(operation_id=operation_id)
-                candidate_live = False
-                raise DataOperatorError("HEAD_ALREADY_EXISTS") from error
-            outcome = _outcome(head)
-            try:
-                self._complete(key, owner_token, outcome)
-            except RuntimeError as error:
-                raise DataOperatorError("BOOTSTRAP_COMPLETION_PENDING") from error
-            return outcome
+                candidate_live = True
+                self._record_candidate(key, owner_token, candidate_manifest)
+                heartbeat.assert_owned()
+                try:
+                    completed_at = self._operator_time()
+                    head = self._lifecycle.compare_and_swap_head(
+                        expected_generation_manifest_sha256=None,
+                        candidate_generation_manifest_sha256=candidate_manifest,
+                        operation_id=operation_id,
+                        prepared_at=completed_at,
+                    )
+                    candidate_live = False
+                except DatasetHeadConflict as error:
+                    self._lifecycle.release_candidate(operation_id=operation_id)
+                    candidate_live = False
+                    raise DataOperatorError("HEAD_ALREADY_EXISTS") from error
+                outcome = _outcome(head)
+                try:
+                    self._complete(key, owner_token, outcome)
+                except RuntimeError as error:
+                    raise DataOperatorError("BOOTSTRAP_COMPLETION_PENDING") from error
+                return outcome
         except DataOperatorError as error:
             if error.code == "BOOTSTRAP_COMPLETION_PENDING":
                 raise
@@ -165,6 +194,61 @@ class DataOperator:
             raise DataOperatorError("INVALID_PREPARATION_TIME")
         return selected
 
+    @contextmanager
+    def _maintain_claim(
+        self,
+        key: str,
+        owner_token: str,
+    ) -> Iterator[_BootstrapHeartbeat]:
+        stopped = Event()
+        state = _BootstrapHeartbeat(failed=Event())
+        thread = Thread(
+            target=self._heartbeat_claim,
+            args=(key, owner_token, stopped, state.failed),
+            name=f"data-bootstrap-heartbeat-{hashlib.sha256(key.encode()).hexdigest()[:12]}",
+            daemon=True,
+        )
+        thread.start()
+        try:
+            yield state
+        finally:
+            stopped.set()
+            thread.join(timeout=5)
+            if thread.is_alive():
+                state.failed.set()
+
+    def _heartbeat_claim(
+        self,
+        key: str,
+        owner_token: str,
+        stopped: Event,
+        failed: Event,
+    ) -> None:
+        while not stopped.wait(self._heartbeat_seconds):
+            try:
+                with self._database.transaction() as transaction:
+                    renewed = transaction.execute(
+                        """
+                        UPDATE data.bootstrap_operations
+                        SET lease_expires_at = now() + make_interval(secs => %s),
+                            updated_at = now()
+                        WHERE idempotency_key = %s
+                          AND status = 'running'
+                          AND owner_token = %s
+                        """,
+                        (self._lease_seconds, key, owner_token),
+                    )
+            except Exception as error:
+                logger.error(
+                    "Bootstrap operation heartbeat failed",
+                    extra={"error_type": type(error).__name__},
+                )
+                failed.set()
+                return
+            if renewed.rowcount != 1:
+                failed.set()
+                return
+
     def _claim(
         self,
         key: str,
@@ -173,6 +257,7 @@ class DataOperator:
     ) -> _BootstrapClaim:
         owner_token = secrets.token_hex(16)
         with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
             inserted = transaction.execute(
                 """
                 INSERT INTO data.bootstrap_operations (
@@ -189,7 +274,7 @@ class DataOperator:
                     key,
                     fingerprint,
                     owner_token,
-                    _BOOTSTRAP_LEASE_SECONDS,
+                    self._lease_seconds,
                     plan.as_of,
                     plan.start_date,
                     plan.completed_through_date,
@@ -227,13 +312,17 @@ class DataOperator:
                 """,
                 (
                     owner_token,
-                    _BOOTSTRAP_LEASE_SECONDS,
+                    self._lease_seconds,
                     key,
                     row["owner_token"],
                 ),
             ).fetchone()
             if reclaimed is None:
                 raise RuntimeError("Bootstrap operation lease changed during claim")
+            release_generation_candidate(
+                transaction,
+                operation_id=_operation_id(key, str(row["owner_token"])),
+            )
             return _BootstrapClaim(owner_token=owner_token, row=row)
 
     def _reopen(self, row: dict[str, object], fingerprint: str) -> BootstrapOutcome:
@@ -269,6 +358,7 @@ class DataOperator:
 
     def _record_candidate(self, key: str, owner_token: str, manifest: str) -> None:
         with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
             result = transaction.execute(
                 """
                 UPDATE data.bootstrap_operations
@@ -279,7 +369,7 @@ class DataOperator:
                   AND status = 'running'
                   AND owner_token = %s
                 """,
-                (manifest, _BOOTSTRAP_LEASE_SECONDS, key, owner_token),
+                (manifest, self._lease_seconds, key, owner_token),
             )
             if result.rowcount != 1:
                 raise RuntimeError("Bootstrap operation lost candidate ownership")

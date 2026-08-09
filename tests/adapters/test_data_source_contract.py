@@ -95,3 +95,5 @@ def test_live_tushare_gate_is_separate_from_the_default_gate() -> None:
     script = (Path(__file__).resolve().parents[2] / "scripts" / "check_live_tushare.py").read_text()
     assert '"preflight":' not in script
     assert '"source":' not in script
+    assert "collect_bootstrap(" in script
+    assert "CollectionPlan.bootstrap" not in script

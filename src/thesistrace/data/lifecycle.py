@@ -43,7 +43,7 @@ class DatasetLifecycle:
     def current_head(self) -> DatasetHead | None:
         for _ in range(4):
             with self._database.transaction() as transaction:
-                _lock(transaction)
+                lock_data_lifecycle(transaction)
                 pointer = self._heads.current_pointer()
             if pointer is None:
                 return None
@@ -51,12 +51,12 @@ class DatasetLifecycle:
                 resolved = self._heads.resolve(pointer)
             except RuntimeError:
                 with self._database.transaction() as transaction:
-                    _lock(transaction)
+                    lock_data_lifecycle(transaction)
                     if self._heads.current_pointer() == pointer:
                         raise
                 continue
             with self._database.transaction() as transaction:
-                _lock(transaction)
+                lock_data_lifecycle(transaction)
                 if self._heads.current_pointer() == pointer:
                     return resolved
         raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
@@ -71,7 +71,7 @@ class DatasetLifecycle:
         _require_identity(operation_id, "candidate operation")
         _require_lease(lease_seconds)
         with self._database.transaction() as transaction:
-            _lock(transaction)
+            lock_data_lifecycle(transaction)
             row = transaction.execute(
                 """
                 SELECT generation_manifest_sha256, status
@@ -120,12 +120,14 @@ class DatasetLifecycle:
     ) -> DatasetHead:
         with self._heads.resolved_candidate(candidate_generation_manifest_sha256) as resolved:
             with self._database.transaction() as transaction:
-                _lock(transaction)
+                lock_data_lifecycle(transaction)
                 candidate = transaction.execute(
                     """
                     SELECT generation_manifest_sha256, status
                     FROM data.generation_candidates
                     WHERE operation_id = %s
+                      AND status = 'live'
+                      AND lease_expires_at > now()
                     FOR UPDATE
                     """,
                     (operation_id,),
@@ -152,7 +154,7 @@ class DatasetLifecycle:
 
     def release_candidate(self, *, operation_id: str) -> None:
         with self._database.transaction() as transaction:
-            _lock(transaction)
+            lock_data_lifecycle(transaction)
             transaction.execute(
                 """
                 UPDATE data.generation_candidates
@@ -174,7 +176,7 @@ class DatasetLifecycle:
         _require_identity(owner_id, "Generation pin owner")
         _require_lease(lease_seconds)
         with self._database.transaction() as transaction:
-            _lock(transaction)
+            lock_data_lifecycle(transaction)
             pointer = self._heads.current_pointer()
             if pointer is None:
                 raise DataNotReady("Dataset Head is not ready")
@@ -214,7 +216,7 @@ class DatasetLifecycle:
     def heartbeat_pin(self, pin_id: str, *, owner_id: str, lease_seconds: float) -> GenerationPin:
         _require_lease(lease_seconds)
         with self._database.transaction() as transaction:
-            _lock(transaction)
+            lock_data_lifecycle(transaction)
             row = transaction.execute(
                 """
                 UPDATE data.generation_pins
@@ -232,7 +234,7 @@ class DatasetLifecycle:
 
     def release_pin(self, pin_id: str, *, owner_id: str) -> None:
         with self._database.transaction() as transaction:
-            _lock(transaction)
+            lock_data_lifecycle(transaction)
             result = transaction.execute(
                 """
                 UPDATE data.generation_pins
@@ -246,7 +248,7 @@ class DatasetLifecycle:
 
     def active_pins(self) -> tuple[GenerationPin, ...]:
         with self._database.transaction() as transaction:
-            _lock(transaction)
+            lock_data_lifecycle(transaction)
             rows = transaction.execute(
                 """
                 SELECT id, owner_kind, owner_id, generation_manifest_sha256,
@@ -259,10 +261,26 @@ class DatasetLifecycle:
             return tuple(_pin(row) for row in rows)
 
 
-def _lock(transaction: PostgresTransaction) -> None:
+def lock_data_lifecycle(transaction: PostgresTransaction) -> None:
     transaction.execute(
         "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
         (_LIFECYCLE_LOCK,),
+    )
+
+
+def release_generation_candidate(
+    transaction: PostgresTransaction,
+    *,
+    operation_id: str,
+) -> None:
+    _require_identity(operation_id, "candidate operation")
+    transaction.execute(
+        """
+        UPDATE data.generation_candidates
+        SET status = 'released', released_at = now(), updated_at = now()
+        WHERE operation_id = %s AND status = 'live'
+        """,
+        (operation_id,),
     )
 
 
@@ -293,4 +311,6 @@ __all__ = (
     "DataNotReady",
     "DatasetLifecycle",
     "GenerationPin",
+    "lock_data_lifecycle",
+    "release_generation_candidate",
 )

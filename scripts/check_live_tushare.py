@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_provider import HttpTushareTransport, TushareAdapter
-from thesistrace.data import CollectionPlan
+from thesistrace.data import bootstrap_collection_plan
 
 
 def main() -> None:
@@ -16,8 +17,8 @@ def main() -> None:
     try:
         provider = TushareAdapter(token=token, transport=transport)
         provider.preflight()
-        batch = TushareDataSource(provider=provider).collect(
-            CollectionPlan.bootstrap()
+        batch = TushareDataSource(provider=provider).collect_bootstrap(
+            bootstrap_collection_plan(datetime.now(UTC))
         )
     finally:
         transport.close()
