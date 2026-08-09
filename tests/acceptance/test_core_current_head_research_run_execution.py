@@ -446,6 +446,40 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert recovered_state["cancelled_progression_count"] == 0
         assert recovered_state["succeeded_progression_count"] == 1
         assert recovered_state["active_pin_count"] == 0
+        recovered_canonical = MountedGenerationStore(
+            settings.data_mount
+        ).open_generation(recovered_head).canonical
+        recovered_calendar = canonical_sessions(
+            recovered_canonical,
+            "recovery reference Head",
+        )
+        recovery_prior_canonical = slice_canonical_sessions(
+            recovered_canonical,
+            recovered_calendar[: len(seed_sessions)],
+        )
+        recovery_origin = restore_tracking_origin(
+            TrackingOrigin.model_validate(recovered_state["origin"]),
+            failed_state["terminal_strategy_state"],
+            recovery_prior_canonical,
+        )
+        recovery_reference = advance(
+            AdvanceInput(
+                prior_state=recovery_origin,
+                target_canonical_release=recovered_canonical,
+                appended_sessions=list(recovered_sessions[len(seed_sessions) :]),
+                continuation=advance_continuation(
+                    run_input=recovery_origin.run_input_with_canonical(
+                        recovery_prior_canonical
+                    ),
+                    prior_continuation=empty_continuation(),
+                    target_canonical=recovery_prior_canonical,
+                    appended_sessions=recovered_calendar[: len(seed_sessions)],
+                ),
+            )
+        )
+        assert recovered_state["terminal_strategy_state"] == terminal_strategy_state(
+            recovery_reference
+        )
 
         stale_sessions = (*recovered_sessions, "2026-08-12")
         stale_head = _publish_head(
