@@ -26,7 +26,11 @@ from thesistrace.publication import (
     PublishedRef,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_kernel.kernel_run import KernelRunError, RunInput
+from thesistrace.research_kernel.kernel_run import (
+    InsufficientCalculationWarmupError,
+    KernelRunError,
+    RunInput,
+)
 from thesistrace.research_kernel.kernel_run import run as run_kernel
 from thesistrace.research_run.models import (
     ImmutableRunInput,
@@ -440,6 +444,13 @@ class ResearchRunService:
                     raise ResearchRunTrackingUnavailable(
                         "Start Tracking requires a succeeded ResearchRun"
                     )
+                if isinstance(row.get("result_provenance"), Mapping) and isinstance(
+                    row["result_provenance"].get("data_generation_id"),
+                    str,
+                ):
+                    raise ResearchRunTrackingUnavailable(
+                        "Start Tracking is unavailable for current-data ResearchRuns"
+                    )
                 try:
                     origin = self._tracking_origin(transaction, row)
                 except PublicationUnavailableError:
@@ -844,9 +855,9 @@ class ResearchRunService:
         )
         try:
             output = run_kernel(kernel_input)
+        except InsufficientCalculationWarmupError as error:
+            raise ResearchRunInsufficientWarmup(str(error)) from error
         except KernelRunError as error:
-            if str(error).startswith("insufficient Calculation Warm-up:"):
-                raise ResearchRunInsufficientWarmup(str(error)) from error
             raise ResearchRunInputInvalid(str(error)) from error
         definition_content = immutable_input.definition.get("content")
         if not isinstance(definition_content, Mapping):

@@ -6,6 +6,7 @@ from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, literal, operation
 
 from thesistrace.research_kernel import (
     AdvanceInput,
+    InsufficientCalculationWarmupError,
     KernelRunError,
     KernelState,
     RunInput,
@@ -155,7 +156,7 @@ def test_incomplete_derived_warmup_fails_without_moving_the_period() -> None:
     expression = operation("pct_change", CLOSE_ADJUSTED, literal(1))
 
     with pytest.raises(
-        KernelRunError,
+        InsufficientCalculationWarmupError,
         match=r"insufficient Calculation Warm-up: requires 1 sessions before 2024-01-02",
     ):
         run(

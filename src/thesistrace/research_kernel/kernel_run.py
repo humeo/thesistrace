@@ -24,6 +24,10 @@ class KernelRunError(ValueError):
     pass
 
 
+class InsufficientCalculationWarmupError(KernelRunError):
+    pass
+
+
 @dataclass(frozen=True, init=False)
 class RunInput:
     _canonical_data_json: bytes = field(repr=False)
@@ -266,7 +270,7 @@ def _run_explicit_period(
     )
     warmup_start = start_index - parsed.effective_lookback
     if warmup_start < 0:
-        raise KernelRunError(
+        raise InsufficientCalculationWarmupError(
             "insufficient Calculation Warm-up: "
             f"requires {parsed.effective_lookback} sessions before {start_session}"
         )

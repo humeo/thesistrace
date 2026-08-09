@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event, Thread
 
+import boto3
 import pytest
+from botocore.config import Config
 from core_runtime import create_migrated_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
@@ -15,7 +20,7 @@ from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.fixture import build_minimal_canonical_fixture
-from thesistrace.publication import PublicationVerificationError, PublishedRef
+from thesistrace.publication import Publication, PublishedRef
 from thesistrace.research_kernel import RunInput, run
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
@@ -46,7 +51,8 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             expected_manifest=head_a,
         )
 
-        assert client.app.state.core_runtime.research_runs.process_next() is True
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
 
         detail = client.get(f"/api/research-runs/{run_id}")
         assert detail.status_code == 200
@@ -79,11 +85,22 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert stored["result_provenance"]["data_through_session"] == sessions[-1]
         assert stored["active_pin_count"] == 0
 
+        tracking = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "attempt-start-head-track"},
+        )
+        assert tracking.status_code == 409
+        assert tracking.json() == {
+            "detail": "Start Tracking is unavailable for current-data ResearchRuns"
+        }
+        assert client.get("/api/daily-tracks").json()["items"] == []
+
     with TestClient(create_app(settings)) as restarted:
         reopened = restarted.get(f"/api/research-runs/{run_id}")
         assert reopened.status_code == 200
         assert reopened.json() == public_run
-        assert restarted.app.state.core_runtime.research_runs.process_next() is False
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
         assert _stored_execution(settings, run_id)["attempt_count"] == 1
 
 
@@ -321,7 +338,6 @@ def test_attempt_revalidates_the_selected_generation(
 )
 def test_publication_failure_is_atomic_and_releases_the_generation_pin(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -337,15 +353,11 @@ def test_publication_failure_is_atomic_and_releases_the_generation_pin(
         run_id = accepted.json()["run"]["id"]
         runtime = client.app.state.core_runtime
         manifest_count = _publication_manifest_count(settings)
-        original_record = runtime.publication.record
-
-        def fail_after_manifest_record(*args: object, **kwargs: object) -> object:
-            original_record(*args, **kwargs)
-            raise RuntimeError("injected final-state failure")
-
-        monkeypatch.setattr(runtime.publication, "record", fail_after_manifest_record)
-
-        assert runtime.research_runs.process_next() is True
+        _install_success_rejection(settings)
+        try:
+            assert runtime.research_runs.process_next() is True
+        finally:
+            _remove_success_rejection(settings)
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "failed"
@@ -362,7 +374,60 @@ def test_publication_failure_is_atomic_and_releases_the_generation_pin(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_result_read_failure_stays_sanitized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_object_write_failure_is_retryable_but_never_publishes_or_keeps_a_pin(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    migrate_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/definitions/run",
+            json=_run_command("attempt-object-write-failure"),
+        )
+        run_id = accepted.json()["run"]["id"]
+        runtime = client.app.state.core_runtime
+        unavailable_s3 = boto3.client(
+            "s3",
+            endpoint_url="http://127.0.0.1:1",
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+            config=Config(connect_timeout=0.2, read_timeout=0.2, retries={"max_attempts": 0}),
+        )
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=Publication(
+                runtime.database,
+                unavailable_s3,
+                bucket=settings.s3_bucket,
+            ),
+        )
+        manifest_count = _publication_manifest_count(settings)
+
+        assert processor.process_next() is True
+
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "running"
+        assert "result" not in detail
+        stored = _stored_execution(settings, run_id)
+        assert stored["attempt_status"] == "failed"
+        assert stored["attempt_failure_reason"] == "InfrastructureUnavailable"
+        assert stored["result_manifest_sha256"] is None
+        assert stored["active_pin_count"] == 0
+        assert _publication_manifest_count(settings) == manifest_count
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     migrate_core(settings.database_url)
@@ -378,13 +443,36 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path, monkeypatch: pytest
         runtime = client.app.state.core_runtime
         assert runtime.research_runs.process_next() is True
 
-        def fail_read(_published_ref: object) -> object:
-            raise PublicationVerificationError(
-                "private bucket checksum mismatch at secret/object/key"
+        stored = _stored_execution(settings, run_id)
+        digest = _first_result_object_sha256(
+            settings,
+            str(stored["result_manifest_sha256"]),
+        )
+        s3 = _s3_client(settings)
+        key = f"publication/v1/sha256/{digest[:2]}/{digest}"
+        original = s3.get_object(Bucket=settings.s3_bucket, Key=key)
+        content = original["Body"].read()
+        content_type = str(original["ContentType"])
+        metadata = dict(original["Metadata"])
+        s3.put_object(
+            Bucket=settings.s3_bucket,
+            Key=key,
+            Body=b"!" * len(content),
+            ContentLength=len(content),
+            ContentType=content_type,
+            Metadata=metadata,
+        )
+        try:
+            response = client.get(f"/api/research-runs/{run_id}")
+        finally:
+            s3.put_object(
+                Bucket=settings.s3_bucket,
+                Key=key,
+                Body=content,
+                ContentLength=len(content),
+                ContentType=content_type,
+                Metadata=metadata,
             )
-
-        monkeypatch.setattr(runtime.publication, "read", fail_read)
-        response = client.get(f"/api/research-runs/{run_id}")
 
         assert response.status_code == 503
         assert response.json() == {"detail": "ResearchRun Result unavailable"}
@@ -521,6 +609,7 @@ def _stored_execution(settings: CoreSettings, run_id: str) -> dict[str, object]:
             row = transaction.execute(
                 """
                 SELECT run.status, run.result_manifest_sha256, run.result_provenance,
+                       attempt.status AS attempt_status,
                        attempt.data_generation_id AS attempt_data_generation_id,
                        attempt.data_through_session AS attempt_data_through_session,
                        attempt.failure_reason AS attempt_failure_reason,
@@ -554,3 +643,94 @@ def _publication_manifest_count(settings: CoreSettings) -> int:
         return int(row["count"])
     finally:
         database.close()
+
+
+def _first_result_object_sha256(settings: CoreSettings, manifest_sha256: str) -> str:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT object_sha256
+                FROM publication.manifest_objects
+                WHERE manifest_sha256 = %s
+                ORDER BY ordinal
+                LIMIT 1
+                """,
+                (manifest_sha256,),
+            ).fetchone()
+        assert row is not None
+        return str(row["object_sha256"])
+    finally:
+        database.close()
+
+
+def _install_success_rejection(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION research_runs.reject_result_success() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected ResearchRun final-state failure';
+                END
+                $$;
+                CREATE TRIGGER reject_result_success
+                BEFORE UPDATE OF status ON research_runs.runs
+                FOR EACH ROW
+                WHEN (NEW.status = 'succeeded')
+                EXECUTE FUNCTION research_runs.reject_result_success();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_success_rejection(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_result_success ON research_runs.runs;
+                DROP FUNCTION research_runs.reject_result_success();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
+    environment = {
+        **os.environ,
+        "THESISTRACE_DATABASE_URL": settings.database_url,
+        "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
+        "THESISTRACE_S3_ACCESS_KEY_ID": settings.s3_access_key_id,
+        "THESISTRACE_S3_SECRET_ACCESS_KEY": settings.s3_secret_access_key,
+        "THESISTRACE_S3_BUCKET": settings.s3_bucket,
+        "THESISTRACE_S3_REGION": settings.s3_region,
+        "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+    }
+    return subprocess.run(
+        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+
+def _s3_client(settings: CoreSettings):
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint_url,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        region_name=settings.s3_region,
+    )

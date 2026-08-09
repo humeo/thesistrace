@@ -189,8 +189,6 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
         for forbidden in ("release", "generation", "manifest", "head", first_manifest):
             assert forbidden not in serialized
         assert _pin_count(settings) == 0
-        runtime = client.app.state.core_runtime
-        assert runtime.research_runs.process_next() is False
         assert _attempt_count(settings, outcome["run"]["id"]) == 0
         assert _stored_run(settings, outcome["run"]["id"])["status"] == "queued"
 

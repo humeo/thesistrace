@@ -11,6 +11,7 @@ if TYPE_CHECKING:
         empty_continuation,
     )
     from thesistrace.research_kernel.kernel_run import (
+        InsufficientCalculationWarmupError,
         KernelRunError,
         KernelState,
         RunInput,
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "AdvanceInput",
+    "InsufficientCalculationWarmupError",
     "KernelRunError",
     "KernelState",
     "RunInput",
@@ -72,8 +74,16 @@ def __getattr__(name: str) -> object:
             "equivalence_bytes": equivalence_bytes,
             "first_divergence": first_divergence,
         }[name]
-    if name in {"KernelRunError", "KernelState", "RunInput", "RunOutput", "run"}:
+    if name in {
+        "InsufficientCalculationWarmupError",
+        "KernelRunError",
+        "KernelState",
+        "RunInput",
+        "RunOutput",
+        "run",
+    }:
         from thesistrace.research_kernel.kernel_run import (
+            InsufficientCalculationWarmupError,
             KernelRunError,
             KernelState,
             RunInput,
@@ -82,6 +92,7 @@ def __getattr__(name: str) -> object:
         )
 
         return {
+            "InsufficientCalculationWarmupError": InsufficientCalculationWarmupError,
             "KernelRunError": KernelRunError,
             "KernelState": KernelState,
             "RunInput": RunInput,
