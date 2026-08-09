@@ -2,34 +2,44 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
-from decimal import Decimal, InvalidOperation
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 from pyarrow import ArrowException
 
+from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
+from thesistrace.data.generation_schema import (
+    GENERATION_MANIFEST_MAX_BYTES,
+    GENERATION_OBJECT_MAX_BYTES,
+    GENERATION_ROW_PARTITION_COUNT,
+    GENERATION_SESSION_PARTITION_COUNT,
+)
+from thesistrace.data.generation_schema import (
+    TABLE_SPECS as _TABLE_SPECS,
+)
+from thesistrace.data.generation_schema import (
+    TableSpec as _TableSpec,
+)
+from thesistrace.data.generation_validation import (
+    UNIVERSE_NAMES,
+    GenerationValidationError,
+    validate_canonical_generation,
+)
 from thesistrace.publication.serialization import (
     ParquetContractError,
-    ParquetWriterContract,
     canonical_json_bytes,
     canonicalize_parquet_rows,
     parquet_bytes,
 )
 
-GENERATION_MANIFEST_MAX_BYTES = 1_048_576
-GENERATION_SESSION_PARTITION_COUNT = 64
-GENERATION_ROW_PARTITION_COUNT = 4_096
-
 _GENERATION_FORMAT = "thesistrace-canonical-generation"
 _TABLE_MANIFEST_FORMAT = "thesistrace-canonical-table"
 _MANIFEST_VERSION = 1
-_UNIVERSE_NAMES = ("top300", "top1000", "top2000", "top3000")
+_UNIVERSE_NAMES = UNIVERSE_NAMES
 
 
 class GenerationStoreError(RuntimeError):
@@ -47,212 +57,10 @@ class MountedGeneration:
     canonical: dict[str, object]
 
 
-@dataclass(frozen=True)
-class _TableSpec:
-    name: str
-    contract: ParquetWriterContract
-    session_field: str | None = None
-
-    @property
-    def partitioning(self) -> dict[str, object]:
-        if self.session_field is not None:
-            return {
-                "kind": "research-session-block",
-                "session_count": GENERATION_SESSION_PARTITION_COUNT,
-            }
-        return {"kind": "row-block", "row_count": GENERATION_ROW_PARTITION_COUNT}
-
-
-def _contract(
-    name: str,
-    fields: Sequence[tuple[str, pa.DataType]],
-    sort_keys: tuple[str, ...],
-) -> ParquetWriterContract:
-    return ParquetWriterContract(
-        name=f"canonical-generation-{name}",
-        version=1,
-        schema=pa.schema([pa.field(field, kind, nullable=False) for field, kind in fields]),
-        sort_keys=sort_keys,
-    )
-
-
-_STRING = pa.string()
-_STRING_LIST = pa.list_(pa.field("item", pa.string(), nullable=False))
-_TABLE_SPECS = (
-    _TableSpec(
-        "research_calendar",
-        _contract("research-calendar", (("session", _STRING),), ("session",)),
-        "session",
-    ),
-    _TableSpec(
-        "instruments",
-        _contract(
-            "instruments",
-            tuple(
-                (name, _STRING)
-                for name in (
-                    "instrument_id",
-                    "ts_code",
-                    "asset_type",
-                    "exchange",
-                    "board",
-                    "listed_from",
-                    "listed_to",
-                )
-            ),
-            ("instrument_id",),
-        ),
-    ),
-    _TableSpec(
-        "prices",
-        _contract(
-            "prices",
-            tuple(
-                (name, _STRING)
-                for name in (
-                    "session",
-                    "instrument_id",
-                    "open_raw",
-                    "high_raw",
-                    "low_raw",
-                    "close_raw",
-                    "pre_close_raw",
-                    "change_raw",
-                    "pct_change_raw",
-                    "volume_shares",
-                    "turnover_cny",
-                    "adjustment_factor",
-                    "adjustment_anchor_factor",
-                    "open_adj",
-                    "high_adj",
-                    "low_adj",
-                    "close_adj",
-                    "trading_state",
-                )
-            ),
-            ("session", "instrument_id"),
-        ),
-        "session",
-    ),
-    _TableSpec(
-        "trading_states",
-        _contract(
-            "trading-states",
-            (("session", _STRING), ("instrument_id", _STRING), ("state", _STRING)),
-            ("session", "instrument_id"),
-        ),
-        "session",
-    ),
-    _TableSpec(
-        "price_limits",
-        _contract(
-            "price-limits",
-            (
-                ("session", _STRING),
-                ("instrument_id", _STRING),
-                ("upper", _STRING),
-                ("lower", _STRING),
-            ),
-            ("session", "instrument_id"),
-        ),
-        "session",
-    ),
-    _TableSpec(
-        "adjustment_anchors",
-        _contract(
-            "adjustment-anchors",
-            (
-                ("instrument_id", _STRING),
-                ("anchor_session", _STRING),
-                ("anchor_factor", _STRING),
-            ),
-            ("instrument_id",),
-        ),
-    ),
-    _TableSpec(
-        "base_pool",
-        _contract(
-            "base-pool",
-            (("session", _STRING), ("instrument_ids", _STRING_LIST)),
-            ("session",),
-        ),
-        "session",
-    ),
-    _TableSpec(
-        "liquidity_universes",
-        _contract(
-            "liquidity-universes",
-            (
-                ("session", _STRING),
-                ("universe", _STRING),
-                ("instrument_ids", _STRING_LIST),
-                ("status", _STRING),
-            ),
-            ("session", "universe"),
-        ),
-        "session",
-    ),
-    _TableSpec(
-        "industry_membership",
-        _contract(
-            "industry-membership",
-            tuple(
-                (name, _STRING)
-                for name in (
-                    "instrument_id",
-                    "active_from",
-                    "active_to",
-                    "sw2021_l1",
-                    "sw2021_l2",
-                    "sw2021_l3",
-                )
-            ),
-            ("instrument_id", "active_from"),
-        ),
-    ),
-    _TableSpec(
-        "st_designations",
-        _contract(
-            "st-designations",
-            tuple(
-                (name, _STRING)
-                for name in (
-                    "trade_date",
-                    "instrument_id",
-                    "ts_code",
-                    "name",
-                    "type",
-                    "type_name",
-                )
-            ),
-            ("trade_date", "instrument_id"),
-        ),
-        "trade_date",
-    ),
-    _TableSpec(
-        "field_catalog",
-        _contract(
-            "field-catalog",
-            (
-                ("field_id", _STRING),
-                ("name", _STRING),
-                ("definition", _STRING),
-                ("unit", _STRING),
-                ("time_semantics", _STRING),
-                ("alpha_authorable", pa.bool_()),
-                ("release_available_from", _STRING),
-                ("coverage", _STRING),
-            ),
-            ("field_id",),
-        ),
-    ),
-)
-_TABLE_SPEC_BY_NAME = {spec.name: spec for spec in _TABLE_SPECS}
-
-
 class MountedGenerationStore:
     def __init__(self, root: Path | str) -> None:
-        self._root = Path(root)
+        self._root = Path(root).resolve()
+        self._files = AddressedFileStore(self._root)
 
     def materialize(
         self,
@@ -263,7 +71,7 @@ class MountedGenerationStore:
         source_lineage: Mapping[str, object],
     ) -> MountedGeneration:
         normalized = _normalize_canonical(canonical)
-        _validate_canonical(normalized)
+        _validate_generation(normalized)
         calendar = normalized["research_calendar"]
         assert isinstance(calendar, list)
         table_entries: list[dict[str, object]] = []
@@ -338,7 +146,7 @@ class MountedGenerationStore:
             if spec.name == "research_calendar":
                 calendar = [str(row["session"]) for row in table_rows[spec.name]]
         canonical = _canonical_from_rows(table_rows)
-        _validate_canonical(canonical)
+        _validate_generation(canonical)
         identity = {
             "schema_contract": root["schema_contract"],
             "dataset_coverage": root["dataset_coverage"],
@@ -374,6 +182,8 @@ class MountedGenerationStore:
         objects: list[dict[str, object]] = []
         for ordinal, partition in enumerate(partitions):
             content = parquet_bytes(partition, spec.contract)
+            if len(content) > GENERATION_OBJECT_MAX_BYTES:
+                raise GenerationStoreError("Generation object exceeds its byte bound")
             sha256 = hashlib.sha256(content).hexdigest()
             self._store_addressed(self._object_path(sha256), sha256, content)
             first_key, last_key = _partition_boundaries(partition, spec.contract.sort_keys)
@@ -426,9 +236,14 @@ class MountedGenerationStore:
         ):
             raise GenerationStoreError("Generation table reference is incompatible")
         manifest_sha256 = str(reference["manifest_sha256"])
-        content = self._read_addressed(self._manifest_path(manifest_sha256), manifest_sha256)
-        if reference["manifest_byte_count"] != len(content):
-            raise GenerationStoreError("Generation table manifest byte count is invalid")
+        content = self._read_addressed(
+            self._manifest_path(manifest_sha256),
+            manifest_sha256,
+            expected_byte_count=_required_byte_count(
+                reference["manifest_byte_count"], "Generation table manifest"
+            ),
+            max_byte_count=GENERATION_MANIFEST_MAX_BYTES,
+        )
         manifest = _parse_manifest(content)
         if (
             manifest.get("format") != _TABLE_MANIFEST_FORMAT
@@ -494,9 +309,12 @@ class MountedGenerationStore:
         ):
             raise GenerationStoreError("Generation table object reference is invalid")
         sha256 = str(object_ref["sha256"])
-        content = self._read_addressed(self._object_path(sha256), sha256)
-        if object_ref["byte_count"] != len(content):
-            raise GenerationStoreError("Generation object byte count is invalid")
+        content = self._read_addressed(
+            self._object_path(sha256),
+            sha256,
+            expected_byte_count=_required_byte_count(object_ref["byte_count"], "Generation object"),
+            max_byte_count=GENERATION_OBJECT_MAX_BYTES,
+        )
         try:
             table = pq.read_table(pa.BufferReader(content))
             if table.schema != spec.contract.schema:
@@ -516,40 +334,38 @@ class MountedGenerationStore:
         return rows
 
     def _read_manifest(self, sha256: str) -> dict[str, object]:
-        return _parse_manifest(self._read_addressed(self._manifest_path(sha256), sha256))
+        return _parse_manifest(
+            self._read_addressed(
+                self._manifest_path(sha256),
+                sha256,
+                max_byte_count=GENERATION_MANIFEST_MAX_BYTES,
+            )
+        )
 
-    def _read_addressed(self, path: Path, expected_sha256: str) -> bytes:
+    def _read_addressed(
+        self,
+        path: Path,
+        expected_sha256: str,
+        *,
+        expected_byte_count: int | None = None,
+        max_byte_count: int | None = None,
+    ) -> bytes:
         _require_sha256(expected_sha256)
         try:
-            content = path.read_bytes()
-        except FileNotFoundError as error:
-            raise GenerationStoreError("Generation object or manifest is missing") from error
-        if hashlib.sha256(content).hexdigest() != expected_sha256:
-            raise GenerationStoreError("Generation object or manifest checksum is invalid")
-        return content
+            return self._files.read(
+                path,
+                expected_sha256,
+                expected_byte_count=expected_byte_count,
+                max_byte_count=max_byte_count,
+            )
+        except AddressedFileError as error:
+            raise GenerationStoreError(f"Generation object or manifest {error}") from error
 
     def _store_addressed(self, target: Path, sha256: str, content: bytes) -> None:
-        if hashlib.sha256(content).hexdigest() != sha256:
-            raise GenerationStoreError("Generation addressed content checksum is invalid")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            if target.read_bytes() != content:
-                raise GenerationStoreError("Generation immutable content conflicts")
-            return
-        descriptor, temporary_name = tempfile.mkstemp(prefix=".candidate-", dir=target.parent)
-        temporary = Path(temporary_name)
         try:
-            with os.fdopen(descriptor, "wb") as stream:
-                stream.write(content)
-                stream.flush()
-                os.fsync(stream.fileno())
-            try:
-                os.link(temporary, target)
-            except FileExistsError:
-                if target.read_bytes() != content:
-                    raise GenerationStoreError("Generation immutable content conflicts") from None
-        finally:
-            temporary.unlink(missing_ok=True)
+            self._files.store(target, sha256, content)
+        except AddressedFileError as error:
+            raise GenerationStoreError(f"Generation {error}") from error
 
     def _manifest_path(self, sha256: str) -> Path:
         _require_sha256(sha256)
@@ -745,209 +561,17 @@ def _validate_root_projection(root: Mapping[str, object], canonical: Mapping[str
         raise GenerationStoreError("Generation preparation metadata is incompatible")
 
 
-def _validate_canonical(canonical: Mapping[str, object]) -> None:
-    if canonical.get("schema_version") != "canonical-eod-v1":
-        raise GenerationStoreError("Canonical Generation schema is incompatible")
-    calendar = canonical.get("research_calendar")
-    if not isinstance(calendar, list) or not calendar or calendar != sorted(set(calendar)):
-        raise GenerationStoreError("Canonical Research Calendar is invalid")
+def _validate_generation(canonical: Mapping[str, object]) -> None:
     try:
-        parsed_calendar = [date.fromisoformat(str(session)) for session in calendar]
-    except ValueError as error:
-        raise GenerationStoreError("Canonical Research Calendar is invalid") from error
-    if any(session.weekday() >= 5 for session in parsed_calendar):
-        raise GenerationStoreError("Canonical Research Calendar is invalid")
-    calendar_set = set(map(str, calendar))
-
-    instruments = _rows(canonical, "instruments")
-    instrument_ids = [str(row["instrument_id"]) for row in instruments]
-    instrument_set = set(instrument_ids)
-    if not instrument_ids or len(instrument_ids) != len(instrument_set):
-        raise GenerationStoreError("Canonical instrument identities are invalid")
-    for row in instruments:
-        listed_from = _iso_date(row["listed_from"], "Canonical Instrument.listed_from")
-        listed_to = row["listed_to"]
-        if listed_to and _iso_date(listed_to, "Canonical Instrument.listed_to") < listed_from:
-            raise GenerationStoreError("Canonical instrument lifecycle is invalid")
-
-    base_pool = _rows(canonical, "base_pool")
-    if [str(row["session"]) for row in base_pool] != list(map(str, calendar)):
-        raise GenerationStoreError("Canonical Base Pool coverage is invalid")
-    base_positions: set[tuple[str, str]] = set()
-    base_by_session: dict[str, set[str]] = {}
-    for row in base_pool:
-        members = row["instrument_ids"]
-        if not isinstance(members, list):
-            raise GenerationStoreError("Canonical Base Pool membership is invalid")
-        member_ids = [str(value) for value in members]
-        if len(member_ids) != len(set(member_ids)) or not set(member_ids) <= instrument_set:
-            raise GenerationStoreError("Canonical Base Pool membership is invalid")
-        session = str(row["session"])
-        base_by_session[session] = set(member_ids)
-        base_positions.update((session, instrument_id) for instrument_id in member_ids)
-
-    states = _rows(canonical, "trading_states")
-    state_by_position = _unique_positions(states, "session", "Canonical Trading State")
-    if set(state_by_position) != base_positions or any(
-        row["state"]
-        not in {
-            "normal",
-            "full_session_suspension",
-            "partial_opening_suspension",
-            "after_open_suspension",
-        }
-        for row in states
-    ):
-        raise GenerationStoreError("Canonical Trading State coverage is invalid")
-
-    prices = _rows(canonical, "prices")
-    price_by_position = _unique_positions(prices, "session", "Canonical Price")
-    expected_trade_positions = {
-        position
-        for position, row in state_by_position.items()
-        if row["state"] != "full_session_suspension"
-    }
-    if set(price_by_position) != expected_trade_positions:
-        raise GenerationStoreError("Canonical Price coverage is invalid")
-    for position, row in price_by_position.items():
-        if row["trading_state"] != state_by_position[position]["state"]:
-            raise GenerationStoreError("Canonical Price trading state is invalid")
-        for field in (
-            "open_raw",
-            "high_raw",
-            "low_raw",
-            "close_raw",
-            "pre_close_raw",
-            "change_raw",
-            "pct_change_raw",
-            "volume_shares",
-            "turnover_cny",
-            "adjustment_factor",
-            "adjustment_anchor_factor",
-            "open_adj",
-            "high_adj",
-            "low_adj",
-            "close_adj",
-        ):
-            _finite_decimal(row[field], f"Canonical Price.{field}")
-
-    limits = _rows(canonical, "price_limits")
-    limit_by_position = _unique_positions(limits, "session", "Canonical Price Limit")
-    if set(limit_by_position) != expected_trade_positions:
-        raise GenerationStoreError("Canonical Price Limit coverage is invalid")
-    for row in limits:
-        _finite_decimal(row["upper"], "Canonical Price Limit.upper")
-        _finite_decimal(row["lower"], "Canonical Price Limit.lower")
-
-    anchors = _rows(canonical, "adjustment_anchors")
-    if {str(row["instrument_id"]) for row in anchors} != instrument_set or len(anchors) != len(
-        instrument_set
-    ):
-        raise GenerationStoreError("Canonical Adjustment Anchor coverage is invalid")
-    for row in anchors:
-        if (
-            str(row["anchor_session"]) not in calendar_set
-            or _finite_decimal(row["anchor_factor"], "Canonical Adjustment Anchor.factor") <= 0
-        ):
-            raise GenerationStoreError("Canonical Adjustment Anchor is invalid")
-
-    universes = canonical.get("liquidity_universes")
-    if not isinstance(universes, Mapping) or set(universes) != set(_UNIVERSE_NAMES):
-        raise GenerationStoreError("Canonical Liquidity Universes are invalid")
-    universe_members: dict[str, list[list[str]]] = {}
-    for name in _UNIVERSE_NAMES:
-        rows = universes[name]
-        if not isinstance(rows, list) or [str(row["session"]) for row in rows] != list(
-            map(str, calendar)
-        ):
-            raise GenerationStoreError("Canonical Liquidity Universe coverage is invalid")
-        universe_members[name] = []
-        for row in rows:
-            members = row["instrument_ids"]
-            if (
-                not isinstance(members, list)
-                or len(members) != len(set(map(str, members)))
-                or not set(map(str, members)) <= base_by_session[str(row["session"])]
-                or row["status"] != "available"
-            ):
-                raise GenerationStoreError("Canonical Liquidity Universe membership is invalid")
-            universe_members[name].append([str(value) for value in members])
-    for session_index in range(len(calendar)):
-        prior: list[str] = []
-        for name, maximum_size in zip(_UNIVERSE_NAMES, (300, 1000, 2000, 3000), strict=True):
-            members = universe_members[name][session_index]
-            if len(members) > maximum_size or prior != members[: len(prior)]:
-                raise GenerationStoreError("Canonical Liquidity Universe nesting is invalid")
-            prior = members
-
-    industries = _rows(canonical, "industry_membership")
-    prior_end_by_instrument: dict[str, date] = {}
-    for row in industries:
-        instrument_id = str(row["instrument_id"])
-        active_from = _iso_date(row["active_from"], "Canonical Industry.active_from")
-        active_to = (
-            _iso_date(row["active_to"], "Canonical Industry.active_to")
-            if row["active_to"]
-            else date.max
-        )
-        if (
-            instrument_id not in instrument_set
-            or active_to < active_from
-            or active_from < prior_end_by_instrument.get(instrument_id, date.min)
-            or not all(row[field] for field in ("sw2021_l1", "sw2021_l2", "sw2021_l3"))
-        ):
-            raise GenerationStoreError("Canonical Industry Membership is invalid")
-        prior_end_by_instrument[instrument_id] = active_to
-    st_designations = _rows(canonical, "st_designations")
-    if any(
-        str(row["instrument_id"]) not in instrument_set
-        or str(row["trade_date"]) not in calendar_set
-        for row in st_designations
-    ):
-        raise GenerationStoreError("Canonical ST Designation is invalid")
-    fields = _rows(canonical, "field_catalog")
-    field_ids = [str(row["field_id"]) for row in fields]
-    if not field_ids or len(field_ids) != len(set(field_ids)):
-        raise GenerationStoreError("Canonical Field Catalog is invalid")
+        validate_canonical_generation(canonical)
+    except GenerationValidationError as error:
+        raise GenerationStoreError(str(error)) from error
 
 
-def _rows(canonical: Mapping[str, object], name: str) -> list[dict[str, object]]:
-    value = canonical.get(name)
-    if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
-        raise GenerationStoreError(f"Canonical table is invalid: {name}")
+def _required_byte_count(value: object, subject: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise GenerationStoreError(f"{subject} byte count is invalid")
     return value
-
-
-def _unique_positions(
-    rows: list[dict[str, object]],
-    session_field: str,
-    name: str,
-) -> dict[tuple[str, str], dict[str, object]]:
-    result = {(str(row[session_field]), str(row["instrument_id"])): row for row in rows}
-    if len(result) != len(rows):
-        raise GenerationStoreError(f"{name} identities are invalid")
-    return result
-
-
-def _finite_decimal(value: object, name: str) -> Decimal:
-    if not isinstance(value, str) or not value:
-        raise GenerationStoreError(f"{name} is invalid")
-    try:
-        result = Decimal(value)
-    except InvalidOperation as error:
-        raise GenerationStoreError(f"{name} is invalid") from error
-    if not result.is_finite():
-        raise GenerationStoreError(f"{name} is invalid")
-    return result
-
-
-def _iso_date(value: object, name: str) -> date:
-    if not isinstance(value, str):
-        raise GenerationStoreError(f"{name} is invalid")
-    try:
-        return date.fromisoformat(value)
-    except ValueError as error:
-        raise GenerationStoreError(f"{name} is invalid") from error
 
 
 __all__ = (

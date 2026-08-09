@@ -11,6 +11,7 @@ import httpx
 
 from thesistrace.data.canonical_mapping import (
     CanonicalMappingError,
+    adjusted_price_string,
     bootstrap_research_calendar,
     decimal_string,
     field_catalog,
@@ -329,9 +330,7 @@ class TushareAdapter:
             )
         stock_by_code = {str(row["ts_code"]): row for row in stock_basic}
         stock_basic = [stock_by_code[key] for key in sorted(stock_by_code)]
-        new_stock_basic = [
-            row for row in stock_basic if str(row["ts_code"]) not in known_ts_codes
-        ]
+        new_stock_basic = [row for row in stock_basic if str(row["ts_code"]) not in known_ts_codes]
         anchor_daily, anchor_adjustments = self._collect_adjustment_anchors(
             new_stock_basic,
             as_of,
@@ -445,9 +444,7 @@ class TushareAdapter:
                 primary_key=("trade_date", "ts_code"),
             )
             daily_by_code = {str(row["ts_code"]): row for row in daily}
-            adjustment_by_code = {
-                str(row["ts_code"]): row for row in adjustments
-            }
+            adjustment_by_code = {str(row["ts_code"]): row for row in adjustments}
             for instrument in instruments:
                 code = instrument["ts_code"]
                 if code in daily_by_code and code in adjustment_by_code:
@@ -495,9 +492,7 @@ class TushareAdapter:
                 primary_key=("trade_date", "ts_code"),
             )
             daily_by_session = {str(row["trade_date"]): row for row in daily}
-            adjustment_by_session = {
-                str(row["trade_date"]): row for row in adjustments
-            }
+            adjustment_by_session = {str(row["trade_date"]): row for row in adjustments}
             qualifying = sorted(daily_by_session.keys() & adjustment_by_session.keys())
             if qualifying:
                 anchor_session = qualifying[0]
@@ -710,7 +705,6 @@ def normalize_tushare_snapshot(
             if factor <= 0:
                 raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
             _, anchor = anchor_record
-            scale = factor / anchor
             bar = validate_source_bar(source_row)
             open_price = bar["open"]
             high = bar["high"]
@@ -733,10 +727,10 @@ def normalize_tushare_snapshot(
                     "turnover_cny": decimal_string(source_amount * 1000, 2),
                     "adjustment_factor": decimal_string(factor, 6),
                     "adjustment_anchor_factor": decimal_string(anchor, 6),
-                    "open_adj": decimal_string(open_price * scale, 8),
-                    "high_adj": decimal_string(high * scale, 8),
-                    "low_adj": decimal_string(low * scale, 8),
-                    "close_adj": decimal_string(close * scale, 8),
+                    "open_adj": adjusted_price_string(open_price, factor, anchor),
+                    "high_adj": adjusted_price_string(high, factor, anchor),
+                    "low_adj": adjusted_price_string(low, factor, anchor),
+                    "close_adj": adjusted_price_string(close, factor, anchor),
                     "trading_state": state,
                 }
             )
@@ -760,9 +754,7 @@ def normalize_tushare_snapshot(
         "adjustment_anchors": [
             {
                 "instrument_id": instrument["instrument_id"],
-                "anchor_session": iso_date(
-                    anchor_by_code[str(instrument["ts_code"])][0]
-                ),
+                "anchor_session": iso_date(anchor_by_code[str(instrument["ts_code"])][0]),
                 "anchor_factor": decimal_string(
                     anchor_by_code[str(instrument["ts_code"])][1],
                     6,
@@ -838,11 +830,7 @@ def normalize_tushare_increment(
 
     instruments = normalize_instruments(snapshot["stock_basic"])
     instrument_by_code = {str(row["ts_code"]): row for row in instruments}
-    prior_codes = {
-        str(row["ts_code"])
-        for row in prior_instruments
-        if isinstance(row, dict)
-    }
+    prior_codes = {str(row["ts_code"]) for row in prior_instruments if isinstance(row, dict)}
     if not prior_codes <= instrument_by_code.keys():
         raise TushareSourceError("INCOMPLETE_INSTRUMENT_REFERENCE", source_code=0)
     validate_incremental_instrument_reference(
@@ -930,8 +918,7 @@ def normalize_tushare_increment(
             {
                 "session": session,
                 "instrument_ids": [
-                    str(instrument_by_code[code]["instrument_id"])
-                    for code in active_codes
+                    str(instrument_by_code[code]["instrument_id"]) for code in active_codes
                 ],
             }
         )
@@ -953,7 +940,6 @@ def normalize_tushare_increment(
             if factor <= 0:
                 raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
             anchor = anchor_record[1]
-            scale = factor / anchor
             bar = validate_source_bar(source_row)
             open_price = bar["open"]
             high = bar["high"]
@@ -976,10 +962,10 @@ def normalize_tushare_increment(
                     "turnover_cny": decimal_string(source_amount * 1000, 2),
                     "adjustment_factor": decimal_string(factor, 6),
                     "adjustment_anchor_factor": decimal_string(anchor, 6),
-                    "open_adj": decimal_string(open_price * scale, 8),
-                    "high_adj": decimal_string(high * scale, 8),
-                    "low_adj": decimal_string(low * scale, 8),
-                    "close_adj": decimal_string(close * scale, 8),
+                    "open_adj": adjusted_price_string(open_price, factor, anchor),
+                    "high_adj": adjusted_price_string(high, factor, anchor),
+                    "low_adj": adjusted_price_string(low, factor, anchor),
+                    "close_adj": adjusted_price_string(close, factor, anchor),
                     "trading_state": state,
                 }
             )
@@ -1122,10 +1108,7 @@ def merge_incremental_industries(
     ]
     if len(merged) != len(prior):
         raise TushareSourceError("INVALID_INDUSTRY_MEMBERSHIP", source_code=0)
-    by_start = {
-        (row["instrument_id"], row["active_from"]): row
-        for row in merged
-    }
+    by_start = {(row["instrument_id"], row["active_from"]): row for row in merged}
     for interval in current:
         key = (interval["instrument_id"], interval["active_from"])
         existing = by_start.get(key)
@@ -1186,11 +1169,7 @@ def validate_incremental_instrument_reference(
     current: list[dict[str, str]],
     last_session: str,
 ) -> None:
-    prior_by_code = {
-        str(row["ts_code"]): row
-        for row in prior
-        if isinstance(row, dict)
-    }
+    prior_by_code = {str(row["ts_code"]): row for row in prior if isinstance(row, dict)}
     if len(prior_by_code) != len(prior):
         raise TushareSourceError("INVALID_PREDECESSOR_CANONICAL", source_code=0)
     for instrument in current:

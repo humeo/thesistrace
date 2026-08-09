@@ -163,3 +163,14 @@ def field_catalog(available_from: str) -> list[dict[str, object]]:
 def decimal_string(value: Decimal, places: int) -> str:
     quantum = Decimal(1).scaleb(-places)
     return format(value.quantize(quantum, rounding=ROUND_HALF_EVEN), "f")
+
+
+def adjusted_price_string(
+    raw_price: Decimal,
+    adjustment_factor: Decimal,
+    anchor_factor: Decimal,
+) -> str:
+    """Apply the canonical adjusted-price numeric contract."""
+    if adjustment_factor <= 0 or anchor_factor <= 0:
+        raise CanonicalMappingError("INVALID_ADJUSTMENT_FACTOR")
+    return decimal_string(raw_price * adjustment_factor / anchor_factor, 8)

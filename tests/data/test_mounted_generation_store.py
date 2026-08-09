@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -131,7 +133,7 @@ def test_missing_or_corrupt_object_is_never_reopened_as_a_generation(
     else:
         object_path.write_bytes(b"corrupt")
 
-    with pytest.raises(GenerationStoreError, match="missing|checksum"):
+    with pytest.raises(GenerationStoreError, match="missing|checksum|byte count"):
         MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
 
     if damage == "corrupt":
@@ -218,6 +220,108 @@ def test_incompatible_parquet_schema_is_rejected_even_with_consistent_hashes(
 
     with pytest.raises(GenerationStoreError, match="schema is incompatible"):
         store.open_generation(root_sha256)
+
+
+@pytest.mark.parametrize("damage", ["anchor", "derived_price"])
+def test_inconsistent_adjusted_price_derivation_is_rejected(
+    tmp_path: Path,
+    damage: str,
+) -> None:
+    canonical = _canonical()
+    if damage == "anchor":
+        canonical["adjustment_anchors"][0]["anchor_factor"] = "99.000000"
+    else:
+        canonical["prices"][0]["close_adj"] = "999.00000000"
+
+    with pytest.raises(GenerationStoreError, match="anchor|derivation"):
+        MountedGenerationStore(tmp_path).materialize(
+            canonical,
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+
+
+def test_oversized_or_symlinked_addressed_files_are_rejected_before_parsing(
+    tmp_path: Path,
+) -> None:
+    oversized_sha256 = "0" * 64
+    oversized = _manifest_path(tmp_path, oversized_sha256)
+    oversized.parent.mkdir(parents=True)
+    with oversized.open("wb") as stream:
+        stream.truncate(GENERATION_MANIFEST_MAX_BYTES + 1)
+    with pytest.raises(GenerationStoreError, match="byte bound"):
+        MountedGenerationStore(tmp_path).open_generation(oversized_sha256)
+
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    root = _manifest(tmp_path, generation.manifest_sha256)
+    table = _manifest(tmp_path, root["tables"][0]["manifest_sha256"])
+    object_path = _object_path(tmp_path, table["objects"][0]["sha256"])
+    external = tmp_path / "external.parquet"
+    external.write_bytes(object_path.read_bytes())
+    object_path.unlink()
+    object_path.symlink_to(external)
+    with pytest.raises(GenerationStoreError, match="unsafe"):
+        store.open_generation(generation.manifest_sha256)
+
+
+def test_concurrent_materializers_publish_one_identical_generation(tmp_path: Path) -> None:
+    def materialize() -> tuple[str, str]:
+        generation = MountedGenerationStore(tmp_path).materialize(
+            _canonical(),
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+        return generation.manifest_sha256, generation.data_identity
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        outcomes = tuple(executor.map(lambda _: materialize(), range(16)))
+
+    assert len(set(outcomes)) == 1
+    manifest_sha256, _ = outcomes[0]
+    assert (
+        MountedGenerationStore(tmp_path).open_generation(manifest_sha256).canonical == _canonical()
+    )
+
+
+def test_directory_sync_failure_never_exposes_a_complete_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from thesistrace.data import generation_files
+
+    linked = False
+    real_link = os.link
+    real_sync = generation_files._fsync_directory
+
+    def tracked_link(*args: object, **kwargs: object) -> None:
+        nonlocal linked
+        real_link(*args, **kwargs)
+        linked = True
+
+    def failing_sync(path: Path) -> None:
+        if linked:
+            raise OSError("injected directory fsync failure")
+        real_sync(path)
+
+    monkeypatch.setattr(os, "link", tracked_link)
+    monkeypatch.setattr(generation_files, "_fsync_directory", failing_sync)
+    with pytest.raises(OSError, match="injected"):
+        MountedGenerationStore(tmp_path).materialize(
+            _canonical(),
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+
+    assert not tuple((tmp_path / "manifests").rglob("*.json"))
 
 
 def _canonical() -> dict[str, object]:
