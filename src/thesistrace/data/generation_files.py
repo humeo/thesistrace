@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import secrets
 import stat
-import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -11,8 +13,12 @@ class AddressedFileError(RuntimeError):
     pass
 
 
+class _EntryMissing(FileNotFoundError):
+    pass
+
+
 class AddressedFileStore:
-    """Crash-safe, content-addressed files below one owned mount root."""
+    """Crash-safe addressed files accessed beneath a symlink-safe mount root."""
 
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -25,68 +31,58 @@ class AddressedFileStore:
         expected_byte_count: int | None = None,
         max_byte_count: int | None = None,
     ) -> bytes:
-        _require_within_root(path, self._root)
-        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
         try:
-            descriptor = os.open(path, flags)
-        except (FileNotFoundError, OSError) as error:
-            raise AddressedFileError("addressed file is missing or unsafe") from error
-        try:
-            metadata = os.fstat(descriptor)
-            if not stat.S_ISREG(metadata.st_mode):
-                raise AddressedFileError("addressed file is not a regular file")
-            if expected_byte_count is not None and metadata.st_size != expected_byte_count:
-                raise AddressedFileError("addressed file byte count is invalid")
-            if max_byte_count is not None and metadata.st_size > max_byte_count:
-                raise AddressedFileError("addressed file exceeds its byte bound")
-            content = bytearray()
-            digest = hashlib.sha256()
-            while chunk := os.read(descriptor, 1024 * 1024):
-                content.extend(chunk)
-                digest.update(chunk)
-            if len(content) != metadata.st_size:
-                raise AddressedFileError("addressed file changed while reading")
-            if digest.hexdigest() != expected_sha256:
-                raise AddressedFileError("addressed file checksum is invalid")
-            return bytes(content)
-        finally:
-            os.close(descriptor)
+            with self._open_parent(path, create=False) as (parent_fd, name):
+                return _read_entry(
+                    parent_fd,
+                    name,
+                    expected_sha256,
+                    expected_byte_count=expected_byte_count,
+                    max_byte_count=max_byte_count,
+                )
+        except AddressedFileError:
+            raise
+        except FileNotFoundError as error:
+            raise AddressedFileError("addressed file is missing") from error
+        except OSError as error:
+            raise AddressedFileError("addressed filesystem read failed or is unsafe") from error
 
     def store(self, target: Path, sha256: str, content: bytes) -> None:
-        _require_within_root(target, self._root)
         if hashlib.sha256(content).hexdigest() != sha256:
             raise AddressedFileError("addressed content checksum is invalid")
-        self._ensure_parent(target.parent)
         try:
-            existing = self.read(
-                target,
+            with self._open_parent(target, create=True) as (parent_fd, name):
+                self._store_entry(parent_fd, name, sha256, content)
+        except AddressedFileError:
+            raise
+        except OSError as error:
+            raise AddressedFileError("addressed filesystem write failed or is unsafe") from error
+
+    def _store_entry(
+        self,
+        parent_fd: int,
+        name: str,
+        sha256: str,
+        content: bytes,
+    ) -> None:
+        try:
+            existing = _read_entry(
+                parent_fd,
+                name,
                 sha256,
                 expected_byte_count=len(content),
                 max_byte_count=len(content),
             )
+        except _EntryMissing:
+            pass
         except AddressedFileError as error:
-            if target.exists() or target.is_symlink():
-                try:
-                    raced = self.read(
-                        target,
-                        sha256,
-                        expected_byte_count=len(content),
-                        max_byte_count=len(content),
-                    )
-                except AddressedFileError as raced_error:
-                    raise AddressedFileError(
-                        "immutable addressed content conflicts"
-                    ) from raced_error
-                if raced == content:
-                    return
-                raise AddressedFileError("immutable addressed content conflicts") from error
+            raise AddressedFileError("immutable addressed content conflicts") from error
         else:
             if existing != content:
                 raise AddressedFileError("immutable addressed content conflicts")
             return
 
-        descriptor, temporary_name = tempfile.mkstemp(prefix=".candidate-", dir=target.parent)
-        temporary = Path(temporary_name)
+        temporary_name, descriptor = _create_temporary(parent_fd)
         installed = False
         try:
             with os.fdopen(descriptor, "wb") as stream:
@@ -94,45 +90,117 @@ class AddressedFileStore:
                 stream.flush()
                 os.fsync(stream.fileno())
             try:
-                os.link(temporary, target, follow_symlinks=False)
+                os.link(
+                    temporary_name,
+                    name,
+                    src_dir_fd=parent_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
                 installed = True
             except FileExistsError:
-                existing = self.read(
-                    target,
-                    sha256,
-                    expected_byte_count=len(content),
-                    max_byte_count=len(content),
-                )
-                if existing != content:
+                try:
+                    raced = _read_entry(
+                        parent_fd,
+                        name,
+                        sha256,
+                        expected_byte_count=len(content),
+                        max_byte_count=len(content),
+                    )
+                except (AddressedFileError, _EntryMissing) as error:
+                    raise AddressedFileError("immutable addressed content conflicts") from error
+                if raced != content:
                     raise AddressedFileError("immutable addressed content conflicts") from None
             if installed:
-                _fsync_directory(target.parent)
+                _fsync_directory(parent_fd)
         finally:
-            temporary.unlink(missing_ok=True)
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+                _fsync_directory(parent_fd)
+            except FileNotFoundError:
+                pass
 
-    def _ensure_parent(self, parent: Path) -> None:
-        parent.mkdir(parents=True, exist_ok=True)
-        current = parent
-        while True:
-            _fsync_directory(current)
-            if current == self._root:
-                return
-            if self._root not in current.parents:
-                raise AddressedFileError("addressed path escapes its mount root")
-            current = current.parent
+    @contextmanager
+    def _open_parent(self, path: Path, *, create: bool) -> Iterator[tuple[int, str]]:
+        relative = _relative_address(path, self._root)
+        if create:
+            self._root.mkdir(parents=True, exist_ok=True)
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(self._root, flags)
+        try:
+            for component in relative.parts[:-1]:
+                if create:
+                    try:
+                        os.mkdir(component, mode=0o755, dir_fd=descriptor)
+                    except FileExistsError:
+                        pass
+                    else:
+                        _fsync_directory(descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+                os.close(descriptor)
+                descriptor = child
+            yield descriptor, relative.name
+        finally:
+            os.close(descriptor)
 
 
-def _require_within_root(path: Path, root: Path) -> None:
-    if path == root or root not in path.parents:
-        raise AddressedFileError("addressed path escapes its mount root")
-
-
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+def _read_entry(
+    parent_fd: int,
+    name: str,
+    expected_sha256: str,
+    *,
+    expected_byte_count: int | None,
+    max_byte_count: int | None,
+) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        os.fsync(descriptor)
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError as error:
+        raise _EntryMissing(name) from error
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise AddressedFileError("addressed file is not a regular file")
+        if expected_byte_count is not None and metadata.st_size != expected_byte_count:
+            raise AddressedFileError("addressed file byte count is invalid")
+        if max_byte_count is not None and metadata.st_size > max_byte_count:
+            raise AddressedFileError("addressed file exceeds its byte bound")
+        content = bytearray()
+        digest = hashlib.sha256()
+        while chunk := os.read(descriptor, 1024 * 1024):
+            content.extend(chunk)
+            digest.update(chunk)
+        if len(content) != metadata.st_size:
+            raise AddressedFileError("addressed file changed while reading")
+        if digest.hexdigest() != expected_sha256:
+            raise AddressedFileError("addressed file checksum is invalid")
+        return bytes(content)
     finally:
         os.close(descriptor)
+
+
+def _create_temporary(parent_fd: int) -> tuple[str, int]:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    while True:
+        name = f".candidate-{secrets.token_hex(12)}"
+        try:
+            return name, os.open(name, flags, 0o600, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+
+
+def _relative_address(path: Path, root: Path) -> Path:
+    try:
+        relative = path.relative_to(root)
+    except ValueError as error:
+        raise AddressedFileError("addressed path escapes its mount root") from error
+    if not relative.parts or any(part in {"", ".", ".."} for part in relative.parts):
+        raise AddressedFileError("addressed path escapes its mount root")
+    return relative
+
+
+def _fsync_directory(descriptor: int) -> None:
+    os.fsync(descriptor)
 
 
 __all__ = ("AddressedFileError", "AddressedFileStore")

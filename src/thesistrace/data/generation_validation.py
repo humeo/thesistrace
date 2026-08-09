@@ -35,8 +35,10 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     instrument_set = set(instrument_ids)
     if not instrument_ids or len(instrument_ids) != len(instrument_set):
         raise GenerationValidationError("Canonical instrument identities are invalid")
+    listed_from_by_instrument: dict[str, date] = {}
     for row in instruments:
         listed_from = _iso_date(row["listed_from"], "Canonical Instrument.listed_from")
+        listed_from_by_instrument[str(row["instrument_id"])] = listed_from
         listed_to = row["listed_to"]
         if listed_to and _iso_date(listed_to, "Canonical Instrument.listed_to") < listed_from:
             raise GenerationValidationError("Canonical instrument lifecycle is invalid")
@@ -79,9 +81,16 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     anchor_by_instrument: dict[str, Decimal] = {}
     for row in anchors:
         anchor_factor = _finite_decimal(row["anchor_factor"], "Canonical Adjustment Anchor.factor")
-        if str(row["anchor_session"]) not in calendar_set or anchor_factor <= 0:
+        instrument_id = str(row["instrument_id"])
+        anchor_session = _iso_date(row["anchor_session"], "Canonical Adjustment Anchor.session")
+        if (
+            anchor_session.weekday() >= 5
+            or anchor_session < listed_from_by_instrument[instrument_id]
+            or anchor_session > parsed_calendar[-1]
+            or anchor_factor <= 0
+        ):
             raise GenerationValidationError("Canonical Adjustment Anchor is invalid")
-        anchor_by_instrument[str(row["instrument_id"])] = anchor_factor
+        anchor_by_instrument[instrument_id] = anchor_factor
 
     prices = _rows(canonical, "prices")
     price_by_position = _unique_positions(prices, "session", "Canonical Price")

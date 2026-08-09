@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -242,6 +243,22 @@ def test_inconsistent_adjusted_price_derivation_is_rejected(
         )
 
 
+def test_adjustment_anchor_may_predate_dataset_coverage(tmp_path: Path) -> None:
+    canonical = _canonical()
+    canonical["instruments"][0]["listed_from"] = "2020-01-02"
+    canonical["adjustment_anchors"][0]["anchor_session"] = "2020-01-02"
+
+    generation = MountedGenerationStore(tmp_path).materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+
+    reopened = MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
+    assert reopened.canonical["adjustment_anchors"][0]["anchor_session"] == "2020-01-02"
+
+
 def test_oversized_or_symlinked_addressed_files_are_rejected_before_parsing(
     tmp_path: Path,
 ) -> None:
@@ -271,7 +288,42 @@ def test_oversized_or_symlinked_addressed_files_are_rejected_before_parsing(
         store.open_generation(generation.manifest_sha256)
 
 
-def test_concurrent_materializers_publish_one_identical_generation(tmp_path: Path) -> None:
+def test_parent_directory_symlink_cannot_escape_the_mount(tmp_path: Path) -> None:
+    external = tmp_path.parent / f"{tmp_path.name}-external"
+    external.mkdir()
+    (tmp_path / "objects").symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(GenerationStoreError, match="unsafe"):
+        MountedGenerationStore(tmp_path).materialize(
+            _canonical(),
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+
+    assert not tuple(external.iterdir())
+
+
+def test_concurrent_materializers_publish_one_identical_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    barrier = threading.Barrier(8)
+    lock = threading.Lock()
+    competing_threads: set[int] = set()
+    real_link = os.link
+
+    def racing_link(*args: object, **kwargs: object) -> None:
+        identity = threading.get_ident()
+        with lock:
+            first_install = identity not in competing_threads
+            competing_threads.add(identity)
+        if first_install:
+            barrier.wait(timeout=10)
+        real_link(*args, **kwargs)
+
+    monkeypatch.setattr(os, "link", racing_link)
+
     def materialize() -> tuple[str, str]:
         generation = MountedGenerationStore(tmp_path).materialize(
             _canonical(),
@@ -285,6 +337,7 @@ def test_concurrent_materializers_publish_one_identical_generation(tmp_path: Pat
         outcomes = tuple(executor.map(lambda _: materialize(), range(16)))
 
     assert len(set(outcomes)) == 1
+    assert len(competing_threads) == 8
     manifest_sha256, _ = outcomes[0]
     assert (
         MountedGenerationStore(tmp_path).open_generation(manifest_sha256).canonical == _canonical()
@@ -306,14 +359,33 @@ def test_directory_sync_failure_never_exposes_a_complete_generation(
         real_link(*args, **kwargs)
         linked = True
 
-    def failing_sync(path: Path) -> None:
+    def failing_sync(descriptor: int) -> None:
         if linked:
             raise OSError("injected directory fsync failure")
-        real_sync(path)
+        real_sync(descriptor)
 
     monkeypatch.setattr(os, "link", tracked_link)
     monkeypatch.setattr(generation_files, "_fsync_directory", failing_sync)
-    with pytest.raises(OSError, match="injected"):
+    with pytest.raises(GenerationStoreError, match="filesystem write failed"):
+        MountedGenerationStore(tmp_path).materialize(
+            _canonical(),
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+
+    assert not tuple((tmp_path / "manifests").rglob("*.json"))
+
+
+def test_link_failure_is_wrapped_and_never_exposes_a_complete_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def failing_link(*args: object, **kwargs: object) -> None:
+        raise OSError("injected link failure")
+
+    monkeypatch.setattr(os, "link", failing_link)
+    with pytest.raises(GenerationStoreError, match="filesystem write failed"):
         MountedGenerationStore(tmp_path).materialize(
             _canonical(),
             prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
