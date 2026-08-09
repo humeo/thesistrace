@@ -35,6 +35,8 @@ CONTENT_FIELDS = (
     "neutralization",
     "holdings_count",
     "rebalance_every_sessions",
+    "start_date",
+    "end_date",
 )
 
 FIXED_STRATEGY_KIND = "long_only_top_n_equal_weight"
@@ -136,7 +138,7 @@ class DefinitionService:
             raise ValueError("Creating a Research Definition takes no expected revision")
         self._validate_structure(command)
         definition_id = f"def_{uuid4().hex[:20]}"
-        content = {field: getattr(command, field) for field in CONTENT_FIELDS}
+        content = _command_content(command)
         name = str(content["name"] or "").strip()
         content["name"] = name or _generated_name(definition_id)
         with self._database.transaction() as transaction:
@@ -174,9 +176,10 @@ class DefinitionService:
             if int(current["revision"]) != command.expected_revision:
                 raise DefinitionConflict(int(current["revision"]))
             content = dict(current["content"])
+            submitted = command.model_dump(mode="json")
             for field in CONTENT_FIELDS:
                 if field in command.model_fields_set:
-                    content[field] = getattr(command, field)
+                    content[field] = submitted[field]
             submitted_name = str(content.get("name") or "").strip()
             if submitted_name:
                 content["name"] = submitted_name
@@ -207,7 +210,7 @@ class DefinitionService:
             raise ValueError("Run request_id is required")
         self._validate_run_structure(command)
         fingerprint = _run_fingerprint(definition_id, command)
-        content = {field: getattr(command, field) for field in CONTENT_FIELDS}
+        content = _command_content(command)
 
         with self._database.transaction() as transaction:
             transaction.execute(
@@ -361,6 +364,13 @@ class DefinitionService:
 
 def _generated_name(definition_id: str) -> str:
     return f"Research {definition_id[-8:].upper()}"
+
+
+def _command_content(
+    command: DefinitionSaveCommand | DefinitionRunCommand,
+) -> dict[str, object]:
+    serialized = command.model_dump(mode="json")
+    return {field: serialized[field] for field in CONTENT_FIELDS}
 
 
 def _run_fingerprint(

@@ -4,12 +4,56 @@ type DefinitionSummary = { id: string; name: string; revision: number };
 type DefinitionList = { items: DefinitionSummary[]; next_cursor: string | null };
 type DefinitionDetail = DefinitionSummary & {
   hypothesis: string | null;
+  start_date: string | null;
+  end_date: string | null;
   alpha: Record<string, unknown> | null;
   universe: "top300" | "top1000" | "top2000" | "top3000" | null;
   neutralization: "none" | "industry" | null;
   holdings_count: number | null;
   rebalance_every_sessions: number | null;
 };
+
+type ResearchDateFieldsProps = {
+  disabled?: boolean;
+  startDate: string;
+  endDate: string;
+  onStartDateChange: (value: string) => void;
+  onEndDateChange: (value: string) => void;
+};
+
+export function ResearchDateFields({
+  disabled = false,
+  startDate,
+  endDate,
+  onStartDateChange,
+  onEndDateChange,
+}: ResearchDateFieldsProps) {
+  return (
+    <fieldset>
+      <legend>Research period</legend>
+      <label>
+        Start date
+        <input
+          aria-label="Research start date"
+          disabled={disabled}
+          onChange={(event) => onStartDateChange(event.target.value)}
+          type="date"
+          value={startDate}
+        />
+      </label>
+      <label>
+        End date
+        <input
+          aria-label="Research end date"
+          disabled={disabled}
+          onChange={(event) => onEndDateChange(event.target.value)}
+          type="date"
+          value={endDate}
+        />
+      </label>
+    </fieldset>
+  );
+}
 type IntegerBounds = { minimum: number; maximum: number };
 type AuthorableField = {
   field_id: string;
@@ -55,6 +99,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [hypothesis, setHypothesis] = useState("");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [alpha, setAlpha] = useState<Record<string, unknown> | null>(null);
   const [alphaEditor, setAlphaEditor] = useState<AlphaEditor | null>(null);
   const [universe, setUniverse] = useState("");
@@ -78,6 +124,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setDefinition(loaded);
     setName(loaded.name);
     setHypothesis(loaded.hypothesis ?? "");
+    setStartDate(loaded.start_date ?? "");
+    setEndDate(loaded.end_date ?? "");
     setAlpha(loaded.alpha);
     setAlphaEditor(readAlphaEditor(loaded.alpha, catalog));
     setUniverse(loaded.universe ?? "");
@@ -172,6 +220,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setActiveDefinitionId(undefined);
     setName("");
     setHypothesis("");
+    setStartDate("");
+    setEndDate("");
     setAlpha(null);
     setAlphaEditor(null);
     setUniverse("");
@@ -349,6 +399,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   function currentContent(): Record<string, unknown> {
     const content: Record<string, unknown> = {
       hypothesis: hypothesis.trim() ? hypothesis : null,
+      start_date: startDate || null,
+      end_date: endDate || null,
       alpha,
       universe: universe || null,
       neutralization: neutralization || null,
@@ -406,6 +458,14 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
             Hypothesis (optional)
             <textarea aria-label="Hypothesis (optional)" onChange={(event) => setHypothesis(event.target.value)} value={hypothesis} />
           </label>
+
+          <ResearchDateFields
+            disabled={busy !== null}
+            endDate={endDate}
+            onEndDateChange={setEndDate}
+            onStartDateChange={setStartDate}
+            startDate={startDate}
+          />
 
           {alphaEditor && selectedOperator ? (
             <fieldset>

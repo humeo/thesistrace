@@ -69,6 +69,9 @@ def test_revision_conflicts_and_malformed_edits_never_corrupt_definition() -> No
             {"expected_revision": 2, "dataset_release": "release_user_selected"},
             {"expected_revision": 2, "holdings_count": "30"},
             {"expected_revision": 2, "holdings_count": 101},
+            {"expected_revision": 2, "start_date": "2026-02-30"},
+            {"expected_revision": 2, "start_date": 20260101},
+            {"expected_revision": 2, "end_date": ["2026-12-31"]},
             {"expected_revision": 2, "alpha": []},
             {"expected_revision": 2, "alpha": {"operator_id": "ts_mean"}},
             {
@@ -112,6 +115,8 @@ def test_revision_conflicts_and_malformed_edits_never_corrupt_definition() -> No
                 "neutralization": "industry",
                 "holdings_count": 40,
                 "rebalance_every_sessions": 10,
+                "start_date": "2026-01-02",
+                "end_date": "2026-12-31",
             },
         )
         assert saved.status_code == 200
@@ -125,6 +130,8 @@ def test_revision_conflicts_and_malformed_edits_never_corrupt_definition() -> No
             "neutralization": "industry",
             "holdings_count": 40,
             "rebalance_every_sessions": 10,
+            "start_date": "2026-01-02",
+            "end_date": "2026-12-31",
         }
 
 

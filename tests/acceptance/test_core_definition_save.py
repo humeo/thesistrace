@@ -35,6 +35,8 @@ def test_incomplete_nameless_definition_survives_http_and_worker_restart() -> No
         assert definition["neutralization"] is None
         assert definition["holdings_count"] is None
         assert definition["rebalance_every_sessions"] is None
+        assert definition["start_date"] is None
+        assert definition["end_date"] is None
         assert set(definition) == {
             "id",
             "revision",
@@ -45,6 +47,8 @@ def test_incomplete_nameless_definition_survives_http_and_worker_restart() -> No
             "neutralization",
             "holdings_count",
             "rebalance_every_sessions",
+            "start_date",
+            "end_date",
         }
 
     _restart_worker_once(settings)

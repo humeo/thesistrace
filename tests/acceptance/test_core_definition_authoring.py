@@ -35,6 +35,8 @@ def test_authoring_options_and_saved_tree_use_authoritative_stable_ids() -> None
         assert options["neutralizations"] == ["none", "industry"]
         assert options["holdings_count"] == {"minimum": 1, "maximum": 100}
         assert options["rebalance_every_sessions"] == {"minimum": 1, "maximum": 20}
+        assert "start_date" not in options
+        assert "end_date" not in options
 
         serialized_options = str(options)
         for private_name in (

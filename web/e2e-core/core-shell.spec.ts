@@ -955,6 +955,9 @@ test("saves and reopens an incomplete nameless Definition", async ({ page }) => 
   await page.getByRole("button", { name: "New Definition" }).click();
   await expect(page.getByLabel("Definition name")).toHaveValue("");
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");
+  await expect(page.getByLabel("Research start date")).toHaveValue("");
+  await expect(page.getByLabel("Research end date")).toHaveValue("");
+  await page.getByLabel("Research start date").fill("2026-01-02");
   await page.getByRole("button", { name: "Save" }).click();
 
   await expect(page.getByRole("status")).toHaveText("Saved revision 1.");
@@ -989,12 +992,16 @@ test("saves and reopens an incomplete nameless Definition", async ({ page }) => 
   await expect(page.getByLabel("Definition name")).toHaveValue(generatedName);
   await expect(page.getByText("Revision 3")).toBeVisible();
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");
+  await expect(page.getByLabel("Research start date")).toHaveValue("2026-01-02");
+  await expect(page.getByLabel("Research end date")).toHaveValue("");
   await page.getByRole("link", { name: "Definitions" }).click();
   await expect(page.getByRole("link", { name: generatedName })).toBeVisible();
   await page.getByRole("button", { name: "Refresh" }).click();
   await page.getByRole("link", { name: generatedName }).click();
   await expect(page).toHaveURL(stableUrl);
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");
+  await expect(page.getByLabel("Research start date")).toHaveValue("2026-01-02");
+  await expect(page.getByLabel("Research end date")).toHaveValue("");
   await expect(page.getByText(/Draft|Snapshot|Frozen version/i)).toHaveCount(0);
 });
 
@@ -1056,6 +1063,8 @@ test("keeps unsaved editor values after revision and structure errors", async ({
 
   await page.getByLabel("Definition name").fill("My unsaved name");
   await page.getByLabel("Hypothesis (optional)").fill("My unsaved hypothesis");
+  await page.getByLabel("Research start date").fill("2026-01-02");
+  await page.getByLabel("Research end date").fill("2026-06-30");
   await page.getByRole("button", { name: "Save" }).click();
   await expect(page.getByRole("alert")).toHaveText(
     "Definition changed elsewhere at revision 2. Your edits are unchanged.",
@@ -1064,6 +1073,8 @@ test("keeps unsaved editor values after revision and structure errors", async ({
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue(
     "My unsaved hypothesis",
   );
+  await expect(page.getByLabel("Research start date")).toHaveValue("2026-01-02");
+  await expect(page.getByLabel("Research end date")).toHaveValue("2026-06-30");
   await expect(page.getByText("Revision 1")).toBeVisible();
   await expect(page.getByRole("button", { name: "Retry" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
@@ -1073,10 +1084,14 @@ test("keeps unsaved editor values after revision and structure errors", async ({
   await expect(page.getByRole("status")).toHaveText("Refreshed.");
   await expect(page.getByLabel("Definition name")).toHaveValue("External edit");
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue("");
+  await expect(page.getByLabel("Research start date")).toHaveValue("");
+  await expect(page.getByLabel("Research end date")).toHaveValue("");
   await expect(page.getByText("Revision 2")).toBeVisible();
 
   await page.getByLabel("Definition name").fill("My corrected name");
   await page.getByLabel("Hypothesis (optional)").fill("My corrected hypothesis");
+  await page.getByLabel("Research start date").fill("2026-02-02");
+  await page.getByLabel("Research end date").fill("2026-12-31");
   await page.getByRole("button", { name: "Add Alpha" }).click();
   await page.getByLabel("Alpha operator").selectOption("ts_mean");
   await page.getByLabel("Alpha window 2").evaluate((element) => {
@@ -1096,6 +1111,8 @@ test("keeps unsaved editor values after revision and structure errors", async ({
   await expect(page.getByLabel("Hypothesis (optional)")).toHaveValue(
     "My corrected hypothesis",
   );
+  await expect(page.getByLabel("Research start date")).toHaveValue("2026-02-02");
+  await expect(page.getByLabel("Research end date")).toHaveValue("2026-12-31");
   await expect(page.getByLabel("Alpha window 2")).toHaveValue("0");
 
   await page.getByLabel("Alpha window 2").fill("20");

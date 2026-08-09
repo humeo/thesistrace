@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from thesistrace.research_run import ResearchRunSummary
 
@@ -10,6 +11,23 @@ Revision = Annotated[int, Field(strict=True, ge=1)]
 HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
 RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+
+
+def _natural_date(value: object) -> date:
+    if type(value) is date:
+        return value
+    if not isinstance(value, str):
+        raise ValueError("natural date must be an ISO YYYY-MM-DD string")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("natural date must be an ISO YYYY-MM-DD string") from error
+    if parsed.isoformat() != value:
+        raise ValueError("natural date must be an ISO YYYY-MM-DD string")
+    return parsed
+
+
+NaturalDate = Annotated[date, BeforeValidator(_natural_date)]
 
 
 class DefinitionSaveCommand(BaseModel):
@@ -23,6 +41,8 @@ class DefinitionSaveCommand(BaseModel):
     neutralization: Literal["none", "industry"] | None = None
     holdings_count: HoldingsCount | None = None
     rebalance_every_sessions: RebalanceInterval | None = None
+    start_date: NaturalDate | None = None
+    end_date: NaturalDate | None = None
 
 
 class DefinitionRunCommand(BaseModel):
@@ -37,6 +57,8 @@ class DefinitionRunCommand(BaseModel):
     neutralization: Literal["none", "industry"] | None = None
     holdings_count: HoldingsCount | None = None
     rebalance_every_sessions: RebalanceInterval | None = None
+    start_date: NaturalDate | None = None
+    end_date: NaturalDate | None = None
 
 
 class DefinitionDetail(BaseModel):
@@ -51,6 +73,8 @@ class DefinitionDetail(BaseModel):
     neutralization: Literal["none", "industry"] | None
     holdings_count: int | None
     rebalance_every_sessions: int | None
+    start_date: NaturalDate | None
+    end_date: NaturalDate | None
 
 
 class DefinitionSummary(BaseModel):
