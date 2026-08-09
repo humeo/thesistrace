@@ -265,6 +265,53 @@ MIGRATIONS = MigrationPlan(
 
                 INSERT INTO data.current_dataset_state (singleton)
                 VALUES (1);
+
+                CREATE TABLE data.refresh_operations (
+                    idempotency_key text PRIMARY KEY CHECK (
+                        idempotency_key <> '' AND idempotency_key = btrim(idempotency_key)
+                    ),
+                    fingerprint text NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
+                    status text NOT NULL CHECK (
+                        status IN ('accepted', 'running', 'succeeded', 'failed')
+                    ),
+                    outcome text NULL CHECK (
+                        outcome IS NULL OR outcome IN ('published', 'no_change')
+                    ),
+                    as_of timestamptz NOT NULL,
+                    generation_manifest_sha256 text NULL CHECK (
+                        generation_manifest_sha256 IS NULL
+                        OR generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
+                    data_through_session date NULL,
+                    last_refresh_at timestamptz NULL,
+                    failure_code text NULL,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    started_at timestamptz NULL,
+                    finished_at timestamptz NULL,
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    CHECK (
+                        (status = 'accepted' AND outcome IS NULL AND failure_code IS NULL)
+                        OR (
+                            status = 'running' AND outcome IS NULL
+                            AND failure_code IS NULL AND started_at IS NOT NULL
+                        )
+                        OR (
+                            status = 'succeeded' AND outcome IS NOT NULL
+                            AND generation_manifest_sha256 IS NOT NULL
+                            AND data_through_session IS NOT NULL
+                            AND last_refresh_at IS NOT NULL
+                            AND failure_code IS NULL AND finished_at IS NOT NULL
+                        )
+                        OR (
+                            status = 'failed' AND outcome IS NULL
+                            AND failure_code IS NOT NULL AND finished_at IS NOT NULL
+                        )
+                    )
+                );
+
+                CREATE UNIQUE INDEX data_one_active_refresh_idx
+                    ON data.refresh_operations ((true))
+                    WHERE status IN ('accepted', 'running');
             """,
         ),
     ),

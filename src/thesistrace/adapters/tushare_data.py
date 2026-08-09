@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from collections.abc import Callable, Mapping
 from datetime import date
+from decimal import Decimal
 from typing import Protocol
 
 from thesistrace.adapters.tushare_provider import (
@@ -49,10 +50,10 @@ class TushareDataSource:
 
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
         try:
-            if plan.kind != "incremental":
+            if plan.kind not in {"incremental", "refresh"}:
                 raise DataSourceError(
                     "invalid_source_data",
-                    detail_code="INCREMENTAL_PLAN_REQUIRED",
+                    detail_code="REFRESH_OR_INCREMENTAL_PLAN_REQUIRED",
                 )
             previous = plan.previous_canonical
             if previous is None or plan.after_session is None:
@@ -71,13 +72,26 @@ class TushareDataSource:
                 for item in instruments
                 if isinstance(item, dict) and "ts_code" in item
             }
-            snapshot = self._provider.collect_incremental_snapshot(
-                last_session=plan.after_session,
-                known_ts_codes=known_codes,
-                as_of=self._clock(),
+            request_start = (
+                plan.overlap_start_session if plan.kind == "refresh" else plan.after_session
             )
+            assert request_start is not None
+            request_end = plan.completed_through_date or self._clock()
+            snapshot = self._provider.collect_incremental_snapshot(
+                last_session=request_start,
+                known_ts_codes=known_codes,
+                as_of=request_end,
+            )
+            normalization_previous = previous
+            if plan.kind == "refresh":
+                normalization_previous = _canonical_before_overlap(previous, request_start)
+                snapshot = _preserve_ordinary_overlap_absence(
+                    snapshot,
+                    previous,
+                    overlap_start_session=request_start,
+                )
             try:
-                lineage, delta = normalize_tushare_increment(snapshot, previous)
+                lineage, delta = normalize_tushare_increment(snapshot, normalization_previous)
             except TushareSourceError as error:
                 if error.reason_code != "NO_NEW_RESEARCH_SESSION":
                     raise
@@ -89,7 +103,7 @@ class TushareDataSource:
                 }
                 canonical = copy.deepcopy(dict(previous))
             else:
-                canonical = _materialize_increment(previous, delta)
+                canonical = _materialize_increment(normalization_previous, delta)
         except TushareSourceError as error:
             raise DataSourceError(
                 _error_category(error.reason_code),
@@ -284,3 +298,226 @@ def _materialize_increment(
             )
         target[field] = str(correction["value"])
     return canonical
+
+
+def _canonical_before_overlap(
+    previous: Mapping[str, object],
+    overlap_start_session: str,
+) -> dict[str, object]:
+    calendar = previous.get("research_calendar")
+    if not isinstance(calendar, list):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_PREVIOUS_CANONICAL",
+        )
+    prefix_sessions = [str(value) for value in calendar if str(value) < overlap_start_session]
+    if not prefix_sessions:
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="REFRESH_OVERLAP_REQUIRES_PREDECESSOR",
+        )
+    prefix = copy.deepcopy(dict(previous))
+    prefix["research_calendar"] = prefix_sessions
+    for table in ("prices", "trading_states", "price_limits", "base_pool"):
+        rows = prefix.get(table)
+        if not isinstance(rows, list):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INVALID_PREVIOUS_CANONICAL",
+            )
+        prefix[table] = [row for row in rows if str(row.get("session", "")) < overlap_start_session]
+    designations = prefix.get("st_designations", [])
+    if not isinstance(designations, list):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_PREVIOUS_CANONICAL",
+        )
+    prefix["st_designations"] = [
+        row for row in designations if str(row.get("trade_date", "")) < overlap_start_session
+    ]
+    universes = prefix.get("liquidity_universes")
+    if not isinstance(universes, dict):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_PREVIOUS_CANONICAL",
+        )
+    prefix["liquidity_universes"] = {
+        name: [row for row in rows if str(row.get("session", "")) < overlap_start_session]
+        for name, rows in universes.items()
+        if isinstance(rows, list)
+    }
+    return prefix
+
+
+def _preserve_ordinary_overlap_absence(
+    snapshot: Mapping[str, list[dict[str, object]]],
+    previous: Mapping[str, object],
+    *,
+    overlap_start_session: str,
+) -> dict[str, list[dict[str, object]]]:
+    supplemented = {name: copy.deepcopy(rows) for name, rows in snapshot.items()}
+    daily = supplemented.get("daily", [])
+    adjustments = supplemented.get("adjustments", [])
+    suspensions = supplemented.get("suspensions", [])
+    limits = supplemented.get("price_limits", [])
+    st_rows = supplemented.get("st", [])
+    if not all(
+        isinstance(rows, list) for rows in (daily, adjustments, suspensions, limits, st_rows)
+    ):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="MALFORMED_PROVIDER_PAYLOAD",
+        )
+    daily_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in daily}
+    suspension_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in suspensions}
+    adjustment_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in adjustments}
+    limit_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in limits}
+    st_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in st_rows}
+    instruments = previous.get("instruments")
+    prices = previous.get("prices")
+    states = previous.get("trading_states")
+    previous_limits = previous.get("price_limits")
+    previous_st = previous.get("st_designations", [])
+    if not all(
+        isinstance(rows, list)
+        for rows in (instruments, prices, states, previous_limits, previous_st)
+    ):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_PREVIOUS_CANONICAL",
+        )
+    assert isinstance(instruments, list)
+    assert isinstance(prices, list)
+    assert isinstance(states, list)
+    assert isinstance(previous_limits, list)
+    assert isinstance(previous_st, list)
+    code_by_instrument = {
+        str(row["instrument_id"]): str(row["ts_code"])
+        for row in instruments
+        if isinstance(row, dict)
+    }
+    price_by_position = {
+        (str(row["session"]), str(row["instrument_id"])): row
+        for row in prices
+        if isinstance(row, dict)
+    }
+    limit_by_position = {
+        (str(row["session"]), str(row["instrument_id"])): row
+        for row in previous_limits
+        if isinstance(row, dict)
+    }
+    for designation in previous_st:
+        if not isinstance(designation, dict):
+            continue
+        trade_date = str(designation.get("trade_date", ""))
+        if trade_date < overlap_start_session:
+            continue
+        instrument_id = str(designation.get("instrument_id", ""))
+        code = code_by_instrument.get(instrument_id)
+        if code is None:
+            continue
+        source_position = (trade_date.replace("-", ""), code)
+        if source_position in st_positions:
+            continue
+        st_rows.append(
+            {
+                "ts_code": code,
+                "trade_date": source_position[0],
+                "name": designation.get("name", "ST"),
+                "type": designation.get("type", "preserved"),
+                "type_name": designation.get("type_name", "preserved"),
+            }
+        )
+        st_positions.add(source_position)
+    for state in states:
+        if not isinstance(state, dict):
+            continue
+        session = str(state["session"])
+        if session < overlap_start_session:
+            continue
+        instrument_id = str(state["instrument_id"])
+        code = code_by_instrument[instrument_id]
+        source_position = (session.replace("-", ""), code)
+        price = price_by_position.get((session, instrument_id))
+        prior_limit = limit_by_position.get((session, instrument_id))
+        if source_position in daily_positions:
+            if price is not None and source_position not in adjustment_positions:
+                adjustments.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": source_position[0],
+                        "adj_factor": price["adjustment_factor"],
+                    }
+                )
+                adjustment_positions.add(source_position)
+            if prior_limit is not None and source_position not in limit_positions:
+                limits.append(
+                    {
+                        "ts_code": code,
+                        "trade_date": source_position[0],
+                        "pre_close": (None if price is None else price["pre_close_raw"]),
+                        "up_limit": prior_limit["upper"],
+                        "down_limit": prior_limit["lower"],
+                    }
+                )
+                limit_positions.add(source_position)
+            continue
+        if source_position in suspension_positions:
+            continue
+        if state["state"] == "full_session_suspension":
+            suspensions.append(
+                {
+                    "ts_code": code,
+                    "trade_date": source_position[0],
+                    "suspend_timing": "全天",
+                    "suspend_type": "preserved",
+                }
+            )
+            suspension_positions.add(source_position)
+            continue
+        if price is None or prior_limit is None:
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INVALID_PREVIOUS_CANONICAL",
+            )
+        daily.append(_source_daily(code, session, price))
+        daily_positions.add(source_position)
+        if source_position not in adjustment_positions:
+            adjustments.append(
+                {
+                    "ts_code": code,
+                    "trade_date": source_position[0],
+                    "adj_factor": price["adjustment_factor"],
+                }
+            )
+        if source_position not in limit_positions:
+            limits.append(
+                {
+                    "ts_code": code,
+                    "trade_date": source_position[0],
+                    "pre_close": price["pre_close_raw"],
+                    "up_limit": prior_limit["upper"],
+                    "down_limit": prior_limit["lower"],
+                }
+            )
+    return supplemented
+
+
+def _source_daily(
+    code: str,
+    session: str,
+    price: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "ts_code": code,
+        "trade_date": session.replace("-", ""),
+        "open": price["open_raw"],
+        "high": price["high_raw"],
+        "low": price["low_raw"],
+        "close": price["close_raw"],
+        "pre_close": price["pre_close_raw"],
+        "change": price["change_raw"],
+        "pct_chg": price["pct_change_raw"],
+        "vol": str(Decimal(str(price["volume_shares"])) / Decimal(100)),
+        "amount": str(Decimal(str(price["turnover_cny"])) / Decimal(1000)),
+    }

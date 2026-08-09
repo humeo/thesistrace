@@ -14,6 +14,8 @@ from thesistrace.adapters.tushare_provider import (
     normalize_tushare_snapshot,
 )
 from thesistrace.data import BootstrapCollectionPlan, CollectionPlan, DataSourceError
+from thesistrace.data.source import refresh_collection_plan
+from thesistrace.data.validation import validate_release_batch
 from thesistrace.fixture import build_fixture
 
 
@@ -219,6 +221,122 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
         previous["research_calendar"][0],
         appended,
     )
+
+
+def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> None:
+    sessions: list[str] = []
+    cursor = date(2026, 7, 1)
+    while len(sessions) < 22:
+        if cursor.weekday() < 5:
+            sessions.append(cursor.strftime("%Y%m%d"))
+        cursor += timedelta(days=1)
+    bootstrap_snapshot = normalizer_snapshot(sessions[:21])
+    preserved_st_session = sessions[6]
+    bootstrap_snapshot["st"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": preserved_st_session,
+            "name": "ST浦发",
+            "type": "S",
+            "type_name": "特别处理",
+        }
+    ]
+    _source, previous = normalize_tushare_snapshot(bootstrap_snapshot)
+
+    refresh_snapshot = normalizer_snapshot(sessions[1:])
+    ordinary_missing = sessions[1]
+    suspension_session = sessions[2]
+    factor_session = sessions[3]
+    turnover_session = sessions[4]
+    for table in ("daily", "adjustments", "price_limits"):
+        refresh_snapshot[table] = [
+            row for row in refresh_snapshot[table] if row["trade_date"] != ordinary_missing
+        ]
+    refresh_snapshot["daily"] = [
+        row for row in refresh_snapshot["daily"] if row["trade_date"] != suspension_session
+    ]
+    refresh_snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": suspension_session,
+            "suspend_timing": "全天",
+            "suspend_type": "S",
+        }
+    ]
+    next(row for row in refresh_snapshot["adjustments"] if row["trade_date"] == factor_session)[
+        "adj_factor"
+    ] = "2"
+    next(row for row in refresh_snapshot["daily"] if row["trade_date"] == turnover_session)[
+        "amount"
+    ] = "9000"
+    refresh_snapshot["st"] = []
+
+    class RefreshProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            known_ts_codes: set[str],
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            self.incremental_calls.append((last_session, known_ts_codes, as_of))
+            return copy.deepcopy(refresh_snapshot)
+
+    provider = RefreshProvider()
+    plan = refresh_collection_plan(datetime(2026, 7, 30, 18, tzinfo=UTC), previous)
+    batch = TushareDataSource(provider=provider).collect(plan)
+
+    assert provider.incremental_calls == [
+        (
+            f"{sessions[1][:4]}-{sessions[1][4:6]}-{sessions[1][6:]}",
+            {"600000.SH"},
+            date(2026, 7, 30),
+        )
+    ]
+    assert batch.canonical["research_calendar"] == [
+        f"{value[:4]}-{value[4:6]}-{value[6:]}" for value in sessions
+    ]
+    instrument_id = "equity:600000.SH"
+    prices = {(row["session"], row["instrument_id"]): row for row in batch.canonical["prices"]}
+    previous_prices = {(row["session"], row["instrument_id"]): row for row in previous["prices"]}
+    ordinary_position = (
+        f"{ordinary_missing[:4]}-{ordinary_missing[4:6]}-{ordinary_missing[6:]}",
+        instrument_id,
+    )
+    assert prices[ordinary_position] == previous_prices[ordinary_position]
+    suspension_position = (
+        f"{suspension_session[:4]}-{suspension_session[4:6]}-{suspension_session[6:]}",
+        instrument_id,
+    )
+    assert suspension_position not in prices
+    assert (
+        next(
+            row
+            for row in batch.canonical["trading_states"]
+            if (row["session"], row["instrument_id"]) == suspension_position
+        )["state"]
+        == "full_session_suspension"
+    )
+    factor_position = (
+        f"{factor_session[:4]}-{factor_session[4:6]}-{factor_session[6:]}",
+        instrument_id,
+    )
+    assert prices[factor_position]["adjustment_factor"] == "2.000000"
+    assert prices[factor_position]["open_adj"] == "20.00000000"
+    turnover_position = (
+        f"{turnover_session[:4]}-{turnover_session[4:6]}-{turnover_session[6:]}",
+        instrument_id,
+    )
+    assert prices[turnover_position]["turnover_cny"] == "9000000.00"
+    assert any(
+        row["trade_date"]
+        == f"{preserved_st_session[:4]}-{preserved_st_session[4:6]}-{preserved_st_session[6:]}"
+        for row in batch.canonical["st_designations"]
+    )
+    for rows in batch.canonical["liquidity_universes"].values():
+        assert rows[-1]["session"] == batch.canonical["research_calendar"][-1]
+        assert len(rows) == len(sessions)
+    validate_release_batch(batch, predecessor_session=previous["research_calendar"][-1])
 
 
 @pytest.mark.parametrize(

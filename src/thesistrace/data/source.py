@@ -26,6 +26,8 @@ class DataSourceError(RuntimeError):
 class CollectionPlan:
     kind: str
     after_session: str | None = None
+    overlap_start_session: str | None = None
+    completed_through_date: date | None = None
     previous_canonical: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
@@ -36,6 +38,15 @@ class CollectionPlan:
         ):
             return
         if self.kind == "incremental" and self.after_session:
+            return
+        if (
+            self.kind == "refresh"
+            and self.after_session
+            and self.overlap_start_session
+            and self.completed_through_date is not None
+            and self.previous_canonical is not None
+            and self.overlap_start_session <= self.after_session
+        ):
             return
         raise ValueError("CollectionPlan state is invalid")
 
@@ -52,6 +63,23 @@ class CollectionPlan:
         return cls(
             kind="incremental",
             after_session=after_session,
+            previous_canonical=previous_canonical,
+        )
+
+    @classmethod
+    def refresh(
+        cls,
+        *,
+        current_data_through: str,
+        overlap_start_session: str,
+        completed_through_date: date,
+        previous_canonical: Mapping[str, object],
+    ) -> CollectionPlan:
+        return cls(
+            kind="refresh",
+            after_session=current_data_through,
+            overlap_start_session=overlap_start_session,
+            completed_through_date=completed_through_date,
             previous_canonical=previous_canonical,
         )
 
@@ -81,14 +109,38 @@ def bootstrap_collection_plan(as_of: datetime) -> BootstrapCollectionPlan:
         start_date = local_date.replace(year=local_date.year - 1)
     except ValueError:
         start_date = local_date.replace(year=local_date.year - 1, day=28)
-    completed_through = (
-        local_date if shanghai.time() >= time(16) else local_date - timedelta(days=1)
-    )
+    completed_through = _completed_through_date(shanghai)
     return BootstrapCollectionPlan(
         as_of=as_of,
         start_date=start_date,
         completed_through_date=completed_through,
     )
+
+
+def refresh_collection_plan(
+    as_of: datetime,
+    previous_canonical: Mapping[str, object],
+) -> CollectionPlan:
+    if as_of.tzinfo is None:
+        raise ValueError("Refresh as-of instant must include a timezone")
+    calendar = previous_canonical.get("research_calendar")
+    if not isinstance(calendar, list) or not calendar:
+        raise ValueError("Refresh requires current Research Calendar")
+    sessions = [str(value) for value in calendar]
+    if sessions != sorted(set(sessions)):
+        raise ValueError("Refresh current Research Calendar is invalid")
+    shanghai = as_of.astimezone(ZoneInfo("Asia/Shanghai"))
+    return CollectionPlan.refresh(
+        current_data_through=sessions[-1],
+        overlap_start_session=sessions[max(0, len(sessions) - 20)],
+        completed_through_date=_completed_through_date(shanghai),
+        previous_canonical=previous_canonical,
+    )
+
+
+def _completed_through_date(shanghai: datetime) -> date:
+    local_date = shanghai.date()
+    return local_date if shanghai.time() >= time(16) else local_date - timedelta(days=1)
 
 
 class DataSource(Protocol):

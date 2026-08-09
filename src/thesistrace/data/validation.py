@@ -42,7 +42,7 @@ def validate_release_batch(
         if batch.collection_kind != "bootstrap":
             raise ValueError("Bootstrap collection kind is invalid")
     elif (
-        batch.collection_kind != "incremental"
+        batch.collection_kind not in {"incremental", "refresh"}
         or predecessor_session not in calendar
         or str(calendar[-1]) < predecessor_session
     ):
@@ -61,14 +61,16 @@ def validate_release_batch(
     _validate_point_in_time(instruments, instrument_ids, "instruments")
 
     states = _required_rows(canonical, "trading_states")
-    expected_state_count = len(calendar) * len(instrument_order)
-    if len(states) != expected_state_count:
+    expected_positions = [
+        (str(session), instrument_id)
+        for session in calendar
+        for instrument_id, instrument in zip(instrument_order, instruments, strict=True)
+        if _instrument_is_active(instrument, str(session))
+    ]
+    if len(states) != len(expected_positions):
         raise ValueError("Bootstrap Trading State coverage is incomplete")
     for ordinal, row in enumerate(states):
-        expected = (
-            str(calendar[ordinal // len(instrument_order)]),
-            instrument_order[ordinal % len(instrument_order)],
-        )
+        expected = expected_positions[ordinal]
         if _position(row) != expected or row.get("state") not in {
             "normal",
             "full_session_suspension",
@@ -193,6 +195,12 @@ def _validate_point_in_time(
         raw_end = row.get("listed_to", row.get("active_to", ""))
         if raw_end not in (None, "") and _date(raw_end, table) < start:
             raise ValueError(f"Bootstrap point-in-time interval is invalid: {table}")
+
+
+def _instrument_is_active(instrument: dict[str, object], session: str) -> bool:
+    listed_from = str(instrument.get("listed_from", ""))
+    listed_to = str(instrument.get("listed_to", ""))
+    return listed_from <= session and (not listed_to or session < listed_to)
 
 
 def _date(value: object, subject: str) -> date:

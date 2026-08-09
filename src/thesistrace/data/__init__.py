@@ -23,6 +23,7 @@ from thesistrace.data.lifecycle import (
 from thesistrace.data.models import DataOverview, DatasetCoverage
 from thesistrace.data.operator import BootstrapOutcome, DataOperator, DataOperatorError
 from thesistrace.data.overview import DatasetOverviewService
+from thesistrace.data.refresh import DataRefreshError, DataRefreshService, RefreshOutcome
 from thesistrace.data.service import DataService, NextRelease
 from thesistrace.data.source import (
     DATA_SOURCE_ERROR_CATEGORIES,
@@ -33,6 +34,7 @@ from thesistrace.data.source import (
     DataSource,
     DataSourceError,
     bootstrap_collection_plan,
+    refresh_collection_plan,
 )
 
 __all__ = [
@@ -44,6 +46,8 @@ __all__ = [
     "CollectionPlan",
     "DATA_SOURCE_ERROR_CATEGORIES",
     "DataOverview",
+    "DataRefreshError",
+    "DataRefreshService",
     "DatasetCoverage",
     "DatasetOverviewService",
     "DataLifecycleError",
@@ -64,6 +68,8 @@ __all__ = [
     "MountedDatasetHeadStore",
     "MountedGeneration",
     "MountedGenerationStore",
+    "RefreshOutcome",
     "authorable_field_bindings",
     "bootstrap_collection_plan",
+    "refresh_collection_plan",
 ]
