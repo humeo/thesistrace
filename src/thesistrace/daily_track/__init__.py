@@ -16,6 +16,7 @@ from thesistrace.daily_track.service import (
     DailyTrackStopConflict,
     DailyTrackStopUnavailable,
 )
+from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
 
 __all__ = [
     "DailyTrackActivationLimitReached",
@@ -30,6 +31,7 @@ __all__ = [
     "DailyTrackStopConflict",
     "DailyTrackStopUnavailable",
     "RetryDailyTrackCommand",
+    "SessionCoordinateRepository",
     "StopDailyTrackCommand",
     "TrackingOrigin",
 ]

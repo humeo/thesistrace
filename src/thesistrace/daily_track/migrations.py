@@ -207,5 +207,127 @@ MIGRATIONS = MigrationPlan(
                 DROP TABLE daily_tracks.activation_receipts;
             """,
         ),
+        Migration(
+            name="0008_session_coordinate_persistence",
+            statement="""
+                CREATE TABLE daily_tracks.session_checkpoints (
+                    manifest_sha256 text PRIMARY KEY,
+                    track_id text NOT NULL REFERENCES daily_tracks.tracks(id),
+                    progression_id text NULL,
+                    predecessor_manifest_sha256 text NULL,
+                    boundary_session date NOT NULL,
+                    terminal_strategy_state jsonb NOT NULL CHECK (
+                        jsonb_typeof(terminal_strategy_state) = 'object'
+                    ),
+                    data_generation_id text NOT NULL,
+                    provenance jsonb NOT NULL CHECK (
+                        jsonb_typeof(provenance) = 'object'
+                    ),
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    UNIQUE (track_id, boundary_session),
+                    UNIQUE (track_id, manifest_sha256),
+                    FOREIGN KEY (track_id, predecessor_manifest_sha256)
+                        REFERENCES daily_tracks.session_checkpoints(
+                            track_id, manifest_sha256
+                        ),
+                    CHECK (
+                        (progression_id IS NULL
+                            AND predecessor_manifest_sha256 IS NULL)
+                        OR
+                        (progression_id IS NOT NULL
+                            AND predecessor_manifest_sha256 IS NOT NULL)
+                    )
+                );
+
+                CREATE TABLE daily_tracks.session_tracking_states (
+                    track_id text PRIMARY KEY REFERENCES daily_tracks.tracks(id),
+                    origin_session date NOT NULL,
+                    current_checkpoint_session date NOT NULL,
+                    current_checkpoint_manifest_sha256 text NOT NULL,
+                    terminal_strategy_state jsonb NOT NULL CHECK (
+                        jsonb_typeof(terminal_strategy_state) = 'object'
+                    ),
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    FOREIGN KEY (track_id, current_checkpoint_manifest_sha256)
+                        REFERENCES daily_tracks.session_checkpoints(
+                            track_id, manifest_sha256
+                        ),
+                    CHECK (current_checkpoint_session >= origin_session)
+                );
+
+                CREATE TABLE daily_tracks.session_progressions (
+                    id text PRIMARY KEY,
+                    track_id text NOT NULL REFERENCES daily_tracks.tracks(id),
+                    predecessor_checkpoint_manifest_sha256 text NOT NULL,
+                    predecessor_checkpoint_session date NOT NULL,
+                    target_sessions date[] NOT NULL,
+                    target_start_session date NOT NULL,
+                    target_end_session date NOT NULL,
+                    data_generation_id text NOT NULL,
+                    status text NOT NULL CHECK (
+                        status IN ('running', 'succeeded', 'blocked', 'cancelled')
+                    ),
+                    checkpoint_manifest_sha256 text NULL,
+                    provenance jsonb NOT NULL CHECK (
+                        jsonb_typeof(provenance) = 'object'
+                    ),
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    finished_at timestamptz NULL,
+                    UNIQUE (track_id, id),
+                    UNIQUE (track_id, target_end_session),
+                    FOREIGN KEY (
+                        track_id, predecessor_checkpoint_manifest_sha256
+                    ) REFERENCES daily_tracks.session_checkpoints(
+                        track_id, manifest_sha256
+                    ),
+                    CHECK (cardinality(target_sessions) > 0),
+                    CHECK (target_start_session = target_sessions[1]),
+                    CHECK (
+                        target_end_session =
+                            target_sessions[cardinality(target_sessions)]
+                    ),
+                    CHECK (predecessor_checkpoint_session < target_start_session),
+                    CHECK (
+                        (status = 'succeeded'
+                            AND checkpoint_manifest_sha256 IS NOT NULL
+                            AND finished_at IS NOT NULL)
+                        OR
+                        (status <> 'succeeded'
+                            AND checkpoint_manifest_sha256 IS NULL)
+                    )
+                );
+
+                CREATE TABLE daily_tracks.session_progression_attempts (
+                    id text PRIMARY KEY,
+                    progression_id text NOT NULL,
+                    track_id text NOT NULL,
+                    ordinal integer NOT NULL CHECK (ordinal > 0),
+                    fence bigint NOT NULL CHECK (fence > 0),
+                    generation_pin_id text NOT NULL UNIQUE,
+                    data_generation_id text NOT NULL,
+                    data_through_session date NOT NULL,
+                    status text NOT NULL CHECK (
+                        status IN ('running', 'succeeded', 'failed', 'cancelled')
+                    ),
+                    started_at timestamptz NOT NULL DEFAULT now(),
+                    heartbeat_at timestamptz NOT NULL DEFAULT now(),
+                    lease_expires_at timestamptz NOT NULL,
+                    finished_at timestamptz NULL,
+                    failure_reason text NULL,
+                    UNIQUE (progression_id, ordinal),
+                    FOREIGN KEY (track_id, progression_id)
+                        REFERENCES daily_tracks.session_progressions(track_id, id)
+                );
+
+                CREATE UNIQUE INDEX daily_tracks_one_live_session_attempt_idx
+                    ON daily_tracks.session_progression_attempts (progression_id)
+                    WHERE status = 'running';
+
+                ALTER TABLE daily_tracks.session_checkpoints
+                    ADD CONSTRAINT session_checkpoint_progression_fk
+                    FOREIGN KEY (track_id, progression_id)
+                    REFERENCES daily_tracks.session_progressions(track_id, id);
+            """,
+        ),
     ),
 )

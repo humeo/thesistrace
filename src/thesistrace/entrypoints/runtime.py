@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.daily_track import DailyTrackService
+from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.data import (
     DataService,
     DatasetAdmissionService,
@@ -98,6 +98,7 @@ class CoreRuntime:
     definitions: DefinitionService
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
+    daily_track_sessions: SessionCoordinateRepository
     publication: Publication
 
 
@@ -150,6 +151,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             ),
             research_runs=research_runs,
             daily_tracks=daily_tracks,
+            daily_track_sessions=SessionCoordinateRepository(database),
             publication=publication,
         )
     finally:
