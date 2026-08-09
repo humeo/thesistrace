@@ -36,11 +36,17 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     if not instrument_ids or len(instrument_ids) != len(instrument_set):
         raise GenerationValidationError("Canonical instrument identities are invalid")
     listed_from_by_instrument: dict[str, date] = {}
+    listed_to_by_instrument: dict[str, date | None] = {}
     for row in instruments:
         listed_from = _iso_date(row["listed_from"], "Canonical Instrument.listed_from")
-        listed_from_by_instrument[str(row["instrument_id"])] = listed_from
+        instrument_id = str(row["instrument_id"])
+        listed_from_by_instrument[instrument_id] = listed_from
         listed_to = row["listed_to"]
-        if listed_to and _iso_date(listed_to, "Canonical Instrument.listed_to") < listed_from:
+        parsed_listed_to = (
+            _iso_date(listed_to, "Canonical Instrument.listed_to") if listed_to else None
+        )
+        listed_to_by_instrument[instrument_id] = parsed_listed_to
+        if parsed_listed_to is not None and parsed_listed_to <= listed_from:
             raise GenerationValidationError("Canonical instrument lifecycle is invalid")
 
     base_pool = _rows(canonical, "base_pool")
@@ -56,6 +62,16 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
         if len(member_ids) != len(set(member_ids)) or not set(member_ids) <= instrument_set:
             raise GenerationValidationError("Canonical Base Pool membership is invalid")
         session = str(row["session"])
+        session_date = date.fromisoformat(session)
+        if any(
+            session_date < listed_from_by_instrument[instrument_id]
+            or (
+                listed_to_by_instrument[instrument_id] is not None
+                and session_date >= listed_to_by_instrument[instrument_id]
+            )
+            for instrument_id in member_ids
+        ):
+            raise GenerationValidationError("Canonical Base Pool membership is invalid")
         base_by_session[session] = set(member_ids)
         base_positions.update((session, instrument_id) for instrument_id in member_ids)
 
@@ -87,6 +103,10 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
         if (
             anchor_session.weekday() >= 5
             or anchor_session < listed_from_by_instrument[instrument_id]
+            or (
+                listed_to_by_instrument[instrument_id] is not None
+                and anchor_session >= listed_to_by_instrument[instrument_id]
+            )
             or anchor_session > parsed_calendar[-1]
             or anchor_factor <= 0
         ):

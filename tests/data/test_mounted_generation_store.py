@@ -277,6 +277,51 @@ def test_in_coverage_anchor_must_be_the_first_valid_price_coordinate(
         )
 
 
+def test_precoverage_anchor_cannot_follow_terminal_delisting(tmp_path: Path) -> None:
+    canonical = _canonical()
+    canonical["instruments"].append(
+        {
+            "instrument_id": "equity:C.SH",
+            "ts_code": "C.SH",
+            "asset_type": "ordinary_a_share",
+            "exchange": "SSE",
+            "board": "main",
+            "listed_from": "2019-01-02",
+            "listed_to": "2020-01-03",
+        }
+    )
+    canonical["adjustment_anchors"].append(
+        {
+            "instrument_id": "equity:C.SH",
+            "anchor_session": "2020-01-06",
+            "anchor_factor": "1.000000",
+        }
+    )
+
+    with pytest.raises(GenerationStoreError, match="Adjustment Anchor is invalid"):
+        MountedGenerationStore(tmp_path).materialize(
+            canonical,
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+
+
+def test_base_pool_cannot_include_an_instrument_after_terminal_delisting(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical()
+    canonical["instruments"][0]["listed_to"] = canonical["research_calendar"][1]
+
+    with pytest.raises(GenerationStoreError, match="Base Pool membership is invalid"):
+        MountedGenerationStore(tmp_path).materialize(
+            canonical,
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+
+
 def test_oversized_or_symlinked_addressed_files_are_rejected_before_parsing(
     tmp_path: Path,
 ) -> None:
