@@ -12,6 +12,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_store import (
     GENERATION_MANIFEST_MAX_BYTES,
     GENERATION_SESSION_PARTITION_COUNT,
@@ -259,6 +260,23 @@ def test_adjustment_anchor_may_predate_dataset_coverage(tmp_path: Path) -> None:
     assert reopened.canonical["adjustment_anchors"][0]["anchor_session"] == "2020-01-02"
 
 
+@pytest.mark.parametrize("anchor_session", ["2024-01-03", "2024-01-06"])
+def test_in_coverage_anchor_must_be_the_first_valid_price_coordinate(
+    tmp_path: Path,
+    anchor_session: str,
+) -> None:
+    canonical = _canonical()
+    canonical["adjustment_anchors"][0]["anchor_session"] = anchor_session
+
+    with pytest.raises(GenerationStoreError, match="Adjustment Anchor is invalid"):
+        MountedGenerationStore(tmp_path).materialize(
+            canonical,
+            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+            source_name="deterministic-test",
+            source_lineage={"snapshot": "fixed"},
+        )
+
+
 def test_oversized_or_symlinked_addressed_files_are_rejected_before_parsing(
     tmp_path: Path,
 ) -> None:
@@ -302,6 +320,24 @@ def test_parent_directory_symlink_cannot_escape_the_mount(tmp_path: Path) -> Non
         )
 
     assert not tuple(external.iterdir())
+
+
+def test_fifo_object_is_rejected_without_blocking(tmp_path: Path) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    root = _manifest(tmp_path, generation.manifest_sha256)
+    table = _manifest(tmp_path, root["tables"][0]["manifest_sha256"])
+    object_path = _object_path(tmp_path, table["objects"][0]["sha256"])
+    object_path.unlink()
+    os.mkfifo(object_path)
+
+    with pytest.raises(GenerationStoreError, match="regular file"):
+        store.open_generation(generation.manifest_sha256)
 
 
 def test_concurrent_materializers_publish_one_identical_generation(
@@ -394,6 +430,66 @@ def test_link_failure_is_wrapped_and_never_exposes_a_complete_generation(
         )
 
     assert not tuple((tmp_path / "manifests").rglob("*.json"))
+
+
+def test_link_race_loser_syncs_the_winner_directory_entry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from thesistrace.data import generation_files
+
+    content = b"identical addressed content"
+    sha256 = hashlib.sha256(content).hexdigest()
+    target = tmp_path / "objects" / "sha256" / sha256[:2] / f"{sha256}.bin"
+    barrier = threading.Barrier(2)
+    winner_ready = threading.Event()
+    winner_id: int | None = None
+    winner_failed = False
+    real_link = os.link
+    real_sync = generation_files._fsync_directory
+
+    def racing_link(*args: object, **kwargs: object) -> None:
+        nonlocal winner_id
+        barrier.wait(timeout=10)
+        try:
+            real_link(*args, **kwargs)
+        except FileExistsError:
+            assert winner_ready.wait(timeout=10)
+            raise
+        winner_id = threading.get_ident()
+        winner_ready.set()
+
+    def winner_sync_fails_once(descriptor: int) -> None:
+        nonlocal winner_failed
+        if threading.get_ident() == winner_id and not winner_failed:
+            winner_failed = True
+            raise OSError("injected winner directory fsync failure")
+        real_sync(descriptor)
+
+    monkeypatch.setattr(os, "link", racing_link)
+    monkeypatch.setattr(generation_files, "_fsync_directory", winner_sync_fails_once)
+
+    def attempt() -> str:
+        try:
+            AddressedFileStore(tmp_path).store(target, sha256, content)
+        except AddressedFileError:
+            return "failed"
+        return "succeeded"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outcomes = tuple(executor.map(lambda _: attempt(), range(2)))
+
+    assert sorted(outcomes) == ["failed", "succeeded"]
+    assert winner_failed
+    assert (
+        AddressedFileStore(tmp_path).read(
+            target,
+            sha256,
+            expected_byte_count=len(content),
+            max_byte_count=len(content),
+        )
+        == content
+    )
 
 
 def _canonical() -> dict[str, object]:

@@ -80,6 +80,7 @@ class AddressedFileStore:
         else:
             if existing != content:
                 raise AddressedFileError("immutable addressed content conflicts")
+            _fsync_directory(parent_fd)
             return
 
         temporary_name, descriptor = _create_temporary(parent_fd)
@@ -111,6 +112,7 @@ class AddressedFileStore:
                     raise AddressedFileError("immutable addressed content conflicts") from error
                 if raced != content:
                     raise AddressedFileError("immutable addressed content conflicts") from None
+                _fsync_directory(parent_fd)
             if installed:
                 _fsync_directory(parent_fd)
         finally:
@@ -134,8 +136,7 @@ class AddressedFileStore:
                         os.mkdir(component, mode=0o755, dir_fd=descriptor)
                     except FileExistsError:
                         pass
-                    else:
-                        _fsync_directory(descriptor)
+                    _fsync_directory(descriptor)
                 child = os.open(component, flags, dir_fd=descriptor)
                 os.close(descriptor)
                 descriptor = child
@@ -152,7 +153,7 @@ def _read_entry(
     expected_byte_count: int | None,
     max_byte_count: int | None,
 ) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(name, flags, dir_fd=parent_fd)
     except FileNotFoundError as error:

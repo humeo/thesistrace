@@ -79,6 +79,7 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     ):
         raise GenerationValidationError("Canonical Adjustment Anchor coverage is invalid")
     anchor_by_instrument: dict[str, Decimal] = {}
+    anchor_session_by_instrument: dict[str, date] = {}
     for row in anchors:
         anchor_factor = _finite_decimal(row["anchor_factor"], "Canonical Adjustment Anchor.factor")
         instrument_id = str(row["instrument_id"])
@@ -91,6 +92,7 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
         ):
             raise GenerationValidationError("Canonical Adjustment Anchor is invalid")
         anchor_by_instrument[instrument_id] = anchor_factor
+        anchor_session_by_instrument[instrument_id] = anchor_session
 
     prices = _rows(canonical, "prices")
     price_by_position = _unique_positions(prices, "session", "Canonical Price")
@@ -101,6 +103,19 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     }
     if set(price_by_position) != expected_trade_positions:
         raise GenerationValidationError("Canonical Price coverage is invalid")
+    earliest_price_session: dict[str, date] = {}
+    for session, instrument_id in price_by_position:
+        candidate = date.fromisoformat(session)
+        earliest_price_session[instrument_id] = min(
+            candidate,
+            earliest_price_session.get(instrument_id, date.max),
+        )
+    for instrument_id, anchor_session in anchor_session_by_instrument.items():
+        if anchor_session >= parsed_calendar[0] and (
+            anchor_session.isoformat() not in calendar_set
+            or earliest_price_session.get(instrument_id) != anchor_session
+        ):
+            raise GenerationValidationError("Canonical Adjustment Anchor is invalid")
     for position, row in price_by_position.items():
         if row["trading_state"] != state_by_position[position]["state"]:
             raise GenerationValidationError("Canonical Price trading state is invalid")
