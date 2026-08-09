@@ -1,3 +1,6 @@
+## rulers
+- Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
+
 ## Browser Operations
 
 Prioritize the [`browser:control-in-app-browser`](/Users/koltenluca/.codex/plugins/cache/openai-bundled/browser/26.721.41059/skills/control-in-app-browser/SKILL.md) skill for browser operations.
