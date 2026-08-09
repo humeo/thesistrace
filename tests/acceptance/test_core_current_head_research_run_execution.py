@@ -331,6 +331,7 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
 )
 def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -544,11 +545,34 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             observation["session"] for observation in final["strategy"]["observations"]
         ] == list(stale_sessions)
 
-        stopped = restarted.post(
-            f"/api/daily-tracks/{first_track['id']}/stop",
-            json={"request_id": "track-recovery-stop-before-cache-cases"},
-        )
-        assert stopped.status_code == 202
+        for index, track in enumerate((first_track, control_track)):
+            stopped = restarted.post(
+                f"/api/daily-tracks/{track['id']}/stop",
+                json={"request_id": f"track-recovery-cache-stop-{index}"},
+            )
+            assert stopped.status_code == 202
+
+        cache_run_ids: list[str] = []
+        for index in range(2):
+            accepted = restarted.post(
+                "/api/definitions/run",
+                json=_run_command(f"track-recovery-cache-seed-{index}"),
+            )
+            assert accepted.status_code == 200
+            cache_run_ids.append(str(accepted.json()["run"]["id"]))
+        for _run_id in cache_run_ids:
+            completed = _run_worker_once(settings)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
+        cache_tracks: list[dict[str, object]] = []
+        for index, run_id in enumerate(cache_run_ids):
+            tracking = restarted.post(
+                f"/api/research-runs/{run_id}/daily-tracks",
+                json={"request_id": f"track-recovery-cache-activate-{index}"},
+            )
+            assert tracking.status_code == 201
+            cache_tracks.append(tracking.json())
+        first_track, control_track = cache_tracks
+
         cache_sessions = (*stale_sessions, "2026-08-13")
         cache_head = _publish_head(
             settings,
@@ -557,6 +581,15 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             expected_manifest=stale_head,
         )
         cache_root = tmp_path / "current-working-cache"
+        intact_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
+        )
         cache_processor = DailyTrackService(
             runtime.database,
             publication=runtime.publication,
@@ -567,17 +600,35 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             read_result_bundle=read_result_bundle,
             working_cache_root=cache_root,
         )
+        assert intact_processor.process_next() is True
         assert cache_processor.process_next() is True
         cache_path = next(cache_root.glob("*.json"))
-        damage_cases = (
-            ("2026-08-14", "missing"),
-            ("2026-08-17", "corrupt"),
-            ("2026-08-18", "stale-generation"),
-            ("2026-08-19", "stale-fence"),
-            ("2026-08-20", "oversized"),
+        assert cache_processor._working_cache is not None
+        original_cache_load = cache_processor._working_cache.load
+        cache_hits: list[bool] = []
+
+        def observe_cache_load(**kwargs: object):
+            result = original_cache_load(**kwargs)
+            cache_hits.append(result is not None)
+            return result
+
+        monkeypatch.setattr(
+            cache_processor._working_cache,
+            "load",
+            observe_cache_load,
         )
-        for offset, (session, damage) in enumerate(damage_cases, start=5):
-            if damage == "missing":
+        damage_cases = (
+            ("2026-08-14", "valid"),
+            ("2026-08-17", "missing"),
+            ("2026-08-18", "corrupt"),
+            ("2026-08-19", "stale-generation"),
+            ("2026-08-20", "stale-fence"),
+            ("2026-08-21", "oversized"),
+        )
+        for session, damage in damage_cases:
+            if damage == "valid":
+                pass
+            elif damage == "missing":
                 cache_path.unlink()
             elif damage == "corrupt":
                 cache_path.write_text("{", encoding="utf-8")
@@ -586,7 +637,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             else:
                 entry = json.loads(cache_path.read_text(encoding="utf-8"))
                 if damage == "stale-generation":
-                    entry["release_id"] = "stale-generation"
+                    entry["basis_sha256"] = "stale-generation"
                 else:
                     entry["fence"] = int(entry["fence"]) - 1
                 cache_path.write_text(json.dumps(entry), encoding="utf-8")
@@ -594,19 +645,38 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             cache_head = _publish_head(
                 settings,
                 sessions=cache_sessions,
-                price_offset=offset,
+                price_offset=4,
                 expected_manifest=cache_head,
             )
+            assert intact_processor.process_next() is True
             assert cache_processor.process_next() is True
+            assert cache_hits[-1] is (damage == "valid")
+            intact_detail = restarted.get(
+                f"/api/daily-tracks/{first_track['id']}"
+            ).json()
             cache_detail = restarted.get(
                 f"/api/daily-tracks/{control_track['id']}"
             ).json()
+            assert intact_detail["factor"] == cache_detail["factor"]
+            assert intact_detail["strategy"] == cache_detail["strategy"]
             assert cache_detail["strategy_session"] == session
             assert [
                 item["session"] for item in cache_detail["strategy"]["observations"]
             ] == list(cache_sessions)
             assert cache_path.exists()
             assert cache_path.stat().st_size <= MAX_WORKING_CACHE_BYTES
+            intact_checkpoint = _stored_tracking_activation(
+                settings,
+                str(first_track["id"]),
+            )
+            damaged_checkpoint = _stored_tracking_activation(
+                settings,
+                str(control_track["id"]),
+            )
+            assert _checkpoint_payload(
+                runtime.publication,
+                intact_checkpoint,
+            ) == _checkpoint_payload(runtime.publication, damaged_checkpoint)
 
         authoritative = _stored_tracking_activation(
             settings,
@@ -615,23 +685,20 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         checkpoint_manifest = str(
             authoritative["current_checkpoint_manifest_sha256"]
         )
-        checkpoint_object = _first_result_object_sha256(settings, checkpoint_manifest)
-        _s3_client(settings).delete_object(
-            Bucket=settings.s3_bucket,
-            Key=(
-                f"publication/v1/sha256/{checkpoint_object[:2]}/"
-                f"{checkpoint_object}"
-            ),
-        )
-        unavailable_sessions = (*cache_sessions, "2026-08-21")
+        _remove_manifest_object_reference(settings, checkpoint_manifest)
+        unavailable_sessions = (*cache_sessions, "2026-08-24")
         _publish_head(
             settings,
             sessions=unavailable_sessions,
-            price_offset=10,
+            price_offset=4,
             expected_manifest=cache_head,
         )
-        with pytest.raises(DailyTrackProgressionFailed):
-            cache_processor.process_next()
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        intact_after_failure = restarted.get(
+            f"/api/daily-tracks/{first_track['id']}"
+        ).json()
+        assert intact_after_failure["strategy_session"] == unavailable_sessions[-1]
         unavailable = restarted.get(f"/api/daily-tracks/{control_track['id']}")
         assert unavailable.status_code == 503
         assert unavailable.json() == {"detail": "DailyTrack detail is unavailable"}
@@ -1194,6 +1261,7 @@ def _stored_tracking_activation(
                        track.origin,
                        state.current_checkpoint_manifest_sha256,
                        checkpoint.boundary_session AS current_checkpoint_session,
+                       checkpoint.provenance AS current_checkpoint_provenance,
                        checkpoint.terminal_strategy_state,
                        (SELECT count(*)
                         FROM daily_tracks.session_checkpoints
@@ -1263,6 +1331,23 @@ def _expire_current_tracking_attempt(settings: CoreSettings, track_id: str) -> N
         database.close()
 
 
+def _checkpoint_payload(
+    publication: Publication,
+    stored: dict[str, object],
+) -> dict[str, object]:
+    bundle = publication.read(
+        PublishedRef(
+            manifest_sha256=str(stored["current_checkpoint_manifest_sha256"]),
+            kind="daily-track.checkpoint",
+            provenance=dict(stored["current_checkpoint_provenance"]),
+        )
+    )
+    payload = bundle.payloads["checkpoint"]
+    value = json.loads(payload.content)
+    assert isinstance(value, dict)
+    return value
+
+
 def _publication_manifest_count(settings: CoreSettings) -> int:
     database = PostgresDatabase(settings.database_url)
     database.open()
@@ -1294,6 +1379,26 @@ def _first_result_object_sha256(settings: CoreSettings, manifest_sha256: str) ->
             ).fetchone()
         assert row is not None
         return str(row["object_sha256"])
+    finally:
+        database.close()
+
+
+def _remove_manifest_object_reference(
+    settings: CoreSettings,
+    manifest_sha256: str,
+) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            removed = transaction.execute(
+                """
+                DELETE FROM publication.manifest_objects
+                WHERE manifest_sha256 = %s
+                """,
+                (manifest_sha256,),
+            )
+        assert removed.rowcount > 0
     finally:
         database.close()
 

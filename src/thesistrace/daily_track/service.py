@@ -56,6 +56,7 @@ from thesistrace.research_kernel import (
     first_divergence,
     run,
 )
+from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.canonical_state import (
     canonical_sessions,
     slice_canonical_sessions,
@@ -345,12 +346,7 @@ class DailyTrackService:
                         "DailyTrack session progression rejected by execution fence",
                         extra={"track_id": current_claim.track_id},
                     )
-                except (
-                    KernelRunError,
-                    PublicationNotFoundError,
-                    PublicationUnavailableError,
-                    PublicationVerificationError,
-                ) as error:
+                except Exception as error:
                     if self._record_current_failure(current_claim, error):
                         raise DailyTrackProgressionFailed(
                             "DailyTrack progression failed at its current target"
@@ -1599,39 +1595,33 @@ class DailyTrackService:
         prior: KernelState,
         prior_canonical: dict[str, object],
     ) -> Mapping[str, object]:
+        if self._working_cache is not None and predecessor.get(
+            "schema_version"
+        ) != "daily-track-activation-checkpoint-v1":
+            checkpoint = KernelStateCheckpoint.model_validate(predecessor)
+            cached = self._working_cache.load(
+                track_id=claim.track_id,
+                basis_sha256=_continuation_basis_sha256(prior, prior_canonical),
+                head_manifest_sha256=claim.predecessor_manifest_sha256,
+                fence=claim.fence - 1,
+                continuation_sha256=checkpoint.continuation_sha256,
+                pending_alpha_sessions=checkpoint.pending_alpha_sessions,
+                rolling_factor_rows=checkpoint.rolling_factor_rows,
+            )
+            if cached is not None:
+                return cached
+        elif self._working_cache is not None:
+            self._working_cache.delete(claim.track_id)
         rebuild_sessions = canonical_sessions(
             prior_canonical,
             "Tracking prior data",
         )[-504:]
-        rebuilt = advance_continuation(
+        return advance_continuation(
             run_input=prior.run_input_with_canonical(prior_canonical),
             prior_continuation=empty_continuation(),
             target_canonical=prior_canonical,
             appended_sessions=rebuild_sessions,
         )
-        if self._working_cache is None:
-            return rebuilt
-        if predecessor.get("schema_version") == (
-            "daily-track-activation-checkpoint-v1"
-        ):
-            self._working_cache.delete(claim.track_id)
-            return rebuilt
-        checkpoint = KernelStateCheckpoint.model_validate(predecessor)
-        if claim.predecessor_provenance.get("data_generation_id") != (
-            claim.data_generation_id
-        ):
-            self._working_cache.delete(claim.track_id)
-            return rebuilt
-        cached = self._working_cache.load(
-            track_id=claim.track_id,
-            release_id=claim.data_generation_id,
-            head_manifest_sha256=claim.predecessor_manifest_sha256,
-            fence=claim.fence - 1,
-            continuation_sha256=checkpoint.continuation_sha256,
-            pending_alpha_sessions=checkpoint.pending_alpha_sessions,
-            rolling_factor_rows=checkpoint.rolling_factor_rows,
-        )
-        return rebuilt if cached is None else cached
 
     def _publish_current(
         self,
@@ -1707,7 +1697,10 @@ class DailyTrackService:
         try:
             stored = self._working_cache.store(
                 track_id=claim.track_id,
-                release_id=claim.data_generation_id,
+                basis_sha256=_continuation_basis_sha256(
+                    state,
+                    state.canonical_snapshot(),
+                ),
                 head_manifest_sha256=published.manifest_sha256,
                 fence=claim.fence,
                 verified_continuation=continuation_snapshot(state),
@@ -2154,7 +2147,7 @@ class DailyTrackService:
             return state, continuation
         cached = self._working_cache.load(
             track_id=claim.track_id,
-            release_id=claim.current_release_id,
+            basis_sha256=_continuation_basis_sha256(state, canonical),
             head_manifest_sha256=claim.head_manifest_sha256,
             fence=claim.fence - 1,
             continuation_sha256=checkpoint.continuation_sha256,
@@ -2167,7 +2160,7 @@ class DailyTrackService:
         _verify_checkpoint_continuation(checkpoint, verified_continuation)
         self._working_cache.store(
             track_id=claim.track_id,
-            release_id=claim.current_release_id,
+            basis_sha256=_continuation_basis_sha256(state, canonical),
             head_manifest_sha256=claim.head_manifest_sha256,
             fence=claim.fence - 1,
             verified_continuation=verified_continuation,
@@ -2410,7 +2403,10 @@ class DailyTrackService:
         try:
             stored = self._working_cache.store(
                 track_id=claim.track_id,
-                release_id=claim.target.id,
+                basis_sha256=_continuation_basis_sha256(
+                    state,
+                    state.canonical_snapshot(),
+                ),
                 head_manifest_sha256=published.manifest_sha256,
                 fence=claim.fence,
                 verified_continuation=continuation_snapshot(state),
@@ -2866,6 +2862,21 @@ def _select_rebuild_steps(
         list(reversed(selected_desc)),
         selected_session_count < REBUILD_CHECKPOINT_LIMIT,
     )
+
+
+def _continuation_basis_sha256(
+    state: KernelState,
+    canonical: dict[str, object],
+) -> str:
+    run_input = state.run_input_with_canonical(canonical)
+    expression = validate_normalized_alpha(
+        run_input.alpha_expression_snapshot(),
+        field_bindings=run_input.field_bindings_snapshot(),
+    )
+    sessions = canonical_sessions(canonical, "Working Cache canonical basis")
+    dependency_sessions = sessions[-(504 + expression.effective_lookback) :]
+    dependency = slice_canonical_sessions(canonical, dependency_sessions)
+    return hashlib.sha256(canonical_json_bytes(dependency)).hexdigest()
 
 
 def _state_payload(
