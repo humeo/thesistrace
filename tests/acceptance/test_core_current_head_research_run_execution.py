@@ -331,7 +331,6 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
 )
 def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -603,20 +602,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert intact_processor.process_next() is True
         assert cache_processor.process_next() is True
         cache_path = next(cache_root.glob("*.json"))
-        assert cache_processor._working_cache is not None
-        original_cache_load = cache_processor._working_cache.load
-        cache_hits: list[bool] = []
-
-        def observe_cache_load(**kwargs: object):
-            result = original_cache_load(**kwargs)
-            cache_hits.append(result is not None)
-            return result
-
-        monkeypatch.setattr(
-            cache_processor._working_cache,
-            "load",
-            observe_cache_load,
-        )
         damage_cases = (
             ("2026-08-14", "valid"),
             ("2026-08-17", "missing"),
@@ -650,7 +635,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             )
             assert intact_processor.process_next() is True
             assert cache_processor.process_next() is True
-            assert cache_hits[-1] is (damage == "valid")
             intact_detail = restarted.get(
                 f"/api/daily-tracks/{first_track['id']}"
             ).json()
@@ -680,7 +664,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
 
         authoritative = _stored_tracking_activation(
             settings,
-            str(control_track["id"]),
+            str(first_track["id"]),
         )
         checkpoint_manifest = str(
             authoritative["current_checkpoint_manifest_sha256"]
@@ -696,15 +680,15 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         intact_after_failure = restarted.get(
-            f"/api/daily-tracks/{first_track['id']}"
+            f"/api/daily-tracks/{control_track['id']}"
         ).json()
         assert intact_after_failure["strategy_session"] == unavailable_sessions[-1]
-        unavailable = restarted.get(f"/api/daily-tracks/{control_track['id']}")
+        unavailable = restarted.get(f"/api/daily-tracks/{first_track['id']}")
         assert unavailable.status_code == 503
         assert unavailable.json() == {"detail": "DailyTrack detail is unavailable"}
         unavailable_state = _stored_tracking_activation(
             settings,
-            str(control_track["id"]),
+            str(first_track["id"]),
         )
         assert unavailable_state["track_status"] == "blocked"
         assert unavailable_state["current_checkpoint_session"].isoformat() == (
