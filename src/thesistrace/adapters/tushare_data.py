@@ -85,6 +85,7 @@ class TushareDataSource:
                 known_ts_codes=known_codes,
                 as_of=request_end,
             )
+            _validate_new_calendar_evidence(snapshot, plan.after_session)
             normalization_previous = previous
             if plan.kind == "refresh":
                 normalization_previous = _canonical_before_overlap(previous, request_start)
@@ -413,6 +414,7 @@ def _preserve_ordinary_overlap_absence(
     supplemented = {name: copy.deepcopy(rows) for name, rows in snapshot.items()}
     calendar_sse = supplemented.get("calendar_sse", [])
     calendar_szse = supplemented.get("calendar_szse", [])
+    stock_basic = supplemented.get("stock_basic", [])
     daily = supplemented.get("daily", [])
     adjustments = supplemented.get("adjustments", [])
     suspensions = supplemented.get("suspensions", [])
@@ -423,6 +425,7 @@ def _preserve_ordinary_overlap_absence(
         for rows in (
             calendar_sse,
             calendar_szse,
+            stock_basic,
             daily,
             adjustments,
             suspensions,
@@ -435,7 +438,8 @@ def _preserve_ordinary_overlap_absence(
             detail_code="MALFORMED_PROVIDER_PAYLOAD",
         )
     previous_calendar = previous.get("research_calendar")
-    if not isinstance(previous_calendar, list):
+    previous_instruments = previous.get("instruments")
+    if not isinstance(previous_calendar, list) or not isinstance(previous_instruments, list):
         raise DataSourceError(
             "invalid_source_data",
             detail_code="INVALID_PREVIOUS_CANONICAL",
@@ -456,6 +460,17 @@ def _preserve_ordinary_overlap_absence(
                     }
                 )
                 returned_dates.add(source_date)
+    returned_codes = {str(row["ts_code"]) for row in stock_basic}
+    for instrument in previous_instruments:
+        if not isinstance(instrument, dict):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INVALID_PREVIOUS_CANONICAL",
+            )
+        code = str(instrument["ts_code"])
+        if code not in returned_codes:
+            stock_basic.append(_source_instrument(instrument))
+            returned_codes.add(code)
     daily_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in daily}
     suspension_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in suspensions}
     adjustment_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in adjustments}
@@ -589,6 +604,54 @@ def _preserve_ordinary_overlap_absence(
                 }
             )
     return supplemented
+
+
+def _validate_new_calendar_evidence(
+    snapshot: Mapping[str, list[dict[str, object]]],
+    current_data_through: str,
+) -> None:
+    sse = snapshot.get("calendar_sse")
+    szse = snapshot.get("calendar_szse")
+    if not isinstance(sse, list) or not isinstance(szse, list):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="MALFORMED_PROVIDER_PAYLOAD",
+        )
+    frontier = current_data_through.replace("-", "")
+    by_exchange = (
+        {str(row["cal_date"]): str(row["is_open"]) for row in sse},
+        {str(row["cal_date"]): str(row["is_open"]) for row in szse},
+    )
+    for calendar, counterpart in (by_exchange, tuple(reversed(by_exchange))):
+        if any(
+            session > frontier and is_open == "1" and session not in counterpart
+            for session, is_open in calendar.items()
+        ):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INCOMPLETE_NEW_SESSION_CALENDAR",
+            )
+
+
+def _source_instrument(instrument: Mapping[str, object]) -> dict[str, object]:
+    market_by_board = {"main": "主板", "chinext": "创业板", "star": "科创板"}
+    board = str(instrument["board"])
+    try:
+        market = market_by_board[board]
+    except KeyError as error:
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_PREVIOUS_CANONICAL",
+        ) from error
+    listed_to = str(instrument.get("listed_to", ""))
+    return {
+        "ts_code": str(instrument["ts_code"]),
+        "exchange": str(instrument["exchange"]),
+        "market": market,
+        "list_status": "D" if listed_to else "L",
+        "list_date": str(instrument["listed_from"]).replace("-", ""),
+        "delist_date": listed_to.replace("-", ""),
+    }
 
 
 def _source_daily(

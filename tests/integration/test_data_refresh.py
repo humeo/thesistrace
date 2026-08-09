@@ -187,6 +187,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
                 "format": "thesistrace-tushare-refresh-replay",
                 "request_start": current["research_calendar"][0],
                 "request_end": "2026-09-07",
+                "known_ts_codes": ["600000.SH"],
             }
         )
         refresh_replay = tmp_path / "refresh-replay.json"

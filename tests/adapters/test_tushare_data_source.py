@@ -226,7 +226,7 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
 def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> None:
     sessions: list[str] = []
     cursor = date(2026, 7, 1)
-    while len(sessions) < 22:
+    while len(sessions) < 23:
         if cursor.weekday() < 5:
             sessions.append(cursor.strftime("%Y%m%d"))
         cursor += timedelta(days=1)
@@ -244,6 +244,7 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
     _source, previous = normalize_tushare_snapshot(bootstrap_snapshot)
 
     refresh_snapshot = normalizer_snapshot(sessions[1:])
+    refresh_snapshot["stock_basic"] = []
     ordinary_missing = sessions[1]
     suspension_session = sessions[2]
     factor_session = sessions[3]
@@ -287,14 +288,14 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
             return copy.deepcopy(refresh_snapshot)
 
     provider = RefreshProvider()
-    plan = refresh_collection_plan(datetime(2026, 7, 30, 18, tzinfo=UTC), previous)
+    plan = refresh_collection_plan(datetime(2026, 7, 31, 18, tzinfo=UTC), previous)
     batch = TushareDataSource(provider=provider).collect(plan)
 
     assert provider.incremental_calls == [
         (
             f"{sessions[1][:4]}-{sessions[1][4:6]}-{sessions[1][6:]}",
             {"600000.SH"},
-            date(2026, 7, 30),
+            date(2026, 7, 31),
         )
     ]
     assert batch.canonical["research_calendar"] == [
@@ -341,6 +342,77 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
         assert rows[-1]["session"] == batch.canonical["research_calendar"][-1]
         assert len(rows) == len(sessions)
     validate_release_batch(batch, predecessor_session=previous["research_calendar"][-1])
+
+
+def test_tushare_refresh_applies_an_overlap_only_correction_and_delisting() -> None:
+    sessions = ["20260803", "20260804", "20260805"]
+    _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions))
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["stock_basic"][0]["delist_date"] = sessions[-1]
+    snapshot["daily"][0]["amount"] = "9000"
+
+    class CorrectionProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            known_ts_codes: set[str],
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            return copy.deepcopy(snapshot)
+
+    batch = TushareDataSource(provider=CorrectionProvider()).collect(
+        refresh_collection_plan(datetime(2026, 8, 5, 18, tzinfo=UTC), previous)
+    )
+
+    assert batch.canonical["research_calendar"][-1] == previous["research_calendar"][-1]
+    first_price = batch.canonical["prices"][0]
+    assert first_price["turnover_cny"] == "9000000.00"
+    final_position = (previous["research_calendar"][-1], "equity:600000.SH")
+    assert final_position not in {
+        (row["session"], row["instrument_id"]) for row in batch.canonical["prices"]
+    }
+    assert final_position not in {
+        (row["session"], row["instrument_id"]) for row in batch.canonical["trading_states"]
+    }
+    validate_release_batch(batch, predecessor_session=previous["research_calendar"][-1])
+
+
+@pytest.mark.parametrize(
+    ("missing_fact", "detail_code"),
+    (
+        ("calendar_szse", "INCOMPLETE_NEW_SESSION_CALENDAR"),
+        ("daily", "UNEXPLAINED_DAILY_ABSENCE"),
+        ("adjustments", "INCOMPLETE_REQUIRED_MARKET_FACTS"),
+        ("price_limits", "INCOMPLETE_REQUIRED_MARKET_FACTS"),
+    ),
+)
+def test_tushare_refresh_rejects_an_incomplete_new_session(
+    missing_fact: str,
+    detail_code: str,
+) -> None:
+    sessions = ["20260803", "20260804", "20260805", "20260806"]
+    _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
+    snapshot = normalizer_snapshot(sessions)
+    key = "cal_date" if missing_fact.startswith("calendar_") else "trade_date"
+    snapshot[missing_fact] = [row for row in snapshot[missing_fact] if row[key] != sessions[-1]]
+
+    class IncompleteProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            known_ts_codes: set[str],
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            return copy.deepcopy(snapshot)
+
+    with pytest.raises(DataSourceError) as failure:
+        TushareDataSource(provider=IncompleteProvider()).collect(
+            refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+        )
+
+    assert failure.value.detail_code == detail_code
 
 
 def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> None:
