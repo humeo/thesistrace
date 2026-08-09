@@ -47,3 +47,6 @@ supersedes ADR-0029's fixed 252-session publication prefix while retaining that
 ADR's maximum Effective Alpha Lookback and supersedes only the fixed-window
 examples in ADR-0033. It also supersedes ADR-0086's Dataset-Release-end boundary
 and fixed-504 examples while retaining its missing-label classifications.
+In every other accepted ADR, a fixed `Research Window` or exact `Research Input
+History` shape is superseded; the retained business rule applies to the
+user-selected Research Period or its derived Calculation Warm-up as appropriate.
