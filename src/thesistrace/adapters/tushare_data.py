@@ -85,7 +85,8 @@ class TushareDataSource:
                 known_ts_codes=known_codes,
                 as_of=request_end,
             )
-            _validate_new_calendar_evidence(snapshot, plan.after_session)
+            if plan.kind == "refresh":
+                _validate_new_calendar_evidence(snapshot, plan.after_session)
             normalization_previous = previous
             if plan.kind == "refresh":
                 normalization_previous = _canonical_before_overlap(previous, request_start)
