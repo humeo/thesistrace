@@ -7,12 +7,17 @@ import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
 
+import thesistrace.research_run.service as research_run_service_module
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.publication import PreparedPublication, PublishedRef
+from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_run import ResearchRunService
-from thesistrace.research_run.result import read_result_bundle
+from thesistrace.research_run.result import (
+    RESULT_DAILY_PARTITION_PREFIX,
+    read_result_bundle,
+    result_bundle_byte_budget,
+)
 
 
 @pytest.mark.skipif(
@@ -108,9 +113,11 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
             "factor_summary",
             "strategy_summary",
             "strategy_daily_observations",
+            f"{RESULT_DAILY_PARTITION_PREFIX}000000",
             "terminal_strategy_state",
         }
-        assert bundle.payloads["strategy_daily_observations"].media_type == (
+        assert bundle.payloads["strategy_daily_observations"].media_type == "application/json"
+        assert bundle.payloads[f"{RESULT_DAILY_PARTITION_PREFIX}000000"].media_type == (
             "application/vnd.apache.parquet"
         )
         assert set(result) == {
@@ -204,13 +211,47 @@ def test_legal_over_budget_result_leaves_no_visible_publication(
         runtime = client.app.state.core_runtime
         run_id, _immutable_input = _admit_run(client, request_id="ticket-04-over-budget")
         manifest_count = _publication_manifest_count(runtime.database)
+        original_builder = research_run_service_module.build_result_payload
+        oversized_results: list[dict[str, object]] = []
+
+        def build_oversized_result(*args: object, **kwargs: object) -> dict[str, object]:
+            result = original_builder(*args, **kwargs)
+            positions = [
+                {
+                    "instrument_id": f"equity:{index:012d}.SH",
+                    "execution_shares": 100,
+                    "adjusted_units": "9999999999999999999999999999999999",
+                    "last_adjusted_price": "9999999999999999999999999999999999",
+                }
+                for index in range(12_000)
+            ]
+            terminal = result["terminal_strategy_state"]
+            terminal["positions"] = positions
+            terminal["last_daily_observation"]["holdings_count"] = len(positions)
+            terminal["metric_state"]["holdings_ending"] = len(positions)
+            oversized_results.append(result)
+            return result
+
+        exact_bytes: list[int] = []
+        original_prepare = runtime.publication.prepare
+
+        def observe_real_prepare(**kwargs: object):
+            prepared = original_prepare(**kwargs)
+            exact_bytes.append(prepared.exact_bytes)
+            return prepared
+
         monkeypatch.setattr(
-            PreparedPublication,
-            "exact_bytes",
-            property(lambda _prepared: 1_048_577),
+            research_run_service_module,
+            "build_result_payload",
+            build_oversized_result,
         )
+        monkeypatch.setattr(runtime.publication, "prepare", observe_real_prepare)
 
         assert runtime.research_runs.process_next() is True
+        assert len(oversized_results) == len(exact_bytes) == 1
+        assert exact_bytes[0] > result_bundle_byte_budget(
+            len(oversized_results[0]["strategy_daily_observations"])
+        )
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "failed"

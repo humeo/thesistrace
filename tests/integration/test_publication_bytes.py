@@ -1,3 +1,4 @@
+import copy
 import hashlib
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -22,6 +23,10 @@ from thesistrace.publication.serialization import (
     canonical_json_bytes,
 )
 from thesistrace.research_run.result import (
+    LAST_DAILY_OBSERVATION_KEYS,
+    METRIC_STATE_KEYS,
+    RESULT_DAILY_PARTITION_PREFIX,
+    STRATEGY_METRIC_KEYS,
     read_result_bundle,
     result_bundle_byte_budget,
     result_publication_payloads,
@@ -95,7 +100,7 @@ def test_prepare_is_canonical_idempotent_and_verified(core_settings: CoreSetting
         assert verified.payloads["rows"].media_type == "application/vnd.apache.parquet"
 
 
-def test_research_result_preparation_uses_four_deterministic_objects(
+def test_research_result_preparation_uses_four_values_and_partitioned_objects(
     core_settings: CoreSettings,
 ) -> None:
     result = _legal_result()
@@ -113,7 +118,14 @@ def test_research_result_preparation_uses_four_deterministic_objects(
 
         assert first.manifest_sha256 == second.manifest_sha256
         assert first.payload_sha256s == second.payload_sha256s
-        assert first.object_count == 4
+        assert first.object_count == 5
+        assert set(first.payload_sha256s) == {
+            "factor_summary",
+            "strategy_summary",
+            "strategy_daily_observations",
+            f"{RESULT_DAILY_PARTITION_PREFIX}000000",
+            "terminal_strategy_state",
+        }
         assert first.exact_bytes <= result_bundle_byte_budget(1)
         assert read_result_bundle(runtime.publication.verify_prepared(second)) == result
 
@@ -402,9 +414,77 @@ def _clear_bucket(s3: BaseClient, bucket: str) -> None:
 
 
 def _legal_result() -> dict[str, object]:
+    correlation = {
+        "icir": None,
+        "mean": None,
+        "positive_fraction": None,
+        "sample_deviation": None,
+        "valid_session_count": 0,
+    }
+    horizons = {
+        str(horizon): {
+            "horizon": horizon,
+            "alpha_checksum": "a" * 64,
+            "label_checksum": "b" * 64,
+            "source_checksum": "c" * 64,
+            "summary": {
+                "ic": copy.deepcopy(correlation),
+                "quantile_returns": {name: None for name in ("q1", "q2", "q3", "q4", "q5")},
+                "rank_ic": copy.deepcopy(correlation),
+                "top_bottom_return": None,
+            },
+            "coverage": {
+                "signal_session_count": 1,
+                "ic_valid_session_count": 0,
+                "rank_ic_valid_session_count": 0,
+                "quantile_valid_session_count": 0,
+            },
+        }
+        for horizon in (1, 5, 20)
+    }
+    metrics = {name: None for name in STRATEGY_METRIC_KEYS}
+    metrics.update(
+        {
+            "cash_ratio": {
+                "ending": 1.0,
+                "maximum": {"session": "2024-01-02", "value": 1.0},
+                "mean": 1.0,
+            },
+            "holdings_count": {"ending": 0, "maximum": 0, "mean": 0.0, "minimum": 0},
+            "market_rejections": {"lower_limit_sell": 0, "suspension": 0, "upper_limit_buy": 0},
+            "maximum_drawdown": {
+                "peak_session": "2024-01-02",
+                "recovery_session": None,
+                "trough_session": "2024-01-02",
+                "unrecovered": False,
+                "value": 0.0,
+            },
+            "maximum_single_name_weight": {
+                "ending": 0.0,
+                "period_maximum": {"session": "2024-01-02", "value": 0.0},
+            },
+            "transaction_costs": {"cumulative_amount": 0.0, "ratio": 0.0, "return_drag": 0.0},
+            "turnover": {"annualized": None, "average_rebalance": None},
+        }
+    )
+    last_daily = {name: 0 for name in LAST_DAILY_OBSERVATION_KEYS}
+    last_daily.update(
+        {"session": "2024-01-02", "cycle_type": "terminal_valuation", "valuation_events": []}
+    )
+    metric_state = {name: 0 for name in METRIC_STATE_KEYS}
+    metric_state.update({"contract": "strategy-metric-state-v1", "last_session": "2024-01-02"})
     return {
-        "factor_summary": {"horizons": {}},
-        "strategy_summary": {"metrics": {}, "benchmark": {"universe": "manual"}},
+        "factor_summary": {"horizons": horizons},
+        "strategy_summary": {
+            "alpha_checksum": "a" * 64,
+            "initial_cash_cny": "1e+7",
+            "source_checksum": "c" * 64,
+            "metrics": metrics,
+            "benchmark": {
+                "universe": "manual",
+                "methodology": "selected_universe_equal_weight",
+            },
+        },
         "strategy_daily_observations": [
             {
                 "session": "2024-01-02",
@@ -420,5 +500,23 @@ def _legal_result() -> dict[str, object]:
                 "suspension_rejections": 0,
             }
         ],
-        "terminal_strategy_state": {"session": "2024-01-02", "positions": []},
+        "terminal_strategy_state": {
+            "session": "2024-01-02",
+            "gross_cash": "1e+7",
+            "net_cash": "1e+7",
+            "gross_nav": "1e+7",
+            "net_nav": "1e+7",
+            "benchmark_nav": "1",
+            "cumulative_transaction_cost": "0",
+            "positions": [],
+            "rebalance_phase": {
+                "origin_session": "2024-01-02",
+                "report_session_count": 1,
+                "rebalance_interval": 1,
+                "completed_intervals": 0,
+            },
+            "pending_signal": None,
+            "last_daily_observation": last_daily,
+            "metric_state": metric_state,
+        },
     }

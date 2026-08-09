@@ -16,6 +16,7 @@ from psycopg.types.json import Jsonb
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import (
+    JsonPayload,
     PublicationUnavailableError,
     PublishedRef,
 )
@@ -207,9 +208,13 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
             **stored_seed["result_provenance"],
             "research_run_id": "run_incomplete_result",
         }
+        incomplete_payloads = result_publication_payloads(stored_result)
+        incomplete_payloads["terminal_strategy_state"] = JsonPayload(
+            incomplete_result["terminal_strategy_state"]
+        )
         prepared = runtime.publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads(incomplete_result),
+            payloads=incomplete_payloads,
             provenance=incomplete_provenance,
         )
         with runtime.database.transaction() as transaction:

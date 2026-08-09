@@ -31,6 +31,8 @@ class ResearchResultError(ValueError):
 
 RESULT_BUDGET_SESSION_BLOCK = 504
 RESULT_BUDGET_BYTE_BLOCK = 1_048_576
+RESULT_DAILY_PARTITION_SESSION_COUNT = 504
+RESULT_DAILY_PARTITION_PREFIX = "strategy_daily_observations.part-"
 RESULT_VALUE_NAMES = frozenset(
     {
         "factor_summary",
@@ -39,17 +41,45 @@ RESULT_VALUE_NAMES = frozenset(
         "terminal_strategy_state",
     }
 )
-FORBIDDEN_DURABLE_RESULT_KEYS = frozenset(
+FACTOR_HORIZON_KEYS = frozenset(
+    {"horizon", "alpha_checksum", "label_checksum", "source_checksum", "summary", "coverage"}
+)
+FACTOR_SUMMARY_KEYS = frozenset({"ic", "quantile_returns", "rank_ic", "top_bottom_return"})
+FACTOR_CORRELATION_KEYS = frozenset(
+    {"icir", "mean", "positive_fraction", "sample_deviation", "valid_session_count"}
+)
+FACTOR_QUANTILE_KEYS = frozenset({"q1", "q2", "q3", "q4", "q5"})
+FACTOR_COVERAGE_KEYS = frozenset(
     {
-        "alpha_matrix",
-        "alpha_values",
-        "forward_labels",
-        "daily_factor_observations",
-        "strategy_ledger",
-        "orders",
-        "child_orders",
-        "fills",
-        "position_history",
+        "signal_session_count",
+        "ic_valid_session_count",
+        "rank_ic_valid_session_count",
+        "quantile_valid_session_count",
+    }
+)
+STRATEGY_SUMMARY_KEYS = frozenset(
+    {"alpha_checksum", "initial_cash_cny", "source_checksum", "benchmark", "metrics"}
+)
+STRATEGY_METRIC_KEYS = frozenset(
+    {
+        "annualized_excess_return",
+        "annualized_volatility",
+        "benchmark_cagr",
+        "benchmark_cumulative_return",
+        "calmar",
+        "cash_ratio",
+        "gross_cagr",
+        "gross_cumulative_return",
+        "holdings_count",
+        "market_rejections",
+        "maximum_drawdown",
+        "maximum_single_name_weight",
+        "net_cagr",
+        "net_cumulative_return",
+        "risk_free_rate",
+        "sharpe",
+        "transaction_costs",
+        "turnover",
     }
 )
 STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
@@ -71,6 +101,100 @@ STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
         ]
     ),
     sort_keys=("session",),
+)
+DAILY_OBSERVATION_KEYS = frozenset(
+    field.name for field in STRATEGY_DAILY_OBSERVATIONS_CONTRACT.schema
+)
+TERMINAL_STATE_KEYS = frozenset(
+    {
+        "session",
+        "gross_cash",
+        "net_cash",
+        "gross_nav",
+        "net_nav",
+        "benchmark_nav",
+        "cumulative_transaction_cost",
+        "positions",
+        "rebalance_phase",
+        "pending_signal",
+        "last_daily_observation",
+        "metric_state",
+    }
+)
+TERMINAL_POSITION_KEYS = frozenset(
+    {"instrument_id", "execution_shares", "adjusted_units", "last_adjusted_price"}
+)
+REBALANCE_PHASE_KEYS = frozenset(
+    {"origin_session", "report_session_count", "rebalance_interval", "completed_intervals"}
+)
+PENDING_SIGNAL_KEYS = frozenset({"signal_session", "execution"})
+LAST_DAILY_OBSERVATION_KEYS = frozenset(
+    {
+        "benchmark_nav",
+        "benchmark_return",
+        "cash_ratio",
+        "cumulative_transaction_cost",
+        "cycle_type",
+        "execution_rounding_residual",
+        "gross_cash",
+        "gross_nav",
+        "gross_return",
+        "holdings_count",
+        "maximum_single_name_weight",
+        "net_cash",
+        "net_nav",
+        "net_return",
+        "pre_trade_gross_nav",
+        "pre_trade_net_nav",
+        "rebalance",
+        "session",
+        "valuation_events",
+    }
+)
+VALUATION_EVENT_KEYS = frozenset({"session", "instrument_id", "type"})
+METRIC_STATE_KEYS = frozenset(
+    {
+        "contract",
+        "first_gross_nav",
+        "first_net_nav",
+        "first_benchmark_nav",
+        "return_count",
+        "peak_net_nav",
+        "peak_session",
+        "worst_drawdown",
+        "worst_peak_nav",
+        "worst_peak_session",
+        "worst_trough_session",
+        "worst_recovery_session",
+        "holdings_sum",
+        "holdings_minimum",
+        "holdings_maximum",
+        "weight_maximum",
+        "weight_maximum_session",
+        "cash_maximum",
+        "cash_maximum_session",
+        "turnover_count",
+        "session_count",
+        "last_gross_nav",
+        "last_net_nav",
+        "last_benchmark_nav",
+        "last_session",
+        "holdings_ending",
+        "weight_ending",
+        "cash_sum_numerator",
+        "cash_sum_denominator",
+        "cash_ending",
+        "return_sum_numerator",
+        "return_sum_denominator",
+        "return_square_sum_numerator",
+        "return_square_sum_denominator",
+        "turnover_sum_numerator",
+        "turnover_sum_denominator",
+        "cumulative_cost",
+        "upper_limit_buy_rejections",
+        "lower_limit_sell_rejections",
+        "suspension_rejections",
+    }
 )
 
 
@@ -102,9 +226,7 @@ def enforce_result_bundle_budget(
 def result_publication_payloads(
     result: Mapping[str, object],
 ) -> dict[str, JsonPayload | ParquetRowsPayload]:
-    if set(result) != RESULT_VALUE_NAMES:
-        raise ResearchResultError("Result must contain exactly four durable values")
-    _reject_transient_values(result)
+    _validate_result_values(result)
     observations = result.get("strategy_daily_observations")
     if (
         not isinstance(observations, list)
@@ -112,19 +234,43 @@ def result_publication_payloads(
         or any(not isinstance(row, Mapping) for row in observations)
     ):
         raise ResearchResultError("Strategy Daily Observations are invalid")
-    return {
+    payloads: dict[str, JsonPayload | ParquetRowsPayload] = {
         "factor_summary": JsonPayload(copy.deepcopy(result["factor_summary"])),
         "strategy_summary": JsonPayload(copy.deepcopy(result["strategy_summary"])),
-        "strategy_daily_observations": ParquetRowsPayload(
-            rows=tuple(dict(row) for row in observations),
-            contract=STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
-        ),
         "terminal_strategy_state": JsonPayload(copy.deepcopy(result["terminal_strategy_state"])),
     }
+    partitions: list[dict[str, object]] = []
+    for partition_index, start in enumerate(
+        range(0, len(observations), RESULT_DAILY_PARTITION_SESSION_COUNT)
+    ):
+        rows = observations[start : start + RESULT_DAILY_PARTITION_SESSION_COUNT]
+        name = f"{RESULT_DAILY_PARTITION_PREFIX}{partition_index:06d}"
+        payloads[name] = ParquetRowsPayload(
+            rows=tuple(dict(row) for row in rows),
+            contract=STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+        )
+        partitions.append(
+            {
+                "name": name,
+                "row_count": len(rows),
+                "first_session": str(rows[0]["session"]),
+                "last_session": str(rows[-1]["session"]),
+            }
+        )
+    payloads["strategy_daily_observations"] = JsonPayload(
+        {
+            "format": "partitioned-parquet",
+            "version": 1,
+            "partition_session_count": RESULT_DAILY_PARTITION_SESSION_COUNT,
+            "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
+            "partitions": partitions,
+        }
+    )
+    return payloads
 
 
 def read_result_bundle(bundle: VerifiedBundle) -> dict[str, object]:
-    if bundle.kind != "research.result" or set(bundle.payloads) != RESULT_VALUE_NAMES:
+    if bundle.kind != "research.result" or not RESULT_VALUE_NAMES <= set(bundle.payloads):
         raise ResearchResultError("Result Bundle must contain exactly four durable values")
     result = {
         "factor_summary": _read_json_value(bundle, "factor_summary"),
@@ -132,7 +278,7 @@ def read_result_bundle(bundle: VerifiedBundle) -> dict[str, object]:
         "strategy_daily_observations": _read_daily_observations(bundle),
         "terminal_strategy_state": _read_json_value(bundle, "terminal_strategy_state"),
     }
-    _reject_transient_values(result)
+    _validate_result_values(result)
     return result
 
 
@@ -342,38 +488,181 @@ def _read_json_value(bundle: VerifiedBundle, name: str) -> object:
 
 
 def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
-    payload = bundle.payloads["strategy_daily_observations"]
+    descriptor = _read_json_value(bundle, "strategy_daily_observations")
+    if not isinstance(descriptor, Mapping) or set(descriptor) != {
+        "format",
+        "version",
+        "partition_session_count",
+        "writer_contract",
+        "partitions",
+    }:
+        raise ResearchResultError("Strategy Daily Observations descriptor is invalid")
+    if descriptor != {
+        **descriptor,
+        "format": "partitioned-parquet",
+        "version": 1,
+        "partition_session_count": RESULT_DAILY_PARTITION_SESSION_COUNT,
+        "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
+    }:
+        raise ResearchResultError("Strategy Daily Observations descriptor is invalid")
+    partitions = descriptor.get("partitions")
+    if not isinstance(partitions, list) or not partitions:
+        raise ResearchResultError("Strategy Daily Observations partitions are invalid")
     expected_serialization = {
         "format": "canonical-parquet",
         "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
     }
-    if (
-        payload.media_type != "application/vnd.apache.parquet"
-        or payload.serialization != expected_serialization
-    ):
-        raise ResearchResultError("Strategy Daily Observations have an invalid encoding")
-    try:
-        table = pq.read_table(pa.BufferReader(payload.content))
-        if table.schema != STRATEGY_DAILY_OBSERVATIONS_CONTRACT.schema:
-            raise ResearchResultError("Strategy Daily Observations schema is invalid")
-        rows = canonicalize_parquet_rows(
-            table.to_pylist(),
-            STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
-        )
-    except (ArrowException, ParquetContractError, TypeError, ValueError) as error:
-        raise ResearchResultError("Strategy Daily Observations are invalid") from error
-    if not rows:
-        raise ResearchResultError("Strategy Daily Observations cannot be empty")
+    expected_payload_names = set(RESULT_VALUE_NAMES)
+    rows: list[dict[str, object]] = []
+    prior_session: str | None = None
+    for index, value in enumerate(partitions):
+        if not isinstance(value, Mapping) or set(value) != {
+            "name",
+            "row_count",
+            "first_session",
+            "last_session",
+        }:
+            raise ResearchResultError("Strategy Daily Observations partition is invalid")
+        expected_name = f"{RESULT_DAILY_PARTITION_PREFIX}{index:06d}"
+        if value.get("name") != expected_name:
+            raise ResearchResultError("Strategy Daily Observations partition order is invalid")
+        expected_payload_names.add(expected_name)
+        payload = bundle.payloads.get(expected_name)
+        if (
+            payload is None
+            or payload.media_type != "application/vnd.apache.parquet"
+            or payload.serialization != expected_serialization
+        ):
+            raise ResearchResultError("Strategy Daily Observations have an invalid encoding")
+        try:
+            table = pq.read_table(pa.BufferReader(payload.content))
+            if table.schema != STRATEGY_DAILY_OBSERVATIONS_CONTRACT.schema:
+                raise ResearchResultError("Strategy Daily Observations schema is invalid")
+            partition_rows = canonicalize_parquet_rows(
+                table.to_pylist(),
+                STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+            )
+        except (ArrowException, ParquetContractError, TypeError, ValueError) as error:
+            raise ResearchResultError("Strategy Daily Observations are invalid") from error
+        if (
+            not partition_rows
+            or value.get("row_count") != len(partition_rows)
+            or value.get("first_session") != partition_rows[0]["session"]
+            or value.get("last_session") != partition_rows[-1]["session"]
+            or (index + 1 < len(partitions) and len(partition_rows) != 504)
+            or len(partition_rows) > 504
+            or (prior_session is not None and str(partition_rows[0]["session"]) <= prior_session)
+        ):
+            raise ResearchResultError("Strategy Daily Observations partition is invalid")
+        prior_session = str(partition_rows[-1]["session"])
+        rows.extend(partition_rows)
+    if set(bundle.payloads) != expected_payload_names:
+        raise ResearchResultError("Result Bundle contains an unexpected physical payload")
     return rows
 
 
-def _reject_transient_values(value: object) -> None:
-    if isinstance(value, Mapping):
-        forbidden = set(value) & FORBIDDEN_DURABLE_RESULT_KEYS
-        if forbidden:
-            raise ResearchResultError(f"Result contains transient value: {sorted(forbidden)[0]}")
-        for nested in value.values():
-            _reject_transient_values(nested)
-    elif isinstance(value, list | tuple):
-        for nested in value:
-            _reject_transient_values(nested)
+def _validate_result_values(result: Mapping[str, object]) -> None:
+    if set(result) != RESULT_VALUE_NAMES:
+        raise ResearchResultError("Result must contain exactly four durable values")
+    _validate_factor_summary(result["factor_summary"])
+    _validate_strategy_summary(result["strategy_summary"])
+    _validate_daily_observations(result["strategy_daily_observations"])
+    _validate_terminal_state(result["terminal_strategy_state"])
+
+
+def _validate_factor_summary(value: object) -> None:
+    factor = _exact_mapping(value, {"horizons"}, "Factor Summary")
+    horizons = _exact_mapping(factor["horizons"], {"1", "5", "20"}, "Factor horizons")
+    for name, expected_horizon in (("1", 1), ("5", 5), ("20", 20)):
+        horizon = _exact_mapping(horizons[name], FACTOR_HORIZON_KEYS, "Factor horizon")
+        if horizon["horizon"] != expected_horizon:
+            raise ResearchResultError("Factor horizon is invalid")
+        summary = _exact_mapping(horizon["summary"], FACTOR_SUMMARY_KEYS, "Factor metrics")
+        _exact_mapping(summary["ic"], FACTOR_CORRELATION_KEYS, "Factor IC")
+        _exact_mapping(summary["rank_ic"], FACTOR_CORRELATION_KEYS, "Factor Rank IC")
+        _exact_mapping(summary["quantile_returns"], FACTOR_QUANTILE_KEYS, "Factor quantiles")
+        _exact_mapping(horizon["coverage"], FACTOR_COVERAGE_KEYS, "Factor coverage")
+
+
+def _validate_strategy_summary(value: object) -> None:
+    summary = _exact_mapping(value, STRATEGY_SUMMARY_KEYS, "Strategy Summary")
+    benchmark = _exact_mapping(
+        summary["benchmark"], {"universe", "methodology"}, "Strategy Benchmark"
+    )
+    if benchmark["methodology"] != "selected_universe_equal_weight":
+        raise ResearchResultError("Strategy Benchmark is invalid")
+    metrics = _exact_mapping(summary["metrics"], STRATEGY_METRIC_KEYS, "Strategy metrics")
+    _exact_mapping(metrics["cash_ratio"], {"ending", "maximum", "mean"}, "Cash Ratio")
+    _exact_mapping(metrics["cash_ratio"]["maximum"], {"session", "value"}, "Cash Ratio maximum")
+    _exact_mapping(
+        metrics["holdings_count"],
+        {"ending", "maximum", "mean", "minimum"},
+        "Holdings Count",
+    )
+    _exact_mapping(
+        metrics["market_rejections"],
+        {"lower_limit_sell", "suspension", "upper_limit_buy"},
+        "Market rejections",
+    )
+    _exact_mapping(
+        metrics["maximum_drawdown"],
+        {"peak_session", "recovery_session", "trough_session", "unrecovered", "value"},
+        "Maximum Drawdown",
+    )
+    maximum_weight = _exact_mapping(
+        metrics["maximum_single_name_weight"],
+        {"ending", "period_maximum"},
+        "Maximum Single Name Weight",
+    )
+    _exact_mapping(maximum_weight["period_maximum"], {"session", "value"}, "Maximum Weight")
+    _exact_mapping(
+        metrics["transaction_costs"],
+        {"cumulative_amount", "ratio", "return_drag"},
+        "Transaction Costs",
+    )
+    _exact_mapping(metrics["turnover"], {"annualized", "average_rebalance"}, "Turnover")
+
+
+def _validate_daily_observations(value: object) -> None:
+    if not isinstance(value, list) or not value:
+        raise ResearchResultError("Strategy Daily Observations are invalid")
+    sessions: list[str] = []
+    for row in value:
+        observation = _exact_mapping(row, DAILY_OBSERVATION_KEYS, "Strategy Daily Observation")
+        sessions.append(str(observation["session"]))
+    if sessions != sorted(set(sessions)):
+        raise ResearchResultError("Strategy Daily Observation sessions are invalid")
+
+
+def _validate_terminal_state(value: object) -> None:
+    terminal = _exact_mapping(value, TERMINAL_STATE_KEYS, "Terminal Strategy State")
+    positions = terminal["positions"]
+    if not isinstance(positions, list):
+        raise ResearchResultError("Terminal positions are invalid")
+    for position in positions:
+        _exact_mapping(position, TERMINAL_POSITION_KEYS, "Terminal position")
+    _exact_mapping(terminal["rebalance_phase"], REBALANCE_PHASE_KEYS, "Rebalance phase")
+    pending_signal = terminal["pending_signal"]
+    if pending_signal is not None:
+        _exact_mapping(pending_signal, PENDING_SIGNAL_KEYS, "Pending signal")
+    last_daily = _exact_mapping(
+        terminal["last_daily_observation"],
+        LAST_DAILY_OBSERVATION_KEYS,
+        "Last Daily Observation",
+    )
+    valuation_events = last_daily["valuation_events"]
+    if not isinstance(valuation_events, list):
+        raise ResearchResultError("Valuation events are invalid")
+    for event in valuation_events:
+        _exact_mapping(event, VALUATION_EVENT_KEYS, "Valuation event")
+    _exact_mapping(terminal["metric_state"], METRIC_STATE_KEYS, "Strategy Metric State")
+
+
+def _exact_mapping(
+    value: object,
+    expected_keys: set[str] | frozenset[str],
+    name: str,
+) -> Mapping[str, object]:
+    if not isinstance(value, Mapping) or set(value) != set(expected_keys):
+        raise ResearchResultError(f"{name} does not match its durable schema")
+    return value
