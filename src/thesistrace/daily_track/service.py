@@ -307,6 +307,8 @@ class DailyTrackService:
         return row
 
     def process_next(self) -> bool:
+        if self._recover_expired_current():
+            return True
         current_claim = self._claim_current()
         if current_claim is not None:
             self._progress(
@@ -314,38 +316,39 @@ class DailyTrackService:
                 current_claim.track_id,
                 current_claim.data_generation_id,
             )
-            try:
-                prepared, provenance, state = self._execute_current(current_claim)
-                self._progress(
-                    "prepared",
-                    current_claim.track_id,
-                    current_claim.data_generation_id,
-                )
-                self._publish_current(current_claim, prepared, provenance, state)
-                self._progress(
-                    "published",
-                    current_claim.track_id,
-                    current_claim.data_generation_id,
-                )
-            except DailyTrackFenced:
-                logger.info(
-                    "DailyTrack session progression rejected by execution fence",
-                    extra={"track_id": current_claim.track_id},
-                )
-            except (
-                KernelRunError,
-                PublicationNotFoundError,
-                PublicationUnavailableError,
-                PublicationVerificationError,
-            ) as error:
-                if self._record_current_failure(current_claim, error):
-                    raise DailyTrackProgressionFailed(
-                        "DailyTrack progression failed at its current target"
-                    ) from error
-                logger.info(
-                    "DailyTrack session failure rejected by execution fence",
-                    extra={"track_id": current_claim.track_id},
-                )
+            with self._maintain_current_claim(current_claim):
+                try:
+                    prepared, provenance, state = self._execute_current(current_claim)
+                    self._progress(
+                        "prepared",
+                        current_claim.track_id,
+                        current_claim.data_generation_id,
+                    )
+                    self._publish_current(current_claim, prepared, provenance, state)
+                    self._progress(
+                        "published",
+                        current_claim.track_id,
+                        current_claim.data_generation_id,
+                    )
+                except DailyTrackFenced:
+                    logger.info(
+                        "DailyTrack session progression rejected by execution fence",
+                        extra={"track_id": current_claim.track_id},
+                    )
+                except (
+                    KernelRunError,
+                    PublicationNotFoundError,
+                    PublicationUnavailableError,
+                    PublicationVerificationError,
+                ) as error:
+                    if self._record_current_failure(current_claim, error):
+                        raise DailyTrackProgressionFailed(
+                            "DailyTrack progression failed at its current target"
+                        ) from error
+                    logger.info(
+                        "DailyTrack session failure rejected by execution fence",
+                        extra={"track_id": current_claim.track_id},
+                    )
             return True
         self._require_progression_dependencies()
         claim = self._claim_next()
@@ -451,10 +454,10 @@ class DailyTrackService:
                 assert blocked is not None
                 if str(blocked["blocked_target_release_id"]) != progression_id:
                     raise DailyTrackFenced
-                cancelled = transaction.execute(
+                resumed = transaction.execute(
                     """
                     UPDATE daily_tracks.session_progressions
-                    SET status = 'cancelled', finished_at = now()
+                    SET status = 'running', finished_at = NULL
                     WHERE id = %s AND track_id = %s AND status = 'blocked'
                     """,
                     (progression_id, track_id),
@@ -469,7 +472,7 @@ class DailyTrackService:
                     """,
                     (track_id, progression_id),
                 )
-                if cancelled.rowcount != 1 or activated.rowcount != 1:
+                if resumed.rowcount != 1 or activated.rowcount != 1:
                     raise DailyTrackFenced
                 outcome = DailyTrackSummary(
                     **{
@@ -1214,7 +1217,13 @@ class DailyTrackService:
                       SELECT 1
                       FROM daily_tracks.session_progressions AS progression
                       WHERE progression.track_id = track.id
-                        AND progression.status IN ('running', 'blocked')
+                        AND progression.status = 'blocked'
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM daily_tracks.session_progression_attempts AS attempt
+                      WHERE attempt.track_id = track.id
+                        AND attempt.status = 'running'
                   )
                 ORDER BY track.created_at, track.id
                 FOR UPDATE OF track, state SKIP LOCKED
@@ -1248,30 +1257,79 @@ class DailyTrackService:
                     )
                     continue
                 fence = int(row["execution_fence"]) + 1
-                progression_id = f"track_progression_{uuid4().hex[:20]}"
-                self._session_coordinates.start_progression(
-                    transaction,
-                    progression_id=progression_id,
-                    track_id=str(row["id"]),
-                    expected_checkpoint_manifest_sha256=str(
-                        row["manifest_sha256"]
-                    ),
-                    generation_sessions=tuple(_session_date(value) for value in calendar),
-                    target_sessions=tuple(
-                        _session_date(value) for value in target_sessions
-                    ),
-                    data_generation_id=pin.generation_manifest_sha256,
-                    provenance={
-                        "schema_version": "daily-track-progression-v1",
-                        "target_start_session": target_sessions[0],
-                        "target_end_session": target_sessions[-1],
-                    },
-                )
+                progression_provenance = {
+                    "schema_version": "daily-track-progression-v1",
+                    "target_start_session": target_sessions[0],
+                    "target_end_session": target_sessions[-1],
+                }
+                existing = transaction.execute(
+                    """
+                    SELECT id,
+                           predecessor_checkpoint_manifest_sha256,
+                           COALESCE((
+                               SELECT max(ordinal)
+                               FROM daily_tracks.session_progression_attempts
+                               WHERE progression_id = progression.id
+                           ), 0) AS latest_ordinal
+                    FROM daily_tracks.session_progressions AS progression
+                    WHERE track_id = %s AND status = 'running'
+                    FOR UPDATE
+                    """,
+                    (row["id"],),
+                ).fetchone()
+                if existing is None:
+                    progression_id = f"track_progression_{uuid4().hex[:20]}"
+                    ordinal = 1
+                    self._session_coordinates.start_progression(
+                        transaction,
+                        progression_id=progression_id,
+                        track_id=str(row["id"]),
+                        expected_checkpoint_manifest_sha256=str(
+                            row["manifest_sha256"]
+                        ),
+                        generation_sessions=tuple(
+                            _session_date(value) for value in calendar
+                        ),
+                        target_sessions=tuple(
+                            _session_date(value) for value in target_sessions
+                        ),
+                        data_generation_id=pin.generation_manifest_sha256,
+                        provenance=progression_provenance,
+                    )
+                else:
+                    if existing["predecessor_checkpoint_manifest_sha256"] != row[
+                        "manifest_sha256"
+                    ]:
+                        raise DailyTrackFenced
+                    progression_id = str(existing["id"])
+                    ordinal = int(existing["latest_ordinal"]) + 1
+                    updated_progression = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progressions
+                        SET target_sessions = %s, target_start_session = %s,
+                            target_end_session = %s, data_generation_id = %s,
+                            provenance = %s, finished_at = NULL
+                        WHERE id = %s AND track_id = %s AND status = 'running'
+                          AND predecessor_checkpoint_manifest_sha256 = %s
+                        """,
+                        (
+                            [_session_date(value) for value in target_sessions],
+                            _session_date(target_sessions[0]),
+                            _session_date(target_sessions[-1]),
+                            pin.generation_manifest_sha256,
+                            Jsonb(progression_provenance),
+                            progression_id,
+                            row["id"],
+                            row["manifest_sha256"],
+                        ),
+                    )
+                    if updated_progression.rowcount != 1:
+                        raise DailyTrackFenced
                 self._session_coordinates.start_attempt(
                     transaction,
                     attempt_id=attempt_id,
                     progression_id=progression_id,
-                    ordinal=1,
+                    ordinal=ordinal,
                     fence=fence,
                     generation_pin_id=pin.id,
                     data_generation_id=pin.generation_manifest_sha256,
@@ -1304,6 +1362,153 @@ class DailyTrackService:
                     canonical=generation.canonical,
                 )
         return None
+
+    def _recover_expired_current(self) -> bool:
+        if self._dataset_lifecycle is None:
+            return False
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT track.id AS track_id, track.execution_fence,
+                       progression.id AS progression_id,
+                       attempt.id AS attempt_id, attempt.fence,
+                       attempt.generation_pin_id
+                FROM daily_tracks.session_progression_attempts AS attempt
+                JOIN daily_tracks.session_progressions AS progression
+                  ON progression.id = attempt.progression_id
+                JOIN daily_tracks.tracks AS track ON track.id = progression.track_id
+                WHERE track.status = 'active'
+                  AND track.execution_fence = attempt.fence
+                  AND progression.status = 'running'
+                  AND attempt.status = 'running'
+                  AND attempt.lease_expires_at <= now()
+                ORDER BY attempt.lease_expires_at, attempt.id
+                FOR UPDATE OF track, progression, attempt SKIP LOCKED
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return False
+            attempt = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progression_attempts
+                SET status = 'failed', heartbeat_at = now(),
+                    lease_expires_at = now(), finished_at = now(),
+                    failure_reason = %s
+                WHERE id = %s AND progression_id = %s
+                  AND status = 'running' AND fence = %s
+                  AND lease_expires_at <= now()
+                """,
+                (
+                    WORKER_LOST_FAILURE,
+                    row["attempt_id"],
+                    row["progression_id"],
+                    row["fence"],
+                ),
+            )
+            progression = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progressions
+                SET status = 'blocked', finished_at = now()
+                WHERE id = %s AND track_id = %s AND status = 'running'
+                """,
+                (row["progression_id"], row["track_id"]),
+            )
+            track = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET status = 'blocked', blocked_target_release_id = %s,
+                    blocked_reason = %s
+                WHERE id = %s AND status = 'active' AND execution_fence = %s
+                """,
+                (
+                    row["progression_id"],
+                    PUBLIC_BLOCKED_REASON,
+                    row["track_id"],
+                    row["fence"],
+                ),
+            )
+            if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
+                raise DailyTrackFenced
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                str(row["generation_pin_id"]),
+                owner_id=str(row["attempt_id"]),
+            )
+        return True
+
+    @contextmanager
+    def _maintain_current_claim(
+        self,
+        claim: _SessionProgressionClaim,
+    ) -> Iterator[None]:
+        stopped = Event()
+        heartbeat = Thread(
+            target=self._heartbeat_current_claim,
+            args=(claim, stopped),
+            name=f"daily-track-session-heartbeat-{claim.track_id}",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            heartbeat.join(timeout=5)
+
+    def _heartbeat_current_claim(
+        self,
+        claim: _SessionProgressionClaim,
+        stopped: Event,
+    ) -> None:
+        assert self._dataset_lifecycle is not None
+        while not stopped.wait(self._heartbeat_seconds):
+            try:
+                with self._database.transaction() as transaction:
+                    renewed = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progression_attempts AS attempt
+                        SET heartbeat_at = now(),
+                            lease_expires_at = now() + make_interval(secs => %s)
+                        WHERE attempt.id = %s AND attempt.progression_id = %s
+                          AND attempt.fence = %s AND attempt.status = 'running'
+                          AND EXISTS (
+                              SELECT 1
+                              FROM daily_tracks.tracks AS track
+                              JOIN daily_tracks.session_progressions AS progression
+                                ON progression.track_id = track.id
+                               AND progression.id = attempt.progression_id
+                              WHERE track.id = %s AND track.status = 'active'
+                                AND track.execution_fence = attempt.fence
+                                AND progression.status = 'running'
+                          )
+                        """,
+                        (
+                            self._lease_seconds,
+                            claim.attempt_id,
+                            claim.progression_id,
+                            claim.fence,
+                            claim.track_id,
+                        ),
+                    )
+                    if renewed.rowcount == 1:
+                        self._dataset_lifecycle.heartbeat_pin_in_transaction(
+                            transaction,
+                            claim.generation_pin_id,
+                            owner_id=claim.attempt_id,
+                            lease_seconds=self._lease_seconds,
+                        )
+            except Exception as error:
+                logger.error(
+                    "DailyTrack session claim heartbeat failed",
+                    extra={
+                        "track_id": claim.track_id,
+                        "error_type": type(error).__name__,
+                    },
+                )
+                return
+            if renewed.rowcount != 1:
+                return
 
     def _execute_current(
         self,

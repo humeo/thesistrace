@@ -408,7 +408,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         ] == "blocked"
 
     recovered_sessions = (*catch_up_sessions, "2026-08-11")
-    _publish_head(
+    recovered_head = _publish_head(
         settings,
         sessions=recovered_sessions,
         price_offset=2,
@@ -441,9 +441,69 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             str(first_track["id"]),
         )
         assert recovered_state["checkpoint_count"] == 2
-        assert recovered_state["cancelled_progression_count"] == 1
+        assert recovered_state["cancelled_progression_count"] == 0
         assert recovered_state["succeeded_progression_count"] == 1
         assert recovered_state["active_pin_count"] == 0
+
+        stale_sessions = (*recovered_sessions, "2026-08-12")
+        _publish_head(
+            settings,
+            sessions=stale_sessions,
+            price_offset=3,
+            expected_manifest=recovered_head,
+        )
+        stale_claimed = Event()
+        release_stale_worker = Event()
+        runtime = restarted.app.state.core_runtime
+
+        def stale_barrier(stage: str, _track_id: str, _target: str) -> None:
+            if stage == "claimed":
+                stale_claimed.set()
+                assert release_stale_worker.wait(timeout=10)
+
+        stale_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
+            progress=stale_barrier,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            stale_future = executor.submit(stale_processor.process_next)
+            assert stale_claimed.wait(timeout=10)
+            _expire_current_tracking_attempt(settings, str(first_track["id"]))
+            assert runtime.daily_tracks.process_next() is True
+            lost = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
+            assert lost["status"] == "blocked"
+            assert lost["strategy_session"] == recovered_sessions[-1]
+            release_stale_worker.set()
+            assert stale_future.result(timeout=20) is True
+
+        lost_state = _stored_tracking_activation(settings, str(first_track["id"]))
+        assert lost_state["current_checkpoint_session"].isoformat() == (
+            recovered_sessions[-1]
+        )
+        assert lost_state["checkpoint_count"] == 2
+        assert lost_state["blocked_progression_count"] == 1
+        assert lost_state["latest_attempt_failure_reason"] == "WorkerLost"
+        assert lost_state["active_pin_count"] == 0
+
+        retry_lost = restarted.post(
+            f"/api/daily-tracks/{first_track['id']}/retry",
+            json={"request_id": "track-recovery-lost-worker-retry"},
+        )
+        assert retry_lost.status_code == 202
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        final = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
+        assert final["status"] == "active"
+        assert final["strategy_session"] == stale_sessions[-1]
+        assert [
+            observation["session"] for observation in final["strategy"]["observations"]
+        ] == list(stale_sessions)
 
 
 @pytest.mark.skipif(
@@ -1018,7 +1078,12 @@ def _stored_tracking_activation(
                           AND status = 'failed') AS failed_attempt_count,
                        (SELECT count(*)
                         FROM data.generation_pins
-                        WHERE status = 'active') AS active_pin_count
+                        WHERE status = 'active') AS active_pin_count,
+                       (SELECT failure_reason
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE track_id = state.track_id
+                        ORDER BY started_at DESC, id DESC
+                        LIMIT 1) AS latest_attempt_failure_reason
                 FROM daily_tracks.session_tracking_states AS state
                 JOIN daily_tracks.tracks AS track ON track.id = state.track_id
                 JOIN daily_tracks.session_checkpoints AS checkpoint
@@ -1031,6 +1096,24 @@ def _stored_tracking_activation(
             ).fetchone()
         assert row is not None
         return row
+    finally:
+        database.close()
+
+
+def _expire_current_tracking_attempt(settings: CoreSettings, track_id: str) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            expired = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progression_attempts
+                SET lease_expires_at = now() - interval '1 second'
+                WHERE track_id = %s AND status = 'running'
+                """,
+                (track_id,),
+            )
+        assert expired.rowcount == 1
     finally:
         database.close()
 
