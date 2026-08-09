@@ -37,6 +37,9 @@ packages = ["src/thesistrace"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "database_restart: isolated final-phase acceptance that restarts its owned PostgreSQL",
+]
 
 [tool.ruff]
 line-length = 100

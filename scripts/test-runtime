@@ -73,7 +73,7 @@ run_with_environment() {
   THESISTRACE_S3_BUCKET="$bucket_name" \
   THESISTRACE_S3_REGION=us-east-1 \
   THESISTRACE_DATA_MOUNT="$data_mount" \
-  THESISTRACE_TEST_COMPOSE_PROJECT_NAME="$project_name" \
+  THESISTRACE_TEST_PROJECT_NAME="$project_name" \
     "$@"
 }
 
@@ -176,9 +176,26 @@ case "$command" in
     cleanup_project
     exit 0
     ;;
+  restart-postgres)
+    project_name=${THESISTRACE_TEST_PROJECT_NAME-}
+    bucket_name=${project_name#"$canonical_prefix"}
+    validate_cleanup_target
+    compose restart postgres >&2
+    readiness_attempt=0
+    until compose exec -T postgres pg_isready -U thesistrace -d thesistrace >/dev/null 2>&1; do
+      readiness_attempt=$((readiness_attempt + 1))
+      if [ "$readiness_attempt" -ge 60 ]; then
+        echo "PostgreSQL did not become ready after restart" >&2
+        exit 1
+      fi
+      sleep 1
+    done
+    mapped_port postgres 5432
+    exit 0
+    ;;
   integration | e2e) ;;
   *)
-    echo "usage: $0 {identity|cleanup|integration|e2e [--keep-environment]}" >&2
+    echo "usage: $0 {identity|cleanup|restart-postgres|integration|e2e [--keep-environment]}" >&2
     exit 2
     ;;
 esac
@@ -208,6 +225,7 @@ run_root="$state_root/$run_id"
 data_mount="$run_root/canonical-data"
 evidence_dir="$run_root/evidence"
 pytest_report="$evidence_dir/pytest.xml"
+database_restart_report="$evidence_dir/pytest-database-restart.xml"
 run_metadata="$run_root/run.txt"
 validate_test_project
 mkdir -p "$evidence_dir" "$data_mount"
@@ -231,7 +249,12 @@ case "$command" in
     s3_port=$(mapped_port rustfs 9000)
     printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
     run_managed run_with_environment uv run pytest -q tests/integration tests/acceptance \
+      -m "not database_restart" \
       --junitxml="$pytest_report"
+    postgres_port=$(mapped_port postgres 5432)
+    run_managed run_with_environment env THESISTRACE_DATABASE_RESTART_PHASE=1 \
+      uv run pytest -q tests/acceptance/test_core_definition_dates.py \
+      -m database_restart --junitxml="$database_restart_report"
     ;;
   e2e)
     run_managed compose up --detach --build --wait --wait-timeout 300

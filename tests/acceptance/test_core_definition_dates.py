@@ -1,9 +1,6 @@
 import os
 import subprocess
 from dataclasses import replace
-from pathlib import Path
-from threading import Event
-from time import monotonic
 
 import pytest
 from core_runtime import create_migrated_test_app as create_app
@@ -17,7 +14,12 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_requested_research_dates_save_reopen_and_keep_drafts_incomplete() -> None:
+@pytest.mark.database_restart
+def test_requested_research_dates_save_reopen_and_keep_drafts_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.environ.get("THESISTRACE_DATABASE_RESTART_PHASE") != "1":
+        pytest.skip("database restart acceptance runs in its isolated final phase")
     settings = CoreSettings.from_environment()
     _drop_definitions_schema(settings)
     app = create_app(settings)
@@ -59,7 +61,7 @@ def test_requested_research_dates_save_reopen_and_keep_drafts_incomplete() -> No
             f"{restarted_port}/thesistrace"
         ),
     )
-    os.environ["THESISTRACE_DATABASE_URL"] = restarted_settings.database_url
+    monkeypatch.setenv("THESISTRACE_DATABASE_URL", restarted_settings.database_url)
 
     with TestClient(create_app(restarted_settings)) as restarted:
         reopened = restarted.get(f"/api/definitions/{definition['id']}")
@@ -196,66 +198,16 @@ def _execution_counts(settings: CoreSettings) -> tuple[int, int, int]:
 
 
 def _restart_isolated_postgres() -> int:
-    project_name = os.environ.get("THESISTRACE_TEST_COMPOSE_PROJECT_NAME", "")
-    if not project_name.startswith("thesistrace-test-"):
+    if not os.environ.get("THESISTRACE_TEST_PROJECT_NAME"):
         pytest.skip("an isolated Core Compose project is required for database restart")
-    repository = Path(__file__).resolve().parents[2]
-    command = [
-        "docker",
-        "compose",
-        "--project-name",
-        project_name,
-        "--file",
-        str(repository / "deploy/core/compose.yaml"),
-        "--file",
-        str(repository / "deploy/core/compose.test-run.yaml"),
-    ]
     restarted = subprocess.run(
-        [*command, "restart", "postgres"],
+        ["./scripts/test-runtime", "restart-postgres"],
         check=False,
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=90,
     )
     assert restarted.returncode == 0, restarted.stderr
-    container = subprocess.run(
-        [*command, "ps", "--quiet", "postgres"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    assert container.returncode == 0, container.stderr
-    container_id = container.stdout.strip()
-    assert container_id
-    deadline = monotonic() + 60
-    status = "unknown"
-    while monotonic() < deadline:
-        inspected = subprocess.run(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                "{{.State.Health.Status}}",
-                container_id,
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        status = inspected.stdout.strip()
-        if inspected.returncode == 0 and status == "healthy":
-            mapped = subprocess.run(
-                [*command, "port", "postgres", "5432"],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            assert mapped.returncode == 0, mapped.stderr
-            host_port = mapped.stdout.strip().rsplit(":", maxsplit=1)[-1]
-            assert host_port.isdigit(), mapped.stdout
-            return int(host_port)
-        Event().wait(0.1)
-    raise AssertionError(f"PostgreSQL did not become healthy after restart: {status}")
+    host_port = restarted.stdout.strip().rsplit(":", maxsplit=1)[-1]
+    assert host_port.isdigit(), restarted.stdout
+    return int(host_port)
