@@ -163,7 +163,6 @@ def test_resolved_candidate_is_opaque_and_single_use(tmp_path: Path) -> None:
     first = _materialize(store, ordinal=1)
     heads = MountedDatasetHeadStore(tmp_path)
     with heads.resolved_candidate(first) as candidate:
-        assert not hasattr(candidate, "generation")
         established = heads.compare_and_swap_resolved(
             expected_generation_manifest_sha256=None,
             candidate=candidate,
@@ -174,12 +173,20 @@ def test_resolved_candidate_is_opaque_and_single_use(tmp_path: Path) -> None:
                 expected_generation_manifest_sha256=first,
                 candidate=candidate,
             )
-    assert heads._resolved_candidates == {}
+    with pytest.raises(DatasetHeadError, match="another mounted store"):
+        heads.compare_and_swap_resolved(
+            expected_generation_manifest_sha256=first,
+            candidate=candidate,
+        )
 
     with pytest.raises(RuntimeError, match="database validation failed"):
-        with heads.resolved_candidate(first):
+        with heads.resolved_candidate(first) as abandoned:
             raise RuntimeError("database validation failed")
-    assert heads._resolved_candidates == {}
+    with pytest.raises(DatasetHeadError, match="another mounted store"):
+        heads.compare_and_swap_resolved(
+            expected_generation_manifest_sha256=first,
+            candidate=abandoned,
+        )
 
 
 def test_head_read_stops_at_hard_bound_when_file_grows(
