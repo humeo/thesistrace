@@ -469,10 +469,45 @@ def _legal_result() -> dict[str, object]:
     )
     last_daily = {name: 0 for name in LAST_DAILY_OBSERVATION_KEYS}
     last_daily.update(
-        {"session": "2024-01-02", "cycle_type": "terminal_valuation", "valuation_events": []}
+        {
+            "benchmark_nav": "1",
+            "cumulative_transaction_cost": "0",
+            "cycle_type": "terminal_valuation",
+            "execution_rounding_residual": "0",
+            "gross_cash": "1e+7",
+            "gross_nav": "1e+7",
+            "net_cash": "1e+7",
+            "net_nav": "1e+7",
+            "pre_trade_gross_nav": "1e+7",
+            "pre_trade_net_nav": "1e+7",
+            "rebalance": False,
+            "session": "2024-01-02",
+            "valuation_events": [],
+        }
     )
     metric_state = {name: 0 for name in METRIC_STATE_KEYS}
-    metric_state.update({"contract": "strategy-metric-state-v1", "last_session": "2024-01-02"})
+    metric_state.update(
+        {
+            "contract": "strategy-metric-state-v1",
+            "first_gross_nav": "1e+7",
+            "first_net_nav": "1e+7",
+            "first_benchmark_nav": "1",
+            "peak_net_nav": "1e+7",
+            "peak_session": "2024-01-02",
+            "worst_drawdown": "0",
+            "worst_peak_nav": "1e+7",
+            "worst_peak_session": "2024-01-02",
+            "worst_trough_session": "2024-01-02",
+            "worst_recovery_session": None,
+            "weight_maximum_session": "2024-01-02",
+            "cash_maximum_session": "2024-01-02",
+            "last_gross_nav": "1e+7",
+            "last_net_nav": "1e+7",
+            "last_benchmark_nav": "1",
+            "last_session": "2024-01-02",
+            "cumulative_cost": "0",
+        }
+    )
     return {
         "factor_summary": {"horizons": horizons},
         "strategy_summary": {

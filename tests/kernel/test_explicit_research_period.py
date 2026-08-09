@@ -16,7 +16,7 @@ from thesistrace.research_kernel import (
 from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 from thesistrace.research_kernel.serialization import canonical_json_bytes
-from thesistrace.research_run.result import build_result_payload
+from thesistrace.research_run.result import build_result_payload, result_publication_payloads
 
 SESSIONS = (
     "2024-01-02",
@@ -70,6 +70,7 @@ def test_explicit_research_period_projects_four_variable_length_result_values(
     )
 
     result = build_result_payload(output, rebalance_interval=1, universe="manual")
+    payloads = result_publication_payloads(result)
 
     assert set(result) == {
         "factor_summary",
@@ -78,6 +79,7 @@ def test_explicit_research_period_projects_four_variable_length_result_values(
         "terminal_strategy_state",
     }
     assert len(result["strategy_daily_observations"]) == session_count
+    assert "strategy_daily_observations.part-000000" in payloads
     serialized = canonical_json_bytes(result)
     for excluded in (
         b"strategy_ledger",

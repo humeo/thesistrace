@@ -196,6 +196,16 @@ METRIC_STATE_KEYS = frozenset(
         "suspension_rejections",
     }
 )
+METRIC_STATE_OPTIONAL_ACCUMULATOR_KEYS = frozenset(
+    {
+        "return_sum_numerator",
+        "return_sum_denominator",
+        "return_square_sum_numerator",
+        "return_square_sum_denominator",
+        "turnover_sum_numerator",
+        "turnover_sum_denominator",
+    }
+)
 
 
 def result_bundle_byte_budget(research_period_session_count: int) -> int:
@@ -577,11 +587,50 @@ def _validate_factor_summary(value: object) -> None:
         horizon = _exact_mapping(horizons[name], FACTOR_HORIZON_KEYS, "Factor horizon")
         if horizon["horizon"] != expected_horizon:
             raise ResearchResultError("Factor horizon is invalid")
+        _scalar_fields(
+            horizon,
+            {
+                "horizon": "int",
+                "alpha_checksum": "str",
+                "label_checksum": "str",
+                "source_checksum": "str",
+            },
+            "Factor horizon",
+        )
         summary = _exact_mapping(horizon["summary"], FACTOR_SUMMARY_KEYS, "Factor metrics")
-        _exact_mapping(summary["ic"], FACTOR_CORRELATION_KEYS, "Factor IC")
-        _exact_mapping(summary["rank_ic"], FACTOR_CORRELATION_KEYS, "Factor Rank IC")
-        _exact_mapping(summary["quantile_returns"], FACTOR_QUANTILE_KEYS, "Factor quantiles")
-        _exact_mapping(horizon["coverage"], FACTOR_COVERAGE_KEYS, "Factor coverage")
+        ic = _exact_mapping(summary["ic"], FACTOR_CORRELATION_KEYS, "Factor IC")
+        rank_ic = _exact_mapping(summary["rank_ic"], FACTOR_CORRELATION_KEYS, "Factor Rank IC")
+        for correlation, correlation_name in ((ic, "Factor IC"), (rank_ic, "Factor Rank IC")):
+            _scalar_fields(
+                correlation,
+                {
+                    "icir": "optional_number",
+                    "mean": "optional_number",
+                    "positive_fraction": "optional_number",
+                    "sample_deviation": "optional_number",
+                    "valid_session_count": "int",
+                },
+                correlation_name,
+            )
+        quantiles = _exact_mapping(
+            summary["quantile_returns"], FACTOR_QUANTILE_KEYS, "Factor quantiles"
+        )
+        _scalar_fields(
+            quantiles,
+            {name: "optional_number" for name in FACTOR_QUANTILE_KEYS},
+            "Factor quantiles",
+        )
+        _scalar_fields(
+            summary,
+            {"top_bottom_return": "optional_number"},
+            "Factor metrics",
+        )
+        coverage = _exact_mapping(horizon["coverage"], FACTOR_COVERAGE_KEYS, "Factor coverage")
+        _scalar_fields(
+            coverage,
+            {name: "int" for name in FACTOR_COVERAGE_KEYS},
+            "Factor coverage",
+        )
 
 
 def _validate_strategy_summary(value: object) -> None:
@@ -591,22 +640,81 @@ def _validate_strategy_summary(value: object) -> None:
     )
     if benchmark["methodology"] != "selected_universe_equal_weight":
         raise ResearchResultError("Strategy Benchmark is invalid")
+    _scalar_fields(
+        summary,
+        {
+            "alpha_checksum": "str",
+            "initial_cash_cny": "str",
+            "source_checksum": "str",
+        },
+        "Strategy Summary",
+    )
+    _scalar_fields(
+        benchmark,
+        {"universe": "str", "methodology": "str"},
+        "Strategy Benchmark",
+    )
     metrics = _exact_mapping(summary["metrics"], STRATEGY_METRIC_KEYS, "Strategy metrics")
-    _exact_mapping(metrics["cash_ratio"], {"ending", "maximum", "mean"}, "Cash Ratio")
-    _exact_mapping(metrics["cash_ratio"]["maximum"], {"session", "value"}, "Cash Ratio maximum")
-    _exact_mapping(
+    _scalar_fields(
+        metrics,
+        {
+            name: "optional_number"
+            for name in STRATEGY_METRIC_KEYS
+            if name
+            not in {
+                "cash_ratio",
+                "holdings_count",
+                "market_rejections",
+                "maximum_drawdown",
+                "maximum_single_name_weight",
+                "transaction_costs",
+                "turnover",
+            }
+        },
+        "Strategy metrics",
+    )
+    cash_ratio = _exact_mapping(metrics["cash_ratio"], {"ending", "maximum", "mean"}, "Cash Ratio")
+    _scalar_fields(cash_ratio, {"ending": "number", "mean": "number"}, "Cash Ratio")
+    cash_maximum = _exact_mapping(cash_ratio["maximum"], {"session", "value"}, "Cash Ratio maximum")
+    _scalar_fields(
+        cash_maximum,
+        {"session": "str", "value": "number"},
+        "Cash Ratio maximum",
+    )
+    holdings_count = _exact_mapping(
         metrics["holdings_count"],
         {"ending", "maximum", "mean", "minimum"},
         "Holdings Count",
     )
-    _exact_mapping(
+    _scalar_fields(
+        holdings_count,
+        {"ending": "int", "maximum": "int", "mean": "number", "minimum": "int"},
+        "Holdings Count",
+    )
+    market_rejections = _exact_mapping(
         metrics["market_rejections"],
         {"lower_limit_sell", "suspension", "upper_limit_buy"},
         "Market rejections",
     )
-    _exact_mapping(
+    _scalar_fields(
+        market_rejections,
+        {name: "int" for name in market_rejections},
+        "Market rejections",
+    )
+    maximum_drawdown = _exact_mapping(
         metrics["maximum_drawdown"],
         {"peak_session", "recovery_session", "trough_session", "unrecovered", "value"},
+        "Maximum Drawdown",
+    )
+    _scalar_fields(
+        maximum_drawdown,
+        {
+            "peak_session": "str",
+            "recovery_session": "optional_str",
+            "trough_session": "str",
+            "unrecovered": "bool",
+            "value": "number",
+        },
         "Maximum Drawdown",
     )
     maximum_weight = _exact_mapping(
@@ -614,13 +722,31 @@ def _validate_strategy_summary(value: object) -> None:
         {"ending", "period_maximum"},
         "Maximum Single Name Weight",
     )
-    _exact_mapping(maximum_weight["period_maximum"], {"session", "value"}, "Maximum Weight")
-    _exact_mapping(
+    _scalar_fields(maximum_weight, {"ending": "number"}, "Maximum Single Name Weight")
+    period_maximum = _exact_mapping(
+        maximum_weight["period_maximum"], {"session", "value"}, "Maximum Weight"
+    )
+    _scalar_fields(
+        period_maximum,
+        {"session": "str", "value": "number"},
+        "Maximum Weight",
+    )
+    transaction_costs = _exact_mapping(
         metrics["transaction_costs"],
         {"cumulative_amount", "ratio", "return_drag"},
         "Transaction Costs",
     )
-    _exact_mapping(metrics["turnover"], {"annualized", "average_rebalance"}, "Turnover")
+    _scalar_fields(
+        transaction_costs,
+        {name: "number" for name in transaction_costs},
+        "Transaction Costs",
+    )
+    turnover = _exact_mapping(metrics["turnover"], {"annualized", "average_rebalance"}, "Turnover")
+    _scalar_fields(
+        turnover,
+        {"annualized": "optional_number", "average_rebalance": "optional_number"},
+        "Turnover",
+    )
 
 
 def _validate_daily_observations(value: object) -> None:
@@ -629,6 +755,23 @@ def _validate_daily_observations(value: object) -> None:
     sessions: list[str] = []
     for row in value:
         observation = _exact_mapping(row, DAILY_OBSERVATION_KEYS, "Strategy Daily Observation")
+        _scalar_fields(
+            observation,
+            {
+                "session": "str",
+                "gross_nav": "str",
+                "net_nav": "str",
+                "benchmark_nav": "str",
+                "net_cash": "str",
+                "transaction_cost_cny": "str",
+                "holdings_count": "int",
+                "maximum_single_name_weight": "number",
+                "upper_limit_buy_rejections": "int",
+                "lower_limit_sell_rejections": "int",
+                "suspension_rejections": "int",
+            },
+            "Strategy Daily Observation",
+        )
         sessions.append(str(observation["session"]))
     if sessions != sorted(set(sessions)):
         raise ResearchResultError("Strategy Daily Observation sessions are invalid")
@@ -636,15 +779,55 @@ def _validate_daily_observations(value: object) -> None:
 
 def _validate_terminal_state(value: object) -> None:
     terminal = _exact_mapping(value, TERMINAL_STATE_KEYS, "Terminal Strategy State")
+    _scalar_fields(
+        terminal,
+        {
+            "session": "str",
+            "gross_cash": "str",
+            "net_cash": "str",
+            "gross_nav": "str",
+            "net_nav": "str",
+            "benchmark_nav": "str",
+            "cumulative_transaction_cost": "str",
+        },
+        "Terminal Strategy State",
+    )
     positions = terminal["positions"]
     if not isinstance(positions, list):
         raise ResearchResultError("Terminal positions are invalid")
     for position in positions:
-        _exact_mapping(position, TERMINAL_POSITION_KEYS, "Terminal position")
-    _exact_mapping(terminal["rebalance_phase"], REBALANCE_PHASE_KEYS, "Rebalance phase")
+        position_value = _exact_mapping(position, TERMINAL_POSITION_KEYS, "Terminal position")
+        _scalar_fields(
+            position_value,
+            {
+                "instrument_id": "str",
+                "execution_shares": "int",
+                "adjusted_units": "str",
+                "last_adjusted_price": "str",
+            },
+            "Terminal position",
+        )
+    rebalance_phase = _exact_mapping(
+        terminal["rebalance_phase"], REBALANCE_PHASE_KEYS, "Rebalance phase"
+    )
+    _scalar_fields(
+        rebalance_phase,
+        {
+            "origin_session": "str",
+            "report_session_count": "int",
+            "rebalance_interval": "int",
+            "completed_intervals": "int",
+        },
+        "Rebalance phase",
+    )
     pending_signal = terminal["pending_signal"]
     if pending_signal is not None:
-        _exact_mapping(pending_signal, PENDING_SIGNAL_KEYS, "Pending signal")
+        pending = _exact_mapping(pending_signal, PENDING_SIGNAL_KEYS, "Pending signal")
+        _scalar_fields(
+            pending,
+            {"signal_session": "str", "execution": "str"},
+            "Pending signal",
+        )
     last_daily = _exact_mapping(
         terminal["last_daily_observation"],
         LAST_DAILY_OBSERVATION_KEYS,
@@ -654,8 +837,93 @@ def _validate_terminal_state(value: object) -> None:
     if not isinstance(valuation_events, list):
         raise ResearchResultError("Valuation events are invalid")
     for event in valuation_events:
-        _exact_mapping(event, VALUATION_EVENT_KEYS, "Valuation event")
-    _exact_mapping(terminal["metric_state"], METRIC_STATE_KEYS, "Strategy Metric State")
+        event_value = _exact_mapping(event, VALUATION_EVENT_KEYS, "Valuation event")
+        _scalar_fields(
+            event_value,
+            {name: "str" for name in VALUATION_EVENT_KEYS},
+            "Valuation event",
+        )
+    _scalar_fields(
+        last_daily,
+        {
+            "benchmark_nav": "str",
+            "benchmark_return": "number",
+            "cash_ratio": "number",
+            "cumulative_transaction_cost": "str",
+            "cycle_type": "str",
+            "execution_rounding_residual": "str",
+            "gross_cash": "str",
+            "gross_nav": "str",
+            "gross_return": "number",
+            "holdings_count": "int",
+            "maximum_single_name_weight": "number",
+            "net_cash": "str",
+            "net_nav": "str",
+            "net_return": "number",
+            "pre_trade_gross_nav": "str",
+            "pre_trade_net_nav": "str",
+            "rebalance": "bool",
+            "session": "str",
+        },
+        "Last Daily Observation",
+    )
+    metric_state = _mapping_with_optional_keys(
+        terminal["metric_state"],
+        METRIC_STATE_KEYS - METRIC_STATE_OPTIONAL_ACCUMULATOR_KEYS,
+        METRIC_STATE_OPTIONAL_ACCUMULATOR_KEYS,
+        "Strategy Metric State",
+    )
+    metric_state_types = {
+        "contract": "str",
+        "first_gross_nav": "str",
+        "first_net_nav": "str",
+        "first_benchmark_nav": "str",
+        "return_count": "int",
+        "peak_net_nav": "str",
+        "peak_session": "str",
+        "worst_drawdown": "str",
+        "worst_peak_nav": "str",
+        "worst_peak_session": "str",
+        "worst_trough_session": "str",
+        "worst_recovery_session": "optional_str",
+        "holdings_sum": "int",
+        "holdings_minimum": "int",
+        "holdings_maximum": "int",
+        "weight_maximum": "number",
+        "weight_maximum_session": "str",
+        "cash_maximum": "number",
+        "cash_maximum_session": "str",
+        "turnover_count": "int",
+        "session_count": "int",
+        "last_gross_nav": "str",
+        "last_net_nav": "str",
+        "last_benchmark_nav": "str",
+        "last_session": "str",
+        "holdings_ending": "int",
+        "weight_ending": "number",
+        "cash_sum_numerator": "int",
+        "cash_sum_denominator": "int",
+        "cash_ending": "number",
+        "return_sum_numerator": "int",
+        "return_sum_denominator": "int",
+        "return_square_sum_numerator": "int",
+        "return_square_sum_denominator": "int",
+        "turnover_sum_numerator": "int",
+        "turnover_sum_denominator": "int",
+        "cumulative_cost": "str",
+        "upper_limit_buy_rejections": "int",
+        "lower_limit_sell_rejections": "int",
+        "suspension_rejections": "int",
+    }
+    _scalar_fields(
+        metric_state,
+        {
+            field: expected
+            for field, expected in metric_state_types.items()
+            if field in metric_state
+        },
+        "Strategy Metric State",
+    )
 
 
 def _exact_mapping(
@@ -666,3 +934,38 @@ def _exact_mapping(
     if not isinstance(value, Mapping) or set(value) != set(expected_keys):
         raise ResearchResultError(f"{name} does not match its durable schema")
     return value
+
+
+def _mapping_with_optional_keys(
+    value: object,
+    required_keys: set[str] | frozenset[str],
+    optional_keys: set[str] | frozenset[str],
+    name: str,
+) -> Mapping[str, object]:
+    if (
+        not isinstance(value, Mapping)
+        or not set(required_keys) <= set(value)
+        or not set(value) <= set(required_keys) | set(optional_keys)
+    ):
+        raise ResearchResultError(f"{name} does not match its durable schema")
+    return value
+
+
+def _scalar_fields(
+    value: Mapping[str, object],
+    schema: Mapping[str, str],
+    name: str,
+) -> None:
+    for field, expected in schema.items():
+        candidate = value[field]
+        valid = {
+            "str": isinstance(candidate, str),
+            "optional_str": candidate is None or isinstance(candidate, str),
+            "int": isinstance(candidate, int) and not isinstance(candidate, bool),
+            "number": isinstance(candidate, int | float) and not isinstance(candidate, bool),
+            "optional_number": candidate is None
+            or (isinstance(candidate, int | float) and not isinstance(candidate, bool)),
+            "bool": isinstance(candidate, bool),
+        }.get(expected, False)
+        if not valid:
+            raise ResearchResultError(f"{name}.{field} has an invalid durable type")
