@@ -11,7 +11,13 @@ import boto3
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import DailyTrackService
-from thesistrace.data import DataService, DatasetAdmissionService, DatasetOverviewService
+from thesistrace.data import (
+    DataService,
+    DatasetAdmissionService,
+    DatasetLifecycle,
+    DatasetOverviewService,
+    MountedGenerationStore,
+)
 from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.migrations import verify_core_migrations
 from thesistrace.publication import Publication
@@ -125,6 +131,8 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
         research_runs = ResearchRunService(
             database,
+            dataset_lifecycle=DatasetLifecycle(database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
             publication=publication,
             activate_track=daily_tracks.activate,
         )

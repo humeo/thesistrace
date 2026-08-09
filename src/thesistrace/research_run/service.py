@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
+from thesistrace.data import DatasetLifecycle, GenerationStoreError, MountedGenerationStore
 from thesistrace.publication import (
     PreparedPublication,
     Publication,
@@ -25,6 +26,8 @@ from thesistrace.publication import (
     PublishedRef,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.research_kernel.kernel_run import KernelRunError, RunInput
+from thesistrace.research_kernel.kernel_run import run as run_kernel
 from thesistrace.research_run.models import (
     ImmutableRunInput,
     ResearchRunCancelCommand,
@@ -37,7 +40,10 @@ from thesistrace.research_run.models import (
 )
 from thesistrace.research_run.result import (
     ResearchResultError,
+    build_result_payload,
+    enforce_result_bundle_budget,
     read_result_bundle,
+    result_publication_payloads,
 )
 
 logger = logging.getLogger(__name__)
@@ -52,11 +58,18 @@ INFRASTRUCTURE_PUBLIC_REASON = "Research execution could not access required inf
 RESOURCE_EXHAUSTED_PUBLIC_REASON = "Research execution exceeded its resource limit."
 AUTOMATIC_RETRIES_PUBLIC_REASON = "Research execution could not complete after automatic retries."
 PERMANENT_FAILURE_PUBLIC_REASON = "Research execution failed."
+INSUFFICIENT_WARMUP_PUBLIC_REASON = (
+    "Selected data does not contain the complete Calculation Warm-up."
+)
+SELECTED_DATA_INVALID_PUBLIC_REASON = (
+    "Current data cannot execute the requested Research Period."
+)
 RETRYABLE_FAILURES = (
     INFRASTRUCTURE_FAILURE,
     RESOURCE_EXHAUSTED_FAILURE,
     WORKER_LOST_FAILURE,
 )
+Progress = Callable[[str, str], None]
 ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
@@ -91,11 +104,22 @@ class ResearchRunTrackingTemporarilyUnavailable(RuntimeError):
     pass
 
 
+class ResearchRunInsufficientWarmup(ValueError):
+    pass
+
+
+class ResearchRunInputInvalid(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class _ExecutionClaim:
     run_id: str
     attempt_id: str
     fence: int
+    generation_pin_id: str
+    data_generation_id: str
+    data_through_session: str
     immutable_input: ImmutableRunInput
 
 
@@ -112,7 +136,10 @@ class ResearchRunService:
         self,
         database: PostgresDatabase,
         *,
+        dataset_lifecycle: DatasetLifecycle | None = None,
+        generation_store: MountedGenerationStore | None = None,
         publication: Publication | None = None,
+        progress: Progress | None = None,
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         activate_track: ActivateTrack | None = None,
@@ -120,7 +147,10 @@ class ResearchRunService:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
         self._database = database
+        self._dataset_lifecycle = dataset_lifecycle
+        self._generation_store = generation_store
         self._publication = publication
+        self._progress = progress or (lambda _stage, _run_id: None)
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._activate_track = activate_track
@@ -155,7 +185,29 @@ class ResearchRunService:
         return _summary(row)
 
     def process_next(self) -> bool:
-        return False
+        self._require_execution_dependencies()
+        claim = self._claim_next()
+        if claim is None:
+            return False
+        with self._maintain_claim(claim):
+            self._progress("claimed", claim.run_id)
+            try:
+                prepared, provenance = self._execute(claim)
+                self._progress("prepared", claim.run_id)
+                self._publish_success(claim, prepared, provenance)
+                self._progress("succeeded", claim.run_id)
+            except ResearchRunFenced:
+                logger.info(
+                    "ResearchRun result rejected by execution fence",
+                    extra={"run_id": claim.run_id},
+                )
+            except Exception as error:
+                self._record_failure(claim, error)
+                logger.error(
+                    "ResearchRun execution failed",
+                    extra={"run_id": claim.run_id, "error_type": type(error).__name__},
+                )
+        return True
 
     def list(self) -> ResearchRunList:
         with self._database.transaction() as transaction:
@@ -225,16 +277,24 @@ class ResearchRunService:
             if row is None:
                 return None
             if row["status"] in {"queued", "running"}:
-                transaction.execute(
+                cancelled_attempt = transaction.execute(
                     """
                     UPDATE research_runs.attempts
                     SET status = 'cancelled', heartbeat_at = now(),
                         lease_expires_at = now(), finished_at = now(),
                         failure_reason = 'UserCancelled'
                     WHERE run_id = %s AND status = 'running'
+                    RETURNING id, generation_pin_id
                     """,
                     (run_id,),
-                )
+                ).fetchone()
+                if cancelled_attempt is not None:
+                    assert self._dataset_lifecycle is not None
+                    self._dataset_lifecycle.release_pin_in_transaction(
+                        transaction,
+                        str(cancelled_attempt["generation_pin_id"]),
+                        owner_id=str(cancelled_attempt["id"]),
+                    )
                 updated = transaction.execute(
                     """
                     UPDATE research_runs.runs
@@ -531,7 +591,16 @@ class ResearchRunService:
             calculation_contracts=dict(calculation_contracts),
         )
 
+    def _require_execution_dependencies(self) -> None:
+        if (
+            self._dataset_lifecycle is None
+            or self._generation_store is None
+            or self._publication is None
+        ):
+            raise RuntimeError("ResearchRun execution dependencies are not configured")
+
     def _claim_next(self) -> _ExecutionClaim | None:
+        assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
@@ -540,6 +609,7 @@ class ResearchRunService:
                        attempt.id AS latest_attempt_id,
                        attempt.ordinal AS latest_attempt_ordinal,
                        attempt.status AS latest_attempt_status,
+                       attempt.generation_pin_id AS latest_generation_pin_id,
                        EXISTS (
                            SELECT 1
                            FROM research_runs.attempts AS exhausted
@@ -548,7 +618,8 @@ class ResearchRunService:
                        ) AS resource_exhausted_seen
                 FROM research_runs.runs AS run
                 LEFT JOIN LATERAL (
-                    SELECT id, ordinal, status, lease_expires_at, failure_reason
+                    SELECT id, ordinal, status, lease_expires_at, failure_reason,
+                           generation_pin_id
                     FROM research_runs.attempts
                     WHERE run_id = run.id
                     ORDER BY ordinal DESC
@@ -591,6 +662,11 @@ class ResearchRunService:
                 )
                 if recovered.rowcount != 1:
                     return None
+                self._dataset_lifecycle.release_pin_in_transaction(
+                    transaction,
+                    str(row["latest_generation_pin_id"]),
+                    owner_id=str(row["latest_attempt_id"]),
+                )
                 attempt_limit = (
                     MAX_RESOURCE_EXHAUSTED_ATTEMPTS
                     if row["resource_exhausted_seen"]
@@ -628,6 +704,16 @@ class ResearchRunService:
             ).fetchone()
             assert ordinal_row is not None
             attempt_id = f"attempt_{uuid4().hex[:20]}"
+            pin = self._dataset_lifecycle.pin_current_in_transaction(
+                transaction,
+                owner_kind="research_run_attempt",
+                owner_id=attempt_id,
+                lease_seconds=self._lease_seconds,
+            )
+            assert self._generation_store is not None
+            generation = self._generation_store.open_generation(
+                pin.generation_manifest_sha256
+            )
             transaction.execute(
                 """
                 UPDATE research_runs.runs
@@ -640,9 +726,11 @@ class ResearchRunService:
             transaction.execute(
                 """
                 INSERT INTO research_runs.attempts (
-                    id, run_id, ordinal, fence, status, lease_expires_at
+                    id, run_id, ordinal, fence, generation_pin_id,
+                    data_generation_id, data_through_session,
+                    status, lease_expires_at
                 ) VALUES (
-                    %s, %s, %s, %s, 'running',
+                    %s, %s, %s, %s, %s, %s, %s, 'running',
                     now() + make_interval(secs => %s)
                 )
                 """,
@@ -651,6 +739,9 @@ class ResearchRunService:
                     run_id,
                     int(ordinal_row["ordinal"]),
                     fence,
+                    pin.id,
+                    generation.manifest_sha256,
+                    generation.data_through_session,
                     self._lease_seconds,
                 ),
             )
@@ -658,6 +749,9 @@ class ResearchRunService:
             run_id=run_id,
             attempt_id=attempt_id,
             fence=fence,
+            generation_pin_id=pin.id,
+            data_generation_id=generation.manifest_sha256,
+            data_through_session=generation.data_through_session,
             immutable_input=ImmutableRunInput.model_validate(row["immutable_input"]),
         )
 
@@ -678,6 +772,7 @@ class ResearchRunService:
             heartbeat.join(timeout=5)
 
     def _heartbeat_claim(self, claim: _ExecutionClaim, stopped: Event) -> None:
+        assert self._dataset_lifecycle is not None
         while not stopped.wait(self._heartbeat_seconds):
             try:
                 with self._database.transaction() as transaction:
@@ -703,6 +798,13 @@ class ResearchRunService:
                             claim.fence,
                         ),
                     )
+                    if renewed.rowcount == 1:
+                        self._dataset_lifecycle.heartbeat_pin_in_transaction(
+                            transaction,
+                            claim.generation_pin_id,
+                            owner_id=claim.attempt_id,
+                            lease_seconds=self._lease_seconds,
+                        )
             except Exception as error:
                 logger.error(
                     "ResearchRun claim heartbeat failed",
@@ -715,6 +817,56 @@ class ResearchRunService:
             if renewed.rowcount != 1:
                 return
 
+    def _execute(
+        self,
+        claim: _ExecutionClaim,
+    ) -> tuple[PreparedPublication, dict[str, object]]:
+        assert self._generation_store is not None
+        assert self._publication is not None
+        immutable_input = claim.immutable_input
+        try:
+            generation = self._generation_store.open_generation(
+                claim.data_generation_id
+            )
+        except GenerationStoreError as error:
+            raise ResearchRunInputInvalid("selected Data Generation is invalid") from error
+        canonical = generation.canonical
+        start_session, end_session = _selected_research_period(
+            immutable_input,
+            canonical=canonical,
+            available_field_ids=frozenset(generation.field_availability),
+        )
+        kernel_input = _kernel_input(
+            immutable_input,
+            canonical,
+            research_start_session=start_session,
+            research_end_session=end_session,
+        )
+        try:
+            output = run_kernel(kernel_input)
+        except KernelRunError as error:
+            if str(error).startswith("insufficient Calculation Warm-up:"):
+                raise ResearchRunInsufficientWarmup(str(error)) from error
+            raise ResearchRunInputInvalid(str(error)) from error
+        definition_content = immutable_input.definition.get("content")
+        if not isinstance(definition_content, Mapping):
+            raise ResearchRunInputInvalid("ResearchRun Definition content is invalid")
+        result = build_result_payload(
+            output,
+            rebalance_interval=int(immutable_input.strategy["rebalance_every_sessions"]),
+            universe=str(definition_content["universe"]),
+        )
+        provenance = _result_provenance(claim)
+        prepared = self._publication.prepare(
+            kind="research.result",
+            payloads=result_publication_payloads(result),
+            provenance=provenance,
+        )
+        observations = result["strategy_daily_observations"]
+        if not isinstance(observations, list):
+            raise ResearchResultError("Result Strategy Daily Observations are invalid")
+        enforce_result_bundle_budget(prepared.exact_bytes, len(observations))
+        return prepared, provenance
 
     def _publish_success(
         self,
@@ -723,6 +875,7 @@ class ResearchRunService:
         provenance: dict[str, object],
     ) -> None:
         assert self._publication is not None
+        assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
             current = transaction.execute(
                 """
@@ -764,8 +917,14 @@ class ResearchRunService:
             )
             if updated.rowcount != 1:
                 raise ResearchRunFenced
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                claim.generation_pin_id,
+                owner_id=claim.attempt_id,
+            )
 
     def _record_failure(self, claim: _ExecutionClaim, error: Exception) -> None:
+        assert self._dataset_lifecycle is not None
         policy = _failure_policy(error)
         with self._database.transaction() as transaction:
             current = transaction.execute(
@@ -850,9 +1009,109 @@ class ResearchRunService:
                     claim.fence,
                 ),
             )
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                claim.generation_pin_id,
+                owner_id=claim.attempt_id,
+            )
+
+
+def _selected_research_period(
+    immutable_input: ImmutableRunInput,
+    *,
+    canonical: dict[str, object],
+    available_field_ids: frozenset[str],
+) -> tuple[str, str]:
+    if canonical.get("schema_version") != "canonical-eod-v1":
+        raise ResearchRunInputInvalid("selected Dataset Schema is incompatible")
+    calendar = canonical.get("research_calendar")
+    if not isinstance(calendar, list) or not calendar:
+        raise ResearchRunInputInvalid("selected Data Generation has no Research Sessions")
+    sessions = [str(session) for session in calendar]
+    requested_start = immutable_input.requested_start_date.isoformat()
+    requested_end = immutable_input.requested_end_date.isoformat()
+    if requested_start < sessions[0] or requested_end > sessions[-1]:
+        raise ResearchRunInputInvalid("requested Research Period is outside Dataset Coverage")
+    selected = [
+        session for session in sessions if requested_start <= session <= requested_end
+    ]
+    if not selected:
+        raise ResearchRunInputInvalid("requested dates contain no Research Session")
+    missing_fields = set(immutable_input.field_bindings) - available_field_ids
+    if missing_fields:
+        raise ResearchRunInputInvalid("selected Data Generation lacks a frozen field")
+    return selected[0], selected[-1]
+
+
+def _kernel_input(
+    immutable_input: ImmutableRunInput,
+    canonical: dict[str, object],
+    *,
+    research_start_session: str,
+    research_end_session: str,
+) -> RunInput:
+    definition = immutable_input.definition
+    content = definition.get("content")
+    if not isinstance(content, Mapping):
+        raise ResearchRunInputInvalid("ResearchRun Definition content is invalid")
+    alpha = content.get("alpha")
+    if not isinstance(alpha, Mapping):
+        raise ResearchRunInputInvalid("ResearchRun Alpha is invalid")
+    strategy = immutable_input.strategy
+    costs = immutable_input.costs
+    return RunInput(
+        canonical_data=canonical,
+        alpha_expression=dict(alpha),
+        field_bindings=immutable_input.field_bindings,
+        universe=str(content["universe"]),
+        neutralization=str(content["neutralization"]),
+        holdings_count=int(strategy["holdings_count"]),
+        rebalance_interval=int(strategy["rebalance_every_sessions"]),
+        initial_cash_cny=str(strategy["initial_cash_cny"]),
+        commission_rate_all_in=str(costs["commission_rate_all_in"]),
+        commission_min_cny=str(costs["commission_min_cny"]),
+        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+        transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        research_start_session=research_start_session,
+        research_end_session=research_end_session,
+    )
+
+
+def _result_provenance(claim: _ExecutionClaim) -> dict[str, object]:
+    value = claim.immutable_input.model_dump(mode="json")
+    return {
+        "schema_version": "research-result-v1",
+        "research_run_id": claim.run_id,
+        "immutable_input_sha256": hashlib.sha256(
+            canonical_json_bytes(value)
+        ).hexdigest(),
+        "data_generation_id": claim.data_generation_id,
+        "data_through_session": claim.data_through_session,
+        "calculation_contracts": {
+            "strategy": value["strategy"],
+            "costs": value["costs"],
+            "risk_free_rate": value["risk_free_rate"],
+            "numeric_execution_contract": value["numeric_execution_contract"],
+        },
+        "semantic_versions": value["semantic_versions"],
+    }
 
 
 def _failure_policy(error: Exception) -> _FailurePolicy:
+    if isinstance(error, ResearchRunInsufficientWarmup):
+        return _FailurePolicy(
+            attempt_reason="InsufficientCalculationWarmup",
+            public_reason=INSUFFICIENT_WARMUP_PUBLIC_REASON,
+            max_attempts=1,
+            retryable=False,
+        )
+    if isinstance(error, ResearchRunInputInvalid):
+        return _FailurePolicy(
+            attempt_reason="SelectedDataInvalid",
+            public_reason=SELECTED_DATA_INVALID_PUBLIC_REASON,
+            max_attempts=1,
+            retryable=False,
+        )
     if isinstance(error, MemoryError):
         return _FailurePolicy(
             attempt_reason=RESOURCE_EXHAUSTED_FAILURE,

@@ -47,6 +47,9 @@ MIGRATIONS = MigrationPlan(
                     run_id text NOT NULL REFERENCES research_runs.runs(id),
                     ordinal integer NOT NULL CHECK (ordinal > 0),
                     fence integer NOT NULL CHECK (fence > 0),
+                    generation_pin_id text NOT NULL UNIQUE,
+                    data_generation_id text NOT NULL,
+                    data_through_session date NOT NULL,
                     status text NOT NULL CHECK (
                         status IN ('running', 'succeeded', 'failed', 'cancelled')
                     ),

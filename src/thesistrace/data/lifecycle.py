@@ -171,80 +171,118 @@ class DatasetLifecycle:
         owner_id: str,
         lease_seconds: float,
     ) -> GenerationPin:
+        with self._database.transaction() as transaction:
+            return self.pin_current_in_transaction(
+                transaction,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                lease_seconds=lease_seconds,
+            )
+
+    def pin_current_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        owner_kind: str,
+        owner_id: str,
+        lease_seconds: float,
+    ) -> GenerationPin:
         if owner_kind not in _OWNER_KINDS:
             raise ValueError("Generation pin owner kind is invalid")
         _require_identity(owner_id, "Generation pin owner")
         _require_lease(lease_seconds)
-        with self._database.transaction() as transaction:
-            lock_data_lifecycle(transaction)
-            pointer = self._heads.current_pointer()
-            if pointer is None:
-                raise DataNotReady("Dataset Head is not ready")
-            pin_id = f"generation_pin_{uuid4().hex[:20]}"
-            try:
-                row = transaction.execute(
-                    """
-                    INSERT INTO data.generation_pins (
-                        id, owner_kind, owner_id, generation_manifest_sha256,
-                        status, lease_expires_at
-                    ) VALUES (
-                        %s, %s, %s, %s, 'active',
-                        now() + make_interval(secs => %s)
-                    )
-                    RETURNING id, owner_kind, owner_id, generation_manifest_sha256,
-                              status, lease_expires_at, heartbeat_at
-                    """,
-                    (
-                        pin_id,
-                        owner_kind,
-                        owner_id,
-                        pointer.generation_manifest_sha256,
-                        lease_seconds,
-                    ),
-                ).fetchone()
-            except UniqueViolation as error:
-                raise DataLifecycleError("Generation pin owner already has a pin") from error
-            assert row is not None
-            pin = _pin(row)
+        lock_data_lifecycle(transaction)
+        pointer = self._heads.current_pointer()
+        if pointer is None:
+            raise DataNotReady("Dataset Head is not ready")
+        self._heads.resolve(pointer)
+        pin_id = f"generation_pin_{uuid4().hex[:20]}"
         try:
-            self._heads.resolve(pointer)
-        except RuntimeError:
-            self.release_pin(pin.id, owner_id=pin.owner_id)
-            raise
-        return pin
-
-    def heartbeat_pin(self, pin_id: str, *, owner_id: str, lease_seconds: float) -> GenerationPin:
-        _require_lease(lease_seconds)
-        with self._database.transaction() as transaction:
-            lock_data_lifecycle(transaction)
             row = transaction.execute(
                 """
-                UPDATE data.generation_pins
-                SET heartbeat_at = now(),
-                    lease_expires_at = now() + make_interval(secs => %s)
-                WHERE id = %s AND owner_id = %s AND status = 'active'
+                INSERT INTO data.generation_pins (
+                    id, owner_kind, owner_id, generation_manifest_sha256,
+                    status, lease_expires_at
+                ) VALUES (
+                    %s, %s, %s, %s, 'active',
+                    now() + make_interval(secs => %s)
+                )
                 RETURNING id, owner_kind, owner_id, generation_manifest_sha256,
                           status, lease_expires_at, heartbeat_at
                 """,
-                (lease_seconds, pin_id, owner_id),
+                (
+                    pin_id,
+                    owner_kind,
+                    owner_id,
+                    pointer.generation_manifest_sha256,
+                    lease_seconds,
+                ),
             ).fetchone()
-            if row is None:
-                raise DataLifecycleError("active Generation pin was not found")
-            return _pin(row)
+        except UniqueViolation as error:
+            raise DataLifecycleError("Generation pin owner already has a pin") from error
+        assert row is not None
+        return _pin(row)
+
+    def heartbeat_pin(self, pin_id: str, *, owner_id: str, lease_seconds: float) -> GenerationPin:
+        with self._database.transaction() as transaction:
+            return self.heartbeat_pin_in_transaction(
+                transaction,
+                pin_id,
+                owner_id=owner_id,
+                lease_seconds=lease_seconds,
+            )
+
+    def heartbeat_pin_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        pin_id: str,
+        *,
+        owner_id: str,
+        lease_seconds: float,
+    ) -> GenerationPin:
+        _require_lease(lease_seconds)
+        lock_data_lifecycle(transaction)
+        row = transaction.execute(
+            """
+            UPDATE data.generation_pins
+            SET heartbeat_at = now(),
+                lease_expires_at = now() + make_interval(secs => %s)
+            WHERE id = %s AND owner_id = %s AND status = 'active'
+            RETURNING id, owner_kind, owner_id, generation_manifest_sha256,
+                      status, lease_expires_at, heartbeat_at
+            """,
+            (lease_seconds, pin_id, owner_id),
+        ).fetchone()
+        if row is None:
+            raise DataLifecycleError("active Generation pin was not found")
+        return _pin(row)
 
     def release_pin(self, pin_id: str, *, owner_id: str) -> None:
         with self._database.transaction() as transaction:
-            lock_data_lifecycle(transaction)
-            result = transaction.execute(
-                """
-                UPDATE data.generation_pins
-                SET status = 'released', released_at = now()
-                WHERE id = %s AND owner_id = %s AND status = 'active'
-                """,
-                (pin_id, owner_id),
+            self.release_pin_in_transaction(
+                transaction,
+                pin_id,
+                owner_id=owner_id,
             )
-            if result.rowcount != 1:
-                raise DataLifecycleError("active Generation pin was not found")
+
+    def release_pin_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        pin_id: str,
+        *,
+        owner_id: str,
+    ) -> None:
+        lock_data_lifecycle(transaction)
+        result = transaction.execute(
+            """
+            UPDATE data.generation_pins
+            SET status = 'released', released_at = now()
+            WHERE id = %s AND owner_id = %s AND status = 'active'
+            """,
+            (pin_id, owner_id),
+        )
+        if result.rowcount != 1:
+            raise DataLifecycleError("active Generation pin was not found")
 
     def active_pins(self) -> tuple[GenerationPin, ...]:
         with self._database.transaction() as transaction:
