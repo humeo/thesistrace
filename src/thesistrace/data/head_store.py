@@ -46,6 +46,12 @@ class DatasetHeadPointer:
     prepared_at: str
 
 
+@dataclass(frozen=True)
+class _ResolvedHeadCandidate:
+    generation: MountedGeneration
+    store_capability: object
+
+
 class MountedDatasetHeadStore:
     """One atomic mutable pointer to immutable mounted Generation content."""
 
@@ -89,19 +95,27 @@ class MountedDatasetHeadStore:
         expected_generation_manifest_sha256: str | None,
         candidate_generation_manifest_sha256: str,
     ) -> DatasetHead:
-        candidate = self._generations.open_generation(candidate_generation_manifest_sha256)
-        return self.compare_and_swap_generation(
+        candidate = self.resolve_candidate(candidate_generation_manifest_sha256)
+        return self.compare_and_swap_resolved(
             expected_generation_manifest_sha256=expected_generation_manifest_sha256,
             candidate=candidate,
         )
 
-    def compare_and_swap_generation(
+    def resolve_candidate(self, manifest_sha256: str) -> _ResolvedHeadCandidate:
+        return _ResolvedHeadCandidate(
+            generation=self._generations.open_generation(manifest_sha256),
+            store_capability=self._generations,
+        )
+
+    def compare_and_swap_resolved(
         self,
         *,
         expected_generation_manifest_sha256: str | None,
-        candidate: MountedGeneration,
+        candidate: _ResolvedHeadCandidate,
     ) -> DatasetHead:
-        candidate_head = _head_from_generation(candidate)
+        if candidate.store_capability is not self._generations:
+            raise DatasetHeadError("Dataset Head candidate belongs to another mounted store")
+        candidate_head = _head_from_generation(candidate.generation)
         content = _head_bytes(candidate_head)
         root_fd = self._open_root()
         lock_fd: int | None = None

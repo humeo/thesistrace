@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -76,7 +77,19 @@ def test_concurrent_head_movers_cannot_both_win(tmp_path: Path) -> None:
     winner = next(outcome for outcome in outcomes if outcome != "conflict")
     current = MountedDatasetHeadStore(tmp_path).current()
     assert current is not None and current.generation_manifest_sha256 == winner
-    assert current.generation.canonical == build_minimal_canonical_fixture()
+    expected_offset = candidates.index(winner) + 2
+    assert current.generation.canonical == build_minimal_canonical_fixture(
+        price_offset=expected_offset
+    )
+    assert (
+        len(
+            {
+                MountedGenerationStore(tmp_path).open_generation(candidate).data_identity
+                for candidate in candidates
+            }
+        )
+        == 2
+    )
 
 
 def test_invalid_candidate_or_malformed_head_is_never_served(tmp_path: Path) -> None:
@@ -99,9 +112,42 @@ def test_invalid_candidate_or_malformed_head_is_never_served(tmp_path: Path) -> 
         MountedDatasetHeadStore(tmp_path).current()
 
 
+def test_resolved_candidate_capability_cannot_cross_mounts(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    target_root = tmp_path / "target"
+    source_root.mkdir()
+    target_root.mkdir()
+    source_store = MountedGenerationStore(source_root)
+    manifest = _materialize(source_store, ordinal=1)
+    candidate = MountedDatasetHeadStore(source_root).resolve_candidate(manifest)
+
+    with pytest.raises(DatasetHeadError, match="another mounted store"):
+        MountedDatasetHeadStore(target_root).compare_and_swap_resolved(
+            expected_generation_manifest_sha256=None,
+            candidate=candidate,
+        )
+    assert MountedDatasetHeadStore(target_root).current() is None
+
+
+@pytest.mark.parametrize("unsafe_kind", ["symlink", "fifo", "oversized"])
+def test_unsafe_head_entry_is_rejected_without_blocking(tmp_path: Path, unsafe_kind: str) -> None:
+    head = tmp_path / "HEAD.json"
+    if unsafe_kind == "symlink":
+        target = tmp_path / "target.json"
+        target.write_bytes(b"{}")
+        head.symlink_to(target)
+    elif unsafe_kind == "fifo":
+        os.mkfifo(head)
+    else:
+        head.write_bytes(b"x" * 65_537)
+
+    with pytest.raises(DatasetHeadError, match="read failed|regular file|byte bound"):
+        MountedDatasetHeadStore(tmp_path).current()
+
+
 def _materialize(store: MountedGenerationStore, *, ordinal: int) -> str:
     generation = store.materialize(
-        build_minimal_canonical_fixture(),
+        build_minimal_canonical_fixture(price_offset=ordinal),
         prepared_at=datetime(2026, 8, 9, tzinfo=UTC) + timedelta(minutes=ordinal),
         source_name="head-store-test",
         source_lineage={"candidate": ordinal},

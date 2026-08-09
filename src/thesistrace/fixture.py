@@ -6,10 +6,14 @@ from thesistrace.data.canonical_mapping import DAILY_FIELDS as DAILY_FIELDS
 from thesistrace.data.canonical_mapping import decimal_string, field_catalog, liquidity_universes
 
 
-def build_minimal_canonical_fixture() -> dict[str, object]:
+def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, object]:
     """One valid session for storage/lifecycle tests that do not need market breadth."""
     session = "2026-08-07"
     instrument_id = "equity:000001.SZ"
+    pre_close = Decimal(10 + price_offset)
+    close = pre_close + Decimal("0.5")
+    high = pre_close + Decimal(1)
+    low = pre_close - Decimal(1)
     universe = {"session": session, "instrument_ids": [instrument_id], "status": "available"}
     return {
         "schema_version": "canonical-eod-v1",
@@ -29,21 +33,21 @@ def build_minimal_canonical_fixture() -> dict[str, object]:
             {
                 "session": session,
                 "instrument_id": instrument_id,
-                "open_raw": "10.0000",
-                "high_raw": "11.0000",
-                "low_raw": "9.0000",
-                "close_raw": "10.5000",
-                "pre_close_raw": "10.0000",
+                "open_raw": decimal_string(pre_close, 4),
+                "high_raw": decimal_string(high, 4),
+                "low_raw": decimal_string(low, 4),
+                "close_raw": decimal_string(close, 4),
+                "pre_close_raw": decimal_string(pre_close, 4),
                 "change_raw": "0.5000",
-                "pct_change_raw": "5.000000",
+                "pct_change_raw": decimal_string(Decimal("50") / pre_close, 6),
                 "volume_shares": "10000",
-                "turnover_cny": "100000.00",
+                "turnover_cny": decimal_string(pre_close * Decimal(10000), 2),
                 "adjustment_factor": "1.000000",
                 "adjustment_anchor_factor": "1.000000",
-                "open_adj": "10.00000000",
-                "high_adj": "11.00000000",
-                "low_adj": "9.00000000",
-                "close_adj": "10.50000000",
+                "open_adj": decimal_string(pre_close, 8),
+                "high_adj": decimal_string(high, 8),
+                "low_adj": decimal_string(low, 8),
+                "close_adj": decimal_string(close, 8),
                 "trading_state": "normal",
             }
         ],
@@ -52,8 +56,8 @@ def build_minimal_canonical_fixture() -> dict[str, object]:
             {
                 "session": session,
                 "instrument_id": instrument_id,
-                "upper": "11.0000",
-                "lower": "9.0000",
+                "upper": decimal_string(high, 4),
+                "lower": decimal_string(low, 4),
             }
         ],
         "adjustment_anchors": [

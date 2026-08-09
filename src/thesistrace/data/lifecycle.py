@@ -33,22 +33,6 @@ class GenerationPin:
     heartbeat_at: datetime
 
 
-@dataclass(frozen=True)
-class GenerationRetention:
-    head_generation_manifest_sha256: str | None
-    active_pin_generations: frozenset[str]
-    live_candidate_generations: frozenset[str]
-
-    @property
-    def all_generations(self) -> frozenset[str]:
-        head = (
-            frozenset()
-            if self.head_generation_manifest_sha256 is None
-            else frozenset({self.head_generation_manifest_sha256})
-        )
-        return head | self.active_pin_generations | self.live_candidate_generations
-
-
 class DatasetLifecycle:
     """The shared PostgreSQL fence for mounted Head and Generation retention state."""
 
@@ -106,20 +90,20 @@ class DatasetLifecycle:
                     """,
                     (operation_id, generation_manifest_sha256, lease_seconds),
                 )
-                return
-            if row != {
+            elif row != {
                 "generation_manifest_sha256": generation_manifest_sha256,
                 "status": "live",
             }:
                 raise DataLifecycleError("candidate operation identity conflicts")
-            transaction.execute(
-                """
-                UPDATE data.generation_candidates
-                SET lease_expires_at = now() + make_interval(secs => %s), updated_at = now()
-                WHERE operation_id = %s AND status = 'live'
-                """,
-                (lease_seconds, operation_id),
-            )
+            else:
+                transaction.execute(
+                    """
+                    UPDATE data.generation_candidates
+                    SET lease_expires_at = now() + make_interval(secs => %s), updated_at = now()
+                    WHERE operation_id = %s AND status = 'live'
+                    """,
+                    (lease_seconds, operation_id),
+                )
         try:
             self._heads.open_generation(generation_manifest_sha256)
         except RuntimeError:
@@ -133,7 +117,7 @@ class DatasetLifecycle:
         candidate_generation_manifest_sha256: str,
         operation_id: str,
     ) -> DatasetHead:
-        resolved_candidate = self._heads.open_generation(candidate_generation_manifest_sha256)
+        resolved_candidate = self._heads.resolve_candidate(candidate_generation_manifest_sha256)
         with self._database.transaction() as transaction:
             _lock(transaction)
             candidate = transaction.execute(
@@ -150,14 +134,14 @@ class DatasetLifecycle:
                 "status": "live",
             }:
                 raise DataLifecycleError("Head candidate is not protected by live work")
-            head = self._heads.compare_and_swap_generation(
+            head = self._heads.compare_and_swap_resolved(
                 expected_generation_manifest_sha256=expected_generation_manifest_sha256,
                 candidate=resolved_candidate,
             )
             transaction.execute(
                 """
                 UPDATE data.generation_candidates
-                SET status = 'released', updated_at = now()
+                SET status = 'released', released_at = now(), updated_at = now()
                 WHERE operation_id = %s AND status = 'live'
                 """,
                 (operation_id,),
@@ -170,7 +154,7 @@ class DatasetLifecycle:
             transaction.execute(
                 """
                 UPDATE data.generation_candidates
-                SET status = 'released', updated_at = now()
+                SET status = 'released', released_at = now(), updated_at = now()
                 WHERE operation_id = %s AND status = 'live'
                 """,
                 (operation_id,),
@@ -272,36 +256,6 @@ class DatasetLifecycle:
             ).fetchall()
             return tuple(_pin(row) for row in rows)
 
-    def retention(self) -> GenerationRetention:
-        with self._database.transaction() as transaction:
-            _lock(transaction)
-            head = self._heads.current_pointer()
-            pins = transaction.execute(
-                """
-                SELECT DISTINCT generation_manifest_sha256
-                FROM data.generation_pins
-                WHERE status = 'active'
-                """
-            ).fetchall()
-            candidates = transaction.execute(
-                """
-                SELECT DISTINCT generation_manifest_sha256
-                FROM data.generation_candidates
-                WHERE status = 'live'
-                """
-            ).fetchall()
-            return GenerationRetention(
-                head_generation_manifest_sha256=(
-                    None if head is None else head.generation_manifest_sha256
-                ),
-                active_pin_generations=frozenset(
-                    str(row["generation_manifest_sha256"]) for row in pins
-                ),
-                live_candidate_generations=frozenset(
-                    str(row["generation_manifest_sha256"]) for row in candidates
-                ),
-            )
-
 
 def _lock(transaction: PostgresTransaction) -> None:
     transaction.execute(
@@ -337,5 +291,4 @@ __all__ = (
     "DataNotReady",
     "DatasetLifecycle",
     "GenerationPin",
-    "GenerationRetention",
 )

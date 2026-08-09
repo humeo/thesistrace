@@ -19,7 +19,6 @@ from thesistrace.data.lifecycle import (
     DataNotReady,
     DatasetLifecycle,
     GenerationPin,
-    GenerationRetention,
 )
 from thesistrace.data.models import DataOverview, ReleaseHistory, ReleaseSummary, UpdateAcceptance
 from thesistrace.data.service import DataService, NextRelease
@@ -50,7 +49,6 @@ __all__ = [
     "DataSourceError",
     "GenerationStoreError",
     "GenerationPin",
-    "GenerationRetention",
     "MountedDatasetHeadStore",
     "MountedGeneration",
     "MountedGenerationStore",

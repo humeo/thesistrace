@@ -206,5 +206,40 @@ MIGRATIONS = MigrationPlan(
                     WHERE status = 'live';
             """,
         ),
+        Migration(
+            name="0007_mounted_generation_lifecycle_constraints",
+            statement="""
+                ALTER TABLE data.generation_candidates
+                    ADD COLUMN released_at timestamptz NULL;
+
+                UPDATE data.generation_candidates
+                SET released_at = updated_at
+                WHERE status = 'released' AND released_at IS NULL;
+
+                ALTER TABLE data.generation_pins
+                    ADD CONSTRAINT data_generation_pins_owner_nonempty CHECK (
+                        owner_id <> '' AND owner_id = btrim(owner_id)
+                    ),
+                    ADD CONSTRAINT data_generation_pins_manifest_sha256 CHECK (
+                        generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
+                    ADD CONSTRAINT data_generation_pins_status_time CHECK (
+                        (status = 'active' AND released_at IS NULL)
+                        OR (status IN ('released', 'fenced') AND released_at IS NOT NULL)
+                    );
+
+                ALTER TABLE data.generation_candidates
+                    ADD CONSTRAINT data_generation_candidates_operation_nonempty CHECK (
+                        operation_id <> '' AND operation_id = btrim(operation_id)
+                    ),
+                    ADD CONSTRAINT data_generation_candidates_manifest_sha256 CHECK (
+                        generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
+                    ADD CONSTRAINT data_generation_candidates_status_time CHECK (
+                        (status = 'live' AND released_at IS NULL)
+                        OR (status = 'released' AND released_at IS NOT NULL)
+                    );
+            """,
+        ),
     ),
 )
