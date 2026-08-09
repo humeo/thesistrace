@@ -515,25 +515,28 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             lost = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
             assert lost["status"] == "blocked"
             assert lost["strategy_session"] == recovered_sessions[-1]
+            lost_state = _stored_tracking_activation(
+                settings,
+                str(first_track["id"]),
+            )
+            assert lost_state["current_checkpoint_session"].isoformat() == (
+                recovered_sessions[-1]
+            )
+            assert lost_state["checkpoint_count"] == 2
+            assert lost_state["blocked_progression_count"] == 1
+            assert lost_state["latest_attempt_failure_reason"] == "WorkerLost"
+            assert lost_state["active_pin_count"] == 0
+
+            retry_lost = restarted.post(
+                f"/api/daily-tracks/{first_track['id']}/retry",
+                json={"request_id": "track-recovery-lost-worker-retry"},
+            )
+            assert retry_lost.status_code == 202
+            completed = _run_worker_once(settings)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
             release_stale_worker.set()
             assert stale_future.result(timeout=20) is True
 
-        lost_state = _stored_tracking_activation(settings, str(first_track["id"]))
-        assert lost_state["current_checkpoint_session"].isoformat() == (
-            recovered_sessions[-1]
-        )
-        assert lost_state["checkpoint_count"] == 2
-        assert lost_state["blocked_progression_count"] == 1
-        assert lost_state["latest_attempt_failure_reason"] == "WorkerLost"
-        assert lost_state["active_pin_count"] == 0
-
-        retry_lost = restarted.post(
-            f"/api/daily-tracks/{first_track['id']}/retry",
-            json={"request_id": "track-recovery-lost-worker-retry"},
-        )
-        assert retry_lost.status_code == 202
-        completed = _run_worker_once(settings)
-        assert completed.returncode == 0, completed.stdout + completed.stderr
         final = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
         assert final["status"] == "active"
         assert final["strategy_session"] == stale_sessions[-1]
