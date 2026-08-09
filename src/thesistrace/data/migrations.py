@@ -170,5 +170,41 @@ MIGRATIONS = MigrationPlan(
                     WHERE status = 'running';
             """,
         ),
+        Migration(
+            name="0006_mounted_generation_lifecycle",
+            statement="""
+                CREATE TABLE data.generation_pins (
+                    id text PRIMARY KEY,
+                    owner_kind text NOT NULL CHECK (
+                        owner_kind IN ('research_run_attempt', 'tracking_advance_attempt')
+                    ),
+                    owner_id text NOT NULL,
+                    generation_manifest_sha256 text NOT NULL,
+                    status text NOT NULL CHECK (status IN ('active', 'released', 'fenced')),
+                    lease_expires_at timestamptz NOT NULL,
+                    heartbeat_at timestamptz NOT NULL DEFAULT now(),
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    released_at timestamptz NULL,
+                    UNIQUE (owner_kind, owner_id)
+                );
+
+                CREATE INDEX data_active_generation_pins_idx
+                    ON data.generation_pins (generation_manifest_sha256)
+                    WHERE status = 'active';
+
+                CREATE TABLE data.generation_candidates (
+                    operation_id text PRIMARY KEY,
+                    generation_manifest_sha256 text NOT NULL,
+                    status text NOT NULL CHECK (status IN ('live', 'released')),
+                    lease_expires_at timestamptz NOT NULL,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now()
+                );
+
+                CREATE INDEX data_live_generation_candidates_idx
+                    ON data.generation_candidates (generation_manifest_sha256)
+                    WHERE status = 'live';
+            """,
+        ),
     ),
 )

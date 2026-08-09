@@ -6,6 +6,84 @@ from thesistrace.data.canonical_mapping import DAILY_FIELDS as DAILY_FIELDS
 from thesistrace.data.canonical_mapping import decimal_string, field_catalog, liquidity_universes
 
 
+def build_minimal_canonical_fixture() -> dict[str, object]:
+    """One valid session for storage/lifecycle tests that do not need market breadth."""
+    session = "2026-08-07"
+    instrument_id = "equity:000001.SZ"
+    universe = {"session": session, "instrument_ids": [instrument_id], "status": "available"}
+    return {
+        "schema_version": "canonical-eod-v1",
+        "research_calendar": [session],
+        "instruments": [
+            {
+                "instrument_id": instrument_id,
+                "ts_code": "000001.SZ",
+                "asset_type": "ordinary_a_share",
+                "exchange": "SZSE",
+                "board": "main",
+                "listed_from": "1991-04-03",
+                "listed_to": "",
+            }
+        ],
+        "prices": [
+            {
+                "session": session,
+                "instrument_id": instrument_id,
+                "open_raw": "10.0000",
+                "high_raw": "11.0000",
+                "low_raw": "9.0000",
+                "close_raw": "10.5000",
+                "pre_close_raw": "10.0000",
+                "change_raw": "0.5000",
+                "pct_change_raw": "5.000000",
+                "volume_shares": "10000",
+                "turnover_cny": "100000.00",
+                "adjustment_factor": "1.000000",
+                "adjustment_anchor_factor": "1.000000",
+                "open_adj": "10.00000000",
+                "high_adj": "11.00000000",
+                "low_adj": "9.00000000",
+                "close_adj": "10.50000000",
+                "trading_state": "normal",
+            }
+        ],
+        "trading_states": [{"session": session, "instrument_id": instrument_id, "state": "normal"}],
+        "price_limits": [
+            {
+                "session": session,
+                "instrument_id": instrument_id,
+                "upper": "11.0000",
+                "lower": "9.0000",
+            }
+        ],
+        "adjustment_anchors": [
+            {
+                "instrument_id": instrument_id,
+                "anchor_session": "1991-04-03",
+                "anchor_factor": "1.000000",
+            }
+        ],
+        "base_pool": [{"session": session, "instrument_ids": [instrument_id]}],
+        "liquidity_universes": {
+            name: [dict(universe)] for name in ("top300", "top1000", "top2000", "top3000")
+        },
+        "industry_membership": [
+            {
+                "instrument_id": instrument_id,
+                "active_from": "2021-01-01",
+                "active_to": "",
+                "sw2021_l1": "Bank",
+                "sw2021_l2": "Bank",
+                "sw2021_l3": "Bank",
+            }
+        ],
+        "st_designations": [],
+        "field_catalog": [
+            next(row for row in field_catalog(session) if row["name"] == "close_adj")
+        ],
+    }
+
+
 def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
     sessions = research_sessions()
     instruments = instrument_reference(sessions[0])
