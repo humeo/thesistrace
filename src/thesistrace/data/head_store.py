@@ -46,10 +46,8 @@ class DatasetHeadPointer:
     prepared_at: str
 
 
-@dataclass(frozen=True)
 class _ResolvedHeadCandidate:
-    generation: MountedGeneration
-    store_capability: object
+    __slots__ = ()
 
 
 class MountedDatasetHeadStore:
@@ -58,6 +56,7 @@ class MountedDatasetHeadStore:
     def __init__(self, root: Path | str) -> None:
         self._root = Path(root).resolve()
         self._generations = MountedGenerationStore(self._root)
+        self._resolved_candidates: dict[_ResolvedHeadCandidate, MountedGeneration] = {}
 
     def current(self) -> DatasetHead | None:
         pointer = self.current_pointer()
@@ -102,10 +101,10 @@ class MountedDatasetHeadStore:
         )
 
     def resolve_candidate(self, manifest_sha256: str) -> _ResolvedHeadCandidate:
-        return _ResolvedHeadCandidate(
-            generation=self._generations.open_generation(manifest_sha256),
-            store_capability=self._generations,
-        )
+        generation = self._generations.open_generation(manifest_sha256)
+        candidate = _ResolvedHeadCandidate()
+        self._resolved_candidates[candidate] = generation
+        return candidate
 
     def compare_and_swap_resolved(
         self,
@@ -113,9 +112,10 @@ class MountedDatasetHeadStore:
         expected_generation_manifest_sha256: str | None,
         candidate: _ResolvedHeadCandidate,
     ) -> DatasetHead:
-        if candidate.store_capability is not self._generations:
+        generation = self._resolved_candidates.pop(candidate, None)
+        if generation is None:
             raise DatasetHeadError("Dataset Head candidate belongs to another mounted store")
-        candidate_head = _head_from_generation(candidate.generation)
+        candidate_head = _head_from_generation(generation)
         content = _head_bytes(candidate_head)
         root_fd = self._open_root()
         lock_fd: int | None = None
@@ -271,8 +271,13 @@ def _read_optional_entry(root_fd: int, name: str) -> bytes | None:
         if metadata.st_size > HEAD_MANIFEST_MAX_BYTES:
             raise DatasetHeadError("Dataset Head manifest exceeds its byte bound")
         content = bytearray()
-        while chunk := os.read(descriptor, 64 * 1024):
+        while chunk := os.read(
+            descriptor,
+            min(64 * 1024, HEAD_MANIFEST_MAX_BYTES + 1 - len(content)),
+        ):
             content.extend(chunk)
+            if len(content) > HEAD_MANIFEST_MAX_BYTES:
+                raise DatasetHeadError("Dataset Head manifest exceeds its byte bound")
         if len(content) != metadata.st_size:
             raise DatasetHeadError("Dataset Head changed while reading")
         return bytes(content)

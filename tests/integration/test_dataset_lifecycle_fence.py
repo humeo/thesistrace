@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,7 +10,12 @@ import pytest
 from psycopg.errors import CheckViolation, RaiseException
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.data import DataLifecycleError, DatasetLifecycle, MountedGenerationStore
+from thesistrace.data import (
+    DataLifecycleError,
+    DatasetHeadError,
+    DatasetLifecycle,
+    MountedGenerationStore,
+)
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -18,6 +24,7 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
     core_settings: CoreSettings,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     migrate_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
@@ -89,10 +96,11 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
             generation_manifest_sha256=third,
             lease_seconds=60,
         )
-        barrier = threading.Barrier(2)
+        started_pin = threading.Event()
+        started_move = threading.Event()
 
         def pin_during_move() -> str:
-            barrier.wait(timeout=10)
+            started_pin.set()
             return lifecycle.pin_current(
                 owner_kind="tracking_advance_attempt",
                 owner_id="track-attempt-1",
@@ -100,18 +108,31 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
             ).generation_manifest_sha256
 
         def move_during_pin() -> str:
-            barrier.wait(timeout=10)
+            started_move.set()
             return lifecycle.compare_and_swap_head(
                 expected_generation_manifest_sha256=second,
                 candidate_generation_manifest_sha256=third,
                 operation_id="refresh-third",
             ).generation_manifest_sha256
 
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            pin_future = executor.submit(pin_during_move)
-            move_future = executor.submit(move_during_pin)
+        executor = ThreadPoolExecutor(max_workers=2)
+        try:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    ("thesistrace-mounted-data-lifecycle",),
+                )
+                pin_future = executor.submit(pin_during_move)
+                move_future = executor.submit(move_during_pin)
+                assert started_pin.wait(timeout=10)
+                assert started_move.wait(timeout=10)
+                completed, blocked = wait((pin_future, move_future), timeout=0.2)
+                assert completed == set()
+                assert blocked == {pin_future, move_future}
             selected = pin_future.result(timeout=20)
             assert move_future.result(timeout=20) == third
+        finally:
+            executor.shutdown(wait=True)
 
         assert selected in {second, third}
         selected_offset = 2 if selected == second else 3
@@ -191,6 +212,33 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
             "status": "live",
         }
         lifecycle.release_candidate(operation_id="refresh-fourth")
+
+        fifth = _materialize(generations, ordinal=5)
+        lifecycle.protect_candidate(
+            operation_id="refresh-fifth",
+            generation_manifest_sha256=fifth,
+            lease_seconds=60,
+        )
+        original_rename = os.rename
+
+        def reject_head_rename(*args: object, **kwargs: object) -> None:
+            raise OSError("injected rename failure")
+
+        monkeypatch.setattr(os, "rename", reject_head_rename)
+        with pytest.raises(DatasetHeadError, match="filesystem operation failed"):
+            lifecycle.compare_and_swap_head(
+                expected_generation_manifest_sha256=fourth,
+                candidate_generation_manifest_sha256=fifth,
+                operation_id="refresh-fifth",
+            )
+        monkeypatch.setattr(os, "rename", original_rename)
+        assert lifecycle.current_head().generation_manifest_sha256 == fourth
+        assert not tuple(tmp_path.glob(".head-candidate-*"))
+        assert _candidate_state(database, "refresh-fifth") == {
+            "generation_manifest_sha256": fifth,
+            "status": "live",
+        }
+        lifecycle.release_candidate(operation_id="refresh-fifth")
     finally:
         _clear_lifecycle(database)
         database.close()

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -70,8 +71,19 @@ def test_concurrent_head_movers_cannot_both_win(tmp_path: Path) -> None:
             return "conflict"
         return candidate
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        outcomes = tuple(executor.map(move, candidates))
+    lock_descriptor = os.open(tmp_path / ".head.lock", os.O_RDWR)
+    fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+    executor = ThreadPoolExecutor(max_workers=2)
+    try:
+        futures = tuple(executor.submit(move, candidate) for candidate in candidates)
+        _, blocked = wait(futures, timeout=0.2)
+        assert len(blocked) == 2
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        outcomes = tuple(future.result(timeout=10) for future in futures)
+    finally:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        os.close(lock_descriptor)
+        executor.shutdown(wait=True)
 
     assert outcomes.count("conflict") == 1
     winner = next(outcome for outcome in outcomes if outcome != "conflict")
@@ -127,6 +139,49 @@ def test_resolved_candidate_capability_cannot_cross_mounts(tmp_path: Path) -> No
             candidate=candidate,
         )
     assert MountedDatasetHeadStore(target_root).current() is None
+
+
+def test_resolved_candidate_is_opaque_and_single_use(tmp_path: Path) -> None:
+    store = MountedGenerationStore(tmp_path)
+    first = _materialize(store, ordinal=1)
+    heads = MountedDatasetHeadStore(tmp_path)
+    candidate = heads.resolve_candidate(first)
+
+    assert not hasattr(candidate, "generation")
+    established = heads.compare_and_swap_resolved(
+        expected_generation_manifest_sha256=None,
+        candidate=candidate,
+    )
+    assert established.generation_manifest_sha256 == first
+    with pytest.raises(DatasetHeadError, match="another mounted store"):
+        heads.compare_and_swap_resolved(
+            expected_generation_manifest_sha256=first,
+            candidate=candidate,
+        )
+
+
+def test_head_read_stops_at_hard_bound_when_file_grows(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    head = tmp_path / "HEAD.json"
+    head.write_bytes(b"x" * 65_536)
+    original_read = os.read
+    total_read = 0
+
+    def append_while_reading(descriptor: int, byte_count: int) -> bytes:
+        nonlocal total_read
+        chunk = original_read(descriptor, byte_count)
+        total_read += len(chunk)
+        if total_read == 65_536:
+            with head.open("ab") as stream:
+                stream.write(b"growth-beyond-bound")
+        return chunk
+
+    monkeypatch.setattr(os, "read", append_while_reading)
+    with pytest.raises(DatasetHeadError, match="byte bound"):
+        MountedDatasetHeadStore(tmp_path).current()
+    assert total_read == 65_537
 
 
 @pytest.mark.parametrize("unsafe_kind", ["symlink", "fifo", "oversized"])
