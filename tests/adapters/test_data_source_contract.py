@@ -1,10 +1,11 @@
 import json
 from dataclasses import fields
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from thesistrace.adapters.tushare_replay import ReplayTushareProvider
 from thesistrace.data import (
     DATA_SOURCE_ERROR_CATEGORIES,
     CanonicalSourceBatch,
@@ -21,6 +22,7 @@ from thesistrace.data.models import (
     ReleaseSummary,
     UpdateAcceptance,
 )
+from thesistrace.entrypoints import live_tushare
 from thesistrace.entrypoints.http import DataUpdateRequest
 
 
@@ -84,7 +86,9 @@ def test_product_data_contract_has_no_provider_or_collection_modes() -> None:
     assert all(word not in str(schema).lower() for schema in schemas for word in forbidden)
 
 
-def test_live_tushare_gate_is_separate_from_the_default_gate() -> None:
+def test_live_tushare_gate_is_separate_from_the_default_gate(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     package = json.loads((Path(__file__).resolve().parents[2] / "package.json").read_text())
     default_gate = package["scripts"]["check"]
     live_gate = package["scripts"]["check:live-tushare"]
@@ -92,8 +96,40 @@ def test_live_tushare_gate_is_separate_from_the_default_gate() -> None:
     assert "scripts/check_live_tushare.py" not in default_gate
     assert "uv run python scripts/check_live_tushare.py" in live_gate
 
-    script = (Path(__file__).resolve().parents[2] / "scripts" / "check_live_tushare.py").read_text()
-    assert '"preflight":' not in script
-    assert '"source":' not in script
-    assert "collect_bootstrap(" in script
-    assert "CollectionPlan.bootstrap" not in script
+    replay = ReplayTushareProvider(
+        Path(__file__).resolve().parents[1] / "fixtures" / "tushare-bootstrap-replay-v1.json"
+    )
+
+    class StubProvider:
+        def __init__(self) -> None:
+            self.preflight_count = 0
+            self.windows: list[tuple[date, date]] = []
+
+        def preflight(self) -> None:
+            self.preflight_count += 1
+
+        def collect_bootstrap_snapshot(
+            self,
+            *,
+            start_date: date,
+            completed_through_date: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            self.windows.append((start_date, completed_through_date))
+            return replay.collect_bootstrap_snapshot(
+                start_date=start_date,
+                completed_through_date=completed_through_date,
+            )
+
+    provider = StubProvider()
+    live_tushare.main(
+        provider=provider,
+        as_of=datetime(2026, 8, 3, 10, tzinfo=UTC),
+    )
+
+    assert provider.preflight_count == 1
+    assert provider.windows == [(date(2025, 8, 3), date(2026, 8, 3))]
+    assert json.loads(capsys.readouterr().out) == {
+        "canonical_schema": "canonical-eod-v1",
+        "covered_session_range": ["2026-08-03", "2026-08-03"],
+        "research_session_count": 1,
+    }
