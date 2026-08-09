@@ -6,20 +6,13 @@ import shutil
 import socket
 import subprocess
 import time
-from dataclasses import replace
-from datetime import UTC, datetime
 from pathlib import Path
-from urllib.error import HTTPError
 from urllib.request import urlopen
 
 import pytest
-from core_runtime import drop_product_schemas
+from test_core_daily_track_activation import _drop_product_schemas
 
-from thesistrace._postgres import PostgresDatabase
-from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.fixture import build_minimal_canonical_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -43,61 +36,35 @@ def _request_json(url: str) -> object:
     raise AssertionError(f"HTTP process did not become ready: {last_error}")
 
 
-def _request_status(url: str) -> int:
-    try:
-        with urlopen(url, timeout=2) as response:  # noqa: S310 - fixed loopback URL
-            return response.status
-    except HTTPError as error:
-        return error.code
-
-
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Path) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    migrate_core(settings.database_url)
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        generation = MountedGenerationStore(tmp_path).materialize(
-            build_minimal_canonical_fixture(),
-            prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
-            source_name="prepared-process-restart-test",
-            source_lineage={"fixture": "minimal"},
-        )
-        lifecycle = DatasetLifecycle(database, tmp_path)
-        lifecycle.protect_candidate(
-            operation_id="prepared-process-restart",
-            generation_manifest_sha256=generation.manifest_sha256,
-            lease_seconds=60,
-        )
-        lifecycle.compare_and_swap_head(
-            expected_generation_manifest_sha256=None,
-            candidate_generation_manifest_sha256=generation.manifest_sha256,
-            operation_id="prepared-process-restart",
-        )
-    finally:
-        database.close()
-
-    environment = {
-        **os.environ,
-        "THESISTRACE_DATA_MOUNT": str(tmp_path),
-        "THESISTRACE_LOG_LEVEL": "warning",
-    }
-    environment.pop("THESISTRACE_TUSHARE_TOKEN", None)
-    api_command = shutil.which("thesistrace-core-api")
-    worker_command = shutil.which("thesistrace-core-worker")
+def test_http_and_worker_process_restarts_preserve_empty_data() -> None:
+    _drop_product_schemas(CoreSettings.from_environment())
+    environment = {**os.environ, "THESISTRACE_LOG_LEVEL": "warning"}
+    migration_command = shutil.which("thesistrace-migrate")
+    api_command = shutil.which("thesistrace-api")
+    worker_command = shutil.which("thesistrace-worker")
+    assert migration_command is not None
     assert api_command is not None
     assert worker_command is not None
+    migration = subprocess.run(
+        [migration_command],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert migration.returncode == 0, migration.stderr
     expected_overview = {
-        "dataset_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
-        "data_through_session": "2026-08-07",
-        "last_refresh_at": None,
-        "readiness": True,
+        "status": "idle",
+        "latest_release": None,
+        "latest_update_outcome": None,
     }
+    expected_history = {"items": [], "next_cursor": None}
 
     for _ in range(2):
         worker = subprocess.run(
@@ -113,7 +80,13 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
 
         port = _free_port()
         http = subprocess.Popen(
-            [api_command, "--host", "127.0.0.1", "--port", str(port)],
+            [
+                api_command,
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
             cwd=ROOT,
             env=environment,
             stdout=subprocess.PIPE,
@@ -122,8 +95,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
         )
         try:
             assert _request_json(f"http://127.0.0.1:{port}/api/data") == expected_overview
-            assert _request_status(f"http://127.0.0.1:{port}/api/data/releases") == 404
-            assert _request_status(f"http://127.0.0.1:{port}/api/data/update") == 404
+            assert _request_json(f"http://127.0.0.1:{port}/api/data/releases") == expected_history
         finally:
             http.terminate()
             _, stderr = http.communicate(timeout=10)

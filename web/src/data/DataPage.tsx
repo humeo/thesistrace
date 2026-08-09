@@ -7,22 +7,6 @@ export type DataOverview = {
   readiness: boolean;
 };
 
-export type DataOverviewLoad =
-  | { overview: DataOverview; error: null }
-  | { overview: null; error: string };
-
-export async function loadDataOverview(
-  request: typeof fetch = fetch,
-): Promise<DataOverviewLoad> {
-  try {
-    const response = await request("/api/data");
-    if (!response.ok) throw new Error("Data overview unavailable");
-    return { overview: (await response.json()) as DataOverview, error: null };
-  } catch {
-    return { overview: null, error: "Data overview unavailable" };
-  }
-}
-
 export function DataOverviewView({
   overview,
   onRefresh,
@@ -74,13 +58,14 @@ export function DataPage() {
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const result = await loadDataOverview();
-    if (result.overview !== null) setOverview(result.overview);
-    setError(result.error);
+    const response = await fetch("/api/data");
+    if (!response.ok) throw new Error("Data overview unavailable");
+    setOverview((await response.json()) as DataOverview);
+    setError(null);
   }, []);
 
   useEffect(() => {
-    void refresh();
+    void refresh().catch((reason: Error) => setError(reason.message));
   }, [refresh]);
 
   if (error) return (

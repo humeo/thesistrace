@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { DataOverviewView, loadDataOverview } from "./DataPage";
+import { DataOverviewView } from "./DataPage";
 
 describe("DataOverviewView", () => {
   it("renders only the read-only current-data projection", () => {
@@ -39,30 +39,5 @@ describe("DataOverviewView", () => {
 
     expect(markup).toContain("Data not ready");
     expect(markup.match(/<dd>—<\/dd>/g)).toHaveLength(4);
-  });
-
-  it("turns refresh failures into visible state and can recover", async () => {
-    const unavailable = vi.fn<typeof fetch>().mockRejectedValue(new Error("network detail"));
-    await expect(loadDataOverview(unavailable)).resolves.toEqual({
-      overview: null,
-      error: "Data overview unavailable",
-    });
-
-    const overview = {
-      dataset_coverage: { start: "2025-08-08", end: "2026-08-07" },
-      data_through_session: "2026-08-07",
-      last_refresh_at: null,
-      readiness: true,
-    };
-    const recovered = vi.fn<typeof fetch>().mockResolvedValue(
-      new Response(JSON.stringify(overview), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
-    await expect(loadDataOverview(recovered)).resolves.toEqual({
-      overview,
-      error: null,
-    });
   });
 });
