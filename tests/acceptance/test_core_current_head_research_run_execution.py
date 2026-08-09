@@ -336,8 +336,10 @@ def test_attempt_revalidates_the_selected_generation(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize("failure_stage", ["manifest_record", "final_state"])
 def test_publication_failure_is_atomic_and_releases_the_generation_pin(
     tmp_path: Path,
+    failure_stage: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -348,16 +350,16 @@ def test_publication_failure_is_atomic_and_releases_the_generation_pin(
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/definitions/run",
-            json=_run_command("attempt-publication-failure"),
+            json=_run_command(f"attempt-publication-failure-{failure_stage}"),
         )
         run_id = accepted.json()["run"]["id"]
         runtime = client.app.state.core_runtime
         manifest_count = _publication_manifest_count(settings)
-        _install_success_rejection(settings)
+        _install_publication_rejection(settings, failure_stage=failure_stage)
         try:
             assert runtime.research_runs.process_next() is True
         finally:
-            _remove_success_rejection(settings)
+            _remove_publication_rejection(settings, failure_stage=failure_stage)
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "failed"
@@ -374,7 +376,7 @@ def test_publication_failure_is_atomic_and_releases_the_generation_pin(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_object_write_failure_is_retryable_but_never_publishes_or_keeps_a_pin(
+def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -386,15 +388,15 @@ def test_object_write_failure_is_retryable_but_never_publishes_or_keeps_a_pin(
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/definitions/run",
-            json=_run_command("attempt-object-write-failure"),
+            json=_run_command("attempt-denied-rustfs-write"),
         )
         run_id = accepted.json()["run"]["id"]
         runtime = client.app.state.core_runtime
-        unavailable_s3 = boto3.client(
+        denied_s3 = boto3.client(
             "s3",
-            endpoint_url="http://127.0.0.1:1",
-            aws_access_key_id=settings.s3_access_key_id,
-            aws_secret_access_key=settings.s3_secret_access_key,
+            endpoint_url=settings.s3_endpoint_url,
+            aws_access_key_id="ticket14-denied",
+            aws_secret_access_key="ticket14-denied-secret",
             region_name=settings.s3_region,
             config=Config(connect_timeout=0.2, read_timeout=0.2, retries={"max_attempts": 0}),
         )
@@ -404,20 +406,21 @@ def test_object_write_failure_is_retryable_but_never_publishes_or_keeps_a_pin(
             generation_store=MountedGenerationStore(settings.data_mount),
             publication=Publication(
                 runtime.database,
-                unavailable_s3,
+                denied_s3,
                 bucket=settings.s3_bucket,
             ),
         )
         manifest_count = _publication_manifest_count(settings)
 
         assert processor.process_next() is True
+        assert processor.process_next() is False
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
-        assert detail["status"] == "running"
+        assert detail["status"] == "failed"
         assert "result" not in detail
         stored = _stored_execution(settings, run_id)
         assert stored["attempt_status"] == "failed"
-        assert stored["attempt_failure_reason"] == "InfrastructureUnavailable"
+        assert stored["attempt_failure_reason"] == "PermanentExecutionFailure"
         assert stored["result_manifest_sha256"] is None
         assert stored["active_pin_count"] == 0
         assert _publication_manifest_count(settings) == manifest_count
@@ -666,41 +669,77 @@ def _first_result_object_sha256(settings: CoreSettings, manifest_sha256: str) ->
         database.close()
 
 
-def _install_success_rejection(settings: CoreSettings) -> None:
+def _install_publication_rejection(
+    settings: CoreSettings,
+    *,
+    failure_stage: str,
+) -> None:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
         with database.transaction() as transaction:
-            transaction.execute(
-                """
-                CREATE FUNCTION research_runs.reject_result_success() RETURNS trigger
-                LANGUAGE plpgsql AS $$
-                BEGIN
-                    RAISE EXCEPTION 'injected ResearchRun final-state failure';
-                END
-                $$;
-                CREATE TRIGGER reject_result_success
-                BEFORE UPDATE OF status ON research_runs.runs
-                FOR EACH ROW
-                WHEN (NEW.status = 'succeeded')
-                EXECUTE FUNCTION research_runs.reject_result_success();
-                """
-            )
+            if failure_stage == "manifest_record":
+                transaction.execute(
+                    """
+                    CREATE FUNCTION publication.reject_manifest_record() RETURNS trigger
+                    LANGUAGE plpgsql AS $$
+                    BEGIN
+                        RAISE EXCEPTION 'injected Result manifest-record failure';
+                    END
+                    $$;
+                    CREATE TRIGGER reject_manifest_record
+                    BEFORE INSERT ON publication.manifests
+                    FOR EACH ROW
+                    EXECUTE FUNCTION publication.reject_manifest_record();
+                    """
+                )
+            elif failure_stage == "final_state":
+                transaction.execute(
+                    """
+                    CREATE FUNCTION research_runs.reject_result_success() RETURNS trigger
+                    LANGUAGE plpgsql AS $$
+                    BEGIN
+                        RAISE EXCEPTION 'injected ResearchRun final-state failure';
+                    END
+                    $$;
+                    CREATE TRIGGER reject_result_success
+                    BEFORE UPDATE OF status ON research_runs.runs
+                    FOR EACH ROW
+                    WHEN (NEW.status = 'succeeded')
+                    EXECUTE FUNCTION research_runs.reject_result_success();
+                    """
+                )
+            else:
+                raise AssertionError(f"unsupported failure stage: {failure_stage}")
     finally:
         database.close()
 
 
-def _remove_success_rejection(settings: CoreSettings) -> None:
+def _remove_publication_rejection(
+    settings: CoreSettings,
+    *,
+    failure_stage: str,
+) -> None:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
         with database.transaction() as transaction:
-            transaction.execute(
-                """
-                DROP TRIGGER reject_result_success ON research_runs.runs;
-                DROP FUNCTION research_runs.reject_result_success();
-                """
-            )
+            if failure_stage == "manifest_record":
+                transaction.execute(
+                    """
+                    DROP TRIGGER reject_manifest_record ON publication.manifests;
+                    DROP FUNCTION publication.reject_manifest_record();
+                    """
+                )
+            elif failure_stage == "final_state":
+                transaction.execute(
+                    """
+                    DROP TRIGGER reject_result_success ON research_runs.runs;
+                    DROP FUNCTION research_runs.reject_result_success();
+                    """
+                )
+            else:
+                raise AssertionError(f"unsupported failure stage: {failure_stage}")
     finally:
         database.close()
 
