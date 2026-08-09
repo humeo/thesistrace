@@ -316,15 +316,16 @@ def test_bounded_continuation_preserves_full_explicit_period_results(
     for chunk_size in chunk_sizes:
         appended = sessions[cursor : cursor + chunk_size]
         cursor += chunk_size
+        compact_prior, bounded = _compact_for_continuation(actual)
         actual = advance(
             AdvanceInput(
-                prior_state=actual,
+                prior_state=compact_prior,
                 target_canonical_release=slice_canonical_sessions(
                     complete,
                     sessions[:cursor],
                 ),
                 appended_sessions=appended,
-                continuation=continuation_snapshot(actual),
+                continuation=bounded,
             )
         )
 
@@ -350,6 +351,25 @@ def _retained_evidence(state: KernelState) -> dict[str, object]:
         "output": state.output_snapshot(),
         "strategy_resume": state.strategy_resume_snapshot(),
     }
+
+
+def _compact_for_continuation(
+    state: KernelState,
+) -> tuple[KernelState, dict[str, object]]:
+    bounded = continuation_snapshot(state)
+    output = state.output_snapshot()
+    output["alpha_matrix"]["sessions"] = []
+    output["forward_labels"] = {"horizons": {}}
+    for horizon in output["factor_evaluation"]["horizons"].values():
+        horizon["daily"] = []
+    compact = KernelState(
+        run_input=state.run_input_with_canonical(state.canonical_snapshot()),
+        output=output,
+        strategy_resume=state.strategy_resume_snapshot(),
+        origin_session=state.origin_session,
+    )
+    assert compact.output_snapshot()["alpha_matrix"]["sessions"] == []
+    return compact, bounded
 
 
 def _run_input(
