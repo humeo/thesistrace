@@ -183,7 +183,8 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert pinned_detail["data_through_session"] == latest_sessions[-1]
         assert pinned_detail["lag_sessions"] == 1
 
-        assert runtime.daily_tracks.process_next() is True
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
         assert client.app.state.core_runtime.daily_tracks.process_next() is False
 
         caught_up = client.get(f"/api/daily-tracks/{track['id']}")
