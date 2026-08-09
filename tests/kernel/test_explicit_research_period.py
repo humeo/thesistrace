@@ -1,4 +1,5 @@
 import copy
+from datetime import date, timedelta
 
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, literal, operation
@@ -277,6 +278,69 @@ def test_explicit_period_advance_rebuilds_the_same_bounded_continuation() -> Non
     assert actual.strategy_resume_snapshot() == expected.strategy_resume_snapshot()
 
 
+@pytest.mark.parametrize(
+    "seed_session_count,chunk_sizes",
+    [
+        (23, (1,)),
+        (500, (2, 1, 2)),
+    ],
+)
+def test_bounded_continuation_preserves_full_explicit_period_results(
+    seed_session_count: int,
+    chunk_sizes: tuple[int, ...],
+) -> None:
+    sessions = _business_sessions(seed_session_count + sum(chunk_sizes))
+    complete = _canonical_for_sessions(sessions)
+    expected = run(
+        _run_input(
+            complete,
+            expression=CLOSE_ADJUSTED,
+            start=sessions[0],
+            end=sessions[-1],
+        )
+    ).track_state
+    seed_canonical = slice_canonical_sessions(
+        complete,
+        sessions[:seed_session_count],
+    )
+    actual = run(
+        _run_input(
+            seed_canonical,
+            expression=CLOSE_ADJUSTED,
+            start=sessions[0],
+            end=sessions[seed_session_count - 1],
+        )
+    ).track_state
+
+    cursor = seed_session_count
+    for chunk_size in chunk_sizes:
+        appended = sessions[cursor : cursor + chunk_size]
+        cursor += chunk_size
+        actual = advance(
+            AdvanceInput(
+                prior_state=actual,
+                target_canonical_release=slice_canonical_sessions(
+                    complete,
+                    sessions[:cursor],
+                ),
+                appended_sessions=appended,
+                continuation=continuation_snapshot(actual),
+            )
+        )
+
+    actual_evidence = _retained_evidence(actual)
+    expected_evidence = _retained_evidence(expected)
+    assert equivalence_bytes(actual_evidence) == equivalence_bytes(
+        expected_evidence
+    ), first_divergence(actual_evidence, expected_evidence)
+    assert len(actual.output_snapshot()["alpha_matrix"]["sessions"]) == len(sessions)
+    for horizon in ("1", "5", "20"):
+        assert (
+            len(actual.output_snapshot()["factor_evaluation"]["horizons"][horizon]["daily"])
+            == len(sessions)
+        )
+
+
 def _retained_evidence(state: KernelState) -> dict[str, object]:
     return {
         "origin_session": state.origin_session,
@@ -314,7 +378,10 @@ def _run_input(
 
 
 def _canonical(*, session_count: int) -> dict[str, object]:
-    sessions = list(SESSIONS[:session_count])
+    return _canonical_for_sessions(list(SESSIONS[:session_count]))
+
+
+def _canonical_for_sessions(sessions: list[str]) -> dict[str, object]:
     prices = []
     states = []
     limits = []
@@ -370,3 +437,13 @@ def _canonical(*, session_count: int) -> dict[str, object]:
         "industry_membership": [],
         "st_designations": [],
     }
+
+
+def _business_sessions(session_count: int) -> list[str]:
+    sessions: list[str] = []
+    candidate = date(2024, 1, 2)
+    while len(sessions) < session_count:
+        if candidate.weekday() < 5:
+            sessions.append(candidate.isoformat())
+        candidate += timedelta(days=1)
+    return sessions

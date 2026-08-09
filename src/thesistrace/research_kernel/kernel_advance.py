@@ -117,31 +117,28 @@ def advance(advance_input: AdvanceInput) -> KernelState:
         new_sessions,
         prior.session_count,
     )
-    explicit_period = prior_run_input.research_end_session is not None
-    research_sessions = _alpha_session_ids(matrix) if explicit_period else None
-    if continuation is None:
-        labels = _advance_labels(
+    research_sessions = _research_period_sessions(run_input, canonical)
+    if research_sessions is not None:
+        if _alpha_session_ids(matrix) != research_sessions:
+            matrix = _rebuild_explicit_alpha(run_input, canonical, research_sessions)
+        labels = build_forward_labels(
             canonical,
             matrix,
-            prior_labels,
-            new_sessions,
-            explicit_period=explicit_period,
+            signal_sessions=research_sessions,
         )
+        factor = evaluate_factor(labels)
     else:
-        labels = _advance_labels_from_continuation(
+        if continuation is None:
+            labels = _advance_labels(canonical, matrix, prior_labels, new_sessions)
+        else:
+            labels = _advance_labels_from_continuation(canonical, matrix, new_sessions)
+        factor = _advance_factor(
             canonical,
-            matrix,
+            labels,
+            prior_factor,
             new_sessions,
-            research_sessions=research_sessions,
+            compact_continuation=continuation is not None,
         )
-    factor = _advance_factor(
-        canonical,
-        labels,
-        prior_factor,
-        new_sessions,
-        compact_continuation=continuation is not None,
-        research_sessions=research_sessions,
-    )
     strategy_resume = prior.strategy_resume_snapshot()
     definition = calculation_definition(run_input)
     strategy = transition_strategy(
@@ -341,7 +338,11 @@ def _with_continuation(
     restored = json.loads(canonical_json_bytes(prior_output))
     alpha = _mapping(restored.get("alpha_matrix"), "prior Alpha Matrix")
     factor = _mapping(restored.get("factor_evaluation"), "prior Factor")
-    alpha["sessions"] = [dict(item) for item in pending if isinstance(item, Mapping)]
+    alpha_sessions = alpha.get("sessions")
+    if not isinstance(alpha_sessions, list):
+        raise KernelRunError("prior Alpha Matrix sessions are invalid")
+    if not alpha_sessions:
+        alpha["sessions"] = [dict(item) for item in pending if isinstance(item, Mapping)]
     horizons = _mapping(factor.get("horizons"), "prior Factor horizons")
     by_horizon: dict[int, list[dict[str, object]]] = {}
     for item in rolling:
@@ -355,7 +356,11 @@ def _with_continuation(
             horizons.get(str(horizon)),
             f"prior Factor horizon {horizon}",
         )
-        horizon_value["daily"] = by_horizon.get(horizon, [])
+        daily = horizon_value.get("daily")
+        if not isinstance(daily, list):
+            raise KernelRunError("prior Factor daily continuation is invalid")
+        if not daily:
+            horizon_value["daily"] = by_horizon.get(horizon, [])
     return restored
 
 
@@ -405,15 +410,9 @@ def _advance_labels(
     matrix: dict[str, object],
     prior_labels: Mapping[str, object],
     new_sessions: list[str],
-    *,
-    explicit_period: bool,
 ) -> dict[str, object]:
     calendar = canonical_sessions(canonical, "Canonical")
-    selected_sessions = (
-        _alpha_session_ids(matrix)
-        if explicit_period
-        else calendar[-504:]
-    )
+    selected_sessions = calendar[-504:]
     selected_set = set(selected_sessions)
     prior_horizons = _mapping(prior_labels.get("horizons"), "prior Label horizons")
     horizons: dict[str, object] = {}
@@ -425,11 +424,7 @@ def _advance_labels(
         prior_rows = prior_horizon.get("sessions")
         if not isinstance(prior_rows, list):
             raise KernelRunError("prior Label sessions are invalid")
-        affected_sessions = [
-            session
-            for session in affected_label_sessions(calendar, new_sessions, horizon)
-            if session in selected_set
-        ]
+        affected_sessions = affected_label_sessions(calendar, new_sessions, horizon)
         partial = build_forward_labels(
             canonical,
             matrix,
@@ -470,19 +465,12 @@ def _advance_labels_from_continuation(
     canonical: dict[str, object],
     matrix: dict[str, object],
     new_sessions: list[str],
-    *,
-    research_sessions: list[str] | None,
 ) -> dict[str, object]:
     """Recompute only labels whose value can change at this Release boundary."""
     calendar = canonical_sessions(canonical, "Canonical")
     horizons: dict[str, object] = {}
     for horizon in HORIZONS:
         affected_sessions = affected_label_sessions(calendar, new_sessions, horizon)
-        if research_sessions is not None:
-            selected = set(research_sessions)
-            affected_sessions = [
-                session for session in affected_sessions if session in selected
-            ]
         partial = build_forward_labels(
             canonical,
             matrix,
@@ -496,10 +484,7 @@ def _advance_labels_from_continuation(
         horizons[str(horizon)] = dict(partial_horizon)
     return {
         "alpha_checksum": matrix["checksum"],
-        "report_session_count": min(
-            504,
-            len(calendar) if research_sessions is None else len(research_sessions),
-        ),
+        "report_session_count": min(504, len(calendar)),
         "horizons": horizons,
     }
 
@@ -511,7 +496,6 @@ def _advance_factor(
     new_sessions: list[str],
     *,
     compact_continuation: bool = False,
-    research_sessions: list[str] | None = None,
 ) -> dict[str, object]:
     calendar = canonical_sessions(canonical, "Canonical")
     label_horizons = _mapping(labels.get("horizons"), "Label horizons")
@@ -531,15 +515,7 @@ def _advance_factor(
         ]
         if len(label_selected) != len(label_sessions):
             raise KernelRunError("Factor Label session is invalid")
-        selected = (
-            (
-                calendar[-504:]
-                if research_sessions is None
-                else research_sessions[-504:]
-            )
-            if compact_continuation
-            else label_selected
-        )
+        selected = calendar[-504:] if compact_continuation else label_selected
         selected_by_horizon[horizon] = selected
         affected = set(affected_label_sessions(calendar, new_sessions, horizon))
         partial_horizons[str(horizon)] = {
@@ -641,3 +617,49 @@ def _alpha_session_ids(matrix: Mapping[str, object]) -> list[str]:
     if not isinstance(rows, list) or any(not isinstance(item, Mapping) for item in rows):
         raise KernelRunError("Advance Alpha sessions are invalid")
     return [str(item["session"]) for item in rows]
+
+
+def _research_period_sessions(
+    run_input: RunInput,
+    canonical: dict[str, object],
+) -> list[str] | None:
+    if run_input.research_start_session is None and run_input.research_end_session is None:
+        return None
+    if run_input.research_start_session is None or run_input.research_end_session is None:
+        raise KernelRunError("Advance Research Period boundaries are incomplete")
+    calendar = canonical_sessions(canonical, "Canonical")
+    try:
+        start = calendar.index(run_input.research_start_session)
+        end = calendar.index(run_input.research_end_session)
+    except ValueError as error:
+        raise KernelRunError("Advance Research Period boundary is not canonical") from error
+    if start > end:
+        raise KernelRunError("Advance Research Period boundary is reversed")
+    return calendar[start : end + 1]
+
+
+def _rebuild_explicit_alpha(
+    run_input: RunInput,
+    canonical: dict[str, object],
+    research_sessions: list[str],
+) -> dict[str, object]:
+    evaluated = evaluate_alpha_matrix(
+        canonical,
+        expression=run_input.alpha_expression_snapshot(),
+        field_bindings=run_input.field_bindings_snapshot(),
+        universe_name=run_input.universe,
+        neutralization=run_input.neutralization,
+    )
+    selected = set(research_sessions)
+    rows = [
+        dict(item)
+        for item in evaluated["sessions"]
+        if isinstance(item, Mapping) and str(item["session"]) in selected
+    ]
+    if [str(item["session"]) for item in rows] != research_sessions:
+        raise KernelRunError("Advance Alpha rebuild did not cover the Research Period")
+    return {
+        **evaluated,
+        "sessions": rows,
+        "checksum": alpha_matrix_checksum(rows),
+    }
