@@ -190,6 +190,84 @@ def test_invalid_session_coordinates_leave_no_partial_progression(
         database.close()
 
 
+@pytest.mark.parametrize("unresolved_status", ["running", "blocked"])
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_track_rejects_a_second_unresolved_progression(
+    unresolved_status: str,
+) -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings.database_url)
+    migrate_core(settings.database_url)
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        _insert_parent_track(database, track_id="track_one_unresolved_progression")
+        repository = SessionCoordinateRepository(database)
+        with database.transaction() as transaction:
+            repository.activate(
+                transaction,
+                track_id="track_one_unresolved_progression",
+                origin_session=date(2026, 8, 3),
+                checkpoint_manifest_sha256="a" * 64,
+                terminal_strategy_state=_strategy_state("2026-08-03", "10000000"),
+                data_generation_id="generation_seed",
+                provenance={"kind": "activation"},
+            )
+            repository.start_progression(
+                transaction,
+                progression_id="progression_first",
+                track_id="track_one_unresolved_progression",
+                expected_checkpoint_manifest_sha256="a" * 64,
+                generation_sessions=(
+                    date(2026, 8, 3),
+                    date(2026, 8, 4),
+                    date(2026, 8, 5),
+                ),
+                target_sessions=(date(2026, 8, 4),),
+                data_generation_id="generation_first",
+                provenance={"kind": "first"},
+            )
+            if unresolved_status == "blocked":
+                transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET status = 'blocked'
+                    WHERE id = 'progression_first'
+                    """
+                )
+
+        with pytest.raises(
+            SessionCoordinateConflict,
+            match="already has an unresolved Progression",
+        ):
+            with database.transaction() as transaction:
+                repository.start_progression(
+                    transaction,
+                    progression_id="progression_competing",
+                    track_id="track_one_unresolved_progression",
+                    expected_checkpoint_manifest_sha256="a" * 64,
+                    generation_sessions=(
+                        date(2026, 8, 3),
+                        date(2026, 8, 4),
+                        date(2026, 8, 5),
+                    ),
+                    target_sessions=(date(2026, 8, 4), date(2026, 8, 5)),
+                    data_generation_id="generation_competing",
+                    provenance={"kind": "competing"},
+                )
+
+        snapshot = repository.load("track_one_unresolved_progression")
+        assert [progression.id for progression in snapshot.progressions] == [
+            "progression_first"
+        ]
+        assert snapshot.progressions[0].status == unresolved_status
+    finally:
+        database.close()
+
+
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",

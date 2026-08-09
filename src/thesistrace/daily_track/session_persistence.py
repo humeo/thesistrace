@@ -5,6 +5,7 @@ from datetime import date
 from itertools import pairwise
 from typing import Literal
 
+from psycopg.errors import UniqueViolation
 from psycopg.types.json import Jsonb
 from pydantic import ValidationError
 
@@ -158,25 +159,30 @@ class SessionCoordinateRepository:
             generation_sessions=generation_sessions,
             target_sessions=target_sessions,
         )
-        transaction.execute(
-            """
-            INSERT INTO daily_tracks.session_progressions (
-                id, track_id, predecessor_checkpoint_manifest_sha256,
-                target_sessions, target_start_session, target_end_session,
-                data_generation_id, status, provenance
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
-            """,
-            (
-                progression_id,
-                track_id,
-                expected_checkpoint_manifest_sha256,
-                list(target_sessions),
-                target_sessions[0],
-                target_sessions[-1],
-                data_generation_id,
-                Jsonb(provenance),
-            ),
-        )
+        try:
+            transaction.execute(
+                """
+                INSERT INTO daily_tracks.session_progressions (
+                    id, track_id, predecessor_checkpoint_manifest_sha256,
+                    target_sessions, target_start_session, target_end_session,
+                    data_generation_id, status, provenance
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
+                """,
+                (
+                    progression_id,
+                    track_id,
+                    expected_checkpoint_manifest_sha256,
+                    list(target_sessions),
+                    target_sessions[0],
+                    target_sessions[-1],
+                    data_generation_id,
+                    Jsonb(provenance),
+                ),
+            )
+        except UniqueViolation as error:
+            raise SessionCoordinateConflict(
+                "Track already has an unresolved Progression"
+            ) from error
 
     def start_attempt(
         self,

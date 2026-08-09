@@ -300,6 +300,10 @@ MIGRATIONS = MigrationPlan(
                     )
                 );
 
+                CREATE UNIQUE INDEX daily_tracks_one_unresolved_session_progression_idx
+                    ON daily_tracks.session_progressions (track_id)
+                    WHERE status IN ('running', 'blocked');
+
                 CREATE TABLE daily_tracks.session_progression_attempts (
                     id text PRIMARY KEY,
                     progression_id text NOT NULL,
