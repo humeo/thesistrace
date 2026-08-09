@@ -3,7 +3,17 @@ import copy
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, literal, operation
 
-from thesistrace.research_kernel import KernelRunError, RunInput, run
+from thesistrace.research_kernel import (
+    AdvanceInput,
+    KernelRunError,
+    KernelState,
+    RunInput,
+    advance,
+    continuation_snapshot,
+    run,
+)
+from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
+from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 
 SESSIONS = (
     "2024-01-02",
@@ -166,6 +176,116 @@ def test_terminal_valuation_retains_holdings_without_a_final_order() -> None:
     assert strategy["daily"][-1]["cycle_type"] == "terminal_valuation"
     assert strategy["positions"]
     assert all(order["session"] != SESSIONS[2] for order in strategy["orders"])
+
+
+@pytest.mark.parametrize(
+    "expression,start_index,seed_end_index,chunks",
+    [
+        (CLOSE_ADJUSTED, 0, 0, ((1,), (2, 3), (4,))),
+        (operation("pct_change", CLOSE_ADJUSTED, literal(1)), 1, 1, ((2, 3, 4),)),
+        (operation("pct_change", CLOSE_ADJUSTED, literal(1)), 1, 2, ((3,), (4,))),
+    ],
+)
+def test_explicit_period_advance_matches_batch_across_irregular_chunks(
+    expression: dict[str, object],
+    start_index: int,
+    seed_end_index: int,
+    chunks: tuple[tuple[int, ...], ...],
+) -> None:
+    complete = _canonical(session_count=5)
+    start = SESSIONS[start_index]
+    expected = run(
+        _run_input(
+            complete,
+            expression=expression,
+            start=start,
+            end=SESSIONS[-1],
+        )
+    ).track_state
+    seed = run(
+        _run_input(
+            complete,
+            expression=expression,
+            start=start,
+            end=SESSIONS[seed_end_index],
+        )
+    ).track_state
+
+    actual = seed
+    for chunk in chunks:
+        boundary = SESSIONS[chunk[-1]]
+        actual = advance(
+            AdvanceInput(
+                prior_state=actual,
+                target_canonical_release=slice_canonical_sessions(
+                    complete,
+                    list(SESSIONS[: SESSIONS.index(boundary) + 1]),
+                ),
+                appended_sessions=[SESSIONS[index] for index in chunk],
+            )
+        )
+
+    actual_evidence = _retained_evidence(actual)
+    expected_evidence = _retained_evidence(expected)
+    assert equivalence_bytes(actual_evidence) == equivalence_bytes(
+        expected_evidence
+    ), first_divergence(actual_evidence, expected_evidence)
+    assert (
+        actual.run_input_with_canonical(actual.canonical_snapshot()).research_end_session
+        == SESSIONS[-1]
+    )
+
+
+def test_explicit_period_advance_rebuilds_the_same_bounded_continuation() -> None:
+    complete = _canonical(session_count=5)
+    expression = operation("pct_change", CLOSE_ADJUSTED, literal(1))
+    expected = run(
+        _run_input(
+            complete,
+            expression=expression,
+            start=SESSIONS[1],
+            end=SESSIONS[-1],
+        )
+    ).track_state
+    seed = run(
+        _run_input(
+            complete,
+            expression=expression,
+            start=SESSIONS[1],
+            end=SESSIONS[2],
+        )
+    ).track_state
+
+    actual = advance(
+        AdvanceInput(
+            prior_state=seed,
+            target_canonical_release=complete,
+            appended_sessions=list(SESSIONS[3:]),
+            continuation=continuation_snapshot(seed),
+        )
+    )
+
+    assert continuation_snapshot(actual) == continuation_snapshot(expected)
+    actual_output = actual.output_snapshot()
+    expected_output = expected.output_snapshot()
+    for horizon in ("1", "5", "20"):
+        assert (
+            actual_output["factor_evaluation"]["horizons"][horizon]["summary"]
+            == expected_output["factor_evaluation"]["horizons"][horizon]["summary"]
+        )
+    assert actual_output["strategy_backtest"] == expected_output["strategy_backtest"]
+    assert actual.strategy_resume_snapshot() == expected.strategy_resume_snapshot()
+
+
+def _retained_evidence(state: KernelState) -> dict[str, object]:
+    return {
+        "origin_session": state.origin_session,
+        "session_count": state.session_count,
+        "boundary_session": state.boundary_session,
+        "canonical": state.canonical_snapshot(),
+        "output": state.output_snapshot(),
+        "strategy_resume": state.strategy_resume_snapshot(),
+    }
 
 
 def _run_input(

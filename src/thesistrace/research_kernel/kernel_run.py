@@ -99,7 +99,12 @@ class RunInput:
     def field_bindings_snapshot(self) -> dict[str, str]:
         return dict(self._field_bindings)
 
-    def with_canonical_data(self, canonical_data: dict[str, object]) -> RunInput:
+    def with_canonical_data(
+        self,
+        canonical_data: dict[str, object],
+        *,
+        research_end_session: str | None = None,
+    ) -> RunInput:
         return RunInput(
             canonical_data=canonical_data,
             alpha_expression=self.alpha_expression_snapshot(),
@@ -114,7 +119,11 @@ class RunInput:
             stamp_duty_sell_rate=self.stamp_duty_sell_rate,
             transfer_fee_rate=self.transfer_fee_rate,
             research_start_session=self.research_start_session,
-            research_end_session=self.research_end_session,
+            research_end_session=(
+                self.research_end_session
+                if research_end_session is None
+                else research_end_session
+            ),
         )
 
 
@@ -158,8 +167,16 @@ class KernelState:
             raise KernelRunError("Kernel output snapshot is invalid")
         return value
 
-    def run_input_with_canonical(self, canonical_data: dict[str, object]) -> RunInput:
-        return self._run_input.with_canonical_data(canonical_data)
+    def run_input_with_canonical(
+        self,
+        canonical_data: dict[str, object],
+        *,
+        research_end_session: str | None = None,
+    ) -> RunInput:
+        return self._run_input.with_canonical_data(
+            canonical_data,
+            research_end_session=research_end_session,
+        )
 
     def strategy_resume_snapshot(self) -> dict[str, object]:
         value = json.loads(self._strategy_resume_json)
