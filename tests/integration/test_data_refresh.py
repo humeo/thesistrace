@@ -3,17 +3,21 @@ from __future__ import annotations
 import copy
 import json
 import os
+import stat
 import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Inexact, localcontext
 from pathlib import Path
+from time import monotonic
 
 import pytest
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import _append_session
+from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_provider import normalize_tushare_snapshot
 from thesistrace.data import (
     CanonicalSourceBatch,
@@ -24,12 +28,14 @@ from thesistrace.data import (
     DatasetOverviewService,
     MountedGenerationStore,
 )
+from thesistrace.data.head_store import MountedDatasetHeadStore
 from thesistrace.data.source import DataSourceError
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 AS_OF = datetime(2026, 9, 7, 9, tzinfo=UTC)
+CORRECTION_AS_OF = datetime(2026, 7, 28, 10, tzinfo=UTC)
 REPLAY_AS_OF = datetime(2026, 8, 3, 9, tzinfo=UTC)
 FIRST_PREPARED_AT = datetime(2026, 9, 7, 9, 30, tzinfo=UTC)
 FIRST_REFRESH_AT = datetime(2026, 9, 7, 10, tzinfo=UTC)
@@ -59,15 +65,18 @@ class UnavailableRefreshSource:
         raise DataSourceError("unavailable", detail_code="UPSTREAM_UNAVAILABLE")
 
 
-class InvalidStageRefreshSource:
-    def __init__(self, stage: str) -> None:
-        self.stage = stage
+class ReplayRefreshProvider:
+    def __init__(self, snapshot: dict[str, object]) -> None:
+        self.snapshot = snapshot
 
-    def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
-        raise DataSourceError(
-            "invalid_source_data",
-            detail_code=f"{self.stage.upper()}_FAILED",
-        )
+    def collect_incremental_snapshot(
+        self,
+        *,
+        last_session: str,
+        known_ts_codes: set[str],
+        as_of: date,
+    ) -> dict[str, list[dict[str, object]]]:
+        return copy.deepcopy(self.snapshot)  # type: ignore[return-value]
 
 
 def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
@@ -434,31 +443,39 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         database.close()
 
 
-@pytest.mark.parametrize("failure_stage", ("merge", "derived_recomputation"))
-def test_source_contract_stage_failure_keeps_prior_head_and_freshness(
+def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
     core_settings: CoreSettings,
     tmp_path: Path,
-    failure_stage: str,
 ) -> None:
     database = _database(core_settings)
     try:
-        current = _twenty_session_canonical()
+        snapshot = _tushare_snapshot(_tushare_sessions(20))
+        _lineage, current = normalize_tushare_snapshot(snapshot)
         manifest = _establish_head(database, tmp_path, current)
+        prior_canonical = MountedGenerationStore(tmp_path).open_generation(manifest).canonical
         prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        malformed = copy.deepcopy(snapshot)
+        malformed["daily"] = {"not": "a source table"}
         refresh = DataRefreshService(database, tmp_path, max_attempts=1)
-        refresh.submit(idempotency_key=f"failure-{failure_stage}", as_of=AS_OF)
+        refresh.submit(idempotency_key="failure-merge", as_of=CORRECTION_AS_OF)
 
         with pytest.raises(DataRefreshError) as failure:
-            refresh.process_next(InvalidStageRefreshSource(failure_stage))
+            refresh.process_next(
+                TushareDataSource(provider=ReplayRefreshProvider(malformed))
+            )
 
         assert failure.value.code == "SOURCE_INVALID_SOURCE_DATA"
-        terminal = refresh.inspect(f"failure-{failure_stage}")
+        terminal = refresh.inspect("failure-merge")
         assert terminal.status == "failed"
         assert terminal.failure_code == "SOURCE_INVALID_SOURCE_DATA"
         assert terminal.last_failure_code == "SOURCE_INVALID_SOURCE_DATA"
         head = DatasetLifecycle(database, tmp_path).current_head()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
+        assert (
+            MountedGenerationStore(tmp_path).open_generation(manifest).canonical
+            == prior_canonical
+        )
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
             prior_refresh_at
         )
@@ -466,42 +483,96 @@ def test_source_contract_stage_failure_keeps_prior_head_and_freshness(
         database.close()
 
 
-@pytest.mark.parametrize("failure_stage", ("generation_write", "head_cas"))
-def test_precommit_infrastructure_failure_keeps_the_prior_head_readable(
+def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshness(
     core_settings: CoreSettings,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    failure_stage: str,
 ) -> None:
     database = _database(core_settings)
+    try:
+        snapshot = _tushare_snapshot(_tushare_sessions(20))
+        _lineage, current = normalize_tushare_snapshot(snapshot)
+        manifest = _establish_head(database, tmp_path, current)
+        prior_canonical = MountedGenerationStore(tmp_path).open_generation(manifest).canonical
+        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        corrected = copy.deepcopy(snapshot)
+        daily = corrected["daily"]
+        assert isinstance(daily, list)
+        daily[2]["amount"] = "1000.00001"
+        refresh = DataRefreshService(database, tmp_path, max_attempts=1)
+        refresh.submit(
+            idempotency_key="failure-derived-recomputation",
+            as_of=CORRECTION_AS_OF,
+        )
+
+        with localcontext() as context:
+            context.traps[Inexact] = True
+            with pytest.raises(DataRefreshError) as failure:
+                refresh.process_next(
+                    TushareDataSource(provider=ReplayRefreshProvider(corrected))
+                )
+
+        assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
+        terminal = refresh.inspect("failure-derived-recomputation")
+        assert terminal.status == "failed"
+        assert terminal.failure_code == "RETRY_EXHAUSTED"
+        assert terminal.last_failure_code == "REFRESH_INFRASTRUCTURE_FAILURE"
+        assert terminal.attempt_count == 1
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        assert (
+            MountedGenerationStore(tmp_path).open_generation(manifest).canonical
+            == prior_canonical
+        )
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+            prior_refresh_at
+        )
+    finally:
+        database.close()
+
+
+def test_real_generation_write_failure_keeps_the_prior_head_readable(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    source_entered = threading.Event()
+    release_source = threading.Event()
+
+    class BlockingSource(RecordingRefreshSource):
+        def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
+            source_entered.set()
+            assert release_source.wait(timeout=10)
+            return super().collect(plan)
+
     try:
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
         prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        if failure_stage == "generation_write":
-            monkeypatch.setattr(
-                MountedGenerationStore,
-                "materialize",
-                lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("injected write")),
-            )
-        else:
-            monkeypatch.setattr(
-                DatasetLifecycle,
-                "compare_and_swap_head",
-                lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("injected cas")),
-            )
         refresh = DataRefreshService(database, tmp_path, max_attempts=1)
-        refresh.submit(idempotency_key=f"failure-{failure_stage}", as_of=AS_OF)
+        refresh.submit(idempotency_key="failure-generation-write", as_of=AS_OF)
+        objects = tmp_path / "objects"
+        held_objects = tmp_path / "objects-held-for-fault"
+        blocked_objects = tmp_path / "objects"
 
-        with pytest.raises(DataRefreshError) as failure:
-            refresh.process_next(RecordingRefreshSource(candidate))
-
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(refresh.process_next, BlockingSource(candidate))
+            assert source_entered.wait(timeout=10)
+            objects.rename(held_objects)
+            blocked_objects.write_text("not a directory")
+            release_source.set()
+            with pytest.raises(DataRefreshError) as failure:
+                future.result(timeout=10)
         assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
-        terminal = refresh.inspect(f"failure-{failure_stage}")
+        blocked_objects.unlink()
+        held_objects.rename(objects)
+
+        terminal = refresh.inspect("failure-generation-write")
         assert terminal.status == "failed"
         assert terminal.failure_code == "RETRY_EXHAUSTED"
+        assert terminal.last_failure_code == "REFRESH_INFRASTRUCTURE_FAILURE"
         assert terminal.attempt_count == 1
         head = DatasetLifecycle(database, tmp_path).current_head()
         assert head is not None
@@ -511,6 +582,13 @@ def test_precommit_infrastructure_failure_keeps_the_prior_head_readable(
             prior_refresh_at
         )
     finally:
+        release_source.set()
+        blocked_objects = tmp_path / "objects"
+        held_objects = tmp_path / "objects-held-for-fault"
+        if blocked_objects.is_file():
+            blocked_objects.unlink()
+        if held_objects.exists() and not blocked_objects.exists():
+            held_objects.rename(blocked_objects)
         database.close()
 
 
@@ -533,6 +611,7 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
                 CREATE FUNCTION data.reject_candidate_release() RETURNS trigger
                 LANGUAGE plpgsql AS $$
                 BEGIN
+                    PERFORM pg_advisory_xact_lock(1147011);
                     RAISE EXCEPTION 'injected candidate release failure';
                 END
                 $$;
@@ -543,11 +622,22 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
                 EXECUTE FUNCTION data.reject_candidate_release();
                 """
             )
+        original_mode = stat.S_IMODE(tmp_path.stat().st_mode)
         try:
-            with pytest.raises(DataRefreshError) as failure:
-                refresh.process_next(RecordingRefreshSource(candidate))
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                with database.transaction() as blocker:
+                    blocker.execute("SELECT pg_advisory_xact_lock(1147011)")
+                    future = executor.submit(
+                        refresh.process_next,
+                        RecordingRefreshSource(candidate),
+                    )
+                    _wait_for_physical_head_change(tmp_path, original, timeout=10)
+                    tmp_path.chmod(0)
+                with pytest.raises(DataRefreshError) as failure:
+                    future.result(timeout=10)
             assert failure.value.code == "REFRESH_COMPLETION_PENDING"
         finally:
+            tmp_path.chmod(original_mode)
             with database.transaction() as transaction:
                 transaction.execute(
                     """
@@ -653,6 +743,105 @@ def _twenty_session_canonical() -> dict[str, object]:
     for _ in range(19):
         _append_session(canonical)
     return canonical
+
+
+def _tushare_sessions(count: int) -> list[str]:
+    sessions: list[str] = []
+    cursor = date(2026, 7, 1)
+    while len(sessions) < count:
+        if cursor.weekday() < 5:
+            sessions.append(cursor.strftime("%Y%m%d"))
+        cursor += timedelta(days=1)
+    return sessions
+
+
+def _tushare_snapshot(sessions: list[str]) -> dict[str, object]:
+    daily = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": session,
+            "open": "10",
+            "high": "11",
+            "low": "9",
+            "close": "10.5",
+            "pre_close": "10",
+            "change": "0.5",
+            "pct_chg": "5",
+            "vol": "100",
+            "amount": "1000",
+        }
+        for session in sessions
+    ]
+    return {
+        "calendar_sse": [
+            {"exchange": "SSE", "cal_date": session, "is_open": "1"}
+            for session in sessions
+        ],
+        "calendar_szse": [
+            {"exchange": "SZSE", "cal_date": session, "is_open": "1"}
+            for session in sessions
+        ],
+        "stock_basic": [
+            {
+                "ts_code": "600000.SH",
+                "exchange": "SSE",
+                "market": "主板",
+                "list_date": "20220101",
+                "delist_date": "",
+            }
+        ],
+        "anchor_daily": [dict(daily[0])],
+        "anchor_adjustments": [
+            {
+                "ts_code": "600000.SH",
+                "trade_date": sessions[0],
+                "adj_factor": "1",
+            }
+        ],
+        "daily": daily,
+        "adjustments": [
+            {"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}
+            for session in sessions
+        ],
+        "suspensions": [],
+        "st": [],
+        "price_limits": [
+            {
+                "ts_code": "600000.SH",
+                "trade_date": session,
+                "up_limit": "11",
+                "down_limit": "9",
+            }
+            for session in sessions
+        ],
+        "industry_membership": [
+            {
+                "ts_code": "600000.SH",
+                "in_date": "20220101",
+                "out_date": "",
+                "l1_code": "801010",
+                "l2_code": "801011",
+                "l3_code": "850111",
+            }
+        ],
+    }
+
+
+def _wait_for_physical_head_change(
+    mount_root: Path,
+    original_manifest: str,
+    *,
+    timeout: float,
+) -> None:
+    heads = MountedDatasetHeadStore(mount_root)
+    deadline = monotonic() + timeout
+    poll = threading.Event()
+    while monotonic() < deadline:
+        pointer = heads.current_pointer()
+        if pointer is not None and pointer.generation_manifest_sha256 != original_manifest:
+            return
+        poll.wait(timeout=0.01)
+    raise AssertionError("Dataset Head did not move before the fault barrier timed out")
 
 
 def _establish_head(

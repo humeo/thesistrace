@@ -218,7 +218,7 @@ class DataRefreshService:
                         prepared_at=prepared_at,
                     )
                 except Exception:
-                    if self._head_matches(generation.manifest_sha256):
+                    if self._post_cas_head_state(generation.manifest_sha256) is not False:
                         head_moved = True
                         candidate_live = False
                     raise
@@ -433,14 +433,21 @@ class DataRefreshService:
                 completed_at=completed_at,
             )
 
-    def _head_matches(self, generation_manifest_sha256: str) -> bool:
-        with self._database.transaction() as transaction:
-            lock_data_lifecycle(transaction)
-            pointer = self._heads.current_pointer()
-            return (
-                pointer is not None
-                and pointer.generation_manifest_sha256 == generation_manifest_sha256
+    def _post_cas_head_state(self, generation_manifest_sha256: str) -> bool | None:
+        try:
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
+                pointer = self._heads.current_pointer()
+        except Exception as error:
+            logger.error(
+                "Refresh post-CAS Head inspection failed",
+                extra={"error_type": type(error).__name__},
             )
+            return None
+        return (
+            pointer is not None
+            and pointer.generation_manifest_sha256 == generation_manifest_sha256
+        )
 
     def _complete_published(
         self,
