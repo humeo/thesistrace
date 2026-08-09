@@ -194,6 +194,14 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
         assert _attempt_count(settings, outcome["run"]["id"]) == 0
         assert _stored_run(settings, outcome["run"]["id"])["status"] == "queued"
 
+        edited = client.put(
+            f"/api/definitions/{outcome['definition']['id']}",
+            json={"expected_revision": 1, "name": "Edited after admission"},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["revision"] == 2
+        assert _stored_run(settings, outcome["run"]["id"])["immutable_input"] == frozen
+
         replay = client.post(
             "/api/definitions/run",
             json={
@@ -233,6 +241,45 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
     assert _pin_count(settings) == 0
 
 
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_current_head_without_the_referenced_alpha_field_rejects_admission(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    migrate_core(settings.database_url)
+    _publish_head(
+        settings,
+        sessions=("2026-08-03", "2026-08-04"),
+        price_offset=0,
+        available_field_id="market.volume.shares",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        rejected = client.post(
+            "/api/definitions/run",
+            json={
+                **_valid_command("dated-missing-current-field"),
+                "start_date": "2026-08-03",
+                "end_date": "2026-08-04",
+            },
+        )
+
+        assert rejected.status_code == 200
+        assert rejected.json()["outcome"] == "rejected"
+        assert rejected.json()["issues"] == [
+            {
+                "code": "FIELD_UNAVAILABLE_IN_CURRENT_DATA",
+                "field": "alpha",
+                "message": "Alpha field is unavailable in current Data",
+            }
+        ]
+        assert _counts(settings) == {"definitions": 1, "receipts": 1, "runs": 0}
+
+
 def test_admission_snapshot_maps_weekend_and_holiday_boundaries() -> None:
     from thesistrace.data import DatasetAdmissionSnapshot
 
@@ -270,7 +317,12 @@ def _valid_command(request_id: str) -> dict[str, object]:
     }
 
 
-def _canonical(sessions: tuple[str, ...], *, price_offset: int) -> dict[str, object]:
+def _canonical(
+    sessions: tuple[str, ...],
+    *,
+    price_offset: int,
+    available_field_id: str,
+) -> dict[str, object]:
     template = build_minimal_canonical_fixture(price_offset=price_offset)
     instrument_id = str(template["instruments"][0]["instrument_id"])
     price = template["prices"][0]
@@ -279,6 +331,17 @@ def _canonical(sessions: tuple[str, ...], *, price_offset: int) -> dict[str, obj
     universe = {"instrument_ids": [instrument_id], "status": "available"}
     return {
         **template,
+        "field_catalog": [
+            {
+                **template["field_catalog"][0],
+                "name": (
+                    "close_adj"
+                    if available_field_id == "price.close.adjusted"
+                    else "volume_shares"
+                ),
+                "field_id": available_field_id,
+            }
+        ],
         "research_calendar": list(sessions),
         "prices": [{**price, "session": session} for session in sessions],
         "trading_states": [{**state, "session": session} for session in sessions],
@@ -299,10 +362,15 @@ def _publish_head(
     sessions: tuple[str, ...],
     price_offset: int,
     expected_manifest: str | None = None,
+    available_field_id: str = "price.close.adjusted",
 ) -> str:
     store = MountedGenerationStore(settings.data_mount)
     generation = store.materialize(
-        _canonical(sessions, price_offset=price_offset),
+        _canonical(
+            sessions,
+            price_offset=price_offset,
+            available_field_id=available_field_id,
+        ),
         prepared_at=datetime(2026, 8, 9, price_offset, tzinfo=UTC),
         source_name="dated-admission-test",
         source_lineage={"price_offset": price_offset},
