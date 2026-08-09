@@ -38,7 +38,6 @@ services:
 
   worker:
     environment:
-      THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE: 1,2,3,4,5
     develop:
       watch:
         - path: ../../src
