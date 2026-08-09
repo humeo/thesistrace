@@ -5,6 +5,8 @@ import json
 import os
 import secrets
 import stat
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -94,17 +96,21 @@ class MountedDatasetHeadStore:
         expected_generation_manifest_sha256: str | None,
         candidate_generation_manifest_sha256: str,
     ) -> DatasetHead:
-        candidate = self.resolve_candidate(candidate_generation_manifest_sha256)
-        return self.compare_and_swap_resolved(
-            expected_generation_manifest_sha256=expected_generation_manifest_sha256,
-            candidate=candidate,
-        )
+        with self.resolved_candidate(candidate_generation_manifest_sha256) as candidate:
+            return self.compare_and_swap_resolved(
+                expected_generation_manifest_sha256=expected_generation_manifest_sha256,
+                candidate=candidate,
+            )
 
-    def resolve_candidate(self, manifest_sha256: str) -> _ResolvedHeadCandidate:
+    @contextmanager
+    def resolved_candidate(self, manifest_sha256: str) -> Iterator[_ResolvedHeadCandidate]:
         generation = self._generations.open_generation(manifest_sha256)
         candidate = _ResolvedHeadCandidate()
         self._resolved_candidates[candidate] = generation
-        return candidate
+        try:
+            yield candidate
+        finally:
+            self._resolved_candidates.pop(candidate, None)
 
     def compare_and_swap_resolved(
         self,

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, wait
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -126,9 +127,7 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
                 move_future = executor.submit(move_during_pin)
                 assert started_pin.wait(timeout=10)
                 assert started_move.wait(timeout=10)
-                completed, blocked = wait((pin_future, move_future), timeout=0.2)
-                assert completed == set()
-                assert blocked == {pin_future, move_future}
+                _await_advisory_waiters(database, expected=2)
             selected = pin_future.result(timeout=20)
             assert move_future.result(timeout=20) == third
         finally:
@@ -270,6 +269,24 @@ def _candidate_state(database: PostgresDatabase, operation_id: str) -> dict[str,
         ).fetchone()
     assert row is not None
     return row
+
+
+def _await_advisory_waiters(database: PostgresDatabase, *, expected: int) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT count(*) AS waiting
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND wait_event = 'advisory'
+                """
+            ).fetchone()
+        assert row is not None
+        if int(row["waiting"]) >= expected:
+            return
+    raise AssertionError(f"expected {expected} PostgreSQL advisory-lock waiters")
 
 
 def test_invalid_candidate_is_released_and_database_constraints_reject_bad_rows(

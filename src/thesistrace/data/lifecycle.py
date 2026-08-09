@@ -117,36 +117,36 @@ class DatasetLifecycle:
         candidate_generation_manifest_sha256: str,
         operation_id: str,
     ) -> DatasetHead:
-        resolved_candidate = self._heads.resolve_candidate(candidate_generation_manifest_sha256)
-        with self._database.transaction() as transaction:
-            _lock(transaction)
-            candidate = transaction.execute(
-                """
-                SELECT generation_manifest_sha256, status
-                FROM data.generation_candidates
-                WHERE operation_id = %s
-                FOR UPDATE
-                """,
-                (operation_id,),
-            ).fetchone()
-            if candidate != {
-                "generation_manifest_sha256": candidate_generation_manifest_sha256,
-                "status": "live",
-            }:
-                raise DataLifecycleError("Head candidate is not protected by live work")
-            head = self._heads.compare_and_swap_resolved(
-                expected_generation_manifest_sha256=expected_generation_manifest_sha256,
-                candidate=resolved_candidate,
-            )
-            transaction.execute(
-                """
-                UPDATE data.generation_candidates
-                SET status = 'released', released_at = now(), updated_at = now()
-                WHERE operation_id = %s AND status = 'live'
-                """,
-                (operation_id,),
-            )
-            return head
+        with self._heads.resolved_candidate(candidate_generation_manifest_sha256) as resolved:
+            with self._database.transaction() as transaction:
+                _lock(transaction)
+                candidate = transaction.execute(
+                    """
+                    SELECT generation_manifest_sha256, status
+                    FROM data.generation_candidates
+                    WHERE operation_id = %s
+                    FOR UPDATE
+                    """,
+                    (operation_id,),
+                ).fetchone()
+                if candidate != {
+                    "generation_manifest_sha256": candidate_generation_manifest_sha256,
+                    "status": "live",
+                }:
+                    raise DataLifecycleError("Head candidate is not protected by live work")
+                head = self._heads.compare_and_swap_resolved(
+                    expected_generation_manifest_sha256=expected_generation_manifest_sha256,
+                    candidate=resolved,
+                )
+                transaction.execute(
+                    """
+                    UPDATE data.generation_candidates
+                    SET status = 'released', released_at = now(), updated_at = now()
+                    WHERE operation_id = %s AND status = 'live'
+                    """,
+                    (operation_id,),
+                )
+                return head
 
     def release_candidate(self, *, operation_id: str) -> None:
         with self._database.transaction() as transaction:

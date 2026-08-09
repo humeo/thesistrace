@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import fcntl
 import os
-from concurrent.futures import ThreadPoolExecutor, wait
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -52,7 +53,10 @@ def test_empty_store_and_atomic_compare_and_swap_survive_restart(tmp_path: Path)
     assert reopened is not None and reopened.prepared_at == "2026-08-09T00:02:00+00:00"
 
 
-def test_concurrent_head_movers_cannot_both_win(tmp_path: Path) -> None:
+def test_concurrent_head_movers_cannot_both_win(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     generations = MountedGenerationStore(tmp_path)
     original = _materialize(generations, ordinal=1)
     candidates = (_materialize(generations, ordinal=2), _materialize(generations, ordinal=3))
@@ -72,16 +76,30 @@ def test_concurrent_head_movers_cannot_both_win(tmp_path: Path) -> None:
         return candidate
 
     lock_descriptor = os.open(tmp_path / ".head.lock", os.O_RDWR)
-    fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+    original_flock = fcntl.flock
+    original_flock(lock_descriptor, fcntl.LOCK_EX)
+    arrivals = (threading.Event(), threading.Event())
+    arrival_lock = threading.Lock()
+    arrival_index = 0
+
+    def observed_flock(descriptor: int, operation: int) -> None:
+        nonlocal arrival_index
+        if operation == fcntl.LOCK_EX and descriptor != lock_descriptor:
+            with arrival_lock:
+                event = arrivals[arrival_index]
+                arrival_index += 1
+            event.set()
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr(fcntl, "flock", observed_flock)
     executor = ThreadPoolExecutor(max_workers=2)
     try:
         futures = tuple(executor.submit(move, candidate) for candidate in candidates)
-        _, blocked = wait(futures, timeout=0.2)
-        assert len(blocked) == 2
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        assert all(event.wait(timeout=10) for event in arrivals)
+        original_flock(lock_descriptor, fcntl.LOCK_UN)
         outcomes = tuple(future.result(timeout=10) for future in futures)
     finally:
-        fcntl.flock(lock_descriptor, fcntl.LOCK_UN)
+        original_flock(lock_descriptor, fcntl.LOCK_UN)
         os.close(lock_descriptor)
         executor.shutdown(wait=True)
 
@@ -131,13 +149,12 @@ def test_resolved_candidate_capability_cannot_cross_mounts(tmp_path: Path) -> No
     target_root.mkdir()
     source_store = MountedGenerationStore(source_root)
     manifest = _materialize(source_store, ordinal=1)
-    candidate = MountedDatasetHeadStore(source_root).resolve_candidate(manifest)
-
-    with pytest.raises(DatasetHeadError, match="another mounted store"):
-        MountedDatasetHeadStore(target_root).compare_and_swap_resolved(
-            expected_generation_manifest_sha256=None,
-            candidate=candidate,
-        )
+    with MountedDatasetHeadStore(source_root).resolved_candidate(manifest) as candidate:
+        with pytest.raises(DatasetHeadError, match="another mounted store"):
+            MountedDatasetHeadStore(target_root).compare_and_swap_resolved(
+                expected_generation_manifest_sha256=None,
+                candidate=candidate,
+            )
     assert MountedDatasetHeadStore(target_root).current() is None
 
 
@@ -145,19 +162,24 @@ def test_resolved_candidate_is_opaque_and_single_use(tmp_path: Path) -> None:
     store = MountedGenerationStore(tmp_path)
     first = _materialize(store, ordinal=1)
     heads = MountedDatasetHeadStore(tmp_path)
-    candidate = heads.resolve_candidate(first)
-
-    assert not hasattr(candidate, "generation")
-    established = heads.compare_and_swap_resolved(
-        expected_generation_manifest_sha256=None,
-        candidate=candidate,
-    )
-    assert established.generation_manifest_sha256 == first
-    with pytest.raises(DatasetHeadError, match="another mounted store"):
-        heads.compare_and_swap_resolved(
-            expected_generation_manifest_sha256=first,
+    with heads.resolved_candidate(first) as candidate:
+        assert not hasattr(candidate, "generation")
+        established = heads.compare_and_swap_resolved(
+            expected_generation_manifest_sha256=None,
             candidate=candidate,
         )
+        assert established.generation_manifest_sha256 == first
+        with pytest.raises(DatasetHeadError, match="another mounted store"):
+            heads.compare_and_swap_resolved(
+                expected_generation_manifest_sha256=first,
+                candidate=candidate,
+            )
+    assert heads._resolved_candidates == {}
+
+    with pytest.raises(RuntimeError, match="database validation failed"):
+        with heads.resolved_candidate(first):
+            raise RuntimeError("database validation failed")
+    assert heads._resolved_candidates == {}
 
 
 def test_head_read_stops_at_hard_bound_when_file_grows(
