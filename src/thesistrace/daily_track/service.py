@@ -314,18 +314,24 @@ class DailyTrackService:
                 current_claim.track_id,
                 current_claim.data_generation_id,
             )
-            prepared, provenance, state = self._execute_current(current_claim)
-            self._progress(
-                "prepared",
-                current_claim.track_id,
-                current_claim.data_generation_id,
-            )
-            self._publish_current(current_claim, prepared, provenance, state)
-            self._progress(
-                "published",
-                current_claim.track_id,
-                current_claim.data_generation_id,
-            )
+            try:
+                prepared, provenance, state = self._execute_current(current_claim)
+                self._progress(
+                    "prepared",
+                    current_claim.track_id,
+                    current_claim.data_generation_id,
+                )
+                self._publish_current(current_claim, prepared, provenance, state)
+                self._progress(
+                    "published",
+                    current_claim.track_id,
+                    current_claim.data_generation_id,
+                )
+            except DailyTrackFenced:
+                logger.info(
+                    "DailyTrack session progression rejected by execution fence",
+                    extra={"track_id": current_claim.track_id},
+                )
             return True
         self._require_progression_dependencies()
         claim = self._claim_next()
@@ -524,6 +530,44 @@ class DailyTrackService:
                     """,
                     (track_id,),
                 )
+                current_attempts = transaction.execute(
+                    """
+                    SELECT id, generation_pin_id
+                    FROM daily_tracks.session_progression_attempts
+                    WHERE track_id = %s AND status = 'running'
+                    FOR UPDATE
+                    """,
+                    (track_id,),
+                ).fetchall()
+                transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progression_attempts
+                    SET status = 'cancelled', heartbeat_at = now(),
+                        lease_expires_at = now(), finished_at = now(),
+                        failure_reason = 'UserStopped'
+                    WHERE track_id = %s AND status = 'running'
+                    """,
+                    (track_id,),
+                )
+                transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET status = 'cancelled', finished_at = now()
+                    WHERE track_id = %s AND status IN ('running', 'blocked')
+                    """,
+                    (track_id,),
+                )
+                if current_attempts and self._dataset_lifecycle is None:
+                    raise RuntimeError(
+                        "current-data DailyTrack stop is not configured"
+                    )
+                for attempt in current_attempts:
+                    assert self._dataset_lifecycle is not None
+                    self._dataset_lifecycle.release_pin_in_transaction(
+                        transaction,
+                        str(attempt["generation_pin_id"]),
+                        owner_id=str(attempt["id"]),
+                    )
                 stopped = transaction.execute(
                     """
                     UPDATE daily_tracks.tracks

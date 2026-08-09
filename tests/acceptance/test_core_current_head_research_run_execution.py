@@ -253,12 +253,41 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             reference_d
         )
 
-        stopped = client.post(
-            f"/api/daily-tracks/{track['id']}/stop",
-            json={"request_id": "attempt-start-head-track-stop"},
+        _publish_head(
+            settings,
+            sessions=(*latest_sessions, "2026-08-11"),
+            price_offset=4,
+            expected_manifest=head_d,
         )
-        assert stopped.status_code == 202
-        assert stopped.json()["status"] == "stopped"
+        stop_claimed = Event()
+        finish_stopped_advance = Event()
+
+        def stop_barrier(stage: str, _track_id: str, _target: str) -> None:
+            if stage == "claimed":
+                stop_claimed.set()
+                assert finish_stopped_advance.wait(timeout=10)
+
+        stopped_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
+            progress=stop_barrier,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(stopped_processor.process_next)
+            assert stop_claimed.wait(timeout=10)
+            stopped = client.post(
+                f"/api/daily-tracks/{track['id']}/stop",
+                json={"request_id": "attempt-start-head-track-stop"},
+            )
+            assert stopped.status_code == 202
+            assert stopped.json()["status"] == "stopped"
+            finish_stopped_advance.set()
+            assert future.result(timeout=20) is True
         stopped_replay = client.post(
             f"/api/daily-tracks/{track['id']}/stop",
             json={"request_id": "attempt-start-head-track-stop"},
@@ -266,6 +295,14 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert stopped_replay.status_code == 202
         assert stopped_replay.json() == stopped.json()
         assert runtime.daily_tracks.process_next() is False
+        stopped_state = _stored_tracking_activation(settings, track["id"])
+        assert stopped_state["current_checkpoint_session"].isoformat() == (
+            latest_sessions[-1]
+        )
+        assert stopped_state["checkpoint_count"] == 3
+        assert stopped_state["cancelled_progression_count"] == 1
+        assert stopped_state["cancelled_attempt_count"] == 1
+        assert stopped_state["active_pin_count"] == 0
 
     with TestClient(create_app(settings)) as restarted:
         reopened = restarted.get(f"/api/research-runs/{run_id}")
@@ -830,6 +867,14 @@ def _stored_tracking_activation(
                        (SELECT count(*)
                         FROM daily_tracks.session_progressions
                         WHERE track_id = state.track_id) AS progression_count,
+                       (SELECT count(*)
+                        FROM daily_tracks.session_progressions
+                        WHERE track_id = state.track_id
+                          AND status = 'cancelled') AS cancelled_progression_count,
+                       (SELECT count(*)
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE track_id = state.track_id
+                          AND status = 'cancelled') AS cancelled_attempt_count,
                        (SELECT count(*)
                         FROM data.generation_pins
                         WHERE status = 'active') AS active_pin_count
