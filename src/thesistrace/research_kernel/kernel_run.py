@@ -6,8 +6,13 @@ import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
-from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.alpha import (
+    alpha_matrix_checksum,
+    evaluate_alpha_matrix,
+    validate_alpha,
+)
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
+from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import transition_strategy
@@ -33,6 +38,8 @@ class RunInput:
     commission_min_cny: str
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
+    research_start_session: str | None
+    research_end_session: str | None
 
     def __init__(
         self,
@@ -49,6 +56,8 @@ class RunInput:
         commission_min_cny: str,
         stamp_duty_sell_rate: str,
         transfer_fee_rate: str,
+        research_start_session: str | None = None,
+        research_end_session: str | None = None,
     ) -> None:
         if not isinstance(alpha_expression, Mapping):
             raise KernelRunError("Alpha expression must be a normalized tree")
@@ -72,6 +81,8 @@ class RunInput:
         object.__setattr__(self, "commission_min_cny", commission_min_cny)
         object.__setattr__(self, "stamp_duty_sell_rate", stamp_duty_sell_rate)
         object.__setattr__(self, "transfer_fee_rate", transfer_fee_rate)
+        object.__setattr__(self, "research_start_session", research_start_session)
+        object.__setattr__(self, "research_end_session", research_end_session)
 
     def canonical_snapshot(self) -> dict[str, object]:
         value = json.loads(self._canonical_data_json)
@@ -102,6 +113,8 @@ class RunInput:
             commission_min_cny=self.commission_min_cny,
             stamp_duty_sell_rate=self.stamp_duty_sell_rate,
             transfer_fee_rate=self.transfer_fee_rate,
+            research_start_session=self.research_start_session,
+            research_end_session=self.research_end_session,
         )
 
 
@@ -179,9 +192,73 @@ class RunOutput:
 def run(run_input: RunInput) -> RunOutput:
     canonical = run_input.canonical_snapshot()
     calendar = canonical.get("research_calendar")
-    if not isinstance(calendar, list) or len(calendar) != INPUT_SESSION_COUNT:
+    if not isinstance(calendar, list) or not calendar:
+        raise KernelRunError("Kernel Run requires canonical Research Sessions")
+    if run_input.research_start_session is None and run_input.research_end_session is None:
+        return _run_legacy_window(run_input, canonical, calendar)
+    if run_input.research_start_session is None or run_input.research_end_session is None:
+        raise KernelRunError("Research Period requires both first and last Research Sessions")
+    return _run_explicit_period(run_input, canonical, [str(session) for session in calendar])
+
+
+def _run_legacy_window(
+    run_input: RunInput,
+    canonical: dict[str, object],
+    calendar: list[object],
+) -> RunOutput:
+    if len(calendar) != INPUT_SESSION_COUNT:
         raise KernelRunError("Kernel Run requires exactly 756 canonical sessions")
     origin_session = str(calendar[-504])
+    return _calculate(run_input, canonical, origin_session=origin_session)
+
+
+def _run_explicit_period(
+    run_input: RunInput,
+    canonical: dict[str, object],
+    calendar: list[str],
+) -> RunOutput:
+    start_session = str(run_input.research_start_session)
+    end_session = str(run_input.research_end_session)
+    try:
+        start_index = calendar.index(start_session)
+        end_index = calendar.index(end_session)
+    except ValueError as error:
+        raise KernelRunError(
+            "Research Period boundary is not a canonical Research Session"
+        ) from error
+    if start_index > end_index:
+        raise KernelRunError("Research Period first session is after its last session")
+
+    alpha_expression = run_input.alpha_expression_snapshot()
+    parsed = validate_alpha(
+        alpha_expression,
+        field_bindings=run_input.field_bindings_snapshot(),
+    )
+    warmup_start = start_index - parsed.effective_lookback
+    if warmup_start < 0:
+        raise KernelRunError(
+            "insufficient Calculation Warm-up: "
+            f"requires {parsed.effective_lookback} sessions before {start_session}"
+        )
+    period_sessions = calendar[start_index : end_index + 1]
+    calculation_sessions = calendar[warmup_start : end_index + 1]
+    calculation_canonical = slice_canonical_sessions(canonical, calculation_sessions)
+    calculation_input = run_input.with_canonical_data(calculation_canonical)
+    return _calculate(
+        calculation_input,
+        calculation_canonical,
+        origin_session=start_session,
+        period_sessions=period_sessions,
+    )
+
+
+def _calculate(
+    run_input: RunInput,
+    canonical: dict[str, object],
+    *,
+    origin_session: str,
+    period_sessions: list[str] | None = None,
+) -> RunOutput:
     alpha_expression = run_input.alpha_expression_snapshot()
     definition = calculation_definition(run_input, alpha_expression)
     matrix = evaluate_alpha_matrix(
@@ -191,7 +268,13 @@ def run(run_input: RunInput) -> RunOutput:
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
     )
-    labels = build_forward_labels(canonical, matrix)
+    if period_sessions is not None:
+        selected = set(period_sessions)
+        matrix["sessions"] = [
+            session for session in matrix["sessions"] if str(session["session"]) in selected
+        ]
+        matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
+    labels = build_forward_labels(canonical, matrix, signal_sessions=period_sessions)
     factor = evaluate_factor(labels)
     strategy = transition_strategy(
         canonical,

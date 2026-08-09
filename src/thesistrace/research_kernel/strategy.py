@@ -55,14 +55,24 @@ def transition_strategy(
         continuation=continuation,
     )
     calendar = canonical_sessions(canonical, "Canonical")
-    resumable = run_strategy(
-        slice_canonical_sessions(canonical, calendar[:-1]),
-        alpha_matrix,
-        definition,
-        origin_session=origin_session,
-        terminal_cutoff=False,
-        continuation=continuation,
-    )
+    if calendar[-1] == origin_session:
+        resumable = run_strategy(
+            canonical,
+            alpha_matrix,
+            definition,
+            origin_session=origin_session,
+            terminal_cutoff=False,
+            continuation=continuation,
+        )
+    else:
+        resumable = run_strategy(
+            slice_canonical_sessions(canonical, calendar[:-1]),
+            alpha_matrix,
+            definition,
+            origin_session=origin_session,
+            terminal_cutoff=False,
+            continuation=continuation,
+        )
     return StrategyTransition(finalized=finalized, resumable=resumable)
 
 
