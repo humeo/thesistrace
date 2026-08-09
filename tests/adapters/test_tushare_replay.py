@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -28,3 +30,25 @@ def test_replay_rejects_unsafe_entries_without_blocking(
 
     with pytest.raises((OSError, ValueError)):
         ReplayTushareProvider(replay)
+
+
+def test_refresh_replay_is_bound_to_the_recorded_window(tmp_path: Path) -> None:
+    replay = tmp_path / "refresh-replay.json"
+    replay.write_text(
+        json.dumps(
+            {
+                "format": "thesistrace-tushare-refresh-replay",
+                "version": 1,
+                "request_start": "2026-08-03",
+                "request_end": "2026-08-31",
+                "snapshot": {"calendar_sse": []},
+            }
+        )
+    )
+    provider = ReplayTushareProvider(replay)
+
+    assert provider.collect_incremental_snapshot(
+        last_session="2026-08-03",
+        known_ts_codes={"600000.SH"},
+        as_of=date(2026, 8, 31),
+    ) == {"calendar_sse": []}

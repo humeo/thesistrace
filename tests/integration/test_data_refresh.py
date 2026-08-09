@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
+import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,6 +12,7 @@ import pytest
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import _append_session
+from thesistrace.adapters.tushare_provider import normalize_tushare_snapshot
 from thesistrace.data import (
     CanonicalSourceBatch,
     CollectionPlan,
@@ -18,12 +22,12 @@ from thesistrace.data import (
     DatasetOverviewService,
     MountedGenerationStore,
 )
-from thesistrace.entrypoints.data_operator import _run as run_data_operator
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 AS_OF = datetime(2026, 9, 7, 9, tzinfo=UTC)
+FIRST_PREPARED_AT = datetime(2026, 9, 7, 9, 30, tzinfo=UTC)
 FIRST_REFRESH_AT = datetime(2026, 9, 7, 10, tzinfo=UTC)
 SECOND_REFRESH_AT = datetime(2026, 9, 7, 11, tzinfo=UTC)
 
@@ -49,7 +53,6 @@ class RecordingRefreshSource:
 def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
     core_settings: CoreSettings,
     tmp_path: Path,
-    monkeypatch,
 ) -> None:
     database = _database(core_settings)
     try:
@@ -58,31 +61,37 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         source = RecordingRefreshSource(candidate)
+        operator_times = iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT))
         refresh = DataRefreshService(
             database,
             tmp_path,
-            clock=lambda: FIRST_REFRESH_AT,
+            clock=lambda: next(operator_times),
         )
 
-        monkeypatch.setenv("THESISTRACE_DATABASE_URL", core_settings.database_url)
-        monkeypatch.setenv("THESISTRACE_DATA_MOUNT", os.fspath(tmp_path))
-        accepted = run_data_operator(
-            ["refresh", "--idempotency-key", "refresh-once", "--as-of", AS_OF.isoformat()]
+        accepted = _operator_command(
+            core_settings,
+            tmp_path,
+            ["refresh", "--idempotency-key", "refresh-once", "--as-of", AS_OF.isoformat()],
         )
 
-        assert accepted.status == "accepted"
+        assert accepted["status"] == "accepted"
         assert source.plans == []
-        assert refresh.inspect("refresh-once") == accepted
+        assert refresh.inspect("refresh-once").__dict__ == accepted
         assert refresh.process_next(source) is True
 
-        terminal = run_data_operator(["inspect-refresh", "--idempotency-key", "refresh-once"])
-        assert terminal.status == "succeeded"
-        assert terminal.outcome == "published"
-        assert terminal.last_refresh_at == FIRST_REFRESH_AT.isoformat()
+        terminal = _operator_command(
+            core_settings,
+            tmp_path,
+            ["inspect-refresh", "--idempotency-key", "refresh-once"],
+        )
+        assert terminal["status"] == "succeeded"
+        assert terminal["outcome"] == "published"
+        assert terminal["last_refresh_at"] == FIRST_REFRESH_AT.isoformat()
         head = DatasetLifecycle(database, tmp_path).current_head()
         assert head is not None
         assert head.generation_manifest_sha256 != original_manifest
         assert head.generation.canonical == candidate
+        assert head.prepared_at == FIRST_PREPARED_AT.isoformat()
         assert len(source.plans) == 1
         plan = source.plans[0]
         assert plan.kind == "refresh"
@@ -161,6 +170,56 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         database.close()
 
 
+def test_refresh_worker_command_processes_a_deterministic_replay(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        fixture_path = (
+            Path(__file__).resolve().parents[1] / "fixtures" / "tushare-bootstrap-replay-v1.json"
+        )
+        replay = json.loads(fixture_path.read_text())
+        _source, current = normalize_tushare_snapshot(replay["snapshot"])
+        manifest = _establish_head(database, tmp_path, current)
+        replay.update(
+            {
+                "format": "thesistrace-tushare-refresh-replay",
+                "request_start": current["research_calendar"][0],
+                "request_end": "2026-09-07",
+            }
+        )
+        refresh_replay = tmp_path / "refresh-replay.json"
+        refresh_replay.write_text(json.dumps(replay, sort_keys=True, separators=(",", ":")))
+        _operator_command(
+            core_settings,
+            tmp_path,
+            ["refresh", "--idempotency-key", "worker-replay", "--as-of", AS_OF.isoformat()],
+        )
+
+        processed = _operator_command(
+            core_settings,
+            tmp_path,
+            ["work-refresh", "--replay", os.fspath(refresh_replay)],
+        )
+
+        assert processed == {"status": "processed"}
+        terminal = _operator_command(
+            core_settings,
+            tmp_path,
+            ["inspect-refresh", "--idempotency-key", "worker-replay"],
+        )
+        assert terminal["status"] == "succeeded"
+        assert terminal["outcome"] == "no_change"
+        assert terminal["last_refresh_at"] is not None
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at is not None
+    finally:
+        database.close()
+
+
 def _twenty_session_canonical() -> dict[str, object]:
     canonical = build_minimal_canonical_fixture()
     for _ in range(19):
@@ -199,3 +258,26 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
     database = PostgresDatabase(settings.database_url)
     database.open()
     return database
+
+
+def _operator_command(
+    settings: CoreSettings,
+    mount_root: Path,
+    arguments: list[str],
+) -> dict[str, object]:
+    environment = {
+        **os.environ,
+        "THESISTRACE_DATABASE_URL": settings.database_url,
+        "THESISTRACE_DATA_MOUNT": os.fspath(mount_root),
+    }
+    completed = subprocess.run(
+        [sys.executable, "-m", "thesistrace.entrypoints.data_operator", *arguments],
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=30,
+    )
+    value = json.loads(completed.stdout)
+    assert isinstance(value, dict)
+    return value

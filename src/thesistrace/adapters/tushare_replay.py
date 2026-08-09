@@ -44,7 +44,15 @@ class ReplayTushareProvider:
             "snapshot",
         }:
             raise ValueError("Tushare replay contract is invalid")
-        if value["format"] != "thesistrace-tushare-bootstrap-replay" or value["version"] != 1:
+        replay_format = value["format"]
+        if (
+            replay_format
+            not in {
+                "thesistrace-tushare-bootstrap-replay",
+                "thesistrace-tushare-refresh-replay",
+            }
+            or value["version"] != 1
+        ):
             raise ValueError("Tushare replay contract is incompatible")
         snapshot = value["snapshot"]
         if not isinstance(snapshot, dict) or any(
@@ -54,6 +62,9 @@ class ReplayTushareProvider:
         self._request_start = date.fromisoformat(str(value["request_start"]))
         self._request_end = date.fromisoformat(str(value["request_end"]))
         self._snapshot = snapshot
+        self._kind = (
+            "bootstrap" if replay_format == "thesistrace-tushare-bootstrap-replay" else "refresh"
+        )
 
     def collect_bootstrap_snapshot(
         self,
@@ -61,6 +72,8 @@ class ReplayTushareProvider:
         start_date: date,
         completed_through_date: date,
     ) -> dict[str, list[dict[str, object]]]:
+        if self._kind != "bootstrap":
+            raise TushareSourceError("REPLAY_REFRESH_ONLY", source_code=0)
         if (start_date, completed_through_date) != (
             self._request_start,
             self._request_end,
@@ -75,7 +88,15 @@ class ReplayTushareProvider:
         known_ts_codes: set[str],
         as_of: date,
     ) -> dict[str, list[dict[str, object]]]:
-        raise TushareSourceError("REPLAY_BOOTSTRAP_ONLY", source_code=0)
+        if self._kind != "refresh":
+            raise TushareSourceError("REPLAY_BOOTSTRAP_ONLY", source_code=0)
+        try:
+            request_start = date.fromisoformat(last_session)
+        except ValueError as error:
+            raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0) from error
+        if (request_start, as_of) != (self._request_start, self._request_end):
+            raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
+        return self._snapshot
 
 
 __all__ = ("ReplayTushareProvider",)

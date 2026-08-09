@@ -411,18 +411,51 @@ def _preserve_ordinary_overlap_absence(
     overlap_start_session: str,
 ) -> dict[str, list[dict[str, object]]]:
     supplemented = {name: copy.deepcopy(rows) for name, rows in snapshot.items()}
+    calendar_sse = supplemented.get("calendar_sse", [])
+    calendar_szse = supplemented.get("calendar_szse", [])
     daily = supplemented.get("daily", [])
     adjustments = supplemented.get("adjustments", [])
     suspensions = supplemented.get("suspensions", [])
     limits = supplemented.get("price_limits", [])
     st_rows = supplemented.get("st", [])
     if not all(
-        isinstance(rows, list) for rows in (daily, adjustments, suspensions, limits, st_rows)
+        isinstance(rows, list)
+        for rows in (
+            calendar_sse,
+            calendar_szse,
+            daily,
+            adjustments,
+            suspensions,
+            limits,
+            st_rows,
+        )
     ):
         raise DataSourceError(
             "invalid_source_data",
             detail_code="MALFORMED_PROVIDER_PAYLOAD",
         )
+    previous_calendar = previous.get("research_calendar")
+    if not isinstance(previous_calendar, list):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_PREVIOUS_CANONICAL",
+        )
+    for exchange, rows in (("SSE", calendar_sse), ("SZSE", calendar_szse)):
+        returned_dates = {str(row["cal_date"]) for row in rows}
+        for session in previous_calendar:
+            session_text = str(session)
+            if session_text < overlap_start_session:
+                continue
+            source_date = session_text.replace("-", "")
+            if source_date not in returned_dates:
+                rows.append(
+                    {
+                        "exchange": exchange,
+                        "cal_date": source_date,
+                        "is_open": "1",
+                    }
+                )
+                returned_dates.add(source_date)
     daily_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in daily}
     suspension_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in suspensions}
     adjustment_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in adjustments}

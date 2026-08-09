@@ -252,6 +252,10 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
         refresh_snapshot[table] = [
             row for row in refresh_snapshot[table] if row["trade_date"] != ordinary_missing
         ]
+    for table in ("calendar_sse", "calendar_szse"):
+        refresh_snapshot[table] = [
+            row for row in refresh_snapshot[table] if row["cal_date"] != ordinary_missing
+        ]
     refresh_snapshot["daily"] = [
         row for row in refresh_snapshot["daily"] if row["trade_date"] != suspension_session
     ]

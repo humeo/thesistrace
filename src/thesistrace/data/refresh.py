@@ -128,10 +128,10 @@ class DataRefreshService:
             batch = source.collect(plan)
             validate_release_batch(batch, predecessor_session=head.data_through_session)
             candidate_canonical = batch.canonical
-            completed_at = self._operator_time()
             if canonical_json_bytes(candidate_canonical) == canonical_json_bytes(
                 head.generation.canonical
             ):
+                completed_at = self._operator_time()
                 self._complete_no_change(
                     key,
                     expected_manifest=expected_manifest,
@@ -139,9 +139,10 @@ class DataRefreshService:
                     completed_at=completed_at,
                 )
                 return True
+            prepared_at = self._operator_time()
             generation = self._generations.materialize(
                 candidate_canonical,
-                prepared_at=completed_at,
+                prepared_at=prepared_at,
                 source_name=batch.source_name,
                 source_lineage=batch.source_lineage,
             )
@@ -157,9 +158,10 @@ class DataRefreshService:
                 expected_generation_manifest_sha256=expected_manifest,
                 candidate_generation_manifest_sha256=candidate_manifest,
                 operation_id=operation_id,
-                prepared_at=completed_at,
+                prepared_at=prepared_at,
             )
             candidate_live = False
+            completed_at = self._operator_time()
             self._complete_published(key, moved, completed_at)
         except DataRefreshError as error:
             self._fail(key, error.code)
