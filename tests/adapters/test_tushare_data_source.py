@@ -415,6 +415,57 @@ def test_tushare_refresh_rejects_an_incomplete_new_session(
     assert failure.value.detail_code == detail_code
 
 
+def test_tushare_refresh_rejects_a_new_date_missing_from_both_calendars() -> None:
+    sessions = ["20260803", "20260804", "20260805", "20260806"]
+    _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
+    snapshot = normalizer_snapshot(sessions)
+    for table in ("calendar_sse", "calendar_szse"):
+        snapshot[table] = [row for row in snapshot[table] if row["cal_date"] != sessions[-1]]
+
+    class MissingCalendarProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            known_ts_codes: set[str],
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            return copy.deepcopy(snapshot)
+
+    with pytest.raises(DataSourceError) as failure:
+        TushareDataSource(provider=MissingCalendarProvider()).collect(
+            refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+        )
+
+    assert failure.value.detail_code == "INCOMPLETE_NEW_SESSION_CALENDAR"
+
+
+def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument() -> None:
+    sessions = ["20260803", "20260804", "20260805", "20260806"]
+    _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
+    snapshot = normalizer_snapshot(sessions)
+    unknown_daily = copy.deepcopy(snapshot["daily"][-1])
+    unknown_daily["ts_code"] = "000001.SZ"
+    snapshot["daily"].append(unknown_daily)
+
+    class MissingInstrumentProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            known_ts_codes: set[str],
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            return copy.deepcopy(snapshot)
+
+    with pytest.raises(DataSourceError) as failure:
+        TushareDataSource(provider=MissingInstrumentProvider()).collect(
+            refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+        )
+
+    assert failure.value.detail_code == "INCOMPLETE_NEW_SESSION_INSTRUMENT"
+
+
 def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> None:
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(["20260701"]))
     snapshot = normalizer_snapshot(["20260701", "20260702"])

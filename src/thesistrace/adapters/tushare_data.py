@@ -85,8 +85,6 @@ class TushareDataSource:
                 known_ts_codes=known_codes,
                 as_of=request_end,
             )
-            if plan.kind == "refresh":
-                _validate_new_calendar_evidence(snapshot, plan.after_session)
             normalization_previous = previous
             if plan.kind == "refresh":
                 normalization_previous = _canonical_before_overlap(previous, request_start)
@@ -94,6 +92,12 @@ class TushareDataSource:
                     snapshot,
                     previous,
                     overlap_start_session=request_start,
+                )
+                assert plan.completed_through_date is not None
+                _validate_new_session_evidence(
+                    snapshot,
+                    plan.after_session,
+                    completed_through_date=plan.completed_through_date,
                 )
             try:
                 lineage, delta = normalize_tushare_increment(snapshot, normalization_previous)
@@ -607,30 +611,49 @@ def _preserve_ordinary_overlap_absence(
     return supplemented
 
 
-def _validate_new_calendar_evidence(
+def _validate_new_session_evidence(
     snapshot: Mapping[str, list[dict[str, object]]],
     current_data_through: str,
+    *,
+    completed_through_date: date,
 ) -> None:
     sse = snapshot.get("calendar_sse")
     szse = snapshot.get("calendar_szse")
-    if not isinstance(sse, list) or not isinstance(szse, list):
+    stock_basic = snapshot.get("stock_basic")
+    if not isinstance(sse, list) or not isinstance(szse, list) or not isinstance(stock_basic, list):
         raise DataSourceError(
             "invalid_source_data",
             detail_code="MALFORMED_PROVIDER_PAYLOAD",
         )
-    frontier = current_data_through.replace("-", "")
-    by_exchange = (
-        {str(row["cal_date"]): str(row["is_open"]) for row in sse},
-        {str(row["cal_date"]): str(row["is_open"]) for row in szse},
-    )
-    for calendar, counterpart in (by_exchange, tuple(reversed(by_exchange))):
-        if any(
-            session > frontier and is_open == "1" and session not in counterpart
-            for session, is_open in calendar.items()
-        ):
+    frontier_date = date.fromisoformat(current_data_through)
+    expected_dates: set[str] = set()
+    cursor = frontier_date + timedelta(days=1)
+    while cursor <= completed_through_date:
+        expected_dates.add(cursor.strftime("%Y%m%d"))
+        cursor += timedelta(days=1)
+    for calendar in (sse, szse):
+        returned_dates = {str(row["cal_date"]) for row in calendar}
+        if not expected_dates <= returned_dates:
             raise DataSourceError(
                 "invalid_source_data",
                 detail_code="INCOMPLETE_NEW_SESSION_CALENDAR",
+            )
+    known_codes = {str(row["ts_code"]) for row in stock_basic}
+    frontier = current_data_through.replace("-", "")
+    for table in ("daily", "adjustments", "suspensions", "price_limits"):
+        rows = snapshot.get(table)
+        if not isinstance(rows, list):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="MALFORMED_PROVIDER_PAYLOAD",
+            )
+        if any(
+            str(row["trade_date"]) > frontier and str(row["ts_code"]) not in known_codes
+            for row in rows
+        ):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INCOMPLETE_NEW_SESSION_INSTRUMENT",
             )
 
 

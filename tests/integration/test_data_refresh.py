@@ -27,6 +27,7 @@ from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 AS_OF = datetime(2026, 9, 7, 9, tzinfo=UTC)
+REPLAY_AS_OF = datetime(2026, 8, 3, 9, tzinfo=UTC)
 FIRST_PREPARED_AT = datetime(2026, 9, 7, 9, 30, tzinfo=UTC)
 FIRST_REFRESH_AT = datetime(2026, 9, 7, 10, tzinfo=UTC)
 SECOND_REFRESH_AT = datetime(2026, 9, 7, 11, tzinfo=UTC)
@@ -186,7 +187,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
             {
                 "format": "thesistrace-tushare-refresh-replay",
                 "request_start": current["research_calendar"][0],
-                "request_end": "2026-09-07",
+                "request_end": "2026-08-03",
                 "known_ts_codes": ["600000.SH"],
             }
         )
@@ -195,7 +196,13 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         _operator_command(
             core_settings,
             tmp_path,
-            ["refresh", "--idempotency-key", "worker-replay", "--as-of", AS_OF.isoformat()],
+            [
+                "refresh",
+                "--idempotency-key",
+                "worker-replay",
+                "--as-of",
+                REPLAY_AS_OF.isoformat(),
+            ],
         )
 
         processed = _operator_command(
