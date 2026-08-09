@@ -42,7 +42,20 @@ def test_kernel_transient_ledger_reconciles_every_session_from_the_strategy_tran
             "legal_quantity": 500000,
         }
     ]
-    assert ledger[1]["submitted_orders"]
+    assert [
+        (
+            order["session"],
+            order["instrument_id"],
+            order["side"],
+            order["legal_quantity"],
+        )
+        for row in ledger[1:3]
+        for order in row["submitted_orders"]
+    ] == [
+        (SESSIONS[1], B, "buy", 499_800),
+        (SESSIONS[2], B, "sell", 499_800),
+        (SESSIONS[2], A, "buy", 665_600),
+    ]
     assert ledger[2]["signal"]["session"] == SESSIONS[1]
     assert ledger[2]["signal"]["selected_instrument_ids"] == [A]
     assert ledger[-1]["cycle_type"] == "terminal_valuation"
@@ -255,6 +268,41 @@ def test_kernel_ledger_records_star_board_specific_order_quantity() -> None:
     assert intent["legal_quantity"] == 333_333
     assert filled_quantity >= 200
     assert filled_quantity % 100 != 0
+    _assert_ledger_reconciles(ledger)
+
+
+def test_kernel_ledger_explains_when_minimum_lot_is_not_affordable() -> None:
+    canonical = _canonical(
+        opens={session: {A: "100000", B: "200000"} for session in SESSIONS},
+    )
+    _set_alpha_closes(
+        canonical,
+        {session: {A: "2", B: "1"} for session in SESSIONS},
+    )
+
+    _, ledger = _kernel_ledger(canonical, rebalance_interval=20)
+
+    assert ledger[1]["intended_orders"] == [
+        {
+            "instrument_id": A,
+            "side": "buy",
+            "intended_value": "1e+7",
+            "unrounded_quantity": 100,
+            "legal_quantity": 100,
+        }
+    ]
+    assert ledger[1]["submitted_orders"] == []
+    assert ledger[1]["fills"] == []
+    assert ledger[1]["diagnostics"] == [
+        {
+            "session": SESSIONS[1],
+            "instrument_id": A,
+            "reason": "insufficient_cash",
+            "side": "buy",
+            "legal_quantity": 100,
+        }
+    ]
+    assert ledger[1]["net_cash"] == "1e+7"
     _assert_ledger_reconciles(ledger)
 
 
