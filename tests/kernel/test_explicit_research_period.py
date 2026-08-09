@@ -18,14 +18,15 @@ INSTRUMENT_ID = "equity:600000.SH"
 @pytest.mark.parametrize("session_count", [1, 2, 4])
 def test_explicit_research_period_accepts_any_positive_session_count(session_count: int) -> None:
     canonical = _canonical(session_count=session_count)
-    output = run(
+    run_output = run(
         _run_input(
             canonical,
             expression=CLOSE_ADJUSTED,
             start=SESSIONS[0],
             end=SESSIONS[session_count - 1],
         )
-    ).artifacts_snapshot()
+    )
+    output = run_output.artifacts_snapshot()
 
     expected_sessions = list(SESSIONS[:session_count])
     assert [row["session"] for row in output["alpha_matrix"]["sessions"]] == expected_sessions
@@ -35,6 +36,11 @@ def test_explicit_research_period_accepts_any_positive_session_count(session_cou
         summary = output["factor_evaluation"]["horizons"][horizon]["summary"]
         assert summary["ic"]["mean"] is None
         assert summary["ic"]["valid_session_count"] == 0
+    if session_count == 1:
+        resumable = run_output.track_state.strategy_resume_snapshot()
+        assert [row["session"] for row in resumable["daily"]] == expected_sessions
+        assert resumable["daily"][0]["cycle_type"] == "open"
+        assert resumable["positions"] == []
 
 
 def test_explicit_research_period_rejects_empty_reversed_or_partial_boundaries() -> None:
