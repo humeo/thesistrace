@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -30,7 +31,13 @@ from thesistrace.daily_track.checkpoint import (
     restore_tracking_origin,
     terminal_strategy_state,
 )
-from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data import (
+    CanonicalSourceBatch,
+    CollectionPlan,
+    DataRefreshService,
+    DatasetLifecycle,
+    MountedGenerationStore,
+)
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -704,6 +711,181 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    migrate_core(settings.database_url)
+    seed_sessions = (
+        "2026-07-31",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+    seed_canonical = _two_instrument_canonical(seed_sessions, corrected=False)
+    seed_head = _publish_canonical_head(
+        settings,
+        seed_canonical,
+        operation_id="forward-only-seed",
+    )
+    alpha = {
+        "operator_id": "ts_mean",
+        "operands": [
+            {"field_id": "price.close.adjusted"},
+            {"literal": 2},
+        ],
+    }
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/definitions/run",
+            json=_run_command("forward-only-seed-run", alpha=alpha),
+        )
+        assert accepted.status_code == 200
+        run_id = str(accepted.json()["run"]["id"])
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        tracking = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "forward-only-track"},
+        )
+        assert tracking.status_code == 201
+        track_id = str(tracking.json()["id"])
+        runtime = client.app.state.core_runtime
+
+        before_state = _stored_tracking_activation(settings, track_id)
+        before_history = _tracking_checkpoint_history(settings, track_id)
+        before_payload = _checkpoint_payload(runtime.publication, before_state)
+        before_detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert _position_ids(before_state["terminal_strategy_state"]) == {
+            "equity:000001.SZ"
+        }
+
+        corrected = _two_instrument_canonical(seed_sessions, corrected=True)
+        submitted = _run_data_operator(
+            settings,
+            [
+                "refresh",
+                "--idempotency-key",
+                "forward-only-correction",
+                "--as-of",
+                "2026-08-10T09:00:00+00:00",
+            ],
+        )
+        assert submitted["status"] == "accepted"
+        refresh = DataRefreshService(
+            runtime.database,
+            settings.data_mount,
+            clock=lambda: datetime(2026, 8, 10, 9, 30, tzinfo=UTC),
+        )
+        assert refresh.process_next(_StaticRefreshSource(corrected)) is True
+        correction_outcome = refresh.inspect("forward-only-correction")
+        assert correction_outcome.status == "succeeded"
+        assert correction_outcome.outcome == "published"
+        correction_head = DatasetLifecycle(
+            runtime.database,
+            settings.data_mount,
+        ).current_head()
+        assert correction_head is not None
+        assert correction_head.generation_manifest_sha256 != seed_head
+        assert correction_head.data_through_session == seed_sessions[-1]
+
+        assert runtime.daily_tracks.process_next() is False
+        assert _tracking_checkpoint_history(settings, track_id) == before_history
+        unchanged_state = _stored_tracking_activation(settings, track_id)
+        assert unchanged_state["current_checkpoint_manifest_sha256"] == before_state[
+            "current_checkpoint_manifest_sha256"
+        ]
+        assert _checkpoint_payload(runtime.publication, unchanged_state) == before_payload
+        assert client.get(f"/api/daily-tracks/{track_id}").json() == before_detail
+        overview = client.get("/api/data")
+        assert overview.status_code == 200
+        assert set(overview.json()) == {
+            "dataset_coverage",
+            "data_through_session",
+            "last_refresh_at",
+            "readiness",
+        }
+        assert "correction" not in overview.text.lower()
+
+        future_sessions = (*seed_sessions, "2026-08-06", "2026-08-07", "2026-08-10")
+        corrected_future = _two_instrument_canonical(future_sessions, corrected=True)
+        submitted = _run_data_operator(
+            settings,
+            [
+                "refresh",
+                "--idempotency-key",
+                "forward-only-new-sessions",
+                "--as-of",
+                "2026-08-11T09:00:00+00:00",
+            ],
+        )
+        assert submitted["status"] == "accepted"
+        later_refresh = DataRefreshService(
+            runtime.database,
+            settings.data_mount,
+            clock=lambda: datetime(2026, 8, 11, 9, 30, tzinfo=UTC),
+        )
+        assert later_refresh.process_next(_StaticRefreshSource(corrected_future)) is True
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        final_detail = client.get(f"/api/daily-tracks/{track_id}")
+        assert final_detail.status_code == 200
+        assert final_detail.json()["strategy_session"] == future_sessions[-1]
+        assert "correction" not in final_detail.text.lower()
+        final_state = _stored_tracking_activation(settings, track_id)
+        assert final_state["checkpoint_count"] == 2
+        assert _tracking_checkpoint_history(settings, track_id)[0] == before_history[0]
+        assert _position_ids(final_state["terminal_strategy_state"]) == {
+            "equity:000002.SZ"
+        }
+        final_payload = _checkpoint_payload(runtime.publication, final_state)
+        checkpoint_text = json.dumps(final_payload, sort_keys=True)
+        assert '"orders"' not in checkpoint_text
+        assert '"fills"' not in checkpoint_text
+        horizons = final_payload["factor_summary"]["horizons"]
+        assert isinstance(horizons, dict)
+        for horizon in horizons.values():
+            assert isinstance(horizon, dict)
+            coverage = horizon["coverage"]
+            assert isinstance(coverage, dict)
+            assert coverage["signal_session_count"] <= 504
+
+        counterfactual_prior = restore_tracking_origin(
+            TrackingOrigin.model_validate(before_state["origin"]),
+            before_state["terminal_strategy_state"],
+            seed_canonical,
+        )
+        uncorrected_future = _two_instrument_canonical(
+            future_sessions,
+            corrected=False,
+        )
+        counterfactual = advance(
+            AdvanceInput(
+                prior_state=counterfactual_prior,
+                target_canonical_release=uncorrected_future,
+                appended_sessions=list(future_sessions[len(seed_sessions) :]),
+                continuation=advance_continuation(
+                    run_input=counterfactual_prior.run_input_with_canonical(
+                        seed_canonical
+                    ),
+                    prior_continuation=empty_continuation(),
+                    target_canonical=seed_canonical,
+                    appended_sessions=list(seed_sessions),
+                ),
+            )
+        )
+        assert _position_ids(terminal_strategy_state(counterfactual)) == {
+            "equity:000001.SZ"
+        }
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -1139,6 +1321,153 @@ def _canonical(
     }
 
 
+def _two_instrument_canonical(
+    sessions: tuple[str, ...],
+    *,
+    corrected: bool,
+) -> dict[str, object]:
+    template = build_minimal_canonical_fixture()
+    instrument_ids = ("equity:000001.SZ", "equity:000002.SZ")
+    ts_codes = ("000001.SZ", "000002.SZ")
+    instruments: list[dict[str, object]] = []
+    anchors: list[dict[str, object]] = []
+    industries: list[dict[str, object]] = []
+    for instrument_id, ts_code in zip(instrument_ids, ts_codes, strict=True):
+        instrument = copy.deepcopy(template["instruments"][0])
+        instrument.update(instrument_id=instrument_id, ts_code=ts_code)
+        instruments.append(instrument)
+        anchor = copy.deepcopy(template["adjustment_anchors"][0])
+        anchor["instrument_id"] = instrument_id
+        anchors.append(anchor)
+        industry = copy.deepcopy(template["industry_membership"][0])
+        industry["instrument_id"] = instrument_id
+        industries.append(industry)
+
+    prices: list[dict[str, object]] = []
+    states: list[dict[str, object]] = []
+    limits: list[dict[str, object]] = []
+    price_template = template["prices"][0]
+    for session in sessions:
+        closes = (
+            ("1", "30")
+            if corrected and session == "2026-08-05"
+            else ("20", "10")
+        )
+        for instrument_id, close, open_price in zip(
+            instrument_ids,
+            closes,
+            ("20", "10"),
+            strict=True,
+        ):
+            price = copy.deepcopy(price_template)
+            high = str(max(int(close), int(open_price)))
+            low = str(min(int(close), int(open_price)))
+            price.update(
+                instrument_id=instrument_id,
+                session=session,
+                open_raw=open_price,
+                open_adj=f"{int(open_price):.8f}",
+                close_raw=close,
+                close_adj=f"{int(close):.8f}",
+                high_raw=high,
+                high_adj=f"{int(high):.8f}",
+                low_raw=low,
+                low_adj=f"{int(low):.8f}",
+                pre_close_raw=close,
+                change_raw="0",
+                pct_change_raw="0",
+            )
+            prices.append(price)
+            states.append(
+                {
+                    "instrument_id": instrument_id,
+                    "session": session,
+                    "state": "normal",
+                }
+            )
+            limits.append(
+                {
+                    "instrument_id": instrument_id,
+                    "session": session,
+                    "lower": "0.01",
+                    "upper": "100",
+                }
+            )
+    universe = {
+        name: [
+            {
+                "session": session,
+                "instrument_ids": list(instrument_ids),
+                "status": "available",
+            }
+            for session in sessions
+        ]
+        for name in ("top300", "top1000", "top2000", "top3000")
+    }
+    return {
+        **template,
+        "instruments": instruments,
+        "adjustment_anchors": anchors,
+        "industry_membership": industries,
+        "research_calendar": list(sessions),
+        "prices": prices,
+        "trading_states": states,
+        "price_limits": limits,
+        "base_pool": [
+            {"session": session, "instrument_ids": list(instrument_ids)}
+            for session in sessions
+        ],
+        "liquidity_universes": universe,
+    }
+
+
+class _StaticRefreshSource:
+    def __init__(self, canonical: dict[str, object]) -> None:
+        self._canonical = canonical
+
+    def collect(self, _plan: CollectionPlan) -> CanonicalSourceBatch:
+        calendar = self._canonical["research_calendar"]
+        assert isinstance(calendar, list)
+        return CanonicalSourceBatch(
+            source_name="forward-only-refresh-test",
+            collection_kind="refresh",
+            source_lineage={"fixture": "forward-only-v1"},
+            canonical=copy.deepcopy(self._canonical),
+            covered_session_range=(str(calendar[0]), str(calendar[-1])),
+        )
+
+
+def _publish_canonical_head(
+    settings: CoreSettings,
+    canonical: dict[str, object],
+    *,
+    operation_id: str,
+) -> str:
+    generation = MountedGenerationStore(settings.data_mount).materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 12, tzinfo=UTC),
+        source_name="forward-only-test",
+        source_lineage={"fixture": operation_id},
+    )
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        lifecycle = DatasetLifecycle(database, settings.data_mount)
+        lifecycle.protect_candidate(
+            operation_id=operation_id,
+            generation_manifest_sha256=generation.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=None,
+            candidate_generation_manifest_sha256=generation.manifest_sha256,
+            operation_id=operation_id,
+        )
+    finally:
+        database.close()
+    return generation.manifest_sha256
+
+
 def _publish_head(
     settings: CoreSettings,
     *,
@@ -1295,6 +1624,40 @@ def _stored_tracking_activation(
         return row
     finally:
         database.close()
+
+
+def _tracking_checkpoint_history(
+    settings: CoreSettings,
+    track_id: str,
+) -> list[dict[str, object]]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT boundary_session::text AS boundary_session,
+                       manifest_sha256, provenance, terminal_strategy_state
+                FROM daily_tracks.session_checkpoints
+                WHERE track_id = %s
+                ORDER BY boundary_session, manifest_sha256
+                """,
+                (track_id,),
+            ).fetchall()
+        return rows
+    finally:
+        database.close()
+
+
+def _position_ids(value: object) -> set[str]:
+    assert isinstance(value, dict)
+    positions = value.get("positions")
+    assert isinstance(positions, list)
+    return {
+        str(position["instrument_id"])
+        for position in positions
+        if isinstance(position, dict)
+    }
 
 
 def _expire_current_tracking_attempt(settings: CoreSettings, track_id: str) -> None:
@@ -1481,6 +1844,28 @@ def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]
         timeout=30,
         env=environment,
     )
+
+
+def _run_data_operator(
+    settings: CoreSettings,
+    arguments: list[str],
+) -> dict[str, object]:
+    environment = {
+        **os.environ,
+        "THESISTRACE_DATABASE_URL": settings.database_url,
+        "THESISTRACE_DATA_MOUNT": os.fspath(settings.data_mount),
+    }
+    completed = subprocess.run(
+        [sys.executable, "-m", "thesistrace.entrypoints.data_operator", *arguments],
+        check=True,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=30,
+    )
+    value = json.loads(completed.stdout)
+    assert isinstance(value, dict)
+    return value
 
 
 def _s3_client(settings: CoreSettings):
