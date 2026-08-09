@@ -176,13 +176,13 @@ class RunOutput:
     def __init__(
         self,
         *,
-        artifacts: dict[str, dict[str, object]],
+        artifacts: dict[str, object],
         track_state: KernelState,
     ) -> None:
         object.__setattr__(self, "_artifacts_json", canonical_json_bytes(artifacts))
         object.__setattr__(self, "track_state", track_state)
 
-    def artifacts_snapshot(self) -> dict[str, dict[str, object]]:
+    def artifacts_snapshot(self) -> dict[str, object]:
         value = json.loads(self._artifacts_json)
         if not isinstance(value, dict):
             raise KernelRunError("Kernel Run artifacts snapshot is invalid")
@@ -282,10 +282,18 @@ def _calculate(
         definition,
         origin_session=origin_session,
     )
-    artifacts = compose_output(matrix, labels, factor, strategy.finalized)
+    artifacts = compose_output(
+        matrix,
+        labels,
+        factor,
+        strategy.finalized,
+        strategy_ledger=strategy.ledger,
+    )
+    retained_artifacts = dict(artifacts)
+    retained_artifacts.pop("strategy_ledger")
     track_state = KernelState(
         run_input=run_input,
-        output=artifacts,
+        output=retained_artifacts,
         strategy_resume=strategy.resumable,
         origin_session=origin_session,
     )
@@ -328,8 +336,10 @@ def compose_output(
     labels: dict[str, object],
     factor: dict[str, object],
     strategy: dict[str, object],
-) -> dict[str, dict[str, object]]:
-    return {
+    *,
+    strategy_ledger: tuple[dict[str, object], ...] | None = None,
+) -> dict[str, object]:
+    output: dict[str, object] = {
         "alpha_matrix": matrix,
         "forward_labels": labels,
         "factor_evaluation": factor,
@@ -353,3 +363,6 @@ def compose_output(
             "strategy": strategy["diagnostics"],
         },
     }
+    if strategy_ledger is not None:
+        output["strategy_ledger"] = [dict(row) for row in strategy_ledger]
+    return output

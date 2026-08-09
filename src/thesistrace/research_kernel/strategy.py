@@ -36,6 +36,7 @@ class Position:
 class StrategyTransition:
     finalized: dict[str, object]
     resumable: dict[str, object]
+    ledger: tuple[dict[str, object], ...]
 
 
 def transition_strategy(
@@ -47,12 +48,14 @@ def transition_strategy(
     continuation: dict[str, object] | None = None,
 ) -> StrategyTransition:
     """Calculate a boundary and retain the state immediately before its terminal."""
+    ledger: list[dict[str, object]] = []
     finalized = run_strategy(
         canonical,
         alpha_matrix,
         definition,
         origin_session=origin_session,
         continuation=continuation,
+        ledger=ledger,
     )
     calendar = canonical_sessions(canonical, "Canonical")
     resumable_canonical = (
@@ -68,7 +71,11 @@ def transition_strategy(
         terminal_cutoff=False,
         continuation=continuation,
     )
-    return StrategyTransition(finalized=finalized, resumable=resumable)
+    return StrategyTransition(
+        finalized=finalized,
+        resumable=resumable,
+        ledger=tuple(ledger),
+    )
 
 
 def legal_order_quantity(
@@ -164,6 +171,7 @@ def run_strategy(
     terminal_cutoff: bool = True,
     continuation: dict[str, object] | None = None,
     skip_execution_sessions: set[str] | None = None,
+    ledger: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     calendar = [str(value) for value in canonical["research_calendar"]]
     if continuation is None:
@@ -296,7 +304,13 @@ def run_strategy(
         rebalance = False
         benchmark_return = Decimal(0)
         event_side_order: list[str] = []
+        event_intended_orders: list[dict[str, object]] = []
+        event_order_start = len(orders)
         event_fill_start = len(fills)
+        event_rejection_start = len(rejections)
+        event_diagnostic_start = len(diagnostics)
+        event_cost_start = cumulative_cost
+        execution_signal: dict[str, object] | None = None
 
         signal_index = global_index - 1
         if (
@@ -312,6 +326,11 @@ def run_strategy(
                 key=lambda item: (-Decimal(str(item["value"])), str(item["instrument_id"])),
             )
             candidates = [str(item["instrument_id"]) for item in ranked[:holdings_count]]
+            execution_signal = {
+                "session": signal_session,
+                "alpha_values": [dict(item) for item in ranked],
+                "selected_instrument_ids": candidates,
+            }
             if not candidates:
                 diagnostics.append(
                     {
@@ -343,6 +362,15 @@ def run_strategy(
                     "sell",
                     unrounded,
                     complete_liquidation=complete,
+                )
+                event_intended_orders.append(
+                    {
+                        "instrument_id": instrument_id,
+                        "side": "sell",
+                        "intended_value": canonical_decimal(current_value - desired_value),
+                        "unrounded_quantity": unrounded,
+                        "legal_quantity": quantity,
+                    }
                 )
                 if quantity <= 0:
                     diagnostics.append(
@@ -393,6 +421,15 @@ def run_strategy(
                 if price is None:
                     if deficit <= 0:
                         continue
+                    event_intended_orders.append(
+                        {
+                            "instrument_id": instrument_id,
+                            "side": "buy",
+                            "intended_value": canonical_decimal(deficit),
+                            "unrounded_quantity": None,
+                            "legal_quantity": None,
+                        }
+                    )
                     state = states.get((session, instrument_id))
                     listed_to = str(instruments[instrument_id].get("listed_to", ""))
                     if state == "full_session_suspension":
@@ -453,6 +490,16 @@ def run_strategy(
                         net_cash=net_cash,
                         costs=costs,
                     )
+                    if deficit > 0:
+                        event_intended_orders.append(
+                            {
+                                "instrument_id": instrument_id,
+                                "side": "buy",
+                                "intended_value": canonical_decimal(deficit),
+                                "unrounded_quantity": unrounded,
+                                "legal_quantity": legal_quantity,
+                            }
+                        )
                 if quantity <= 0:
                     if legal_quantity <= 0 and unrounded > 0:
                         diagnostics.append(
@@ -582,6 +629,32 @@ def run_strategy(
                 "valuation_events": unique_events(valuation_events),
             }
         )
+        if ledger is not None:
+            ledger.append(
+                {
+                    "session": session,
+                    "cycle_type": cycle_type,
+                    "signal": execution_signal,
+                    "intended_orders": event_intended_orders,
+                    "submitted_orders": [dict(item) for item in orders[event_order_start:]],
+                    "fills": [dict(item) for item in fills[event_fill_start:]],
+                    "rejections": [
+                        dict(item) for item in rejections[event_rejection_start:]
+                    ],
+                    "diagnostics": [
+                        dict(item) for item in diagnostics[event_diagnostic_start:]
+                    ],
+                    "gross_cash": canonical_decimal(gross_cash),
+                    "net_cash": canonical_decimal(net_cash),
+                    "positions": _position_payload(positions),
+                    "transaction_cost_cny": canonical_decimal(
+                        cumulative_cost - event_cost_start
+                    ),
+                    "cumulative_transaction_cost": canonical_decimal(cumulative_cost),
+                    "gross_nav": canonical_decimal(gross_nav),
+                    "net_nav": canonical_decimal(net_nav),
+                }
+            )
 
     if prior_metric_state is None:
         metrics = strategy_metrics(
@@ -600,15 +673,7 @@ def run_strategy(
             rejections=rejections,
         )
         metrics = strategy_metrics_from_state(metric_state)
-    positions_payload = [
-        {
-            "instrument_id": instrument_id,
-            "execution_shares": position.execution_shares,
-            "adjusted_units": canonical_decimal(position.adjusted_units),
-            "last_adjusted_price": canonical_decimal(position.last_adjusted_price),
-        }
-        for instrument_id, position in sorted(positions.items())
-    ]
+    positions_payload = _position_payload(positions)
     payload = {
         "alpha_checksum": alpha_matrix["checksum"],
         "initial_cash_cny": canonical_decimal(INITIAL_CASH),
@@ -628,6 +693,18 @@ def run_strategy(
         **payload,
         "checksum": hashlib.sha256(canonical_json_bytes(payload)).hexdigest(),
     }
+
+
+def _position_payload(positions: Mapping[str, Position]) -> list[dict[str, object]]:
+    return [
+        {
+            "instrument_id": instrument_id,
+            "execution_shares": position.execution_shares,
+            "adjusted_units": canonical_decimal(position.adjusted_units),
+            "last_adjusted_price": canonical_decimal(position.last_adjusted_price),
+        }
+        for instrument_id, position in sorted(positions.items())
+    ]
 
 
 def mark_positions(

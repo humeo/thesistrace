@@ -5,12 +5,64 @@ from decimal import Decimal
 
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 
+from thesistrace.research_kernel import RunInput, run
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.strategy import run_strategy
 
 SESSIONS = ("2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08")
 A = "equity:600001.SH"
 B = "equity:600002.SH"
+
+
+def test_kernel_transient_ledger_reconciles_every_session_from_the_strategy_transition() -> None:
+    canonical = _canonical(
+        opens={
+            SESSIONS[0]: {A: "10", B: "20"},
+            SESSIONS[1]: {A: "30", B: "20"},
+            SESSIONS[2]: {A: "30", B: "40"},
+            SESSIONS[3]: {A: "35", B: "40"},
+        }
+    )
+    first = _kernel_run(canonical)
+    repeated = _kernel_run(canonical)
+    ledger = first.artifacts_snapshot()["strategy_ledger"]
+
+    assert ledger == repeated.artifacts_snapshot()["strategy_ledger"]
+    assert [row["session"] for row in ledger] == list(SESSIONS)
+    assert ledger[0]["signal"] is None
+    assert ledger[1]["signal"]["session"] == SESSIONS[0]
+    assert ledger[1]["signal"]["selected_instrument_ids"] == [B]
+    assert ledger[1]["intended_orders"] == [
+        {
+            "instrument_id": B,
+            "side": "buy",
+            "intended_value": "1e+7",
+            "unrounded_quantity": 500000,
+            "legal_quantity": 500000,
+        }
+    ]
+    assert ledger[1]["submitted_orders"]
+    assert ledger[2]["signal"]["session"] == SESSIONS[1]
+    assert ledger[2]["signal"]["selected_instrument_ids"] == [A]
+    assert ledger[-1]["cycle_type"] == "terminal_valuation"
+    assert ledger[-1]["signal"] is None
+    assert ledger[-1]["intended_orders"] == []
+
+    for row in ledger:
+        position_value = sum(
+            Decimal(str(position["adjusted_units"]))
+            * Decimal(str(position["last_adjusted_price"]))
+            for position in row["positions"]
+        )
+        fill_cost = sum(Decimal(str(fill["cost"])) for fill in row["fills"])
+        assert Decimal(str(row["net_cash"])) >= 0
+        assert Decimal(str(row["net_cash"])) + position_value == Decimal(
+            str(row["net_nav"])
+        )
+        assert fill_cost == Decimal(str(row["transaction_cost_cny"]))
+
+    assert "strategy_ledger" not in first.track_state.output_snapshot()
+    assert "ledger" not in first.track_state.strategy_resume_snapshot()
 
 
 def test_manual_switch_ledger_reconciles_signal_orders_fills_cash_and_positions() -> None:
@@ -475,6 +527,27 @@ def _definition(
             "transfer_fee_rate": "0.00001",
         },
     }
+
+
+def _kernel_run(canonical: dict[str, object]):
+    return run(
+        RunInput(
+            canonical_data=canonical,
+            alpha_expression=CLOSE_ADJUSTED,
+            field_bindings=FIELD_BINDINGS,
+            universe="manual",
+            neutralization="none",
+            holdings_count=1,
+            rebalance_interval=1,
+            initial_cash_cny="10000000",
+            commission_rate_all_in="0.0003",
+            commission_min_cny="5",
+            stamp_duty_sell_rate="0.0005",
+            transfer_fee_rate="0.00001",
+            research_start_session=SESSIONS[0],
+            research_end_session=SESSIONS[-1],
+        )
+    )
 
 
 def _run(

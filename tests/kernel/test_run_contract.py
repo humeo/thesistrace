@@ -4,6 +4,8 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from thesistrace.research_kernel import KernelRunError, KernelState, RunInput, RunOutput, run
+from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_run.result import build_result_payload
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -34,6 +36,28 @@ def test_kernel_run_matches_the_complete_characterization_baseline(
     assert (
         run_output.artifacts_snapshot()["diagnostics"] == accepted_calculation_case["diagnostics"]
     )
+
+
+def test_strategy_ledger_is_transient_and_rejected_from_product_state(
+    accepted_kernel_run: RunOutput,
+) -> None:
+    artifacts = accepted_kernel_run.artifacts_snapshot()
+    ledger = artifacts["strategy_ledger"]
+    assert isinstance(ledger, list) and len(ledger) == 504
+    assert "strategy_ledger" not in accepted_kernel_run.track_state.output_snapshot()
+
+    result = build_result_payload(
+        accepted_kernel_run,
+        rebalance_interval=5,
+        universe="top300",
+    )
+    assert set(result) == {
+        "factor_summary",
+        "strategy_summary",
+        "strategy_daily_observations",
+        "terminal_strategy_state",
+    }
+    assert b"strategy_ledger" not in canonical_json_bytes(result)
 
 
 def test_kernel_run_input_snapshots_values_and_has_no_product_context(
