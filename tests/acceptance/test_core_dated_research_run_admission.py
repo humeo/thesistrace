@@ -182,10 +182,17 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         }
+        assert frozen["field_bindings"] == {
+            "price.close.adjusted": "close_adj",
+        }
         serialized = str(frozen).lower()
         for forbidden in ("release", "generation", "manifest", "head", first_manifest):
             assert forbidden not in serialized
         assert _pin_count(settings) == 0
+        runtime = client.app.state.core_runtime
+        assert runtime.research_runs.process_next() is False
+        assert _attempt_count(settings, outcome["run"]["id"]) == 0
+        assert _stored_run(settings, outcome["run"]["id"])["status"] == "queued"
 
         replay = client.post(
             "/api/definitions/run",
@@ -361,6 +368,21 @@ def _pin_count(settings: CoreSettings) -> int:
         with database.transaction() as transaction:
             row = transaction.execute(
                 "SELECT count(*) AS count FROM data.generation_pins"
+            ).fetchone()
+        assert row is not None
+        return int(row["count"])
+    finally:
+        database.close()
+
+
+def _attempt_count(settings: CoreSettings, run_id: str) -> int:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                "SELECT count(*) AS count FROM research_runs.attempts WHERE run_id = %s",
+                (run_id,),
             ).fetchone()
         assert row is not None
         return int(row["count"])

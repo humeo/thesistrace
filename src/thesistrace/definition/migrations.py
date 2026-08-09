@@ -43,30 +43,9 @@ MIGRATIONS = MigrationPlan(
                 ALTER TABLE definitions.run_receipts
                     DROP CONSTRAINT run_receipts_outcome_check,
                     ADD COLUMN research_run_id text NULL,
-                    ADD COLUMN dataset_release_id text NULL,
                     ADD CONSTRAINT run_receipts_outcome_check CHECK (
                         outcome IN ('rejected', 'accepted')
                     ),
-                    ADD CONSTRAINT run_receipts_admission_shape_check CHECK (
-                        (
-                            outcome = 'rejected'
-                            AND research_run_id IS NULL
-                            AND dataset_release_id IS NULL
-                        ) OR (
-                            outcome = 'accepted'
-                            AND research_run_id IS NOT NULL
-                            AND dataset_release_id IS NOT NULL
-                            AND issues = '[]'::jsonb
-                        )
-                    );
-            """,
-        ),
-        Migration(
-            name="0004_current_data_run_receipts",
-            statement="""
-                ALTER TABLE definitions.run_receipts
-                    DROP CONSTRAINT run_receipts_admission_shape_check,
-                    DROP COLUMN dataset_release_id,
                     ADD CONSTRAINT run_receipts_admission_shape_check CHECK (
                         (
                             outcome = 'rejected'

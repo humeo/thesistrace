@@ -25,12 +25,6 @@ from thesistrace.publication import (
     PublishedRef,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_kernel.canonical_state import (
-    canonical_sessions,
-    slice_canonical_sessions,
-)
-from thesistrace.research_kernel.kernel_run import RunInput, RunOutput
-from thesistrace.research_kernel.kernel_run import run as run_kernel
 from thesistrace.research_run.models import (
     ImmutableRunInput,
     ResearchRunCancelCommand,
@@ -43,10 +37,7 @@ from thesistrace.research_run.models import (
 )
 from thesistrace.research_run.result import (
     ResearchResultError,
-    build_result_payload,
-    enforce_result_bundle_budget,
     read_result_bundle,
-    result_publication_payloads,
 )
 
 logger = logging.getLogger(__name__)
@@ -66,9 +57,6 @@ RETRYABLE_FAILURES = (
     RESOURCE_EXHAUSTED_FAILURE,
     WORKER_LOST_FAILURE,
 )
-LoadCanonical = Callable[[str], dict[str, object]]
-ExecuteKernel = Callable[[RunInput], RunOutput]
-Progress = Callable[[str, str], None]
 ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
@@ -124,10 +112,7 @@ class ResearchRunService:
         self,
         database: PostgresDatabase,
         *,
-        load_canonical: LoadCanonical | None = None,
         publication: Publication | None = None,
-        execute_kernel: ExecuteKernel = run_kernel,
-        progress: Progress | None = None,
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         activate_track: ActivateTrack | None = None,
@@ -135,10 +120,7 @@ class ResearchRunService:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
         self._database = database
-        self._load_canonical = load_canonical
         self._publication = publication
-        self._execute_kernel = execute_kernel
-        self._progress = progress or (lambda _stage, _run_id: None)
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._activate_track = activate_track
@@ -173,30 +155,7 @@ class ResearchRunService:
         return _summary(row)
 
     def process_next(self) -> bool:
-        if not self._execution_is_configured():
-            return False
-        claim = self._claim_next()
-        if claim is None:
-            return False
-        with self._maintain_claim(claim):
-            self._progress("claimed", claim.run_id)
-            try:
-                prepared, provenance = self._execute(claim)
-                self._progress("prepared", claim.run_id)
-                self._publish_success(claim, prepared, provenance)
-                self._progress("succeeded", claim.run_id)
-            except ResearchRunFenced:
-                logger.info(
-                    "ResearchRun result rejected by execution fence",
-                    extra={"run_id": claim.run_id},
-                )
-            except Exception as error:
-                self._record_failure(claim, error)
-                logger.error(
-                    "ResearchRun execution failed",
-                    extra={"run_id": claim.run_id, "error_type": type(error).__name__},
-                )
-        return True
+        return False
 
     def list(self) -> ResearchRunList:
         with self._database.transaction() as transaction:
@@ -572,9 +531,6 @@ class ResearchRunService:
             calculation_contracts=dict(calculation_contracts),
         )
 
-    def _execution_is_configured(self) -> bool:
-        return self._load_canonical is not None and self._publication is not None
-
     def _claim_next(self) -> _ExecutionClaim | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
@@ -759,41 +715,6 @@ class ResearchRunService:
             if renewed.rowcount != 1:
                 return
 
-    def _execute(
-        self,
-        claim: _ExecutionClaim,
-    ) -> tuple[PreparedPublication, dict[str, object]]:
-        raise RuntimeError("ResearchRun Attempt must select current Data before execution")
-
-    def _prepare_result(
-        self,
-        claim: _ExecutionClaim,
-        canonical: dict[str, object],
-    ) -> tuple[PreparedPublication, dict[str, object]]:
-        assert self._publication is not None
-        immutable_input = claim.immutable_input
-        kernel_input = _kernel_input(immutable_input, canonical)
-        output = self._execute_kernel(kernel_input)
-        self._progress("calculated", claim.run_id)
-        definition_content = immutable_input.definition.get("content")
-        if not isinstance(definition_content, Mapping):
-            raise RuntimeError("ResearchRun Definition content is invalid")
-        result = build_result_payload(
-            output,
-            rebalance_interval=int(immutable_input.strategy["rebalance_every_sessions"]),
-            universe=str(definition_content["universe"]),
-        )
-        provenance = _result_provenance(claim.run_id, immutable_input)
-        prepared = self._publication.prepare(
-            kind="research.result",
-            payloads=result_publication_payloads(result),
-            provenance=provenance,
-        )
-        observations = result["strategy_daily_observations"]
-        if not isinstance(observations, list):
-            raise RuntimeError("Result Strategy Daily Observations are invalid")
-        enforce_result_bundle_budget(prepared.exact_bytes, len(observations))
-        return prepared, provenance
 
     def _publish_success(
         self,
@@ -929,61 +850,6 @@ class ResearchRunService:
                     claim.fence,
                 ),
             )
-
-
-def _research_input_history(canonical: dict[str, object]) -> dict[str, object]:
-    sessions = canonical_sessions(canonical, "Dataset Release")
-    if len(sessions) < 756:
-        raise RuntimeError("Dataset Release has fewer than 756 Research Sessions")
-    return slice_canonical_sessions(canonical, sessions[-756:])
-
-
-def _kernel_input(
-    immutable_input: ImmutableRunInput,
-    canonical: dict[str, object],
-) -> RunInput:
-    definition = immutable_input.definition
-    content = definition.get("content")
-    if not isinstance(content, Mapping):
-        raise RuntimeError("ResearchRun Definition content is invalid")
-    alpha = content.get("alpha")
-    if not isinstance(alpha, Mapping):
-        raise RuntimeError("ResearchRun Alpha is invalid")
-    strategy = immutable_input.strategy
-    costs = immutable_input.costs
-    return RunInput(
-        canonical_data=canonical,
-        alpha_expression=dict(alpha),
-        field_bindings=immutable_input.field_bindings,
-        universe=str(content["universe"]),
-        neutralization=str(content["neutralization"]),
-        holdings_count=int(strategy["holdings_count"]),
-        rebalance_interval=int(strategy["rebalance_every_sessions"]),
-        initial_cash_cny=str(strategy["initial_cash_cny"]),
-        commission_rate_all_in=str(costs["commission_rate_all_in"]),
-        commission_min_cny=str(costs["commission_min_cny"]),
-        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-        transfer_fee_rate=str(costs["transfer_fee_rate"]),
-    )
-
-
-def _result_provenance(
-    run_id: str,
-    immutable_input: ImmutableRunInput,
-) -> dict[str, object]:
-    value = immutable_input.model_dump(mode="json")
-    return {
-        "schema_version": "research-result-v1",
-        "research_run_id": run_id,
-        "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
-        "calculation_contracts": {
-            "strategy": value["strategy"],
-            "costs": value["costs"],
-            "risk_free_rate": value["risk_free_rate"],
-            "numeric_execution_contract": value["numeric_execution_contract"],
-        },
-        "semantic_versions": value["semantic_versions"],
-    }
 
 
 def _failure_policy(error: Exception) -> _FailurePolicy:

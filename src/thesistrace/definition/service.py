@@ -282,6 +282,7 @@ class DefinitionService:
 
             issues = _runnability_issues(content)
             snapshot = None if issues else self._current_dataset()
+            parsed_alpha: ParsedAlpha | None = None
             if not issues:
                 if snapshot is None:
                     issues.append(
@@ -292,11 +293,12 @@ class DefinitionService:
                         )
                     )
                 else:
+                    parsed_alpha = self._parsed_alpha(content)
                     issues.extend(
                         _dataset_issues(
                             content,
                             snapshot=snapshot,
-                            parsed_alpha=self._parsed_alpha(content),
+                            parsed_alpha=parsed_alpha,
                         )
                     )
             serialized_issues = [issue.model_dump(mode="json") for issue in issues]
@@ -323,11 +325,15 @@ class DefinitionService:
                     issues=issues,
                 )
 
+            assert parsed_alpha is not None
             immutable_input = _immutable_run_input(
                 definition_id=saved_id,
                 definition_revision=saved_revision,
                 content=content,
-                field_bindings=self._field_bindings,
+                field_bindings={
+                    field_id: self._field_bindings[field_id]
+                    for field_id in parsed_alpha.field_ids
+                },
                 operator_catalog=self._operator_catalog(),
             )
             run = self._admit_run(transaction, immutable_input)

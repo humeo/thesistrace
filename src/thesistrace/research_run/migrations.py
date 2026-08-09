@@ -13,13 +13,15 @@ MIGRATIONS = MigrationPlan(
                     definition_id text NOT NULL,
                     definition_revision integer NOT NULL
                         CHECK (definition_revision > 0),
-                    dataset_release_id text NOT NULL REFERENCES data.releases(id),
+                    requested_start_date date NOT NULL,
+                    requested_end_date date NOT NULL,
                     status text NOT NULL CHECK (
                         status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')
                     ),
                     immutable_input jsonb NOT NULL CHECK (
                         jsonb_typeof(immutable_input) = 'object'
                     ),
+                    CHECK (requested_start_date <= requested_end_date),
                     created_at timestamptz NOT NULL DEFAULT now(),
                     updated_at timestamptz NOT NULL DEFAULT now()
                 );
@@ -149,20 +151,6 @@ MIGRATIONS = MigrationPlan(
                     END IF;
                 END
                 $migration$;
-            """,
-        ),
-        Migration(
-            name="0008_requested_dates_without_admission_data_binding",
-            statement="""
-                ALTER TABLE research_runs.runs
-                    DROP COLUMN dataset_release_id,
-                    ADD COLUMN requested_start_date date,
-                    ADD COLUMN requested_end_date date,
-                    ADD CONSTRAINT research_runs_requested_date_order CHECK (
-                        requested_start_date IS NULL
-                        OR requested_end_date IS NULL
-                        OR requested_start_date <= requested_end_date
-                    );
             """,
         ),
     ),

@@ -165,9 +165,6 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
                 assert "daily_tracks.tracks" in statement
                 statement = statement.replace("daily_tracks.activation_receipts", "")
                 statement = statement.replace("daily_tracks.tracks", "")
-            if module == "research_run" and migration.name == "0001_queued_research_runs":
-                assert statement.count("REFERENCES data.releases(id)") == 1
-                statement = statement.replace("REFERENCES data.releases(id)", "")
             for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
                 assert f"{foreign_schema}." not in statement, (
                     f"{module} migration {migration.name} owns {foreign_schema} SQL"
@@ -658,8 +655,6 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "def rerun(" in run_source
     assert "CREATE TABLE research_runs.rerun_receipts" in run_migrations
     assert "immutable_input, rerun_of_id" in run_source
-    assert "load_canonical" in run_source
-    assert "self._publication.prepare(" in run_source
     assert "self._publication.record(" in run_source
     assert "runtime.research_runs.process_next()" in worker_source
     for removed in ("outbox", "dispatch", "global job", "temporal"):
