@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import os
+import signal
+import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from threading import Event, Thread
+from threading import Event
 
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
+from psycopg import Connection, connect
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
@@ -18,7 +23,6 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import RunInput, run
-from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 
 SESSIONS = ("2026-08-03", "2026-08-04", "2026-08-05")
@@ -35,16 +39,18 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
     head_a = _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as first_process:
-        runtime = first_process.app.state.core_runtime
         run_id = _admit_run(first_process, request_id="retry-current-head")
-        lost_worker = _processor(
-            runtime,
-            settings,
-            progress=lambda stage, _run_id: _exit_after_claim(stage),
-        )
-
-        with pytest.raises(SystemExit, match="simulated worker loss"):
-            lost_worker.process_next()
+        blocked_worker, advisory_owner = _start_blocked_worker(settings)
+        try:
+            assert _wait_for_advisory_waiter(settings)
+            blocked_worker.terminate()
+            stdout, stderr = blocked_worker.communicate(timeout=10)
+            assert blocked_worker.returncode != 0, stdout + stderr
+        finally:
+            if blocked_worker.poll() is None:
+                blocked_worker.terminate()
+                blocked_worker.communicate(timeout=10)
+            _release_worker_block(settings, advisory_owner)
         assert _attempts(settings, run_id) == [
             {
                 "ordinal": 1,
@@ -58,7 +64,8 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
 
     with TestClient(create_app(settings)) as restarted_process:
         runtime = restarted_process.app.state.core_runtime
-        assert runtime.research_runs.process_next() is True
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
         detail = restarted_process.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
         assert "attempt" not in str(detail).lower()
@@ -90,7 +97,9 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
         }
         expected = _reference_result(settings, head_b)
         assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(expected)
-        assert runtime.research_runs.process_next() is False
+        idle = _run_worker_once(settings)
+        assert idle.returncode == 0, idle.stdout + idle.stderr
+        assert len(_attempts(settings, run_id)) == 2
 
 
 @pytest.mark.skipif(
@@ -102,32 +111,41 @@ def test_recovered_winner_fences_a_stale_prepared_attempt(tmp_path: Path) -> Non
     drop_product_schemas(settings)
     migrate_core(settings.database_url)
     head_a = _publish_head(settings, price_offset=0)
-    prepared = Event()
-    release_stale = Event()
 
     with TestClient(create_app(settings)) as client:
-        runtime = client.app.state.core_runtime
         run_id = _admit_run(client, request_id="retry-stale-fence")
+        stale_worker, advisory_owner = _start_blocked_worker(settings)
+        block_released = False
+        stale_stopped = False
+        try:
+            assert _wait_for_advisory_waiter(settings)
+            backend_pid = _waiting_advisory_backend_pid(settings)
+            os.kill(stale_worker.pid, signal.SIGSTOP)
+            stale_stopped = True
+            _terminate_backend(settings, backend_pid)
+            _release_worker_block(settings, advisory_owner)
+            block_released = True
+            _expire_live_attempt(settings, run_id)
+            head_b = _publish_head(settings, price_offset=9, expected_manifest=head_a)
 
-        def pause_after_prepare(stage: str, current_run_id: str) -> None:
-            if stage != "prepared":
-                return
-            _expire_live_attempt(settings, current_run_id)
-            prepared.set()
-            assert release_stale.wait(timeout=10)
-
-        stale = _processor(runtime, settings, progress=pause_after_prepare)
-        stale_thread = Thread(target=stale.process_next)
-        stale_thread.start()
-        assert prepared.wait(timeout=10)
-        head_b = _publish_head(settings, price_offset=9, expected_manifest=head_a)
-
-        assert runtime.research_runs.process_next() is True
-        winning = client.get(f"/api/research-runs/{run_id}").json()
-        assert winning["status"] == "succeeded"
-        release_stale.set()
-        stale_thread.join(timeout=10)
-        assert not stale_thread.is_alive()
+            completed_worker = _run_worker_once(settings)
+            assert completed_worker.returncode == 0, (
+                completed_worker.stdout + completed_worker.stderr
+            )
+            winning = client.get(f"/api/research-runs/{run_id}").json()
+            assert winning["status"] == "succeeded"
+            os.kill(stale_worker.pid, signal.SIGCONT)
+            stale_stopped = False
+            stdout, stderr = stale_worker.communicate(timeout=10)
+            assert stale_worker.returncode == 0, stdout + stderr
+        finally:
+            if stale_stopped and stale_worker.poll() is None:
+                os.kill(stale_worker.pid, signal.SIGCONT)
+            if stale_worker.poll() is None:
+                stale_worker.terminate()
+                stale_worker.communicate(timeout=10)
+            if not block_released:
+                _release_worker_block(settings, advisory_owner)
 
         assert client.get(f"/api/research-runs/{run_id}").json() == winning
         assert [row["status"] for row in _attempts(settings, run_id)] == [
@@ -152,20 +170,24 @@ def test_worker_loss_retry_exhaustion_is_bounded_and_restart_stable(
     _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
-        runtime = client.app.state.core_runtime
         run_id = _admit_run(client, request_id="retry-exhaustion")
         for ordinal in range(1, 4):
-            lost_worker = _processor(
-                runtime,
-                settings,
-                progress=lambda stage, _run_id: _exit_after_claim(stage),
-            )
-            with pytest.raises(SystemExit, match="simulated worker loss"):
-                lost_worker.process_next()
+            blocked_worker, advisory_owner = _start_blocked_worker(settings)
+            try:
+                assert _wait_for_advisory_waiter(settings)
+                blocked_worker.terminate()
+                stdout, stderr = blocked_worker.communicate(timeout=10)
+                assert blocked_worker.returncode != 0, stdout + stderr
+            finally:
+                if blocked_worker.poll() is None:
+                    blocked_worker.terminate()
+                    blocked_worker.communicate(timeout=10)
+                _release_worker_block(settings, advisory_owner)
             assert len(_attempts(settings, run_id)) == ordinal
             _expire_live_attempt(settings, run_id)
 
-        assert runtime.research_runs.process_next() is False
+        exhausted = _run_worker_once(settings)
+        assert exhausted.returncode == 0, exhausted.stdout + exhausted.stderr
         failed = client.get(f"/api/research-runs/{run_id}").json()
         assert failed["status"] == "failed"
         assert failed["failure_reason"] == (
@@ -180,7 +202,8 @@ def test_worker_loss_retry_exhaustion_is_bounded_and_restart_stable(
 
     with TestClient(create_app(settings)) as restarted:
         assert restarted.get(f"/api/research-runs/{run_id}").json() == failed
-        assert restarted.app.state.core_runtime.research_runs.process_next() is False
+        idle = _run_worker_once(settings)
+        assert idle.returncode == 0, idle.stdout + idle.stderr
         assert len(_attempts(settings, run_id)) == 3
 
 
@@ -197,24 +220,19 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
     _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
-        runtime = client.app.state.core_runtime
         run_id = _admit_run(client, request_id="resource-exhaustion")
+        _install_resource_exhaustion(settings)
+        try:
+            first = _run_worker_once(settings)
+            assert first.returncode == 0, first.stdout + first.stderr
+            retrying = client.get(f"/api/research-runs/{run_id}").json()
+            assert retrying["status"] == "running"
+            assert "failure_reason" not in retrying
 
-        def exhaust_after_real_preparation(stage: str, _run_id: str) -> None:
-            if stage == "prepared":
-                raise MemoryError("secret-resource-pressure-detail")
-
-        exhausted = _processor(
-            runtime,
-            settings,
-            progress=exhaust_after_real_preparation,
-        )
-        assert exhausted.process_next() is True
-        retrying = client.get(f"/api/research-runs/{run_id}").json()
-        assert retrying["status"] == "running"
-        assert "failure_reason" not in retrying
-
-        assert exhausted.process_next() is True
+            second = _run_worker_once(settings)
+            assert second.returncode == 0, second.stdout + second.stderr
+        finally:
+            _remove_resource_exhaustion(settings)
         failed = client.get(f"/api/research-runs/{run_id}").json()
         assert failed["status"] == "failed"
         assert failed["failure_reason"] == ("Research execution exceeded its resource limit.")
@@ -224,11 +242,15 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
             "ResourceExhausted",
         ]
         assert _research_result_manifest_count(settings) == 0
-        assert exhausted.process_next() is False
+        idle = _run_worker_once(settings)
+        assert idle.returncode == 0, idle.stdout + idle.stderr
 
     with TestClient(create_app(settings)) as restarted:
         assert restarted.get(f"/api/research-runs/{run_id}").json() == failed
-        assert restarted.app.state.core_runtime.research_runs.process_next() is False
+        restarted_worker = _run_worker_once(settings)
+        assert restarted_worker.returncode == 0, (
+            restarted_worker.stdout + restarted_worker.stderr
+        )
         assert len(_attempts(settings, run_id)) == 2
 
 
@@ -247,7 +269,8 @@ def test_rerun_preserves_the_question_and_executes_on_current_data(
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         source_id = _admit_run(client, request_id="rerun-source")
-        assert runtime.research_runs.process_next() is True
+        source_worker = _run_worker_once(settings)
+        assert source_worker.returncode == 0, source_worker.stdout + source_worker.stderr
         source_before = client.get(f"/api/research-runs/{source_id}").json()
         source_stored_before = _stored_run(settings, source_id)
         source_input = source_stored_before["immutable_input"]
@@ -286,7 +309,8 @@ def test_rerun_preserves_the_question_and_executes_on_current_data(
         )
         assert conflict.status_code == 409
 
-        assert runtime.research_runs.process_next() is True
+        rerun_worker = _run_worker_once(settings)
+        assert rerun_worker.returncode == 0, rerun_worker.stdout + rerun_worker.stderr
         completed = client.get(f"/api/research-runs/{rerun['id']}").json()
         assert completed["status"] == "succeeded"
         assert completed["rerun_of_id"] == source_id
@@ -297,22 +321,6 @@ def test_rerun_preserves_the_question_and_executes_on_current_data(
         )
         assert client.get(f"/api/research-runs/{source_id}").json() == source_before
         assert _stored_run(settings, source_id) == source_stored_before
-
-
-def _processor(runtime, settings: CoreSettings, *, progress=None) -> ResearchRunService:
-    return ResearchRunService(
-        runtime.database,
-        dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
-        generation_store=MountedGenerationStore(settings.data_mount),
-        publication=runtime.publication,
-        progress=progress,
-        heartbeat_seconds=60,
-    )
-
-
-def _exit_after_claim(stage: str) -> None:
-    if stage == "claimed":
-        raise SystemExit("simulated worker loss")
 
 
 def _admit_run(client: TestClient, *, request_id: str) -> str:
@@ -498,3 +506,182 @@ def _research_result_manifest_count(settings: CoreSettings) -> int:
         return int(row["count"])
     finally:
         database.close()
+
+
+def _install_resource_exhaustion(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION publication.reject_ticket15_out_of_memory()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'secret-resource-pressure-detail'
+                        USING ERRCODE = '53200';
+                END
+                $$;
+                CREATE TRIGGER reject_ticket15_out_of_memory
+                BEFORE INSERT ON publication.manifests
+                FOR EACH ROW
+                EXECUTE FUNCTION publication.reject_ticket15_out_of_memory();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_resource_exhaustion(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_ticket15_out_of_memory ON publication.manifests;
+                DROP FUNCTION publication.reject_ticket15_out_of_memory();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _start_blocked_worker(
+    settings: CoreSettings,
+) -> tuple[subprocess.Popen[str], Connection[object]]:
+    advisory_owner = connect(settings.database_url, autocommit=True)
+    advisory_owner.execute("SELECT pg_advisory_lock(150015)").fetchone()
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION publication.block_ticket15_manifest() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    PERFORM pg_advisory_xact_lock(150015);
+                    RETURN NEW;
+                END
+                $$;
+                CREATE TRIGGER block_ticket15_manifest
+                BEFORE INSERT ON publication.manifests
+                FOR EACH ROW
+                EXECUTE FUNCTION publication.block_ticket15_manifest();
+                """
+            )
+    finally:
+        database.close()
+    worker = subprocess.Popen(
+        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        env=_worker_environment(settings),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return worker, advisory_owner
+
+
+def _wait_for_advisory_waiter(settings: CoreSettings) -> bool:
+    poll = Event()
+    for _ in range(500):
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            with database.transaction() as transaction:
+                row = transaction.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM pg_locks
+                        WHERE locktype = 'advisory' AND NOT granted
+                    ) AS waiting
+                    """
+                ).fetchone()
+        finally:
+            database.close()
+        assert row is not None
+        if bool(row["waiting"]):
+            return True
+        poll.wait(0.02)
+    return False
+
+
+def _waiting_advisory_backend_pid(settings: CoreSettings) -> int:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT pid
+                FROM pg_locks
+                WHERE locktype = 'advisory' AND NOT granted
+                ORDER BY pid
+                LIMIT 1
+                """
+            ).fetchone()
+        assert row is not None
+        return int(row["pid"])
+    finally:
+        database.close()
+
+
+def _terminate_backend(settings: CoreSettings, backend_pid: int) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                "SELECT pg_terminate_backend(%s) AS terminated",
+                (backend_pid,),
+            ).fetchone()
+        assert row == {"terminated": True}
+    finally:
+        database.close()
+
+
+def _release_worker_block(
+    settings: CoreSettings,
+    advisory_owner: Connection[object],
+) -> None:
+    advisory_owner.execute("SELECT pg_advisory_unlock(150015)").fetchone()
+    advisory_owner.close()
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER block_ticket15_manifest ON publication.manifests;
+                DROP FUNCTION publication.block_ticket15_manifest();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=_worker_environment(settings),
+    )
+
+
+def _worker_environment(settings: CoreSettings) -> dict[str, str]:
+    return {
+        **os.environ,
+        "THESISTRACE_DATABASE_URL": settings.database_url,
+        "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
+        "THESISTRACE_S3_ACCESS_KEY_ID": settings.s3_access_key_id,
+        "THESISTRACE_S3_SECRET_ACCESS_KEY": settings.s3_secret_access_key,
+        "THESISTRACE_S3_BUCKET": settings.s3_bucket,
+        "THESISTRACE_S3_REGION": settings.s3_region,
+        "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
+    }

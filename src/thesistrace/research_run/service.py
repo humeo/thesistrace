@@ -10,6 +10,7 @@ from threading import Event, Thread
 from uuid import uuid4
 
 from psycopg import OperationalError
+from psycopg.errors import OutOfMemory
 from psycopg.types.json import Jsonb
 from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
@@ -1123,7 +1124,7 @@ def _failure_policy(error: Exception) -> _FailurePolicy:
             max_attempts=1,
             retryable=False,
         )
-    if isinstance(error, MemoryError):
+    if isinstance(error, (MemoryError, OutOfMemory)):
         return _FailurePolicy(
             attempt_reason=RESOURCE_EXHAUSTED_FAILURE,
             public_reason=RESOURCE_EXHAUSTED_PUBLIC_REASON,
