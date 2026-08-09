@@ -66,7 +66,6 @@ type ResearchResult = {
     schema_version: string;
     research_run_id: string;
     immutable_input_sha256: string;
-    dataset_release_id: string;
     calculation_contracts: Record<string, unknown>;
     semantic_versions: Record<string, string>;
   };
@@ -77,7 +76,8 @@ type ResearchRun = {
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   definition_id: string;
   definition_revision: number;
-  dataset_release_id: string;
+  start_date: string;
+  end_date: string;
   rerun_of_id?: string;
   failure_reason?: string;
   result?: ResearchResult;
@@ -369,7 +369,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
               Revision {run.definition_revision}
             </a>
           </p>
-          <p><strong>Dataset Release</strong> {run.dataset_release_id}</p>
+          <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
           {run.rerun_of_id ? (
             <p>
               <strong>Rerun of</strong>{" "}
@@ -394,7 +394,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         {items?.map((item) => (
           <li key={item.id}>
             <a href={`/research-runs/${item.id}`}>{item.id}</a>
-            <span> · {item.status}</span>
+            <span> · {item.status} · {item.start_date} to {item.end_date}</span>
           </li>
         ))}
       </ol>
@@ -453,7 +453,6 @@ function ResearchResultView({ result }: { result: ResearchResult }) {
           <h2>Provenance</h2>
         </div>
         <dl>
-          <div><dt>Dataset Release</dt><dd>{result.provenance.dataset_release_id}</dd></div>
           <div>
             <dt>Input digest</dt>
             <dd><code>{shortDigest(result.provenance.immutable_input_sha256)}</code></dd>

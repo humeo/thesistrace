@@ -1,3 +1,4 @@
+from thesistrace.data.admission import DatasetAdmissionService, DatasetAdmissionSnapshot
 from thesistrace.data.fields import (
     AuthorableField,
     authorable_field_bindings,
@@ -48,6 +49,8 @@ __all__ = [
     "DataOverview",
     "DataRefreshError",
     "DataRefreshService",
+    "DatasetAdmissionService",
+    "DatasetAdmissionSnapshot",
     "DatasetCoverage",
     "DatasetOverviewService",
     "DataLifecycleError",

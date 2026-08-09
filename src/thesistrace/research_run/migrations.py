@@ -151,5 +151,19 @@ MIGRATIONS = MigrationPlan(
                 $migration$;
             """,
         ),
+        Migration(
+            name="0008_requested_dates_without_admission_data_binding",
+            statement="""
+                ALTER TABLE research_runs.runs
+                    DROP COLUMN dataset_release_id,
+                    ADD COLUMN requested_start_date date,
+                    ADD COLUMN requested_end_date date,
+                    ADD CONSTRAINT research_runs_requested_date_order CHECK (
+                        requested_start_date IS NULL
+                        OR requested_end_date IS NULL
+                        OR requested_start_date <= requested_end_date
+                    );
+            """,
+        ),
     ),
 )

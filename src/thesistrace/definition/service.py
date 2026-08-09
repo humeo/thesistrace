@@ -3,13 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable, Mapping
+from datetime import date
 from uuid import uuid4
 
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.data import AuthorableField
-from thesistrace.data.service import ReleaseReference
+from thesistrace.data import (
+    AuthorableField,
+    DatasetAdmissionSnapshot,
+    authorable_field_bindings,
+)
 from thesistrace.definition.models import (
     AuthorableFieldOption,
     DefinitionAuthoringOptions,
@@ -23,7 +27,7 @@ from thesistrace.definition.models import (
     OperatorOption,
     RunValidationIssue,
 )
-from thesistrace.research_kernel.alpha_expression import AlphaValidationError
+from thesistrace.research_kernel.alpha_expression import ParsedAlpha
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run import ImmutableRunInput, ResearchRunSummary
 
@@ -54,6 +58,7 @@ SEMANTIC_VERSIONS = {
     "strategy": "strategy-v1",
     "kernel": "kernel-v1",
 }
+CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
 
 
 class DefinitionConflict(RuntimeError):
@@ -74,7 +79,7 @@ class DefinitionService:
         authorable_fields: Callable[[], tuple[AuthorableField, ...]],
         operator_catalog: Callable[[], dict[str, object]],
         validate_alpha: Callable[..., object],
-        latest_release: Callable[[PostgresTransaction], ReleaseReference | None],
+        current_dataset: CurrentDataset,
         admit_run: Callable[
             [PostgresTransaction, ImmutableRunInput], ResearchRunSummary
         ],
@@ -83,7 +88,8 @@ class DefinitionService:
         self._authorable_fields = authorable_fields
         self._operator_catalog = operator_catalog
         self._validate_alpha = validate_alpha
-        self._latest_release = latest_release
+        self._current_dataset = current_dataset
+        self._field_bindings = authorable_field_bindings()
         self._admit_run = admit_run
 
     def authoring_options(self) -> DefinitionAuthoringOptions:
@@ -220,8 +226,7 @@ class DefinitionService:
             receipt = transaction.execute(
                 """
                 SELECT request_fingerprint, definition_id, saved_revision,
-                       saved_content, outcome, issues, research_run_id,
-                       dataset_release_id
+                       saved_content, outcome, issues, research_run_id
                 FROM definitions.run_receipts
                 WHERE request_id = %s
                 """,
@@ -275,23 +280,23 @@ class DefinitionService:
                     (saved_revision, Jsonb(content), saved_id),
                 )
 
-            release = self._latest_release(transaction)
-            issues = _runnability_issues(content, has_release=release is not None)
-            if release is not None and isinstance(content.get("alpha"), Mapping):
-                try:
-                    self._validate_alpha(
-                        content["alpha"],
-                        field_bindings=release.field_bindings,
-                    )
-                except AlphaValidationError:
+            issues = _runnability_issues(content)
+            snapshot = None if issues else self._current_dataset()
+            if not issues:
+                if snapshot is None:
                     issues.append(
                         RunValidationIssue(
-                            code="FIELD_UNAVAILABLE_IN_RELEASE",
-                            field="alpha",
-                            message=(
-                                "Alpha field is unavailable in the latest "
-                                "Dataset Release"
-                            ),
+                            code="DATA_NOT_READY",
+                            field="data",
+                            message="Current Dataset is not ready",
+                        )
+                    )
+                else:
+                    issues.extend(
+                        _dataset_issues(
+                            content,
+                            snapshot=snapshot,
+                            parsed_alpha=self._parsed_alpha(content),
                         )
                     )
             serialized_issues = [issue.model_dump(mode="json") for issue in issues]
@@ -318,22 +323,21 @@ class DefinitionService:
                     issues=issues,
                 )
 
-            assert release is not None
             immutable_input = _immutable_run_input(
                 definition_id=saved_id,
                 definition_revision=saved_revision,
                 content=content,
-                release=release,
+                field_bindings=self._field_bindings,
                 operator_catalog=self._operator_catalog(),
             )
             run = self._admit_run(transaction, immutable_input)
             transaction.execute(
                 """
-                INSERT INTO definitions.run_receipts (
-                    request_id, request_fingerprint, definition_id,
-                    saved_revision, saved_content, outcome, issues,
-                    research_run_id, dataset_release_id
-                ) VALUES (%s, %s, %s, %s, %s, 'accepted', %s, %s, %s)
+                    INSERT INTO definitions.run_receipts (
+                        request_id, request_fingerprint, definition_id,
+                        saved_revision, saved_content, outcome, issues,
+                        research_run_id
+                    ) VALUES (%s, %s, %s, %s, %s, 'accepted', %s, %s)
                 """,
                 (
                     request_id,
@@ -343,7 +347,6 @@ class DefinitionService:
                     Jsonb(content),
                     Jsonb(serialized_issues),
                     run.id,
-                    release.id,
                 ),
             )
         return DefinitionRunOutcome(
@@ -355,11 +358,18 @@ class DefinitionService:
 
     def _validate_structure(self, command: DefinitionSaveCommand) -> None:
         if command.alpha is not None:
-            self._validate_alpha(command.alpha)
+            self._validate_alpha(command.alpha, field_bindings=self._field_bindings)
 
     def _validate_run_structure(self, command: DefinitionRunCommand) -> None:
         if command.alpha is not None:
-            self._validate_alpha(command.alpha)
+            self._validate_alpha(command.alpha, field_bindings=self._field_bindings)
+
+    def _parsed_alpha(self, content: dict[str, object]) -> ParsedAlpha:
+        alpha = content["alpha"]
+        assert isinstance(alpha, Mapping)
+        parsed = self._validate_alpha(alpha, field_bindings=self._field_bindings)
+        assert isinstance(parsed, ParsedAlpha)
+        return parsed
 
 
 def _generated_name(definition_id: str) -> str:
@@ -386,12 +396,10 @@ def _run_fingerprint(
     return hashlib.sha256(serialized).hexdigest()
 
 
-def _runnability_issues(
-    content: dict[str, object],
-    *,
-    has_release: bool,
-) -> list[RunValidationIssue]:
+def _runnability_issues(content: dict[str, object]) -> list[RunValidationIssue]:
     required = (
+        ("start_date", "START_DATE_REQUIRED", "Research start date is required"),
+        ("end_date", "END_DATE_REQUIRED", "Research end date is required"),
         ("alpha", "ALPHA_REQUIRED", "Alpha is required"),
         ("universe", "UNIVERSE_REQUIRED", "Universe is required"),
         ("neutralization", "NEUTRALIZATION_REQUIRED", "Neutralization is required"),
@@ -407,15 +415,63 @@ def _runnability_issues(
         for field, code, message in required
         if content.get(field) is None
     ]
-    if not has_release:
+    start = _content_date(content.get("start_date"))
+    end = _content_date(content.get("end_date"))
+    if start is not None and end is not None and start > end:
         issues.append(
             RunValidationIssue(
-                code="DATASET_RELEASE_REQUIRED",
-                field="dataset_release",
-                message="Publish canonical Data before running research",
+                code="RESEARCH_DATE_ORDER_INVALID",
+                field="end_date",
+                message="Research end date must not precede start date",
             )
         )
     return issues
+
+
+def _dataset_issues(
+    content: dict[str, object],
+    *,
+    snapshot: DatasetAdmissionSnapshot,
+    parsed_alpha: ParsedAlpha,
+) -> list[RunValidationIssue]:
+    start = _content_date(content["start_date"])
+    end = _content_date(content["end_date"])
+    assert start is not None and end is not None
+    issues: list[RunValidationIssue] = []
+    if start < snapshot.coverage_start or end > snapshot.coverage_end:
+        issues.append(
+            RunValidationIssue(
+                code="RESEARCH_PERIOD_OUTSIDE_COVERAGE",
+                field="start_date",
+                message="Requested Research Dates must be inside current Dataset Coverage",
+            )
+        )
+    elif not snapshot.research_period(start, end):
+        issues.append(
+            RunValidationIssue(
+                code="RESEARCH_PERIOD_HAS_NO_SESSIONS",
+                field="start_date",
+                message="Requested Research Dates contain no Research Session",
+            )
+        )
+    if not set(parsed_alpha.field_ids) <= snapshot.available_field_ids:
+        issues.append(
+            RunValidationIssue(
+                code="FIELD_UNAVAILABLE_IN_CURRENT_DATA",
+                field="alpha",
+                message="Alpha field is unavailable in current Data",
+            )
+        )
+    return issues
+
+
+def _content_date(value: object) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    assert isinstance(value, str)
+    return date.fromisoformat(value)
 
 
 def _run_outcome_from_receipt(row: object) -> DefinitionRunOutcome:
@@ -431,7 +487,8 @@ def _run_outcome_from_receipt(row: object) -> DefinitionRunOutcome:
             status="queued",
             definition_id=str(row["definition_id"]),
             definition_revision=int(row["saved_revision"]),
-            dataset_release_id=str(row["dataset_release_id"]),
+            start_date=_content_date(content["start_date"]),
+            end_date=_content_date(content["end_date"]),
         )
     return DefinitionRunOutcome(
         outcome=row["outcome"],
@@ -450,7 +507,7 @@ def _immutable_run_input(
     definition_id: str,
     definition_revision: int,
     content: dict[str, object],
-    release: ReleaseReference,
+    field_bindings: dict[str, str],
     operator_catalog: dict[str, object],
 ) -> ImmutableRunInput:
     catalog_version = operator_catalog.get("semantic_version")
@@ -462,8 +519,9 @@ def _immutable_run_input(
             "revision": definition_revision,
             "content": dict(content),
         },
-        dataset_release_id=release.id,
-        field_bindings=dict(release.field_bindings),
+        requested_start_date=_content_date(content["start_date"]),
+        requested_end_date=_content_date(content["end_date"]),
+        field_bindings=dict(field_bindings),
         strategy={
             "kind": FIXED_STRATEGY_KIND,
             "holdings_count": content["holdings_count"],

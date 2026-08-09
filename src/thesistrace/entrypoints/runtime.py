@@ -4,7 +4,6 @@ import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -12,7 +11,7 @@ import boto3
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import DailyTrackService
-from thesistrace.data import DataService, DatasetOverviewService, authorable_field_bindings
+from thesistrace.data import DataService, DatasetAdmissionService, DatasetOverviewService
 from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.migrations import verify_core_migrations
 from thesistrace.publication import Publication
@@ -115,10 +114,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         data = DataService(database, publication)
         data_overview = DatasetOverviewService(database, settings.data_mount)
         data_overview.validate_startup()
-        validate_alpha = partial(
-            validate_normalized_alpha,
-            field_bindings=authorable_field_bindings(),
-        )
+        dataset_admission = DatasetAdmissionService(database, settings.data_mount)
         daily_tracks = DailyTrackService(
             database,
             publication=publication,
@@ -129,7 +125,6 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
         research_runs = ResearchRunService(
             database,
-            load_canonical=data.load_canonical,
             publication=publication,
             activate_track=daily_tracks.activate,
         )
@@ -141,8 +136,8 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
                 database,
                 authorable_fields=data.authorable_fields,
                 operator_catalog=operator_catalog,
-                validate_alpha=validate_alpha,
-                latest_release=data.latest_release,
+                validate_alpha=validate_normalized_alpha,
+                current_dataset=dataset_admission.current,
                 admit_run=research_runs.admit,
             ),
             research_runs=research_runs,

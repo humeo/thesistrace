@@ -155,16 +155,17 @@ class ResearchRunService:
             """
             INSERT INTO research_runs.runs (
                 id, definition_id, definition_revision,
-                dataset_release_id, status, immutable_input
-            ) VALUES (%s, %s, %s, %s, 'queued', %s)
+                requested_start_date, requested_end_date, status, immutable_input
+            ) VALUES (%s, %s, %s, %s, %s, 'queued', %s)
             RETURNING id, status, definition_id, definition_revision,
-                      dataset_release_id, rerun_of_id
+                      requested_start_date, requested_end_date, rerun_of_id
             """,
             (
                 run_id,
                 str(definition["id"]),
                 int(definition["revision"]),
-                immutable_input.dataset_release_id,
+                immutable_input.requested_start_date,
+                immutable_input.requested_end_date,
                 Jsonb(immutable_input.model_dump(mode="json")),
             ),
         ).fetchone()
@@ -172,7 +173,8 @@ class ResearchRunService:
         return _summary(row)
 
     def process_next(self) -> bool:
-        self._require_execution_dependencies()
+        if not self._execution_is_configured():
+            return False
         claim = self._claim_next()
         if claim is None:
             return False
@@ -201,7 +203,8 @@ class ResearchRunService:
             rows = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, rerun_of_id, failure_reason
+                       requested_start_date, requested_end_date,
+                       rerun_of_id, failure_reason
                 FROM research_runs.runs
                 ORDER BY created_at DESC, id
                 """
@@ -213,7 +216,8 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, rerun_of_id, failure_reason
+                       requested_start_date, requested_end_date,
+                       rerun_of_id, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -251,7 +255,8 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, rerun_of_id, failure_reason
+                       requested_start_date, requested_end_date,
+                       rerun_of_id, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 FOR UPDATE
@@ -279,7 +284,8 @@ class ResearchRunService:
                         failure_reason = NULL, updated_at = now()
                     WHERE id = %s AND status IN ('queued', 'running')
                     RETURNING id, status, definition_id, definition_revision,
-                              dataset_release_id, rerun_of_id, failure_reason
+                              requested_start_date, requested_end_date,
+                              rerun_of_id, failure_reason
                     """,
                     (run_id,),
                 ).fetchone()
@@ -333,15 +339,17 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 INSERT INTO research_runs.runs (
-                    id, definition_id, definition_revision, dataset_release_id,
+                    id, definition_id, definition_revision,
+                    requested_start_date, requested_end_date,
                     status, immutable_input, rerun_of_id
                 )
                 SELECT %s, definition_id, definition_revision,
-                       dataset_release_id, 'queued', immutable_input, id
+                       requested_start_date, requested_end_date,
+                       'queued', immutable_input, id
                 FROM research_runs.runs
                 WHERE id = %s
                 RETURNING id, status, definition_id, definition_revision,
-                          dataset_release_id, rerun_of_id
+                          requested_start_date, requested_end_date, rerun_of_id
                 """,
                 (rerun_id, run_id),
             ).fetchone()
@@ -399,7 +407,7 @@ class ResearchRunService:
                 row = transaction.execute(
                     """
                     SELECT id, status, definition_id, definition_revision,
-                           dataset_release_id, immutable_input,
+                           requested_start_date, requested_end_date, immutable_input,
                            result_manifest_sha256, result_provenance
                     FROM research_runs.runs
                     WHERE id = %s
@@ -464,7 +472,8 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 SELECT id, status, definition_id, definition_revision,
-                       dataset_release_id, rerun_of_id, result_manifest_sha256,
+                       requested_start_date, requested_end_date,
+                       rerun_of_id, result_manifest_sha256,
                        result_provenance, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
@@ -520,9 +529,11 @@ class ResearchRunService:
         ).hexdigest()
         if (
             selected_provenance.get("research_run_id") != row["id"]
-            or selected_provenance.get("dataset_release_id") != row["dataset_release_id"]
             or selected_provenance.get("immutable_input_sha256") != expected_digest
         ):
+            raise ResearchRunTrackingUnavailable
+        data_generation_id = selected_provenance.get("data_generation_id")
+        if not isinstance(data_generation_id, str):
             raise ResearchRunTrackingUnavailable
         bundle = self._publication.read_in_transaction(
             transaction,
@@ -547,7 +558,7 @@ class ResearchRunService:
             definition_id=str(row["definition_id"]),
             definition_revision=int(row["definition_revision"]),
             immutable_input=immutable_input.model_dump(mode="json"),
-            seed_release_id=str(row["dataset_release_id"]),
+            seed_release_id=data_generation_id,
             verified_result={
                 "kind": "research.result",
                 "research_run_id": str(row["id"]),
@@ -561,9 +572,8 @@ class ResearchRunService:
             calculation_contracts=dict(calculation_contracts),
         )
 
-    def _require_execution_dependencies(self) -> None:
-        if self._load_canonical is None or self._publication is None:
-            raise RuntimeError("ResearchRun execution dependencies are not configured")
+    def _execution_is_configured(self) -> bool:
+        return self._load_canonical is not None and self._publication is not None
 
     def _claim_next(self) -> _ExecutionClaim | None:
         with self._database.transaction() as transaction:
@@ -753,12 +763,15 @@ class ResearchRunService:
         self,
         claim: _ExecutionClaim,
     ) -> tuple[PreparedPublication, dict[str, object]]:
-        assert self._load_canonical is not None
+        raise RuntimeError("ResearchRun Attempt must select current Data before execution")
+
+    def _prepare_result(
+        self,
+        claim: _ExecutionClaim,
+        canonical: dict[str, object],
+    ) -> tuple[PreparedPublication, dict[str, object]]:
         assert self._publication is not None
         immutable_input = claim.immutable_input
-        canonical = self._load_canonical(immutable_input.dataset_release_id)
-        canonical = _research_input_history(canonical)
-        self._progress("inputs_loaded", claim.run_id)
         kernel_input = _kernel_input(immutable_input, canonical)
         output = self._execute_kernel(kernel_input)
         self._progress("calculated", claim.run_id)
@@ -963,7 +976,6 @@ def _result_provenance(
         "schema_version": "research-result-v1",
         "research_run_id": run_id,
         "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
-        "dataset_release_id": immutable_input.dataset_release_id,
         "calculation_contracts": {
             "strategy": value["strategy"],
             "costs": value["costs"],
@@ -1034,9 +1046,12 @@ def _summary(row: object) -> ResearchRunSummary:
             "status",
             "definition_id",
             "definition_revision",
-            "dataset_release_id",
+            "requested_start_date",
+            "requested_end_date",
         )
     }
+    summary["start_date"] = summary.pop("requested_start_date")
+    summary["end_date"] = summary.pop("requested_end_date")
     summary["rerun_of_id"] = row.get("rerun_of_id")
     summary["failure_reason"] = row.get("failure_reason")
     return ResearchRunSummary.model_validate(summary)
@@ -1086,6 +1101,15 @@ def _public_result(
                 "benchmark": benchmark,
                 "observations": observations,
             },
-            "provenance": provenance,
+            "provenance": {
+                name: provenance[name]
+                for name in (
+                    "schema_version",
+                    "research_run_id",
+                    "immutable_input_sha256",
+                    "calculation_contracts",
+                    "semantic_versions",
+                )
+            },
         }
     )

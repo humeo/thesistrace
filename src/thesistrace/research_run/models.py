@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,7 +14,8 @@ class ImmutableRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     definition: dict[str, object]
-    dataset_release_id: str
+    requested_start_date: date
+    requested_end_date: date
     field_bindings: dict[str, str]
     strategy: dict[str, object]
     costs: dict[str, str]
@@ -29,7 +31,8 @@ class ResearchRunSummary(BaseModel):
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
     definition_id: str
     definition_revision: int
-    dataset_release_id: str
+    start_date: date
+    end_date: date
     rerun_of_id: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -154,7 +157,6 @@ class ResultProvenance(BaseModel):
     schema_version: str
     research_run_id: str
     immutable_input_sha256: str
-    dataset_release_id: str
     calculation_contracts: dict[str, object]
     semantic_versions: dict[str, str]
 
