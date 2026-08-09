@@ -1,24 +1,76 @@
+from __future__ import annotations
+
+from dataclasses import replace
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from thesistrace.data import DatasetHeadError, DatasetLifecycle, MountedGenerationStore
+from thesistrace.entrypoints.http import create_app
+from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.fixture import build_minimal_canonical_fixture
 
 
-def test_empty_data_projection_uses_postgres_and_rustfs(
+def test_empty_and_prepared_data_overview_survive_real_http_restart(
     core_settings: CoreSettings,
+    tmp_path: Path,
 ) -> None:
-    with open_core_runtime(core_settings) as runtime:
-        assert runtime.data.overview().model_dump(mode="json") == {
-            "status": "idle",
-            "latest_release": None,
-            "latest_update_outcome": None,
-        }
-        assert runtime.data.list_releases().model_dump(mode="json") == {
-            "items": [],
-            "next_cursor": None,
-        }
-        assert runtime.publication.storage_is_available()
+    migrate_core(core_settings.database_url)
+    settings = replace(core_settings, data_mount=tmp_path)
+    empty = {
+        "dataset_coverage": None,
+        "data_through_session": None,
+        "last_refresh_at": None,
+        "readiness": False,
+    }
 
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/data").json() == empty
+        assert client.post("/api/data/update").status_code == 404
+        assert client.get("/api/data/releases").status_code == 404
+        assert client.get("/api/data/releases/anything").status_code == 404
 
-def test_reopening_runtime_preserves_empty_data_state(core_settings: CoreSettings) -> None:
+    generation = MountedGenerationStore(tmp_path).materialize(
+        build_minimal_canonical_fixture(),
+        prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="prepared-overview-test",
+        source_lineage={"fixture": "minimal"},
+    )
+    with open_core_runtime(settings) as runtime:
+        lifecycle = DatasetLifecycle(runtime.database, tmp_path)
+        lifecycle.protect_candidate(
+            operation_id="prepared-overview",
+            generation_manifest_sha256=generation.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=None,
+            candidate_generation_manifest_sha256=generation.manifest_sha256,
+            operation_id="prepared-overview",
+        )
+
+    expected = {
+        "dataset_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+        "data_through_session": "2026-08-07",
+        "last_refresh_at": None,
+        "readiness": True,
+    }
     for _ in range(2):
-        with open_core_runtime(core_settings) as runtime:
-            assert runtime.data.overview().status == "idle"
-            assert runtime.data.list_releases().items == []
+        with TestClient(create_app(settings)) as client:
+            assert client.get("/api/data").json() == expected
+
+
+def test_malformed_existing_head_prevents_healthy_runtime_start(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    migrate_core(core_settings.database_url)
+    (tmp_path / "HEAD.json").write_bytes(b'{"format":')
+    settings = replace(core_settings, data_mount=tmp_path)
+
+    with pytest.raises(DatasetHeadError, match="malformed"):
+        with open_core_runtime(settings):
+            raise AssertionError("runtime started from malformed Dataset Head")

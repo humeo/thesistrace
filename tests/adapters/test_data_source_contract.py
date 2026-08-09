@@ -16,14 +16,8 @@ from thesistrace.data.canonical_mapping import (
     bootstrap_research_calendar,
     research_sessions_after,
 )
-from thesistrace.data.models import (
-    DataOverview,
-    ReleaseHistory,
-    ReleaseSummary,
-    UpdateAcceptance,
-)
+from thesistrace.data.models import DataOverview
 from thesistrace.entrypoints import live_tushare
-from thesistrace.entrypoints.http import DataUpdateRequest
 
 
 def test_data_source_contract_has_one_batch_shape_and_bounded_error_categories() -> None:
@@ -74,15 +68,8 @@ def test_data_accepts_any_positive_bootstrap_calendar_and_rejects_no_overlap() -
 
 def test_product_data_contract_has_no_provider_or_collection_modes() -> None:
     forbidden = {"live", "fixture", "bootstrap", "increment"}
-    schemas = (
-        DataUpdateRequest.model_json_schema(),
-        DataOverview.model_json_schema(),
-        ReleaseHistory.model_json_schema(),
-        ReleaseSummary.model_json_schema(),
-        UpdateAcceptance.model_json_schema(),
-    )
+    schemas = (DataOverview.model_json_schema(),)
 
-    assert DataUpdateRequest.model_fields == {}
     assert all(word not in str(schema).lower() for schema in schemas for word in forbidden)
 
 

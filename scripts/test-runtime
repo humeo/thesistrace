@@ -72,6 +72,7 @@ run_with_environment() {
   THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
   THESISTRACE_S3_BUCKET="$bucket_name" \
   THESISTRACE_S3_REGION=us-east-1 \
+  THESISTRACE_DATA_MOUNT="$data_mount" \
     "$@"
 }
 
@@ -196,11 +197,12 @@ run_id=$(new_run_id)
 project_name="$canonical_prefix$run_id"
 bucket_name="$canonical_prefix$run_id"
 run_root="$state_root/$run_id"
+data_mount="$run_root/canonical-data"
 evidence_dir="$run_root/evidence"
 pytest_report="$evidence_dir/pytest.xml"
 run_metadata="$run_root/run.txt"
 validate_test_project
-mkdir -p "$evidence_dir"
+mkdir -p "$evidence_dir" "$data_mount"
 printf 'run_id=%s\nproject_name=%s\n' "$run_id" "$project_name" >"$run_metadata"
 printf 'test_kind=%s\n' "$command" >>"$run_metadata"
 echo "Test run: $run_id"

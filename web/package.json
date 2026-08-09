@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test:shell": "vitest run src/shell/AppShell.test.tsx",
+    "test:shell": "vitest run src/shell/AppShell.test.tsx src/data/DataPage.test.tsx",
     "test:e2e": "playwright test"
   },
   "dependencies": {

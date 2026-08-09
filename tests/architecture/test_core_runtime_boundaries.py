@@ -337,9 +337,6 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
 def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() -> None:
     assert _http_routes() == {
         ("get", "/api/data"),
-        ("get", "/api/data/releases"),
-        ("get", "/api/data/releases/{release_id}"),
-        ("post", "/api/data/update"),
         ("get", "/api/definitions"),
         ("get", "/api/definitions/authoring-options"),
         ("get", "/api/definitions/{definition_id}"),

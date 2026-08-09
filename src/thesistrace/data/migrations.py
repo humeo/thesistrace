@@ -257,6 +257,14 @@ MIGRATIONS = MigrationPlan(
                         OR (status = 'failed' AND failure_code IS NOT NULL)
                     )
                 );
+
+                CREATE TABLE data.current_dataset_state (
+                    singleton smallint PRIMARY KEY CHECK (singleton = 1),
+                    last_refresh_at timestamptz NULL
+                );
+
+                INSERT INTO data.current_dataset_state (singleton)
+                VALUES (1);
             """,
         ),
     ),

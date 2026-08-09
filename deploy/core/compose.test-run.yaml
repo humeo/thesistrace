@@ -5,6 +5,7 @@ x-test-environment: &test-environment
   THESISTRACE_S3_SECRET_ACCESS_KEY: rustfsadmin
   THESISTRACE_S3_BUCKET: ${THESISTRACE_TEST_BUCKET:-thesistrace-test}
   THESISTRACE_S3_REGION: us-east-1
+  THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
 
 services:
   postgres:

@@ -11,9 +11,8 @@ from tempfile import TemporaryDirectory
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.adapters.fixture_data import FixtureDataSource
 from thesistrace.daily_track import DailyTrackService
-from thesistrace.data import DataService, authorable_field_bindings
+from thesistrace.data import DataService, DatasetOverviewService, authorable_field_bindings
 from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.migrations import verify_core_migrations
 from thesistrace.publication import Publication
@@ -28,6 +27,7 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_ACCESS_KEY_ID",
     "THESISTRACE_S3_SECRET_ACCESS_KEY",
     "THESISTRACE_S3_BUCKET",
+    "THESISTRACE_DATA_MOUNT",
 )
 
 
@@ -38,6 +38,7 @@ class CoreSettings:
     s3_access_key_id: str
     s3_secret_access_key: str
     s3_bucket: str
+    data_mount: Path
     s3_region: str = "us-east-1"
 
     @classmethod
@@ -50,6 +51,7 @@ class CoreSettings:
                     "s3_access_key_id",
                     "s3_secret_access_key",
                     "s3_bucket",
+                    "data_mount",
                 ),
                 CORE_ENVIRONMENT_NAMES,
                 strict=True,
@@ -66,7 +68,12 @@ class CoreSettings:
         if missing:
             raise RuntimeError(f"missing Core configuration: {', '.join(missing)}")
         return cls(
-            **values,
+            database_url=values["database_url"],
+            s3_endpoint_url=values["s3_endpoint_url"],
+            s3_access_key_id=values["s3_access_key_id"],
+            s3_secret_access_key=values["s3_secret_access_key"],
+            s3_bucket=values["s3_bucket"],
+            data_mount=Path(values["data_mount"]),
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
         )
 
@@ -82,6 +89,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data: DataService
+    data_overview: DatasetOverviewService
     definitions: DefinitionService
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
@@ -104,19 +112,9 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
-        fixture_availability = tuple(
-            int(value)
-            for value in os.environ.get(
-                "THESISTRACE_FIXTURE_AVAILABILITY_SEQUENCE",
-                "1",
-            ).split(",")
-            if value.strip()
-        )
-        data = DataService(
-            database,
-            publication,
-            FixtureDataSource(availability_sequence=fixture_availability),
-        )
+        data = DataService(database, publication)
+        data_overview = DatasetOverviewService(database, settings.data_mount)
+        data_overview.validate_startup()
         validate_alpha = partial(
             validate_normalized_alpha,
             field_bindings=authorable_field_bindings(),
@@ -138,6 +136,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         yield CoreRuntime(
             database=database,
             data=data,
+            data_overview=data_overview,
             definitions=DefinitionService(
                 database,
                 authorable_fields=data.authorable_fields,
