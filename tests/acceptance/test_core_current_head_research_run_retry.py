@@ -4,16 +4,20 @@ import os
 import signal
 import subprocess
 import sys
-from dataclasses import replace
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Event
+from uuid import uuid4
 
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 from psycopg import Connection, connect
+from psycopg.conninfo import make_conninfo
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
@@ -26,6 +30,103 @@ from thesistrace.research_kernel import RunInput, run
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 
 SESSIONS = ("2026-08-03", "2026-08-04", "2026-08-05")
+ADVISORY_KEY = 150015
+
+
+@dataclass
+class _BlockedWorker:
+    settings: CoreSettings
+    run_id: str
+    process: subprocess.Popen[str]
+    advisory_owner: Connection[object]
+    application_name: str
+    barrier_released: bool = False
+    stopped: bool = False
+    stdout: str = ""
+    stderr: str = ""
+
+    def wait_until_blocked(self) -> None:
+        poll = Event()
+        for _ in range(500):
+            if self.process.poll() is not None:
+                stdout, stderr = self.process.communicate()
+                raise AssertionError(
+                    "Worker exited before reaching the PostgreSQL barrier; "
+                    f"exit={self.process.returncode}; stdout={stdout!r}; "
+                    f"stderr={stderr!r}; attempts={_attempts(self.settings, self.run_id)!r}"
+                )
+            if self._matching_locks():
+                return
+            poll.wait(0.02)
+        self.terminate()
+        raise AssertionError(
+            "Worker did not reach the PostgreSQL barrier; "
+            f"exit={self.process.returncode}; stdout={self.stdout!r}; "
+            f"stderr={self.stderr!r}; attempts={_attempts(self.settings, self.run_id)!r}; "
+            f"locks={self._matching_locks()!r}"
+        )
+
+    def backend_pid(self) -> int:
+        rows = self._matching_locks()
+        if len(rows) != 1:
+            raise AssertionError(f"expected one blocked Worker backend, got {rows!r}")
+        return int(rows[0]["pid"])
+
+    def stop(self) -> None:
+        os.kill(self.process.pid, signal.SIGSTOP)
+        self.stopped = True
+
+    def resume(self) -> None:
+        if self.stopped and self.process.poll() is None:
+            os.kill(self.process.pid, signal.SIGCONT)
+        self.stopped = False
+
+    def terminate(self) -> None:
+        self.resume()
+        if self.process.poll() is None:
+            self.process.terminate()
+        self.stdout, self.stderr = self.process.communicate(timeout=10)
+
+    def release_barrier(self) -> None:
+        if self.barrier_released:
+            return
+        self.advisory_owner.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_KEY,)).fetchone()
+        self.advisory_owner.close()
+        _drop_worker_block(self.settings)
+        self.barrier_released = True
+
+    def close(self) -> None:
+        self.terminate()
+        self.release_barrier()
+
+    def _matching_locks(self) -> list[dict[str, object]]:
+        database = PostgresDatabase(self.settings.database_url)
+        database.open()
+        try:
+            with database.transaction() as transaction:
+                rows = transaction.execute(
+                    """
+                    SELECT lock.pid, lock.granted, activity.state,
+                           activity.wait_event_type, activity.wait_event
+                    FROM pg_locks AS lock
+                    JOIN pg_stat_activity AS activity ON activity.pid = lock.pid
+                    WHERE lock.locktype = 'advisory'
+                      AND lock.database = (
+                          SELECT oid FROM pg_database
+                          WHERE datname = current_database()
+                      )
+                      AND lock.classid = 0
+                      AND lock.objid = %s
+                      AND lock.objsubid = 1
+                      AND NOT lock.granted
+                      AND activity.application_name = %s
+                    ORDER BY lock.pid
+                    """,
+                    (ADVISORY_KEY, self.application_name),
+                ).fetchall()
+            return rows
+        finally:
+            database.close()
 
 
 @pytest.mark.skipif(
@@ -40,17 +141,10 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
 
     with TestClient(create_app(settings)) as first_process:
         run_id = _admit_run(first_process, request_id="retry-current-head")
-        blocked_worker, advisory_owner = _start_blocked_worker(settings)
-        try:
-            assert _wait_for_advisory_waiter(settings)
-            blocked_worker.terminate()
-            stdout, stderr = blocked_worker.communicate(timeout=10)
-            assert blocked_worker.returncode != 0, stdout + stderr
-        finally:
-            if blocked_worker.poll() is None:
-                blocked_worker.terminate()
-                blocked_worker.communicate(timeout=10)
-            _release_worker_block(settings, advisory_owner)
+        with _blocked_worker(settings, run_id) as blocked:
+            blocked.wait_until_blocked()
+            blocked.terminate()
+            assert blocked.process.returncode != 0, blocked.stdout + blocked.stderr
         assert _attempts(settings, run_id) == [
             {
                 "ordinal": 1,
@@ -114,17 +208,12 @@ def test_recovered_winner_fences_a_stale_prepared_attempt(tmp_path: Path) -> Non
 
     with TestClient(create_app(settings)) as client:
         run_id = _admit_run(client, request_id="retry-stale-fence")
-        stale_worker, advisory_owner = _start_blocked_worker(settings)
-        block_released = False
-        stale_stopped = False
-        try:
-            assert _wait_for_advisory_waiter(settings)
-            backend_pid = _waiting_advisory_backend_pid(settings)
-            os.kill(stale_worker.pid, signal.SIGSTOP)
-            stale_stopped = True
+        with _blocked_worker(settings, run_id) as stale:
+            stale.wait_until_blocked()
+            backend_pid = stale.backend_pid()
+            stale.stop()
             _terminate_backend(settings, backend_pid)
-            _release_worker_block(settings, advisory_owner)
-            block_released = True
+            stale.release_barrier()
             _expire_live_attempt(settings, run_id)
             head_b = _publish_head(settings, price_offset=9, expected_manifest=head_a)
 
@@ -134,18 +223,9 @@ def test_recovered_winner_fences_a_stale_prepared_attempt(tmp_path: Path) -> Non
             )
             winning = client.get(f"/api/research-runs/{run_id}").json()
             assert winning["status"] == "succeeded"
-            os.kill(stale_worker.pid, signal.SIGCONT)
-            stale_stopped = False
-            stdout, stderr = stale_worker.communicate(timeout=10)
-            assert stale_worker.returncode == 0, stdout + stderr
-        finally:
-            if stale_stopped and stale_worker.poll() is None:
-                os.kill(stale_worker.pid, signal.SIGCONT)
-            if stale_worker.poll() is None:
-                stale_worker.terminate()
-                stale_worker.communicate(timeout=10)
-            if not block_released:
-                _release_worker_block(settings, advisory_owner)
+            stale.resume()
+            stale.stdout, stale.stderr = stale.process.communicate(timeout=10)
+            assert stale.process.returncode == 0, stale.stdout + stale.stderr
 
         assert client.get(f"/api/research-runs/{run_id}").json() == winning
         assert [row["status"] for row in _attempts(settings, run_id)] == [
@@ -172,17 +252,10 @@ def test_worker_loss_retry_exhaustion_is_bounded_and_restart_stable(
     with TestClient(create_app(settings)) as client:
         run_id = _admit_run(client, request_id="retry-exhaustion")
         for ordinal in range(1, 4):
-            blocked_worker, advisory_owner = _start_blocked_worker(settings)
-            try:
-                assert _wait_for_advisory_waiter(settings)
-                blocked_worker.terminate()
-                stdout, stderr = blocked_worker.communicate(timeout=10)
-                assert blocked_worker.returncode != 0, stdout + stderr
-            finally:
-                if blocked_worker.poll() is None:
-                    blocked_worker.terminate()
-                    blocked_worker.communicate(timeout=10)
-                _release_worker_block(settings, advisory_owner)
+            with _blocked_worker(settings, run_id) as blocked:
+                blocked.wait_until_blocked()
+                blocked.terminate()
+                assert blocked.process.returncode != 0, blocked.stdout + blocked.stderr
             assert len(_attempts(settings, run_id)) == ordinal
             _expire_live_attempt(settings, run_id)
 
@@ -248,9 +321,7 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
     with TestClient(create_app(settings)) as restarted:
         assert restarted.get(f"/api/research-runs/{run_id}").json() == failed
         restarted_worker = _run_worker_once(settings)
-        assert restarted_worker.returncode == 0, (
-            restarted_worker.stdout + restarted_worker.stderr
-        )
+        assert restarted_worker.returncode == 0, restarted_worker.stdout + restarted_worker.stderr
         assert len(_attempts(settings, run_id)) == 2
 
 
@@ -548,87 +619,6 @@ def _remove_resource_exhaustion(settings: CoreSettings) -> None:
         database.close()
 
 
-def _start_blocked_worker(
-    settings: CoreSettings,
-) -> tuple[subprocess.Popen[str], Connection[object]]:
-    advisory_owner = connect(settings.database_url, autocommit=True)
-    advisory_owner.execute("SELECT pg_advisory_lock(150015)").fetchone()
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute(
-                """
-                CREATE FUNCTION publication.block_ticket15_manifest() RETURNS trigger
-                LANGUAGE plpgsql AS $$
-                BEGIN
-                    PERFORM pg_advisory_xact_lock(150015);
-                    RETURN NEW;
-                END
-                $$;
-                CREATE TRIGGER block_ticket15_manifest
-                BEFORE INSERT ON publication.manifests
-                FOR EACH ROW
-                EXECUTE FUNCTION publication.block_ticket15_manifest();
-                """
-            )
-    finally:
-        database.close()
-    worker = subprocess.Popen(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
-        env=_worker_environment(settings),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    return worker, advisory_owner
-
-
-def _wait_for_advisory_waiter(settings: CoreSettings) -> bool:
-    poll = Event()
-    for _ in range(500):
-        database = PostgresDatabase(settings.database_url)
-        database.open()
-        try:
-            with database.transaction() as transaction:
-                row = transaction.execute(
-                    """
-                    SELECT EXISTS (
-                        SELECT 1
-                        FROM pg_locks
-                        WHERE locktype = 'advisory' AND NOT granted
-                    ) AS waiting
-                    """
-                ).fetchone()
-        finally:
-            database.close()
-        assert row is not None
-        if bool(row["waiting"]):
-            return True
-        poll.wait(0.02)
-    return False
-
-
-def _waiting_advisory_backend_pid(settings: CoreSettings) -> int:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT pid
-                FROM pg_locks
-                WHERE locktype = 'advisory' AND NOT granted
-                ORDER BY pid
-                LIMIT 1
-                """
-            ).fetchone()
-        assert row is not None
-        return int(row["pid"])
-    finally:
-        database.close()
-
-
 def _terminate_backend(settings: CoreSettings, backend_pid: int) -> None:
     database = PostgresDatabase(settings.database_url)
     database.open()
@@ -643,20 +633,84 @@ def _terminate_backend(settings: CoreSettings, backend_pid: int) -> None:
         database.close()
 
 
-def _release_worker_block(
+@contextmanager
+def _blocked_worker(
     settings: CoreSettings,
-    advisory_owner: Connection[object],
-) -> None:
-    advisory_owner.execute("SELECT pg_advisory_unlock(150015)").fetchone()
-    advisory_owner.close()
+    run_id: str,
+) -> Iterator[_BlockedWorker]:
+    advisory_owner: Connection[object] | None = None
+    trigger_created = False
+    blocked: _BlockedWorker | None = None
+    try:
+        advisory_owner = connect(settings.database_url, autocommit=True)
+        advisory_owner.execute("SELECT pg_advisory_lock(%s)", (ADVISORY_KEY,)).fetchone()
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    CREATE FUNCTION publication.block_ticket15_manifest()
+                    RETURNS trigger
+                    LANGUAGE plpgsql AS $$
+                    BEGIN
+                        PERFORM pg_advisory_xact_lock(150015);
+                        RETURN NEW;
+                    END
+                    $$;
+                    CREATE TRIGGER block_ticket15_manifest
+                    BEFORE INSERT ON publication.manifests
+                    FOR EACH ROW
+                    EXECUTE FUNCTION publication.block_ticket15_manifest();
+                    """
+                )
+            trigger_created = True
+        finally:
+            database.close()
+        application_name = f"ticket15_{uuid4().hex}"
+        worker_settings = replace(
+            settings,
+            database_url=make_conninfo(
+                settings.database_url,
+                application_name=application_name,
+            ),
+        )
+        process = subprocess.Popen(
+            [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+            env=_worker_environment(worker_settings),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        blocked = _BlockedWorker(
+            settings=settings,
+            run_id=run_id,
+            process=process,
+            advisory_owner=advisory_owner,
+            application_name=application_name,
+        )
+        yield blocked
+    finally:
+        if blocked is not None:
+            blocked.close()
+        else:
+            if advisory_owner is not None and not advisory_owner.closed:
+                advisory_owner.execute("SELECT pg_advisory_unlock(%s)", (ADVISORY_KEY,)).fetchone()
+                advisory_owner.close()
+            if trigger_created:
+                _drop_worker_block(settings)
+
+
+def _drop_worker_block(settings: CoreSettings) -> None:
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
         with database.transaction() as transaction:
             transaction.execute(
                 """
-                DROP TRIGGER block_ticket15_manifest ON publication.manifests;
-                DROP FUNCTION publication.block_ticket15_manifest();
+                DROP TRIGGER IF EXISTS block_ticket15_manifest
+                    ON publication.manifests;
+                DROP FUNCTION IF EXISTS publication.block_ticket15_manifest();
                 """
             )
     finally:
