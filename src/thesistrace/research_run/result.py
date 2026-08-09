@@ -24,14 +24,16 @@ from thesistrace.publication.serialization import (
 from thesistrace.research_kernel.kernel_run import RunOutput
 from thesistrace.research_kernel.numeric import canonical_decimal
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
-from thesistrace.research_run.result_schema import (
+from thesistrace.research_kernel.terminal_state_schema import (
     LAST_DAILY_OBSERVATION_KEYS,
     METRIC_STATE_KEYS,
+    TerminalStrategyStateValue,
+)
+from thesistrace.research_run.result_schema import (
     STRATEGY_METRIC_KEYS,
     FactorSummaryValue,
     StrategyDailyObservationsValue,
     StrategySummaryValue,
-    TerminalStrategyStateValue,
 )
 
 __all__ = (

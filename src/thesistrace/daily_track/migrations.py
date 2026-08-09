@@ -226,6 +226,7 @@ MIGRATIONS = MigrationPlan(
                     created_at timestamptz NOT NULL DEFAULT now(),
                     UNIQUE (track_id, boundary_session),
                     UNIQUE (track_id, manifest_sha256),
+                    UNIQUE (track_id, boundary_session, manifest_sha256),
                     FOREIGN KEY (track_id, predecessor_manifest_sha256)
                         REFERENCES daily_tracks.session_checkpoints(
                             track_id, manifest_sha256
@@ -242,24 +243,25 @@ MIGRATIONS = MigrationPlan(
                 CREATE TABLE daily_tracks.session_tracking_states (
                     track_id text PRIMARY KEY REFERENCES daily_tracks.tracks(id),
                     origin_session date NOT NULL,
-                    current_checkpoint_session date NOT NULL,
+                    origin_checkpoint_manifest_sha256 text NOT NULL,
                     current_checkpoint_manifest_sha256 text NOT NULL,
-                    terminal_strategy_state jsonb NOT NULL CHECK (
-                        jsonb_typeof(terminal_strategy_state) = 'object'
-                    ),
                     updated_at timestamptz NOT NULL DEFAULT now(),
+                    FOREIGN KEY (
+                        track_id, origin_session,
+                        origin_checkpoint_manifest_sha256
+                    ) REFERENCES daily_tracks.session_checkpoints(
+                        track_id, boundary_session, manifest_sha256
+                    ),
                     FOREIGN KEY (track_id, current_checkpoint_manifest_sha256)
                         REFERENCES daily_tracks.session_checkpoints(
                             track_id, manifest_sha256
-                        ),
-                    CHECK (current_checkpoint_session >= origin_session)
+                        )
                 );
 
                 CREATE TABLE daily_tracks.session_progressions (
                     id text PRIMARY KEY,
                     track_id text NOT NULL REFERENCES daily_tracks.tracks(id),
                     predecessor_checkpoint_manifest_sha256 text NOT NULL,
-                    predecessor_checkpoint_session date NOT NULL,
                     target_sessions date[] NOT NULL,
                     target_start_session date NOT NULL,
                     target_end_session date NOT NULL,
@@ -274,6 +276,7 @@ MIGRATIONS = MigrationPlan(
                     created_at timestamptz NOT NULL DEFAULT now(),
                     finished_at timestamptz NULL,
                     UNIQUE (track_id, id),
+                    UNIQUE (track_id, id, target_end_session),
                     UNIQUE (track_id, target_end_session),
                     FOREIGN KEY (
                         track_id, predecessor_checkpoint_manifest_sha256
@@ -286,7 +289,6 @@ MIGRATIONS = MigrationPlan(
                         target_end_session =
                             target_sessions[cardinality(target_sessions)]
                     ),
-                    CHECK (predecessor_checkpoint_session < target_start_session),
                     CHECK (
                         (status = 'succeeded'
                             AND checkpoint_manifest_sha256 IS NOT NULL
@@ -325,8 +327,10 @@ MIGRATIONS = MigrationPlan(
 
                 ALTER TABLE daily_tracks.session_checkpoints
                     ADD CONSTRAINT session_checkpoint_progression_fk
-                    FOREIGN KEY (track_id, progression_id)
-                    REFERENCES daily_tracks.session_progressions(track_id, id);
+                    FOREIGN KEY (track_id, progression_id, boundary_session)
+                    REFERENCES daily_tracks.session_progressions(
+                        track_id, id, target_end_session
+                    );
             """,
         ),
     ),

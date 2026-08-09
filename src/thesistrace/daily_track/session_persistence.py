@@ -6,8 +6,10 @@ from itertools import pairwise
 from typing import Literal
 
 from psycopg.types.json import Jsonb
+from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.research_kernel.terminal_state_schema import TerminalStrategyStateValue
 
 
 class SessionCoordinateConflict(ValueError):
@@ -85,7 +87,7 @@ class SessionCoordinateRepository:
         data_generation_id: str,
         provenance: dict[str, object],
     ) -> None:
-        _require_state_boundary(terminal_strategy_state, origin_session)
+        validated_state = _validated_state(terminal_strategy_state, origin_session)
         transaction.execute(
             """
             INSERT INTO daily_tracks.session_checkpoints (
@@ -98,7 +100,7 @@ class SessionCoordinateRepository:
                 checkpoint_manifest_sha256,
                 track_id,
                 origin_session,
-                Jsonb(terminal_strategy_state),
+                Jsonb(validated_state),
                 data_generation_id,
                 Jsonb(provenance),
             ),
@@ -106,16 +108,15 @@ class SessionCoordinateRepository:
         transaction.execute(
             """
             INSERT INTO daily_tracks.session_tracking_states (
-                track_id, origin_session, current_checkpoint_session,
-                current_checkpoint_manifest_sha256, terminal_strategy_state
-            ) VALUES (%s, %s, %s, %s, %s)
+                track_id, origin_session, origin_checkpoint_manifest_sha256,
+                current_checkpoint_manifest_sha256
+            ) VALUES (%s, %s, %s, %s)
             """,
             (
                 track_id,
                 origin_session,
-                origin_session,
                 checkpoint_manifest_sha256,
-                Jsonb(terminal_strategy_state),
+                checkpoint_manifest_sha256,
             ),
         )
 
@@ -133,10 +134,14 @@ class SessionCoordinateRepository:
     ) -> None:
         state = transaction.execute(
             """
-            SELECT current_checkpoint_session,
-                   current_checkpoint_manifest_sha256
-            FROM daily_tracks.session_tracking_states
-            WHERE track_id = %s
+            SELECT checkpoint.boundary_session AS current_checkpoint_session,
+                   state.current_checkpoint_manifest_sha256
+            FROM daily_tracks.session_tracking_states AS state
+            JOIN daily_tracks.session_checkpoints AS checkpoint
+              ON checkpoint.track_id = state.track_id
+             AND checkpoint.manifest_sha256 =
+                    state.current_checkpoint_manifest_sha256
+            WHERE state.track_id = %s
             FOR UPDATE
             """,
             (track_id,),
@@ -157,16 +162,14 @@ class SessionCoordinateRepository:
             """
             INSERT INTO daily_tracks.session_progressions (
                 id, track_id, predecessor_checkpoint_manifest_sha256,
-                predecessor_checkpoint_session, target_sessions,
-                target_start_session, target_end_session,
+                target_sessions, target_start_session, target_end_session,
                 data_generation_id, status, provenance
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'running', %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
             """,
             (
                 progression_id,
                 track_id,
                 expected_checkpoint_manifest_sha256,
-                current_session,
                 list(target_sessions),
                 target_sessions[0],
                 target_sessions[-1],
@@ -269,7 +272,7 @@ class SessionCoordinateRepository:
         ):
             raise SessionCoordinateConflict("Progression Attempt is fenced")
         boundary = row["target_end_session"]
-        _require_state_boundary(terminal_strategy_state, boundary)
+        validated_state = _validated_state(terminal_strategy_state, boundary)
         transaction.execute(
             """
             INSERT INTO daily_tracks.session_checkpoints (
@@ -284,7 +287,7 @@ class SessionCoordinateRepository:
                 progression_id,
                 row["predecessor_checkpoint_manifest_sha256"],
                 boundary,
-                Jsonb(terminal_strategy_state),
+                Jsonb(validated_state),
                 row["data_generation_id"],
                 Jsonb(provenance),
             ),
@@ -310,16 +313,13 @@ class SessionCoordinateRepository:
         state = transaction.execute(
             """
             UPDATE daily_tracks.session_tracking_states
-            SET current_checkpoint_session = %s,
-                current_checkpoint_manifest_sha256 = %s,
-                terminal_strategy_state = %s, updated_at = now()
+            SET current_checkpoint_manifest_sha256 = %s,
+                updated_at = now()
             WHERE track_id = %s
               AND current_checkpoint_manifest_sha256 = %s
             """,
             (
-                boundary,
                 checkpoint_manifest_sha256,
-                Jsonb(terminal_strategy_state),
                 row["track_id"],
                 row["predecessor_checkpoint_manifest_sha256"],
             ),
@@ -329,13 +329,19 @@ class SessionCoordinateRepository:
 
     def load(self, track_id: str) -> SessionCoordinateSnapshot:
         with self._database.transaction() as transaction:
+            transaction.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             track = transaction.execute(
                 """
-                SELECT track_id, origin_session, current_checkpoint_session,
-                       current_checkpoint_manifest_sha256,
-                       terminal_strategy_state
-                FROM daily_tracks.session_tracking_states
-                WHERE track_id = %s
+                SELECT state.track_id, state.origin_session,
+                       checkpoint.boundary_session AS current_checkpoint_session,
+                       state.current_checkpoint_manifest_sha256,
+                       checkpoint.terminal_strategy_state
+                FROM daily_tracks.session_tracking_states AS state
+                JOIN daily_tracks.session_checkpoints AS checkpoint
+                  ON checkpoint.track_id = state.track_id
+                 AND checkpoint.manifest_sha256 =
+                        state.current_checkpoint_manifest_sha256
+                WHERE state.track_id = %s
                 """,
                 (track_id,),
             ).fetchone()
@@ -343,14 +349,20 @@ class SessionCoordinateRepository:
                 raise SessionCoordinateConflict("Session Tracking State does not exist")
             progressions = transaction.execute(
                 """
-                SELECT id, track_id,
-                       predecessor_checkpoint_manifest_sha256,
-                       predecessor_checkpoint_session, target_sessions,
-                       data_generation_id, status,
-                       checkpoint_manifest_sha256, provenance
-                FROM daily_tracks.session_progressions
-                WHERE track_id = %s
-                ORDER BY target_end_session, id
+                SELECT progression.id, progression.track_id,
+                       progression.predecessor_checkpoint_manifest_sha256,
+                       predecessor.boundary_session AS predecessor_checkpoint_session,
+                       progression.target_sessions,
+                       progression.data_generation_id, progression.status,
+                       progression.checkpoint_manifest_sha256,
+                       progression.provenance
+                FROM daily_tracks.session_progressions AS progression
+                JOIN daily_tracks.session_checkpoints AS predecessor
+                  ON predecessor.track_id = progression.track_id
+                 AND predecessor.manifest_sha256 =
+                        progression.predecessor_checkpoint_manifest_sha256
+                WHERE progression.track_id = %s
+                ORDER BY progression.target_end_session, progression.id
                 """,
                 (track_id,),
             ).fetchall()
@@ -381,7 +393,15 @@ class SessionCoordinateRepository:
                 (track_id,),
             ).fetchall()
         return SessionCoordinateSnapshot(
-            track=SessionTrackRecord(**track),
+            track=SessionTrackRecord(
+                **{
+                    **track,
+                    "terminal_strategy_state": _validated_state(
+                        track["terminal_strategy_state"],
+                        track["current_checkpoint_session"],
+                    ),
+                }
+            ),
             progressions=tuple(
                 SessionProgressionRecord(
                     **{**row, "target_sessions": tuple(row["target_sessions"])}
@@ -389,7 +409,18 @@ class SessionCoordinateRepository:
                 for row in progressions
             ),
             attempts=tuple(SessionAttemptRecord(**row) for row in attempts),
-            checkpoints=tuple(SessionCheckpointRecord(**row) for row in checkpoints),
+            checkpoints=tuple(
+                SessionCheckpointRecord(
+                    **{
+                        **row,
+                        "terminal_strategy_state": _validated_state(
+                            row["terminal_strategy_state"],
+                            row["boundary_session"],
+                        ),
+                    }
+                )
+                for row in checkpoints
+            ),
         )
 
 
@@ -418,6 +449,11 @@ def _strictly_increasing(sessions: tuple[date, ...]) -> bool:
     return all(left < right for left, right in pairwise(sessions))
 
 
-def _require_state_boundary(state: dict[str, object], boundary: date) -> None:
-    if state.get("session") != boundary.isoformat():
+def _validated_state(state: object, boundary: date) -> dict[str, object]:
+    try:
+        validated = TerminalStrategyStateValue.model_validate(state)
+    except ValidationError as error:
+        raise SessionCoordinateConflict("Terminal Strategy State is invalid") from error
+    if validated.session != boundary.isoformat():
         raise SessionCoordinateConflict("Terminal Strategy State boundary does not match")
+    return validated.model_dump(mode="json")
