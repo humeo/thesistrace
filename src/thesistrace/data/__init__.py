@@ -2,6 +2,11 @@ from thesistrace.data.fields import (
     AuthorableField,
     authorable_field_bindings,
 )
+from thesistrace.data.generation_store import (
+    GenerationStoreError,
+    MountedGeneration,
+    MountedGenerationStore,
+)
 from thesistrace.data.models import DataOverview, ReleaseHistory, ReleaseSummary, UpdateAcceptance
 from thesistrace.data.service import DataService, NextRelease
 from thesistrace.data.source import (
@@ -22,6 +27,9 @@ __all__ = [
     "NextRelease",
     "DataSource",
     "DataSourceError",
+    "GenerationStoreError",
+    "MountedGeneration",
+    "MountedGenerationStore",
     "ReleaseHistory",
     "ReleaseSummary",
     "UpdateAcceptance",

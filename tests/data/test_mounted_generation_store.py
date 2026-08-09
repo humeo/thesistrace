@@ -1,0 +1,381 @@
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
+
+import pyarrow as pa
+import pytest
+
+from thesistrace.data.generation_store import (
+    GENERATION_MANIFEST_MAX_BYTES,
+    GENERATION_SESSION_PARTITION_COUNT,
+    GenerationStoreError,
+    MountedGenerationStore,
+)
+from thesistrace.publication.serialization import (
+    ParquetWriterContract,
+    canonical_json_bytes,
+    parquet_bytes,
+)
+
+
+def test_materialized_generation_reopens_every_canonical_table_after_restart(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+
+    materialized = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    reopened = MountedGenerationStore(tmp_path).open_generation(materialized.manifest_sha256)
+
+    assert reopened.manifest_sha256 == materialized.manifest_sha256
+    assert reopened.data_identity == materialized.data_identity
+    assert reopened.dataset_coverage == {
+        "start": canonical["research_calendar"][0],
+        "end": canonical["research_calendar"][-1],
+        "session_count": len(canonical["research_calendar"]),
+    }
+    assert reopened.data_through_session == canonical["research_calendar"][-1]
+    assert reopened.field_availability == (
+        "market.turnover.cny",
+        "price.close.adjusted",
+    )
+    assert reopened.preparation == {
+        "prepared_at": "2026-08-09T00:00:00+00:00",
+        "source_lineage_sha256": hashlib.sha256(
+            canonical_json_bytes({"snapshot": "fixed"})
+        ).hexdigest(),
+        "source_name": "deterministic-test",
+    }
+    assert reopened.canonical == canonical
+
+    root = _manifest(tmp_path, materialized.manifest_sha256)
+    assert len(canonical_json_bytes(root)) <= GENERATION_MANIFEST_MAX_BYTES
+    assert root["schema_contract"] == "canonical-eod-v1"
+    price_table = next(table for table in root["tables"] if table["name"] == "prices")
+    price_manifest = _manifest(tmp_path, price_table["manifest_sha256"])
+    assert len(canonical_json_bytes(price_manifest)) <= GENERATION_MANIFEST_MAX_BYTES
+    assert len(price_manifest["objects"]) == 2
+    assert price_manifest["partitioning"] == {
+        "kind": "research-session-block",
+        "session_count": GENERATION_SESSION_PARTITION_COUNT,
+    }
+    assert price_manifest["writer_contract"]["compression"]["codec"] == "zstd"
+
+
+def test_reordered_source_rows_reuse_identical_physical_data_objects(tmp_path: Path) -> None:
+    canonical = _canonical()
+    reordered = copy.deepcopy(canonical)
+    for table in (
+        "instruments",
+        "prices",
+        "trading_states",
+        "price_limits",
+        "adjustment_anchors",
+        "base_pool",
+        "industry_membership",
+        "st_designations",
+        "field_catalog",
+    ):
+        reordered[table] = list(reversed(reordered[table]))
+    reordered["liquidity_universes"] = {
+        name: list(reversed(rows))
+        for name, rows in reversed(tuple(reordered["liquidity_universes"].items()))
+    }
+    store = MountedGenerationStore(tmp_path)
+    preparation = {
+        "prepared_at": datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        "source_name": "deterministic-test",
+        "source_lineage": {"snapshot": "fixed"},
+    }
+
+    first = store.materialize(canonical, **preparation)
+    object_names = sorted(path.name for path in (tmp_path / "objects").rglob("*.parquet"))
+    second = store.materialize(reordered, **preparation)
+
+    assert second.data_identity == first.data_identity
+    assert second.manifest_sha256 == first.manifest_sha256
+    assert sorted(path.name for path in (tmp_path / "objects").rglob("*.parquet")) == object_names
+    assert (
+        MountedGenerationStore(tmp_path).open_generation(second.manifest_sha256).canonical
+        == canonical
+    )
+
+
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_missing_or_corrupt_object_is_never_reopened_as_a_generation(
+    tmp_path: Path,
+    damage: str,
+) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    root = _manifest(tmp_path, generation.manifest_sha256)
+    table = _manifest(tmp_path, root["tables"][0]["manifest_sha256"])
+    object_sha256 = table["objects"][0]["sha256"]
+    object_path = _object_path(tmp_path, object_sha256)
+    if damage == "missing":
+        object_path.unlink()
+    else:
+        object_path.write_bytes(b"corrupt")
+
+    with pytest.raises(GenerationStoreError, match="missing|checksum"):
+        MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
+
+    if damage == "corrupt":
+        with pytest.raises(GenerationStoreError, match="immutable"):
+            store.materialize(
+                _canonical(),
+                prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+                source_name="deterministic-test",
+                source_lineage={"snapshot": "fixed"},
+            )
+
+
+def test_partial_or_incompatible_manifest_is_rejected(tmp_path: Path) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    _manifest_path(tmp_path, generation.manifest_sha256).write_bytes(b'{"format":')
+    with pytest.raises(GenerationStoreError, match="checksum"):
+        store.open_generation(generation.manifest_sha256)
+
+    incompatible = canonical_json_bytes(
+        {"format": "thesistrace-canonical-generation", "version": 2}
+    )
+    incompatible_sha256 = hashlib.sha256(incompatible).hexdigest()
+    incompatible_path = _manifest_path(tmp_path, incompatible_sha256)
+    incompatible_path.parent.mkdir(parents=True, exist_ok=True)
+    incompatible_path.write_bytes(incompatible)
+    with pytest.raises(GenerationStoreError, match="incompatible"):
+        store.open_generation(incompatible_sha256)
+
+
+def test_incompatible_parquet_schema_is_rejected_even_with_consistent_hashes(
+    tmp_path: Path,
+) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    root = _manifest(tmp_path, generation.manifest_sha256)
+    table_ref = root["tables"][0]
+    table = _manifest(tmp_path, table_ref["manifest_sha256"])
+    wrong_contract = ParquetWriterContract(
+        name="incompatible-generation-test",
+        version=1,
+        schema=pa.schema([pa.field("session", pa.int64(), nullable=False)]),
+        sort_keys=("session",),
+    )
+    wrong_rows = [{"session": index} for index in range(GENERATION_SESSION_PARTITION_COUNT)]
+    wrong_object = parquet_bytes(wrong_rows, wrong_contract)
+    wrong_object_sha256 = hashlib.sha256(wrong_object).hexdigest()
+    wrong_object_path = _object_path(tmp_path, wrong_object_sha256)
+    wrong_object_path.parent.mkdir(parents=True, exist_ok=True)
+    wrong_object_path.write_bytes(wrong_object)
+    table["objects"][0].update(
+        {
+            "sha256": wrong_object_sha256,
+            "byte_count": len(wrong_object),
+            "row_count": len(wrong_rows),
+            "first_sort_key": [0],
+            "last_sort_key": [GENERATION_SESSION_PARTITION_COUNT - 1],
+        }
+    )
+    table_sha256, table_bytes = _write_manifest(tmp_path, table)
+    table_ref.update({"manifest_sha256": table_sha256, "manifest_byte_count": len(table_bytes)})
+    identity = {
+        key: root[key]
+        for key in (
+            "schema_contract",
+            "dataset_coverage",
+            "data_through_session",
+            "field_availability",
+            "tables",
+        )
+    }
+    root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    root_sha256, _ = _write_manifest(tmp_path, root)
+
+    with pytest.raises(GenerationStoreError, match="schema is incompatible"):
+        store.open_generation(root_sha256)
+
+
+def _canonical() -> dict[str, object]:
+    sessions = _research_sessions(GENERATION_SESSION_PARTITION_COUNT + 1)
+    instruments = (
+        {
+            "instrument_id": "equity:A.SH",
+            "ts_code": "A.SH",
+            "asset_type": "ordinary_a_share",
+            "exchange": "SSE",
+            "board": "main",
+            "listed_from": sessions[0],
+            "listed_to": "",
+        },
+        {
+            "instrument_id": "equity:B.SZ",
+            "ts_code": "B.SZ",
+            "asset_type": "ordinary_a_share",
+            "exchange": "SZSE",
+            "board": "main",
+            "listed_from": sessions[0],
+            "listed_to": "",
+        },
+    )
+    prices: list[dict[str, str]] = []
+    states: list[dict[str, str]] = []
+    limits: list[dict[str, str]] = []
+    base_pool: list[dict[str, object]] = []
+    universes = {name: [] for name in ("top300", "top1000", "top2000", "top3000")}
+    for ordinal, session in enumerate(sessions):
+        members = ["equity:A.SH", "equity:B.SZ"]
+        base_pool.append({"session": session, "instrument_ids": members})
+        for universe_rows in universes.values():
+            universe_rows.append(
+                {"session": session, "instrument_ids": members, "status": "available"}
+            )
+        for instrument_index, instrument_id in enumerate(members):
+            raw = 10 + ordinal + instrument_index
+            states.append({"session": session, "instrument_id": instrument_id, "state": "normal"})
+            prices.append(
+                {
+                    "session": session,
+                    "instrument_id": instrument_id,
+                    "open_raw": f"{raw}.0000",
+                    "high_raw": f"{raw + 1}.0000",
+                    "low_raw": f"{raw - 1}.0000",
+                    "close_raw": f"{raw}.5000",
+                    "pre_close_raw": f"{raw}.0000",
+                    "change_raw": "0.5000",
+                    "pct_change_raw": "5.000000",
+                    "volume_shares": "10000",
+                    "turnover_cny": str(raw * 10000),
+                    "adjustment_factor": "1.000000",
+                    "adjustment_anchor_factor": "1.000000",
+                    "open_adj": f"{raw}.00000000",
+                    "high_adj": f"{raw + 1}.00000000",
+                    "low_adj": f"{raw - 1}.00000000",
+                    "close_adj": f"{raw}.50000000",
+                    "trading_state": "normal",
+                }
+            )
+            limits.append(
+                {
+                    "session": session,
+                    "instrument_id": instrument_id,
+                    "upper": f"{raw + 1}.0000",
+                    "lower": f"{raw - 1}.0000",
+                }
+            )
+    return {
+        "schema_version": "canonical-eod-v1",
+        "research_calendar": sessions,
+        "instruments": list(instruments),
+        "prices": prices,
+        "trading_states": states,
+        "price_limits": limits,
+        "adjustment_anchors": [
+            {
+                "instrument_id": instrument["instrument_id"],
+                "anchor_session": sessions[0],
+                "anchor_factor": "1.000000",
+            }
+            for instrument in instruments
+        ],
+        "base_pool": base_pool,
+        "liquidity_universes": universes,
+        "industry_membership": [
+            {
+                "instrument_id": instrument["instrument_id"],
+                "active_from": sessions[0],
+                "active_to": "",
+                "sw2021_l1": "L1",
+                "sw2021_l2": "L2",
+                "sw2021_l3": "L3",
+            }
+            for instrument in instruments
+        ],
+        "st_designations": [
+            {
+                "ts_code": "B.SZ",
+                "name": "B ST",
+                "trade_date": sessions[-1],
+                "type": "S",
+                "type_name": "ST",
+                "instrument_id": "equity:B.SZ",
+            }
+        ],
+        "field_catalog": [
+            {
+                "name": "turnover_amount_cny",
+                "field_id": "market.turnover.cny",
+                "definition": "turnover amount",
+                "unit": "CNY",
+                "time_semantics": "post-close",
+                "alpha_authorable": True,
+                "release_available_from": sessions[-1],
+                "coverage": "canonical EOD price rows",
+            },
+            {
+                "name": "close_adj",
+                "field_id": "price.close.adjusted",
+                "definition": "adjusted close",
+                "unit": "CNY/share",
+                "time_semantics": "post-close",
+                "alpha_authorable": True,
+                "release_available_from": sessions[-1],
+                "coverage": "canonical EOD price rows",
+            },
+        ],
+    }
+
+
+def _research_sessions(count: int) -> list[str]:
+    current = date(2024, 1, 2)
+    sessions: list[str] = []
+    while len(sessions) < count:
+        if current.weekday() < 5:
+            sessions.append(current.isoformat())
+        current += timedelta(days=1)
+    return sessions
+
+
+def _manifest(root: Path, sha256: str) -> dict[str, object]:
+    return json.loads(_manifest_path(root, sha256).read_bytes())
+
+
+def _manifest_path(root: Path, sha256: str) -> Path:
+    return root / "manifests" / "sha256" / sha256[:2] / f"{sha256}.json"
+
+
+def _object_path(root: Path, sha256: str) -> Path:
+    return root / "objects" / "sha256" / sha256[:2] / f"{sha256}.parquet"
+
+
+def _write_manifest(root: Path, value: dict[str, object]) -> tuple[str, bytes]:
+    content = canonical_json_bytes(value)
+    sha256 = hashlib.sha256(content).hexdigest()
+    path = _manifest_path(root, sha256)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return sha256, content
