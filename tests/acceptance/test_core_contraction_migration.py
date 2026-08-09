@@ -3,8 +3,8 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from core_runtime import drop_product_schemas
 from psycopg.types.json import Jsonb
-from test_core_daily_track_activation import _drop_product_schemas
 
 from thesistrace._postgres import MigrationPlan, PostgresDatabase, apply_migrations
 from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
@@ -63,7 +63,7 @@ def test_published_migration_history_forwards_legacy_receipts_then_drops_table()
     assert _historical_sha256(RESEARCH_RUN_MIGRATIONS) == HISTORICAL_RESEARCH_RUN_SHA256
 
     settings = CoreSettings.from_environment()
-    _drop_product_schemas(settings)
+    drop_product_schemas(settings)
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:

@@ -94,7 +94,14 @@ capture_evidence() {
 
 cleanup_project() {
   validate_cleanup_target
-  compose down --volumes --remove-orphans
+  compose_status=0
+  compose down --volumes --remove-orphans || compose_status=$?
+  mount_status=0
+  rm -rf -- "$state_root/$run_id/canonical-data" || mount_status=$?
+  if [ "$compose_status" -ne 0 ]; then
+    return "$compose_status"
+  fi
+  return "$mount_status"
 }
 
 handle_signal() {

@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.data.head_store import MountedDatasetHeadStore
+from thesistrace.data.head_store import DatasetHeadPointer, MountedDatasetHeadStore
 from thesistrace.data.lifecycle import lock_data_lifecycle
 from thesistrace.data.models import DataOverview, DatasetCoverage
 
@@ -14,7 +14,7 @@ class DatasetOverviewService:
     def __init__(self, database: PostgresDatabase, mount_root: Path | str) -> None:
         self._database = database
         self._heads = MountedDatasetHeadStore(mount_root)
-        self._validated_manifest_sha256: str | None = None
+        self._validated_pointer: DatasetHeadPointer | None = None
 
     def validate_startup(self) -> None:
         self.overview()
@@ -30,9 +30,9 @@ class DatasetOverviewService:
                     last_refresh_at=None,
                     readiness=False,
                 )
-            if pointer.generation_manifest_sha256 != self._validated_manifest_sha256:
+            if pointer != self._validated_pointer:
                 self._heads.resolve(pointer)
-                self._validated_manifest_sha256 = pointer.generation_manifest_sha256
+                self._validated_pointer = pointer
             state = transaction.execute(
                 """
                 SELECT last_refresh_at
