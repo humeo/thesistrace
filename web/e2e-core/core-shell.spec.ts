@@ -244,7 +244,9 @@ test("reruns the selected immutable input at a new stable Run URL", async ({ pag
 
   await page.goto("/research-runs/run_1111aaaa");
   await expect(page.getByText("Status succeeded", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Rerun", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Rerun on current data", exact: true })
+    .click();
 
   await expect(page).toHaveURL(/\/research-runs\/run_2222bbbb$/);
   await expect(page.getByText("Status queued", { exact: true })).toBeVisible();

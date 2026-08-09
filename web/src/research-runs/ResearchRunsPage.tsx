@@ -339,7 +339,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
                 disabled={rerunning || startingTracking}
                 onClick={() => void rerunSelected()}
               >
-                {rerunning ? "Rerunning…" : "Rerun"}
+                {rerunning ? "Rerunning on current data…" : "Rerun on current data"}
               </button>
             ) : null}
             {run.status === "succeeded" ? (
