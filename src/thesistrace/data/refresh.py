@@ -49,6 +49,7 @@ class RefreshOutcome:
     data_through_session: str | None
     last_refresh_at: str | None
     failure_code: str | None
+    last_failure_code: str | None
     attempt_count: int
 
 
@@ -172,7 +173,7 @@ class DataRefreshService:
                     raise DataRefreshError("DATA_NOT_READY")
                 expected_manifest = head.generation_manifest_sha256
                 self._record_expected_head(claim, expected_manifest)
-                plan = refresh_collection_plan(self._as_of(claim.key), head.generation.canonical)
+                plan = refresh_collection_plan(self._as_of(claim), head.generation.canonical)
                 batch = source.collect(plan)
                 heartbeat.assert_owned()
                 validate_release_batch(batch, predecessor_session=head.data_through_session)
@@ -209,12 +210,18 @@ class DataRefreshService:
                     prepared_at=prepared_at,
                 )
                 heartbeat.assert_owned()
-                moved = self._lifecycle.compare_and_swap_head(
-                    expected_generation_manifest_sha256=expected_manifest,
-                    candidate_generation_manifest_sha256=generation.manifest_sha256,
-                    operation_id=operation_id,
-                    prepared_at=prepared_at,
-                )
+                try:
+                    moved = self._lifecycle.compare_and_swap_head(
+                        expected_generation_manifest_sha256=expected_manifest,
+                        candidate_generation_manifest_sha256=generation.manifest_sha256,
+                        operation_id=operation_id,
+                        prepared_at=prepared_at,
+                    )
+                except Exception:
+                    if self._head_matches(generation.manifest_sha256):
+                        head_moved = True
+                        candidate_live = False
+                    raise
                 candidate_live = False
                 head_moved = True
                 completed_at = self._operator_time()
@@ -310,15 +317,19 @@ class DataRefreshService:
                             updated_at = now()
                         WHERE idempotency_key = %s AND status = 'running'
                           AND owner_token = %s
+                          AND lease_expires_at > now()
                         """,
                         (self._lease_seconds, claim.key, claim.owner_token),
                     )
+                    if renewed.rowcount != 1:
+                        raise _RefreshFenced("Refresh operation lease expired")
                     transaction.execute(
                         """
                         UPDATE data.generation_candidates
                         SET lease_expires_at = now() + make_interval(secs => %s),
                             updated_at = now()
                         WHERE operation_id = %s AND status = 'live'
+                          AND lease_expires_at > now()
                         """,
                         (
                             self._lease_seconds,
@@ -332,18 +343,17 @@ class DataRefreshService:
                 )
                 failed.set()
                 return
-            if renewed.rowcount != 1:
-                failed.set()
-                return
 
-    def _as_of(self, key: str) -> datetime:
+    def _as_of(self, claim: _RefreshClaim) -> datetime:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
                 SELECT as_of FROM data.refresh_operations
                 WHERE idempotency_key = %s AND status = 'running'
+                  AND owner_token = %s
+                  AND lease_expires_at > now()
                 """,
-                (key,),
+                (claim.key, claim.owner_token),
             ).fetchone()
         if row is None:
             raise _RefreshFenced("Refresh operation no longer owns work")
@@ -360,6 +370,7 @@ class DataRefreshService:
                 UPDATE data.refresh_operations
                 SET expected_generation_manifest_sha256 = %s, updated_at = now()
                 WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
+                  AND lease_expires_at > now()
                 """,
                 (expected_manifest, claim.key, claim.owner_token),
             )
@@ -386,6 +397,7 @@ class DataRefreshService:
                     lease_expires_at = now() + make_interval(secs => %s), updated_at = now()
                 WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
                   AND expected_generation_manifest_sha256 = %s
+                  AND lease_expires_at > now()
                 """,
                 (
                     candidate_manifest,
@@ -419,6 +431,15 @@ class DataRefreshService:
                 generation_manifest_sha256=expected_manifest,
                 data_through_session=data_through_session,
                 completed_at=completed_at,
+            )
+
+    def _head_matches(self, generation_manifest_sha256: str) -> bool:
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            pointer = self._heads.current_pointer()
+            return (
+                pointer is not None
+                and pointer.generation_manifest_sha256 == generation_manifest_sha256
             )
 
     def _complete_published(
@@ -459,21 +480,23 @@ class DataRefreshService:
                     SET status = 'accepted', owner_token = NULL, lease_expires_at = NULL,
                         expected_generation_manifest_sha256 = NULL,
                         generation_manifest_sha256 = NULL, candidate_prepared_at = NULL,
-                        started_at = NULL, updated_at = now()
+                        started_at = NULL, last_failure_code = %s, updated_at = now()
                     WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
+                      AND lease_expires_at > now()
                     """,
-                    (claim.key, claim.owner_token),
+                    (code, claim.key, claim.owner_token),
                 )
             else:
                 terminal_code = "RETRY_EXHAUSTED" if retryable else code
                 updated = transaction.execute(
                     """
                     UPDATE data.refresh_operations
-                    SET status = 'failed', failure_code = %s,
+                    SET status = 'failed', failure_code = %s, last_failure_code = %s,
                         finished_at = now(), updated_at = now()
                     WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
+                      AND lease_expires_at > now()
                     """,
-                    (terminal_code, claim.key, claim.owner_token),
+                    (terminal_code, code, claim.key, claim.owner_token),
                 )
             if updated.rowcount != 1:
                 raise _RefreshFenced("Refresh failure belongs to a stale owner")
@@ -494,6 +517,12 @@ class DataRefreshService:
                 (pointer.generation_manifest_sha256,),
             ).fetchall()
             for row in rows:
+                release_generation_candidate(
+                    transaction,
+                    operation_id=_operation_id(
+                        str(row["idempotency_key"]), str(row["owner_token"])
+                    ),
+                )
                 _complete_reconciled_operation(
                     transaction,
                     row,
@@ -526,6 +555,7 @@ class DataRefreshService:
                         """
                         UPDATE data.refresh_operations
                         SET status = 'failed', failure_code = 'RETRY_EXHAUSTED',
+                            last_failure_code = 'WORKER_LEASE_EXPIRED',
                             finished_at = now(), updated_at = now()
                         WHERE idempotency_key = %s AND status = 'running'
                           AND owner_token = %s
@@ -540,7 +570,7 @@ class DataRefreshService:
                             expected_generation_manifest_sha256 = NULL,
                             generation_manifest_sha256 = NULL,
                             candidate_prepared_at = NULL, started_at = NULL,
-                            updated_at = now()
+                            last_failure_code = 'WORKER_LEASE_EXPIRED', updated_at = now()
                         WHERE idempotency_key = %s AND status = 'running'
                           AND owner_token = %s
                         """,
@@ -569,9 +599,10 @@ def _complete_operation(
         UPDATE data.refresh_operations
         SET status = 'succeeded', outcome = %s,
             generation_manifest_sha256 = %s, data_through_session = %s,
-            last_refresh_at = %s, failure_code = NULL,
+            last_refresh_at = %s, failure_code = NULL, last_failure_code = NULL,
             finished_at = now(), updated_at = now()
         WHERE idempotency_key = %s AND status = 'running' AND owner_token = %s
+          AND lease_expires_at > now()
         """,
         (
             outcome,
@@ -599,7 +630,8 @@ def _complete_reconciled_operation(
         UPDATE data.refresh_operations
         SET status = 'succeeded', outcome = 'published',
             data_through_session = %s, last_refresh_at = %s,
-            failure_code = NULL, finished_at = now(), updated_at = now()
+            failure_code = NULL, last_failure_code = NULL,
+            finished_at = now(), updated_at = now()
         WHERE idempotency_key = %s AND status = 'running'
           AND generation_manifest_sha256 = %s
         """,
@@ -664,6 +696,9 @@ def _outcome(row: dict[str, object]) -> RefreshOutcome:
             None if row["last_refresh_at"] is None else row["last_refresh_at"].isoformat()
         ),
         failure_code=None if row["failure_code"] is None else str(row["failure_code"]),
+        last_failure_code=(
+            None if row["last_failure_code"] is None else str(row["last_failure_code"])
+        ),
         attempt_count=int(row["attempt_count"]),
     )
 

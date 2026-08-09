@@ -59,6 +59,17 @@ class UnavailableRefreshSource:
         raise DataSourceError("unavailable", detail_code="UPSTREAM_UNAVAILABLE")
 
 
+class InvalidStageRefreshSource:
+    def __init__(self, stage: str) -> None:
+        self.stage = stage
+
+    def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code=f"{self.stage.upper()}_FAILED",
+        )
+
+
 def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -334,6 +345,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         assert retrying.status == "accepted"
         assert retrying.attempt_count == 1
         assert retrying.failure_code is None
+        assert retrying.last_failure_code == "SOURCE_UNAVAILABLE"
 
         with pytest.raises(DataRefreshError) as second:
             refresh.process_next(UnavailableRefreshSource())
@@ -341,6 +353,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         terminal = refresh.inspect("bounded-retry")
         assert terminal.status == "failed"
         assert terminal.failure_code == "RETRY_EXHAUSTED"
+        assert terminal.last_failure_code == "SOURCE_UNAVAILABLE"
         assert terminal.attempt_count == 2
         head = DatasetLifecycle(database, tmp_path).current_head()
         assert head is not None
@@ -352,43 +365,103 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         database.close()
 
 
-def test_expired_worker_is_fenced_and_recovered_from_a_new_attempt(
+def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
     database = _database(core_settings)
+    old_worker_started = threading.Event()
+    resume_old_worker = threading.Event()
+
+    class PausedOldSource(RecordingRefreshSource):
+        def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
+            old_worker_started.set()
+            assert resume_old_worker.wait(timeout=10)
+            return super().collect(plan)
+
     try:
         current = _twenty_session_canonical()
-        _establish_head(database, tmp_path, current)
-        refresh = DataRefreshService(database, tmp_path, max_attempts=3)
-        refresh.submit(idempotency_key="lost-worker", as_of=AS_OF)
-        with database.transaction() as transaction:
-            transaction.execute(
-                """
-                UPDATE data.refresh_operations
-                SET status = 'running', owner_token = 'lost-owner',
-                    lease_expires_at = now() - interval '1 second',
-                    attempt_count = 1, started_at = now()
-                WHERE idempotency_key = 'lost-worker'
-                """
-            )
+        manifest = _establish_head(database, tmp_path, current)
+        stale_candidate = copy.deepcopy(current)
+        _append_session(stale_candidate)
+        old_worker = DataRefreshService(
+            database,
+            tmp_path,
+            lease_seconds=60,
+            heartbeat_seconds=30,
+            max_attempts=3,
+        )
+        replacement = DataRefreshService(database, tmp_path, max_attempts=3)
+        old_worker.submit(idempotency_key="lost-worker", as_of=AS_OF)
 
-        assert refresh.process_next(RecordingRefreshSource(current)) is True
-
-        terminal = refresh.inspect("lost-worker")
-        assert terminal.status == "succeeded"
-        assert terminal.outcome == "no_change"
-        assert terminal.attempt_count == 2
-        with database.transaction() as transaction:
-            stale_write = transaction.execute(
-                """
-                UPDATE data.refresh_operations SET failure_code = 'STALE_WRITE'
-                WHERE idempotency_key = 'lost-worker'
-                  AND status = 'running' AND owner_token = 'lost-owner'
-                """
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            old_future = executor.submit(
+                old_worker.process_next,
+                PausedOldSource(stale_candidate),
             )
-        assert stale_write.rowcount == 0
-        assert refresh.inspect("lost-worker") == terminal
+            assert old_worker_started.wait(timeout=10)
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    UPDATE data.refresh_operations
+                    SET lease_expires_at = now() - interval '1 second'
+                    WHERE idempotency_key = 'lost-worker' AND status = 'running'
+                    """
+                )
+
+            assert replacement.process_next(RecordingRefreshSource(current)) is True
+            recovered = replacement.inspect("lost-worker")
+            assert recovered.status == "succeeded"
+            assert recovered.outcome == "no_change"
+            assert recovered.attempt_count == 2
+            assert recovered.last_failure_code is None
+            recovered_freshness = DatasetOverviewService(
+                database, tmp_path
+            ).overview().last_refresh_at
+
+            resume_old_worker.set()
+            assert old_future.result(timeout=10) is True
+
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        assert replacement.inspect("lost-worker") == recovered
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+            recovered_freshness
+        )
+    finally:
+        resume_old_worker.set()
+        database.close()
+
+
+@pytest.mark.parametrize("failure_stage", ("merge", "derived_recomputation"))
+def test_source_contract_stage_failure_keeps_prior_head_and_freshness(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    failure_stage: str,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        manifest = _establish_head(database, tmp_path, current)
+        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        refresh = DataRefreshService(database, tmp_path, max_attempts=1)
+        refresh.submit(idempotency_key=f"failure-{failure_stage}", as_of=AS_OF)
+
+        with pytest.raises(DataRefreshError) as failure:
+            refresh.process_next(InvalidStageRefreshSource(failure_stage))
+
+        assert failure.value.code == "SOURCE_INVALID_SOURCE_DATA"
+        terminal = refresh.inspect(f"failure-{failure_stage}")
+        assert terminal.status == "failed"
+        assert terminal.failure_code == "SOURCE_INVALID_SOURCE_DATA"
+        assert terminal.last_failure_code == "SOURCE_INVALID_SOURCE_DATA"
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == manifest
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+            prior_refresh_at
+        )
     finally:
         database.close()
 
@@ -437,6 +510,72 @@ def test_precommit_infrastructure_failure_keeps_the_prior_head_readable(
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
             prior_refresh_at
         )
+    finally:
+        database.close()
+
+
+def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        original = _establish_head(database, tmp_path, current)
+        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        refresh = DataRefreshService(database, tmp_path)
+        refresh.submit(idempotency_key="ambiguous-cas", as_of=AS_OF)
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_candidate_release() RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected candidate release failure';
+                END
+                $$;
+                CREATE TRIGGER reject_candidate_release
+                BEFORE UPDATE OF status ON data.generation_candidates
+                FOR EACH ROW
+                WHEN (OLD.status = 'live' AND NEW.status = 'released')
+                EXECUTE FUNCTION data.reject_candidate_release();
+                """
+            )
+        try:
+            with pytest.raises(DataRefreshError) as failure:
+                refresh.process_next(RecordingRefreshSource(candidate))
+            assert failure.value.code == "REFRESH_COMPLETION_PENDING"
+        finally:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    DROP TRIGGER reject_candidate_release ON data.generation_candidates;
+                    DROP FUNCTION data.reject_candidate_release();
+                    """
+                )
+
+        moved = DatasetLifecycle(database, tmp_path).current_head()
+        assert moved is not None
+        assert moved.generation_manifest_sha256 != original
+        pending = refresh.inspect("ambiguous-cas")
+        assert pending.status == "running"
+        assert pending.failure_code is None
+        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+            prior_refresh_at
+        )
+        manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
+
+        reopened = DataRefreshService(database, tmp_path)
+        assert reopened.process_next(RecordingRefreshSource(candidate)) is True
+
+        terminal = reopened.inspect("ambiguous-cas")
+        assert terminal.status == "succeeded"
+        assert terminal.outcome == "published"
+        assert terminal.attempt_count == 1
+        assert terminal.last_failure_code is None
+        assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == manifests_before
     finally:
         database.close()
 

@@ -296,6 +296,7 @@ MIGRATIONS = MigrationPlan(
                     data_through_session date NULL,
                     last_refresh_at timestamptz NULL,
                     failure_code text NULL,
+                    last_failure_code text NULL,
                     created_at timestamptz NOT NULL DEFAULT now(),
                     started_at timestamptz NULL,
                     finished_at timestamptz NULL,
@@ -317,7 +318,8 @@ MIGRATIONS = MigrationPlan(
                             AND generation_manifest_sha256 IS NOT NULL
                             AND data_through_session IS NOT NULL
                             AND last_refresh_at IS NOT NULL
-                            AND failure_code IS NULL AND finished_at IS NOT NULL
+                            AND failure_code IS NULL AND last_failure_code IS NULL
+                            AND finished_at IS NOT NULL
                         )
                         OR (
                             status = 'failed' AND outcome IS NULL
