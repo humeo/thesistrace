@@ -538,6 +538,7 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
     database = _database(core_settings)
     source_entered = threading.Event()
     release_source = threading.Event()
+    blocked_candidate_object: Path | None = None
 
     class BlockingSource(RecordingRefreshSource):
         def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
@@ -551,23 +552,40 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
         prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
         candidate = copy.deepcopy(current)
         _append_session(candidate)
+        preview_root = tmp_path.with_name(f"{tmp_path.name}-candidate-preview")
+        MountedGenerationStore(preview_root).materialize(
+            candidate,
+            prepared_at=FIRST_PREPARED_AT,
+            source_name="recording-refresh-source",
+            source_lineage={"fixture": "refresh-v1"},
+        )
+        candidate_objects = sorted(
+            (preview_root / "objects" / "sha256").glob("*/*.parquet")
+        )
+        blocked_candidate_object = next(
+            (
+                tmp_path / path.relative_to(preview_root)
+                for path in candidate_objects
+                if not (tmp_path / path.relative_to(preview_root)).exists()
+            ),
+            None,
+        )
+        assert blocked_candidate_object is not None
+        blocked_candidate_object.parent.mkdir(parents=True, exist_ok=True)
+        blocked_candidate_object.write_bytes(b"candidate write fault barrier")
         refresh = DataRefreshService(database, tmp_path, max_attempts=1)
         refresh.submit(idempotency_key="failure-generation-write", as_of=AS_OF)
-        objects = tmp_path / "objects"
-        held_objects = tmp_path / "objects-held-for-fault"
-        blocked_objects = tmp_path / "objects"
+        assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(refresh.process_next, BlockingSource(candidate))
             assert source_entered.wait(timeout=10)
-            objects.rename(held_objects)
-            blocked_objects.write_text("not a directory")
+            assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
             release_source.set()
             with pytest.raises(DataRefreshError) as failure:
                 future.result(timeout=10)
         assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
-        blocked_objects.unlink()
-        held_objects.rename(objects)
+        assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
 
         terminal = refresh.inspect("failure-generation-write")
         assert terminal.status == "failed"
@@ -583,12 +601,8 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
         )
     finally:
         release_source.set()
-        blocked_objects = tmp_path / "objects"
-        held_objects = tmp_path / "objects-held-for-fault"
-        if blocked_objects.is_file():
-            blocked_objects.unlink()
-        if held_objects.exists() and not blocked_objects.exists():
-            held_objects.rename(blocked_objects)
+        if blocked_candidate_object is not None and blocked_candidate_object.is_file():
+            blocked_candidate_object.unlink()
         database.close()
 
 
