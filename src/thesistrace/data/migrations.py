@@ -178,13 +178,19 @@ MIGRATIONS = MigrationPlan(
                     owner_kind text NOT NULL CHECK (
                         owner_kind IN ('research_run_attempt', 'tracking_advance_attempt')
                     ),
-                    owner_id text NOT NULL,
-                    generation_manifest_sha256 text NOT NULL,
+                    owner_id text NOT NULL CHECK (owner_id <> '' AND owner_id = btrim(owner_id)),
+                    generation_manifest_sha256 text NOT NULL CHECK (
+                        generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
                     status text NOT NULL CHECK (status IN ('active', 'released', 'fenced')),
                     lease_expires_at timestamptz NOT NULL,
                     heartbeat_at timestamptz NOT NULL DEFAULT now(),
                     created_at timestamptz NOT NULL DEFAULT now(),
                     released_at timestamptz NULL,
+                    CHECK (
+                        (status = 'active' AND released_at IS NULL)
+                        OR (status IN ('released', 'fenced') AND released_at IS NOT NULL)
+                    ),
                     UNIQUE (owner_kind, owner_id)
                 );
 
@@ -193,52 +199,26 @@ MIGRATIONS = MigrationPlan(
                     WHERE status = 'active';
 
                 CREATE TABLE data.generation_candidates (
-                    operation_id text PRIMARY KEY,
-                    generation_manifest_sha256 text NOT NULL,
+                    operation_id text PRIMARY KEY CHECK (
+                        operation_id <> '' AND operation_id = btrim(operation_id)
+                    ),
+                    generation_manifest_sha256 text NOT NULL CHECK (
+                        generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
                     status text NOT NULL CHECK (status IN ('live', 'released')),
                     lease_expires_at timestamptz NOT NULL,
                     created_at timestamptz NOT NULL DEFAULT now(),
-                    updated_at timestamptz NOT NULL DEFAULT now()
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    released_at timestamptz NULL,
+                    CHECK (
+                        (status = 'live' AND released_at IS NULL)
+                        OR (status = 'released' AND released_at IS NOT NULL)
+                    )
                 );
 
                 CREATE INDEX data_live_generation_candidates_idx
                     ON data.generation_candidates (generation_manifest_sha256)
                     WHERE status = 'live';
-            """,
-        ),
-        Migration(
-            name="0007_mounted_generation_lifecycle_constraints",
-            statement="""
-                ALTER TABLE data.generation_candidates
-                    ADD COLUMN released_at timestamptz NULL;
-
-                UPDATE data.generation_candidates
-                SET released_at = updated_at
-                WHERE status = 'released' AND released_at IS NULL;
-
-                ALTER TABLE data.generation_pins
-                    ADD CONSTRAINT data_generation_pins_owner_nonempty CHECK (
-                        owner_id <> '' AND owner_id = btrim(owner_id)
-                    ),
-                    ADD CONSTRAINT data_generation_pins_manifest_sha256 CHECK (
-                        generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
-                    ),
-                    ADD CONSTRAINT data_generation_pins_status_time CHECK (
-                        (status = 'active' AND released_at IS NULL)
-                        OR (status IN ('released', 'fenced') AND released_at IS NOT NULL)
-                    );
-
-                ALTER TABLE data.generation_candidates
-                    ADD CONSTRAINT data_generation_candidates_operation_nonempty CHECK (
-                        operation_id <> '' AND operation_id = btrim(operation_id)
-                    ),
-                    ADD CONSTRAINT data_generation_candidates_manifest_sha256 CHECK (
-                        generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
-                    ),
-                    ADD CONSTRAINT data_generation_candidates_status_time CHECK (
-                        (status = 'live' AND released_at IS NULL)
-                        OR (status = 'released' AND released_at IS NOT NULL)
-                    );
             """,
         ),
     ),
