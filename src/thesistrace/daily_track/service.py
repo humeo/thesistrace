@@ -332,6 +332,20 @@ class DailyTrackService:
                     "DailyTrack session progression rejected by execution fence",
                     extra={"track_id": current_claim.track_id},
                 )
+            except (
+                KernelRunError,
+                PublicationNotFoundError,
+                PublicationUnavailableError,
+                PublicationVerificationError,
+            ) as error:
+                if self._record_current_failure(current_claim, error):
+                    raise DailyTrackProgressionFailed(
+                        "DailyTrack progression failed at its current target"
+                    ) from error
+                logger.info(
+                    "DailyTrack session failure rejected by execution fence",
+                    extra={"track_id": current_claim.track_id},
+                )
             return True
         self._require_progression_dependencies()
         claim = self._claim_next()
@@ -415,6 +429,70 @@ class DailyTrackService:
                 return None
             if track["status"] != "blocked":
                 raise DailyTrackRetryUnavailable("DailyTrack Retry requires blocked status")
+            session_progression = transaction.execute(
+                """
+                SELECT id
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s AND status = 'blocked'
+                FOR UPDATE
+                """,
+                (track_id,),
+            ).fetchone()
+            if session_progression is not None:
+                progression_id = str(session_progression["id"])
+                blocked = transaction.execute(
+                    """
+                    SELECT blocked_target_release_id
+                    FROM daily_tracks.tracks
+                    WHERE id = %s
+                    """,
+                    (track_id,),
+                ).fetchone()
+                assert blocked is not None
+                if str(blocked["blocked_target_release_id"]) != progression_id:
+                    raise DailyTrackFenced
+                cancelled = transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET status = 'cancelled', finished_at = now()
+                    WHERE id = %s AND track_id = %s AND status = 'blocked'
+                    """,
+                    (progression_id, track_id),
+                )
+                activated = transaction.execute(
+                    """
+                    UPDATE daily_tracks.tracks
+                    SET status = 'active', blocked_target_release_id = NULL,
+                        blocked_reason = NULL
+                    WHERE id = %s AND status = 'blocked'
+                      AND blocked_target_release_id = %s
+                    """,
+                    (track_id, progression_id),
+                )
+                if cancelled.rowcount != 1 or activated.rowcount != 1:
+                    raise DailyTrackFenced
+                outcome = DailyTrackSummary(
+                    **{
+                        **_summary(track).model_dump(mode="python"),
+                        "status": "active",
+                    }
+                )
+                transaction.execute(
+                    """
+                    INSERT INTO daily_tracks.retry_receipts (
+                        request_id, request_fingerprint, track_id,
+                        target_release_id, outcome
+                    ) VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (
+                        request_id,
+                        fingerprint,
+                        track_id,
+                        progression_id,
+                        Jsonb(outcome.model_dump(mode="json")),
+                    ),
+                )
+                return outcome
             blocked = transaction.execute(
                 """
                 SELECT blocked_target_release_id
@@ -1361,6 +1439,84 @@ class DailyTrackService:
                 claim.generation_pin_id,
                 owner_id=claim.attempt_id,
             )
+
+    def _record_current_failure(
+        self,
+        claim: _SessionProgressionClaim,
+        error: Exception,
+    ) -> bool:
+        assert self._dataset_lifecycle is not None
+        failure_reason = type(error).__name__
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT track.status, track.execution_fence,
+                       progression.status AS progression_status,
+                       attempt.status AS attempt_status, attempt.fence
+                FROM daily_tracks.tracks AS track
+                JOIN daily_tracks.session_progressions AS progression
+                  ON progression.track_id = track.id
+                JOIN daily_tracks.session_progression_attempts AS attempt
+                  ON attempt.progression_id = progression.id
+                WHERE track.id = %s AND progression.id = %s AND attempt.id = %s
+                FOR UPDATE OF track, progression, attempt
+                """,
+                (claim.track_id, claim.progression_id, claim.attempt_id),
+            ).fetchone()
+            if row != {
+                "status": "active",
+                "execution_fence": claim.fence,
+                "progression_status": "running",
+                "attempt_status": "running",
+                "fence": claim.fence,
+            }:
+                return False
+            attempt = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progression_attempts
+                SET status = 'failed', heartbeat_at = now(),
+                    lease_expires_at = now(), finished_at = now(),
+                    failure_reason = %s
+                WHERE id = %s AND progression_id = %s
+                  AND status = 'running' AND fence = %s
+                """,
+                (
+                    failure_reason,
+                    claim.attempt_id,
+                    claim.progression_id,
+                    claim.fence,
+                ),
+            )
+            progression = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progressions
+                SET status = 'blocked', finished_at = now()
+                WHERE id = %s AND track_id = %s AND status = 'running'
+                """,
+                (claim.progression_id, claim.track_id),
+            )
+            track = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET status = 'blocked', blocked_target_release_id = %s,
+                    blocked_reason = %s
+                WHERE id = %s AND status = 'active' AND execution_fence = %s
+                """,
+                (
+                    claim.progression_id,
+                    PUBLIC_BLOCKED_REASON,
+                    claim.track_id,
+                    claim.fence,
+                ),
+            )
+            if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
+                raise DailyTrackFenced
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                claim.generation_pin_id,
+                owner_id=claim.attempt_id,
+            )
+        return True
 
     def _claim_next(self) -> _ProgressionClaim | None:
         assert self._next_release is not None

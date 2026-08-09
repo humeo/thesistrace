@@ -17,7 +17,11 @@ from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.daily_track import DailyTrackService, TrackingOrigin
+from thesistrace.daily_track import (
+    DailyTrackProgressionFailed,
+    DailyTrackService,
+    TrackingOrigin,
+)
 from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
     restore_tracking_checkpoint,
@@ -31,6 +35,7 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.research_kernel import (
     AdvanceInput,
+    KernelRunError,
     RunInput,
     advance,
     advance_continuation,
@@ -316,6 +321,129 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert reopened_track.status_code == 200
         assert "release" not in reopened_track.text.lower()
         assert "generation" not in reopened_track.text.lower()
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    migrate_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        tracks: list[dict[str, object]] = []
+        for index in range(2):
+            accepted = client.post(
+                "/api/definitions/run",
+                json=_run_command(f"track-recovery-seed-{index}"),
+            )
+            assert accepted.status_code == 200
+            run_id = accepted.json()["run"]["id"]
+            completed = _run_worker_once(settings)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
+            tracking = client.post(
+                f"/api/research-runs/{run_id}/daily-tracks",
+                json={"request_id": f"track-recovery-activate-{index}"},
+            )
+            assert tracking.status_code == 201
+            tracks.append(tracking.json())
+
+        first_track, control_track = tracks
+        catch_up_sessions = (*seed_sessions, "2026-08-06", "2026-08-07", "2026-08-10")
+        catch_up_head = _publish_head(
+            settings,
+            sessions=catch_up_sessions,
+            price_offset=1,
+            expected_manifest=seed_head,
+        )
+        runtime = client.app.state.core_runtime
+
+        def fail_after_calculation(value: AdvanceInput):
+            advance(value)
+            raise KernelRunError("injected private calculation failure")
+
+        failing = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
+            advance_kernel=fail_after_calculation,
+        )
+        with pytest.raises(DailyTrackProgressionFailed):
+            failing.process_next()
+
+        blocked = client.get(f"/api/daily-tracks/{first_track['id']}")
+        assert blocked.status_code == 200
+        assert blocked.json()["status"] == "blocked"
+        assert blocked.json()["strategy_session"] == seed_sessions[-1]
+        assert blocked.json()["blocked_reason"] == (
+            "DailyTrack could not process the current dataset."
+        )
+        assert "injected" not in blocked.text
+        failed_state = _stored_tracking_activation(settings, str(first_track["id"]))
+        assert failed_state["current_checkpoint_session"].isoformat() == (
+            seed_sessions[-1]
+        )
+        assert failed_state["checkpoint_count"] == 1
+        assert failed_state["blocked_progression_count"] == 1
+        assert failed_state["failed_attempt_count"] == 1
+        assert failed_state["active_pin_count"] == 0
+
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        control = client.get(f"/api/daily-tracks/{control_track['id']}").json()
+        assert control["strategy_session"] == catch_up_sessions[-1]
+        assert control["lag_sessions"] == 0
+        assert client.get(f"/api/daily-tracks/{first_track['id']}").json()[
+            "status"
+        ] == "blocked"
+
+    recovered_sessions = (*catch_up_sessions, "2026-08-11")
+    _publish_head(
+        settings,
+        sessions=recovered_sessions,
+        price_offset=2,
+        expected_manifest=catch_up_head,
+    )
+    with TestClient(create_app(settings)) as restarted:
+        retry = restarted.post(
+            f"/api/daily-tracks/{first_track['id']}/retry",
+            json={"request_id": "track-recovery-retry"},
+        )
+        assert retry.status_code == 202
+        assert retry.json()["status"] == "active"
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        recovered = restarted.get(f"/api/daily-tracks/{first_track['id']}")
+        assert recovered.status_code == 200
+        detail = recovered.json()
+        assert detail["status"] == "active"
+        assert detail["strategy_session"] == recovered_sessions[-1]
+        assert detail["data_through_session"] == recovered_sessions[-1]
+        assert detail["lag_sessions"] == 0
+        observation_sessions = [
+            observation["session"] for observation in detail["strategy"]["observations"]
+        ]
+        assert observation_sessions == list(recovered_sessions)
+        assert len(observation_sessions) == len(set(observation_sessions))
+        recovered_state = _stored_tracking_activation(
+            settings,
+            str(first_track["id"]),
+        )
+        assert recovered_state["checkpoint_count"] == 2
+        assert recovered_state["cancelled_progression_count"] == 1
+        assert recovered_state["succeeded_progression_count"] == 1
+        assert recovered_state["active_pin_count"] == 0
 
 
 @pytest.mark.skipif(
@@ -873,9 +1001,21 @@ def _stored_tracking_activation(
                         WHERE track_id = state.track_id
                           AND status = 'cancelled') AS cancelled_progression_count,
                        (SELECT count(*)
+                        FROM daily_tracks.session_progressions
+                        WHERE track_id = state.track_id
+                          AND status = 'blocked') AS blocked_progression_count,
+                       (SELECT count(*)
+                        FROM daily_tracks.session_progressions
+                        WHERE track_id = state.track_id
+                          AND status = 'succeeded') AS succeeded_progression_count,
+                       (SELECT count(*)
                         FROM daily_tracks.session_progression_attempts
                         WHERE track_id = state.track_id
                           AND status = 'cancelled') AS cancelled_attempt_count,
+                       (SELECT count(*)
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE track_id = state.track_id
+                          AND status = 'failed') AS failed_attempt_count,
                        (SELECT count(*)
                         FROM data.generation_pins
                         WHERE status = 'active') AS active_pin_count
