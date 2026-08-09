@@ -36,6 +36,7 @@ from thesistrace.publication import (
     PublicationUnavailableError,
     PublicationVerificationError,
     PublishedRef,
+    VerifiedBundle,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
@@ -55,7 +56,6 @@ from thesistrace.research_kernel.canonical_state import (
     canonical_sessions,
     slice_canonical_sessions,
 )
-from thesistrace.research_run.result import read_result_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,7 @@ NextReleaseLookup = Callable[[PostgresTransaction, str], NextRelease | None]
 CanonicalLoader = Callable[[str], dict[str, object]]
 KernelAdvance = Callable[[AdvanceInput], KernelState]
 Progress = Callable[[str, str, str], None]
+ResultBundleReader = Callable[[VerifiedBundle], dict[str, object]]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
@@ -142,6 +143,7 @@ class DailyTrackService:
         publication: Publication | None = None,
         next_release: NextReleaseLookup | None = None,
         load_canonical: CanonicalLoader | None = None,
+        read_result_bundle: ResultBundleReader,
         advance_kernel: KernelAdvance = advance,
         progress: Progress | None = None,
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
@@ -154,6 +156,7 @@ class DailyTrackService:
         self._publication = publication
         self._next_release = next_release
         self._load_canonical = load_canonical
+        self._read_result_bundle = read_result_bundle
         self._advance_kernel = advance_kernel
         self._progress = progress or (lambda _stage, _track_id, _target_id: None)
         self._lease_seconds = lease_seconds
@@ -535,7 +538,7 @@ class DailyTrackService:
     ) -> DailyTrackDetail:
         assert self._publication is not None
         origin = TrackingOrigin.model_validate(row["origin"])
-        seed_result = read_result_bundle(
+        seed_result = self._read_result_bundle(
             self._publication.read(
                 PublishedRef(
                     manifest_sha256=origin.verified_result.result_manifest_sha256,

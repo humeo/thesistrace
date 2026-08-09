@@ -20,6 +20,7 @@ from thesistrace.publication import Publication
 from thesistrace.research_kernel import operator_catalog
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.result import read_result_bundle
 
 CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_DATABASE_URL",
@@ -125,6 +126,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             publication=publication,
             next_release=data.next_release,
             load_canonical=data.load_canonical,
+            read_result_bundle=read_result_bundle,
             working_cache_root=Path(working_cache.name) / "daily-tracks",
         )
         research_runs = ResearchRunService(

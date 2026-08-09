@@ -20,6 +20,7 @@ from thesistrace.entrypoints.runtime import (
 from thesistrace.publication import PreparedPublication, Publication, PublishedRef
 from thesistrace.research_kernel import AdvanceInput, KernelState
 from thesistrace.research_kernel import advance as advance_kernel
+from thesistrace.research_run.result import read_result_bundle
 
 _SUMMARY_FIELDS = {
     "id",
@@ -290,6 +291,7 @@ def _service(
         publication=publication or runtime.publication,
         next_release=runtime.data.next_release,
         load_canonical=runtime.data.load_canonical,
+        read_result_bundle=read_result_bundle,
         advance_kernel=advance,
         progress=progress,
         lease_seconds=lease_seconds,

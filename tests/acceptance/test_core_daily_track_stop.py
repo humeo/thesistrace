@@ -19,6 +19,7 @@ from thesistrace.daily_track import DailyTrackService
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.worker import _process_once
 from thesistrace.research_kernel import KernelRunError
+from thesistrace.research_run.result import read_result_bundle
 
 
 @pytest.mark.skipif(
@@ -207,6 +208,7 @@ def test_stop_fences_a_worker_that_prepared_before_publication() -> None:
             publication=runtime.publication,
             next_release=runtime.data.next_release,
             load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
             progress=pause_after_prepare,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -255,6 +257,7 @@ def test_worker_reconciles_its_local_cache_after_http_stop(tmp_path: Path) -> No
             publication=runtime.publication,
             next_release=runtime.data.next_release,
             load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
             working_cache_root=tmp_path / "worker-local-cache",
         )
         assert worker.process_next() is True
@@ -304,6 +307,7 @@ def test_worker_cannot_restore_cache_after_stop_follows_publication(
             publication=runtime.publication,
             next_release=runtime.data.next_release,
             load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
             progress=pause_after_publication,
             working_cache_root=tmp_path / "worker-local-cache",
         )
