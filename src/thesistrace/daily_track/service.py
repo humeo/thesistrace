@@ -324,7 +324,17 @@ class DailyTrackService:
                         current_claim.track_id,
                         current_claim.data_generation_id,
                     )
-                    self._publish_current(current_claim, prepared, provenance, state)
+                    published = self._publish_current(
+                        current_claim,
+                        prepared,
+                        provenance,
+                        state,
+                    )
+                    self._store_current_working_cache(
+                        current_claim,
+                        published,
+                        state,
+                    )
                     self._progress(
                         "published",
                         current_claim.track_id,
@@ -1540,12 +1550,11 @@ class DailyTrackService:
             prior = restore_tracking_origin(claim.origin, terminal, prior_canonical)
         else:
             prior = _state_from_payload(predecessor, prior_canonical)
-        rebuild_sessions = canonical_sessions(prior_canonical, "Tracking prior data")[-504:]
-        continuation = advance_continuation(
-            run_input=prior.run_input_with_canonical(prior_canonical),
-            prior_continuation=empty_continuation(),
-            target_canonical=prior_canonical,
-            appended_sessions=rebuild_sessions,
+        continuation = self._current_continuation(
+            claim,
+            predecessor,
+            prior,
+            prior_canonical,
         )
         state = self._advance_kernel(
             AdvanceInput(
@@ -1583,13 +1592,54 @@ class DailyTrackService:
         )
         return prepared, provenance, state
 
+    def _current_continuation(
+        self,
+        claim: _SessionProgressionClaim,
+        predecessor: Mapping[str, object],
+        prior: KernelState,
+        prior_canonical: dict[str, object],
+    ) -> Mapping[str, object]:
+        rebuild_sessions = canonical_sessions(
+            prior_canonical,
+            "Tracking prior data",
+        )[-504:]
+        rebuilt = advance_continuation(
+            run_input=prior.run_input_with_canonical(prior_canonical),
+            prior_continuation=empty_continuation(),
+            target_canonical=prior_canonical,
+            appended_sessions=rebuild_sessions,
+        )
+        if self._working_cache is None:
+            return rebuilt
+        if predecessor.get("schema_version") == (
+            "daily-track-activation-checkpoint-v1"
+        ):
+            self._working_cache.delete(claim.track_id)
+            return rebuilt
+        checkpoint = KernelStateCheckpoint.model_validate(predecessor)
+        if claim.predecessor_provenance.get("data_generation_id") != (
+            claim.data_generation_id
+        ):
+            self._working_cache.delete(claim.track_id)
+            return rebuilt
+        cached = self._working_cache.load(
+            track_id=claim.track_id,
+            release_id=claim.data_generation_id,
+            head_manifest_sha256=claim.predecessor_manifest_sha256,
+            fence=claim.fence - 1,
+            continuation_sha256=checkpoint.continuation_sha256,
+            pending_alpha_sessions=checkpoint.pending_alpha_sessions,
+            rolling_factor_rows=checkpoint.rolling_factor_rows,
+        )
+        return rebuilt if cached is None else cached
+
     def _publish_current(
         self,
         claim: _SessionProgressionClaim,
         prepared: PreparedPublication,
         provenance: dict[str, object],
         state: KernelState,
-    ) -> None:
+    ) -> PublishedRef:
         assert self._publication is not None
         assert self._dataset_lifecycle is not None
         published_state = terminal_strategy_state(state)
@@ -1644,6 +1694,57 @@ class DailyTrackService:
                 claim.generation_pin_id,
                 owner_id=claim.attempt_id,
             )
+        return published
+
+    def _store_current_working_cache(
+        self,
+        claim: _SessionProgressionClaim,
+        published: PublishedRef,
+        state: KernelState,
+    ) -> None:
+        if self._working_cache is None:
+            return
+        try:
+            stored = self._working_cache.store(
+                track_id=claim.track_id,
+                release_id=claim.data_generation_id,
+                head_manifest_sha256=published.manifest_sha256,
+                fence=claim.fence,
+                verified_continuation=continuation_snapshot(state),
+            )
+        except Exception:
+            logger.warning(
+                "DailyTrack session Working Cache update failed",
+                extra={"track_id": claim.track_id},
+                exc_info=True,
+            )
+            return
+        if not stored:
+            logger.info(
+                "DailyTrack session Working Cache exceeded its bound or was unavailable",
+                extra={"track_id": claim.track_id},
+            )
+            return
+        with self._database.transaction() as transaction:
+            basis = transaction.execute(
+                """
+                SELECT track.status, track.execution_fence,
+                       track.head_manifest_sha256,
+                       state.current_checkpoint_manifest_sha256
+                FROM daily_tracks.tracks AS track
+                JOIN daily_tracks.session_tracking_states AS state
+                  ON state.track_id = track.id
+                WHERE track.id = %s
+                """,
+                (claim.track_id,),
+            ).fetchone()
+        if basis != {
+            "status": "active",
+            "execution_fence": claim.fence,
+            "head_manifest_sha256": published.manifest_sha256,
+            "current_checkpoint_manifest_sha256": published.manifest_sha256,
+        }:
+            self._working_cache.delete(claim.track_id)
 
     def _record_current_failure(
         self,

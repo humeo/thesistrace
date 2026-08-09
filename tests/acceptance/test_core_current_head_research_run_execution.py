@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from thesistrace.daily_track import (
     DailyTrackService,
     TrackingOrigin,
 )
+from thesistrace.daily_track.cache import MAX_WORKING_CACHE_BYTES
 from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
     restore_tracking_checkpoint,
@@ -446,7 +448,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert recovered_state["active_pin_count"] == 0
 
         stale_sessions = (*recovered_sessions, "2026-08-12")
-        _publish_head(
+        stale_head = _publish_head(
             settings,
             sessions=stale_sessions,
             price_offset=3,
@@ -504,6 +506,110 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert [
             observation["session"] for observation in final["strategy"]["observations"]
         ] == list(stale_sessions)
+
+        stopped = restarted.post(
+            f"/api/daily-tracks/{first_track['id']}/stop",
+            json={"request_id": "track-recovery-stop-before-cache-cases"},
+        )
+        assert stopped.status_code == 202
+        cache_sessions = (*stale_sessions, "2026-08-13")
+        cache_head = _publish_head(
+            settings,
+            sessions=cache_sessions,
+            price_offset=4,
+            expected_manifest=stale_head,
+        )
+        cache_root = tmp_path / "current-working-cache"
+        cache_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            next_release=runtime.data.next_release,
+            load_canonical=runtime.data.load_canonical,
+            read_result_bundle=read_result_bundle,
+            working_cache_root=cache_root,
+        )
+        assert cache_processor.process_next() is True
+        cache_path = next(cache_root.glob("*.json"))
+        damage_cases = (
+            ("2026-08-14", "missing"),
+            ("2026-08-17", "corrupt"),
+            ("2026-08-18", "stale-generation"),
+            ("2026-08-19", "stale-fence"),
+            ("2026-08-20", "oversized"),
+        )
+        for offset, (session, damage) in enumerate(damage_cases, start=5):
+            if damage == "missing":
+                cache_path.unlink()
+            elif damage == "corrupt":
+                cache_path.write_text("{", encoding="utf-8")
+            elif damage == "oversized":
+                cache_path.write_bytes(b"x" * (MAX_WORKING_CACHE_BYTES + 1))
+            else:
+                entry = json.loads(cache_path.read_text(encoding="utf-8"))
+                if damage == "stale-generation":
+                    entry["release_id"] = "stale-generation"
+                else:
+                    entry["fence"] = int(entry["fence"]) - 1
+                cache_path.write_text(json.dumps(entry), encoding="utf-8")
+            cache_sessions = (*cache_sessions, session)
+            cache_head = _publish_head(
+                settings,
+                sessions=cache_sessions,
+                price_offset=offset,
+                expected_manifest=cache_head,
+            )
+            assert cache_processor.process_next() is True
+            cache_detail = restarted.get(
+                f"/api/daily-tracks/{control_track['id']}"
+            ).json()
+            assert cache_detail["strategy_session"] == session
+            assert [
+                item["session"] for item in cache_detail["strategy"]["observations"]
+            ] == list(cache_sessions)
+            assert cache_path.exists()
+            assert cache_path.stat().st_size <= MAX_WORKING_CACHE_BYTES
+
+        authoritative = _stored_tracking_activation(
+            settings,
+            str(control_track["id"]),
+        )
+        checkpoint_manifest = str(
+            authoritative["current_checkpoint_manifest_sha256"]
+        )
+        checkpoint_object = _first_result_object_sha256(settings, checkpoint_manifest)
+        _s3_client(settings).delete_object(
+            Bucket=settings.s3_bucket,
+            Key=(
+                f"publication/v1/sha256/{checkpoint_object[:2]}/"
+                f"{checkpoint_object}"
+            ),
+        )
+        unavailable_sessions = (*cache_sessions, "2026-08-21")
+        _publish_head(
+            settings,
+            sessions=unavailable_sessions,
+            price_offset=10,
+            expected_manifest=cache_head,
+        )
+        with pytest.raises(DailyTrackProgressionFailed):
+            cache_processor.process_next()
+        unavailable = restarted.get(f"/api/daily-tracks/{control_track['id']}")
+        assert unavailable.status_code == 503
+        assert unavailable.json() == {"detail": "DailyTrack detail is unavailable"}
+        unavailable_state = _stored_tracking_activation(
+            settings,
+            str(control_track["id"]),
+        )
+        assert unavailable_state["track_status"] == "blocked"
+        assert unavailable_state["current_checkpoint_session"].isoformat() == (
+            cache_sessions[-1]
+        )
+        assert unavailable_state["checkpoint_count"] == authoritative[
+            "checkpoint_count"
+        ]
+        assert unavailable_state["active_pin_count"] == 0
 
 
 @pytest.mark.skipif(
@@ -1046,8 +1152,10 @@ def _stored_tracking_activation(
         with database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT state.origin_session,
+                SELECT track.status AS track_status,
+                       state.origin_session,
                        track.origin,
+                       state.current_checkpoint_manifest_sha256,
                        checkpoint.boundary_session AS current_checkpoint_session,
                        checkpoint.terminal_strategy_state,
                        (SELECT count(*)
