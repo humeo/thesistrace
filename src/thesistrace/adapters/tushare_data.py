@@ -133,6 +133,15 @@ class TushareDataSource:
                 "invalid_source_data",
                 detail_code="MISSING_RESEARCH_CALENDAR",
             )
+        if (
+            plan.kind == "refresh"
+            and plan.completed_through_date is not None
+            and str(calendar[-1]) > plan.completed_through_date.isoformat()
+        ):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="REFRESH_WINDOW_VIOLATION",
+            )
         return CanonicalSourceBatch(
             source_name="tushare",
             collection_kind=plan.kind,

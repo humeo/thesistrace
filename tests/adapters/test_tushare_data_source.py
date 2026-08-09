@@ -466,6 +466,29 @@ def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument() ->
     assert failure.value.detail_code == "INCOMPLETE_NEW_SESSION_INSTRUMENT"
 
 
+def test_tushare_refresh_rejects_a_session_after_the_completed_boundary() -> None:
+    sessions = ["20260803", "20260804", "20260805", "20260806"]
+    _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
+    snapshot = normalizer_snapshot(sessions)
+
+    class FutureSessionProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            known_ts_codes: set[str],
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            return copy.deepcopy(snapshot)
+
+    with pytest.raises(DataSourceError) as failure:
+        TushareDataSource(provider=FutureSessionProvider()).collect(
+            refresh_collection_plan(datetime(2026, 8, 5, 18, tzinfo=UTC), previous)
+        )
+
+    assert failure.value.detail_code == "REFRESH_WINDOW_VIOLATION"
+
+
 def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> None:
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(["20260701"]))
     snapshot = normalizer_snapshot(["20260701", "20260702"])
