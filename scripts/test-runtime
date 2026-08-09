@@ -73,6 +73,7 @@ run_with_environment() {
   THESISTRACE_S3_BUCKET="$bucket_name" \
   THESISTRACE_S3_REGION=us-east-1 \
   THESISTRACE_DATA_MOUNT="$data_mount" \
+  THESISTRACE_TEST_COMPOSE_PROJECT_NAME="$project_name" \
     "$@"
 }
 

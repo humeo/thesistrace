@@ -486,10 +486,11 @@ def _detail_from_values(
     revision: int,
     content: dict[str, object],
 ) -> DefinitionDetail:
+    projected = _complete_content(content)
     return DefinitionDetail(
         id=definition_id,
         revision=revision,
-        **{field: content.get(field) for field in CONTENT_FIELDS},
+        **projected,
     )
 
 
@@ -497,11 +498,18 @@ def _detail(row: object) -> DefinitionDetail:
     assert isinstance(row, dict)
     content = row["content"]
     assert isinstance(content, dict)
+    projected = _complete_content(content)
     return DefinitionDetail(
         id=str(row["id"]),
         revision=int(row["revision"]),
-        **{field: content.get(field) for field in CONTENT_FIELDS},
+        **projected,
     )
+
+
+def _complete_content(content: dict[str, object]) -> dict[str, object]:
+    if set(content) != set(CONTENT_FIELDS):
+        raise RuntimeError("Research Definition content is incompatible")
+    return {field: content[field] for field in CONTENT_FIELDS}
 
 
 def _summary(row: object) -> DefinitionSummary:
