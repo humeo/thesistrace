@@ -55,6 +55,7 @@ from thesistrace.research_kernel.canonical_state import (
     canonical_sessions,
     slice_canonical_sessions,
 )
+from thesistrace.research_run.result import read_result_bundle
 
 logger = logging.getLogger(__name__)
 
@@ -534,14 +535,14 @@ class DailyTrackService:
     ) -> DailyTrackDetail:
         assert self._publication is not None
         origin = TrackingOrigin.model_validate(row["origin"])
-        seed_result = _read_publication_json(
-            self._publication,
-            PublishedRef(
-                manifest_sha256=origin.verified_result.result_manifest_sha256,
-                kind=origin.verified_result.kind,
-                provenance=_seed_result_provenance(origin),
-            ),
-            payload_name="result",
+        seed_result = read_result_bundle(
+            self._publication.read(
+                PublishedRef(
+                    manifest_sha256=origin.verified_result.result_manifest_sha256,
+                    kind=origin.verified_result.kind,
+                    provenance=_seed_result_provenance(origin),
+                )
+            )
         )
         seed_factor = _mapping_value(seed_result.get("factor_summary"), "Factor Summary")
         seed_strategy_summary = _mapping_value(

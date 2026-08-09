@@ -21,6 +21,11 @@ from thesistrace.publication.serialization import (
     ParquetWriterContract,
     canonical_json_bytes,
 )
+from thesistrace.research_run.result import (
+    read_result_bundle,
+    result_bundle_byte_budget,
+    result_publication_payloads,
+)
 
 ROWS_CONTRACT = ParquetWriterContract(
     name="ticket-05-rows",
@@ -88,6 +93,29 @@ def test_prepare_is_canonical_idempotent_and_verified(core_settings: CoreSetting
             {"alpha": "量化", "z": 3}
         )
         assert verified.payloads["rows"].media_type == "application/vnd.apache.parquet"
+
+
+def test_research_result_preparation_uses_four_deterministic_objects(
+    core_settings: CoreSettings,
+) -> None:
+    result = _legal_result()
+    with open_core_runtime(core_settings) as runtime:
+        first = runtime.publication.prepare(
+            kind="research.result",
+            payloads=result_publication_payloads(result),
+            provenance={"research_run_id": "run-result-codec"},
+        )
+        second = runtime.publication.prepare(
+            kind="research.result",
+            payloads=result_publication_payloads(result),
+            provenance={"research_run_id": "run-result-codec"},
+        )
+
+        assert first.manifest_sha256 == second.manifest_sha256
+        assert first.payload_sha256s == second.payload_sha256s
+        assert first.object_count == 4
+        assert first.exact_bytes <= result_bundle_byte_budget(1)
+        assert read_result_bundle(runtime.publication.verify_prepared(second)) == result
 
 
 def test_all_payloads_are_serialized_before_any_upload(
@@ -371,3 +399,26 @@ def _clear_bucket(s3: BaseClient, bucket: str) -> None:
     objects = [{"Key": item["Key"]} for item in response.get("Contents", [])]
     if objects:
         s3.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+
+
+def _legal_result() -> dict[str, object]:
+    return {
+        "factor_summary": {"horizons": {}},
+        "strategy_summary": {"metrics": {}, "benchmark": {"universe": "manual"}},
+        "strategy_daily_observations": [
+            {
+                "session": "2024-01-02",
+                "gross_nav": "1e+7",
+                "net_nav": "1e+7",
+                "benchmark_nav": "1",
+                "net_cash": "1e+7",
+                "transaction_cost_cny": "0",
+                "holdings_count": 0,
+                "maximum_single_name_weight": 0.0,
+                "upper_limit_buy_rejections": 0,
+                "lower_limit_sell_rejections": 0,
+                "suspension_rejections": 0,
+            }
+        ],
+        "terminal_strategy_state": {"session": "2024-01-02", "positions": []},
+    }

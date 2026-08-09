@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import copy
 import hashlib
-import json
 import os
 import subprocess
 import sys
@@ -16,10 +16,11 @@ from psycopg.types.json import Jsonb
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.publication import (
-    JsonPayload,
     PublicationUnavailableError,
     PublishedRef,
 )
+from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.research_run.result import read_result_bundle, result_publication_payloads
 
 
 @pytest.mark.skipif(
@@ -43,7 +44,8 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
                 provenance=stored_seed["result_provenance"],
             )
         )
-        result_payload = published.payloads["result"]
+        stored_result = read_result_bundle(published)
+        result_checksum = hashlib.sha256(canonical_json_bytes(stored_result)).hexdigest()
 
         command = {"request_id": "ticket-26-start"}
         started = client.post(
@@ -61,10 +63,8 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
             "current_release_id": original["dataset_release_id"],
             "definition_id": original["definition_id"],
             "definition_revision": original["definition_revision"],
-            "result_checksum_sha256": hashlib.sha256(result_payload.content).hexdigest(),
-            "strategy_session": _result_json(result_payload.content)["terminal_strategy_state"][
-                "session"
-            ],
+            "result_checksum_sha256": result_checksum,
+            "strategy_session": stored_result["terminal_strategy_state"]["session"],
         }
         origin = _stored_origin(settings, track["id"])
         assert origin == {
@@ -80,9 +80,7 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
                 "result_manifest_sha256": stored_seed["result_manifest_sha256"],
                 "result_checksum_sha256": track["result_checksum_sha256"],
             },
-            "initial_strategy_state": _result_json(result_payload.content)[
-                "terminal_strategy_state"
-            ],
+            "initial_strategy_state": stored_result["terminal_strategy_state"],
             "calculation_contracts": stored_seed["result_provenance"]["calculation_contracts"],
         }
         assert _counts(settings) == {"tracks": 1, "receipts": 1}
@@ -203,7 +201,7 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
         )
         assert unreadable.status_code == 409
 
-        incomplete_result = _result_json(result_payload.content)
+        incomplete_result = copy.deepcopy(stored_result)
         incomplete_result["terminal_strategy_state"].pop("metric_state")
         incomplete_provenance = {
             **stored_seed["result_provenance"],
@@ -211,7 +209,7 @@ def test_start_tracking_copies_one_complete_origin_and_reopens_independently(
         }
         prepared = runtime.publication.prepare(
             kind="research.result",
-            payloads={"result": JsonPayload(incomplete_result)},
+            payloads=result_publication_payloads(incomplete_result),
             provenance=incomplete_provenance,
         )
         with runtime.database.transaction() as transaction:
@@ -457,12 +455,6 @@ def _restart_worker_once(settings: CoreSettings) -> None:
         timeout=30,
     )
     assert completed.returncode == 0, completed.stderr
-
-
-def _result_json(content: bytes) -> dict[str, object]:
-    value = json.loads(content)
-    assert isinstance(value, dict)
-    return value
 
 
 def _drop_product_schemas(settings: CoreSettings) -> None:

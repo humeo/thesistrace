@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -15,8 +14,9 @@ from test_core_daily_track_activation import (
 )
 
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.publication import JsonPayload, PublishedRef
+from thesistrace.publication import PublishedRef
 from thesistrace.research_run import ResearchRunTrackingUnavailable
+from thesistrace.research_run.result import read_result_bundle, result_publication_payloads
 
 ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached"
 
@@ -194,14 +194,14 @@ def _eligible_runs(client: TestClient, *, count: int) -> list[dict[str, object]]
             provenance=dict(stored["result_provenance"]),
         )
     )
-    payload = json.loads(source.payloads["result"].content)
+    result = read_result_bundle(source)
     runs = [first]
     for index in range(1, count):
         run_id = f"run_ticket36_{index:02d}"
         provenance = {**stored["result_provenance"], "research_run_id": run_id}
         prepared = runtime.publication.prepare(
             kind="research.result",
-            payloads={"result": JsonPayload(payload)},
+            payloads=result_publication_payloads(result),
             provenance=provenance,
         )
         with runtime.database.transaction() as transaction:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Callable
 
 import pytest
@@ -10,9 +9,10 @@ from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
-from thesistrace.publication import PublishedRef
+from thesistrace.publication import PreparedPublication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.result import read_result_bundle
 
 
 @pytest.mark.skipif(
@@ -82,9 +82,7 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
         assert stored["attempt_count"] == 1
         assert isinstance(stored["result_manifest_sha256"], str)
         assert isinstance(stored["result_provenance"], dict)
-        expected_input_digest = hashlib.sha256(
-            canonical_json_bytes(immutable_input)
-        ).hexdigest()
+        expected_input_digest = hashlib.sha256(canonical_json_bytes(immutable_input)).hexdigest()
         assert stored["result_provenance"] == {
             "schema_version": "research-result-v1",
             "research_run_id": run_id,
@@ -94,9 +92,7 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
                 "strategy": immutable_input["strategy"],
                 "costs": immutable_input["costs"],
                 "risk_free_rate": immutable_input["risk_free_rate"],
-                "numeric_execution_contract": immutable_input[
-                    "numeric_execution_contract"
-                ],
+                "numeric_execution_contract": immutable_input["numeric_execution_contract"],
             },
             "semantic_versions": immutable_input["semantic_versions"],
         }
@@ -107,7 +103,16 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
                 provenance=stored["result_provenance"],
             )
         )
-        result = json.loads(bundle.payloads["result"].content)
+        result = read_result_bundle(bundle)
+        assert set(bundle.payloads) == {
+            "factor_summary",
+            "strategy_summary",
+            "strategy_daily_observations",
+            "terminal_strategy_state",
+        }
+        assert bundle.payloads["strategy_daily_observations"].media_type == (
+            "application/vnd.apache.parquet"
+        )
         assert set(result) == {
             "factor_summary",
             "strategy_summary",
@@ -116,8 +121,7 @@ def test_queued_run_executes_publishes_and_reopens_without_reexecution() -> None
         }
         assert set(result["factor_summary"]["horizons"]) == {"1", "5", "20"}
         assert all(
-            "daily" not in horizon
-            for horizon in result["factor_summary"]["horizons"].values()
+            "daily" not in horizon for horizon in result["factor_summary"]["horizons"].values()
         )
         assert len(result["strategy_daily_observations"]) == 504
         expected_daily_fields = {
@@ -183,6 +187,36 @@ def test_publication_failure_cannot_expose_partial_result_or_success(
         assert stored["result_manifest_sha256"] is None
         assert stored["result_provenance"] is None
         assert stored["attempt_count"] == 1
+        assert _publication_manifest_count(runtime.database) == manifest_count
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_legal_over_budget_result_leaves_no_visible_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = CoreSettings.from_environment()
+    _drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id, _immutable_input = _admit_run(client, request_id="ticket-04-over-budget")
+        manifest_count = _publication_manifest_count(runtime.database)
+        monkeypatch.setattr(
+            PreparedPublication,
+            "exact_bytes",
+            property(lambda _prepared: 1_048_577),
+        )
+
+        assert runtime.research_runs.process_next() is True
+
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "failed"
+        stored = _stored_execution(runtime.database, run_id)
+        assert stored["result_manifest_sha256"] is None
+        assert stored["result_provenance"] is None
         assert _publication_manifest_count(runtime.database) == manifest_count
 
 
@@ -290,9 +324,7 @@ def _stored_execution(database: PostgresDatabase, run_id: str) -> dict[str, obje
 
 def _publication_manifest_count(database: PostgresDatabase) -> int:
     with database.transaction() as transaction:
-        row = transaction.execute(
-            "SELECT count(*) AS count FROM publication.manifests"
-        ).fetchone()
+        row = transaction.execute("SELECT count(*) AS count FROM publication.manifests").fetchone()
     assert row is not None
     return int(row["count"])
 

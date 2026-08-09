@@ -17,7 +17,6 @@ from pydantic import ValidationError
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
 from thesistrace.publication import (
-    JsonPayload,
     PreparedPublication,
     Publication,
     PublicationNotFoundError,
@@ -42,10 +41,15 @@ from thesistrace.research_run.models import (
     ResearchRunSummary,
     StartTrackingCommand,
 )
-from thesistrace.research_run.result import build_result_payload
+from thesistrace.research_run.result import (
+    ResearchResultError,
+    build_result_payload,
+    enforce_result_bundle_budget,
+    read_result_bundle,
+    result_publication_payloads,
+)
 
 logger = logging.getLogger(__name__)
-MAX_RESULT_BUNDLE_BYTES = 1_048_576
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 MAX_RESEARCH_RUN_ATTEMPTS = 3
@@ -53,15 +57,9 @@ MAX_RESOURCE_EXHAUSTED_ATTEMPTS = 2
 INFRASTRUCTURE_FAILURE = "InfrastructureUnavailable"
 RESOURCE_EXHAUSTED_FAILURE = "ResourceExhausted"
 WORKER_LOST_FAILURE = "WorkerLost"
-INFRASTRUCTURE_PUBLIC_REASON = (
-    "Research execution could not access required infrastructure."
-)
-RESOURCE_EXHAUSTED_PUBLIC_REASON = (
-    "Research execution exceeded its resource limit."
-)
-AUTOMATIC_RETRIES_PUBLIC_REASON = (
-    "Research execution could not complete after automatic retries."
-)
+INFRASTRUCTURE_PUBLIC_REASON = "Research execution could not access required infrastructure."
+RESOURCE_EXHAUSTED_PUBLIC_REASON = "Research execution exceeded its resource limit."
+AUTOMATIC_RETRIES_PUBLIC_REASON = "Research execution could not complete after automatic retries."
 PERMANENT_FAILURE_PUBLIC_REASON = "Research execution failed."
 RETRYABLE_FAILURES = (
     INFRASTRUCTURE_FAILURE,
@@ -247,9 +245,7 @@ class ResearchRunService:
             ).fetchone()
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunCancelConflict(
-                        "ResearchRun Cancel request_id conflicts"
-                    )
+                    raise ResearchRunCancelConflict("ResearchRun Cancel request_id conflicts")
                 return ResearchRunSummary.model_validate(receipt["outcome"])
 
             row = transaction.execute(
@@ -330,9 +326,7 @@ class ResearchRunService:
             ).fetchone()
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunRerunConflict(
-                        "ResearchRun Rerun request_id conflicts"
-                    )
+                    raise ResearchRunRerunConflict("ResearchRun Rerun request_id conflicts")
                 return ResearchRunSummary.model_validate(receipt["outcome"])
 
             rerun_id = f"run_{uuid4().hex[:20]}"
@@ -428,6 +422,7 @@ class ResearchRunService:
                     KeyError,
                     PublicationNotFoundError,
                     PublicationVerificationError,
+                    ResearchResultError,
                     ResearchRunResultUnavailable,
                     ValidationError,
                 ) as error:
@@ -497,10 +492,7 @@ class ResearchRunService:
                     provenance=dict(provenance),
                 )
             )
-            payload = bundle.payloads.get("result")
-            if payload is None or payload.media_type != "application/json":
-                raise ResearchRunResultUnavailable
-            stored_result = json.loads(payload.content)
+            stored_result = read_result_bundle(bundle)
             result = _public_result(stored_result, dict(provenance))
         except Exception as error:
             logger.error(
@@ -538,12 +530,9 @@ class ResearchRunService:
                 manifest_sha256=manifest_sha256,
                 kind="research.result",
                 provenance=selected_provenance,
-            )
+            ),
         )
-        payload = bundle.payloads.get("result")
-        if payload is None or payload.media_type != "application/json":
-            raise ResearchRunTrackingUnavailable
-        stored_result = json.loads(payload.content)
+        stored_result = read_result_bundle(bundle)
         _public_result(stored_result, selected_provenance)
         if not isinstance(stored_result, Mapping):
             raise ResearchRunTrackingUnavailable
@@ -564,7 +553,9 @@ class ResearchRunService:
                 "research_run_id": str(row["id"]),
                 "schema_version": str(selected_provenance["schema_version"]),
                 "result_manifest_sha256": manifest_sha256,
-                "result_checksum_sha256": hashlib.sha256(payload.content).hexdigest(),
+                "result_checksum_sha256": hashlib.sha256(
+                    canonical_json_bytes(stored_result)
+                ).hexdigest(),
             },
             initial_strategy_state=dict(initial_strategy_state),
             calculation_contracts=dict(calculation_contracts),
@@ -782,11 +773,13 @@ class ResearchRunService:
         provenance = _result_provenance(claim.run_id, immutable_input)
         prepared = self._publication.prepare(
             kind="research.result",
-            payloads={"result": JsonPayload(result)},
+            payloads=result_publication_payloads(result),
             provenance=provenance,
         )
-        if prepared.exact_bytes > MAX_RESULT_BUNDLE_BYTES:
-            raise RuntimeError("complete Result Bundle exceeds 1,048,576 exact bytes")
+        observations = result["strategy_daily_observations"]
+        if not isinstance(observations, list):
+            raise RuntimeError("Result Strategy Daily Observations are invalid")
+        enforce_result_bundle_budget(prepared.exact_bytes, len(observations))
         return prepared, provenance
 
     def _publish_success(
@@ -879,19 +872,13 @@ class ResearchRunService:
             ).fetchone()
             if attempt is None or attempt["status"] != "running":
                 return
-            resource_limited = (
-                policy.attempt_reason == RESOURCE_EXHAUSTED_FAILURE
-                or bool(attempt["resource_exhausted_seen"])
+            resource_limited = policy.attempt_reason == RESOURCE_EXHAUSTED_FAILURE or bool(
+                attempt["resource_exhausted_seen"]
             )
             attempt_limit = (
-                MAX_RESOURCE_EXHAUSTED_ATTEMPTS
-                if resource_limited
-                else policy.max_attempts
+                MAX_RESOURCE_EXHAUSTED_ATTEMPTS if resource_limited else policy.max_attempts
             )
-            retry = (
-                policy.retryable
-                and int(attempt["attempt_count"]) < attempt_limit
-            )
+            retry = policy.retryable and int(attempt["attempt_count"]) < attempt_limit
             failed_attempt = transaction.execute(
                 """
                 UPDATE research_runs.attempts
@@ -1089,9 +1076,7 @@ def _public_result(
         }
     benchmark = strategy_summary.get("benchmark")
     public_strategy_summary = {
-        name: value
-        for name, value in strategy_summary.items()
-        if name != "benchmark"
+        name: value for name, value in strategy_summary.items() if name != "benchmark"
     }
     return ResearchRunResult.model_validate(
         {

@@ -15,6 +15,8 @@ from thesistrace.research_kernel import (
 )
 from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
+from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_run.result import build_result_payload
 
 SESSIONS = (
     "2024-01-02",
@@ -52,6 +54,40 @@ def test_explicit_research_period_accepts_any_positive_session_count(session_cou
         assert [row["session"] for row in resumable["daily"]] == expected_sessions
         assert resumable["daily"][0]["cycle_type"] == "open"
         assert resumable["positions"] == []
+
+
+@pytest.mark.parametrize("session_count", [1, 2, 4])
+def test_explicit_research_period_projects_four_variable_length_result_values(
+    session_count: int,
+) -> None:
+    output = run(
+        _run_input(
+            _canonical(session_count=session_count),
+            expression=CLOSE_ADJUSTED,
+            start=SESSIONS[0],
+            end=SESSIONS[session_count - 1],
+        )
+    )
+
+    result = build_result_payload(output, rebalance_interval=1, universe="manual")
+
+    assert set(result) == {
+        "factor_summary",
+        "strategy_summary",
+        "strategy_daily_observations",
+        "terminal_strategy_state",
+    }
+    assert len(result["strategy_daily_observations"]) == session_count
+    serialized = canonical_json_bytes(result)
+    for excluded in (
+        b"strategy_ledger",
+        b"alpha_matrix",
+        b"forward_labels",
+        b"orders",
+        b"fills",
+        b"position_history",
+    ):
+        assert excluded not in serialized
 
 
 def test_explicit_research_period_rejects_empty_reversed_or_partial_boundaries() -> None:
@@ -228,9 +264,9 @@ def test_explicit_period_advance_matches_batch_across_irregular_chunks(
 
     actual_evidence = _retained_evidence(actual)
     expected_evidence = _retained_evidence(expected)
-    assert equivalence_bytes(actual_evidence) == equivalence_bytes(
-        expected_evidence
-    ), first_divergence(actual_evidence, expected_evidence)
+    assert equivalence_bytes(actual_evidence) == equivalence_bytes(expected_evidence), (
+        first_divergence(actual_evidence, expected_evidence)
+    )
     assert (
         actual.run_input_with_canonical(actual.canonical_snapshot()).research_end_session
         == SESSIONS[-1]
@@ -331,15 +367,14 @@ def test_bounded_continuation_preserves_full_explicit_period_results(
 
     actual_evidence = _retained_evidence(actual)
     expected_evidence = _retained_evidence(expected)
-    assert equivalence_bytes(actual_evidence) == equivalence_bytes(
-        expected_evidence
-    ), first_divergence(actual_evidence, expected_evidence)
+    assert equivalence_bytes(actual_evidence) == equivalence_bytes(expected_evidence), (
+        first_divergence(actual_evidence, expected_evidence)
+    )
     assert len(actual.output_snapshot()["alpha_matrix"]["sessions"]) == len(sessions)
     for horizon in ("1", "5", "20"):
-        assert (
-            len(actual.output_snapshot()["factor_evaluation"]["horizons"][horizon]["daily"])
-            == len(sessions)
-        )
+        assert len(
+            actual.output_snapshot()["factor_evaluation"]["horizons"][horizon]["daily"]
+        ) == len(sessions)
 
 
 def _retained_evidence(state: KernelState) -> dict[str, object]:
@@ -420,9 +455,7 @@ def _canonical_for_sessions(sessions: list[str]) -> dict[str, object]:
                 "turnover_cny": "10000000",
             }
         )
-        states.append(
-            {"session": session, "instrument_id": INSTRUMENT_ID, "state": "normal"}
-        )
+        states.append({"session": session, "instrument_id": INSTRUMENT_ID, "state": "normal"})
         limits.append(
             {
                 "session": session,
@@ -445,13 +478,10 @@ def _canonical_for_sessions(sessions: list[str]) -> dict[str, object]:
         "prices": prices,
         "trading_states": states,
         "price_limits": limits,
-        "base_pool": [
-            {"session": session, "instrument_id": INSTRUMENT_ID} for session in sessions
-        ],
+        "base_pool": [{"session": session, "instrument_id": INSTRUMENT_ID} for session in sessions],
         "liquidity_universes": {
             "manual": [
-                {"session": session, "instrument_ids": [INSTRUMENT_ID]}
-                for session in sessions
+                {"session": session, "instrument_ids": [INSTRUMENT_ID]} for session in sessions
             ]
         },
         "industry_membership": [],

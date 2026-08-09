@@ -1,10 +1,25 @@
 from __future__ import annotations
 
 import copy
+import json
 from collections import Counter, defaultdict
 from collections.abc import Mapping
 from decimal import Decimal
 
+import pyarrow as pa
+import pyarrow.parquet as pq
+from pyarrow import ArrowException
+
+from thesistrace.publication import (
+    JsonPayload,
+    ParquetRowsPayload,
+    VerifiedBundle,
+)
+from thesistrace.publication.serialization import (
+    ParquetContractError,
+    ParquetWriterContract,
+    canonicalize_parquet_rows,
+)
 from thesistrace.research_kernel.kernel_run import RunOutput
 from thesistrace.research_kernel.numeric import canonical_decimal
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
@@ -12,6 +27,113 @@ from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 
 class ResearchResultError(ValueError):
     pass
+
+
+RESULT_BUDGET_SESSION_BLOCK = 504
+RESULT_BUDGET_BYTE_BLOCK = 1_048_576
+RESULT_VALUE_NAMES = frozenset(
+    {
+        "factor_summary",
+        "strategy_summary",
+        "strategy_daily_observations",
+        "terminal_strategy_state",
+    }
+)
+FORBIDDEN_DURABLE_RESULT_KEYS = frozenset(
+    {
+        "alpha_matrix",
+        "alpha_values",
+        "forward_labels",
+        "daily_factor_observations",
+        "strategy_ledger",
+        "orders",
+        "child_orders",
+        "fills",
+        "position_history",
+    }
+)
+STRATEGY_DAILY_OBSERVATIONS_CONTRACT = ParquetWriterContract(
+    name="research-result-strategy-daily-observations",
+    version=1,
+    schema=pa.schema(
+        [
+            pa.field("session", pa.string(), nullable=False),
+            pa.field("gross_nav", pa.string(), nullable=False),
+            pa.field("net_nav", pa.string(), nullable=False),
+            pa.field("benchmark_nav", pa.string(), nullable=False),
+            pa.field("net_cash", pa.string(), nullable=False),
+            pa.field("transaction_cost_cny", pa.string(), nullable=False),
+            pa.field("holdings_count", pa.int64(), nullable=False),
+            pa.field("maximum_single_name_weight", pa.float64(), nullable=False),
+            pa.field("upper_limit_buy_rejections", pa.int64(), nullable=False),
+            pa.field("lower_limit_sell_rejections", pa.int64(), nullable=False),
+            pa.field("suspension_rejections", pa.int64(), nullable=False),
+        ]
+    ),
+    sort_keys=("session",),
+)
+
+
+def result_bundle_byte_budget(research_period_session_count: int) -> int:
+    if (
+        isinstance(research_period_session_count, bool)
+        or not isinstance(research_period_session_count, int)
+        or research_period_session_count < 1
+    ):
+        raise ResearchResultError("Result budget requires a positive Research Period")
+    blocks = (
+        research_period_session_count + RESULT_BUDGET_SESSION_BLOCK - 1
+    ) // RESULT_BUDGET_SESSION_BLOCK
+    return blocks * RESULT_BUDGET_BYTE_BLOCK
+
+
+def enforce_result_bundle_budget(
+    exact_bytes: int,
+    research_period_session_count: int,
+) -> int:
+    budget = result_bundle_byte_budget(research_period_session_count)
+    if isinstance(exact_bytes, bool) or not isinstance(exact_bytes, int) or exact_bytes < 0:
+        raise ResearchResultError("Result Bundle exact bytes are invalid")
+    if exact_bytes > budget:
+        raise ResearchResultError("Result Bundle exceeds session-scaled byte budget")
+    return exact_bytes
+
+
+def result_publication_payloads(
+    result: Mapping[str, object],
+) -> dict[str, JsonPayload | ParquetRowsPayload]:
+    if set(result) != RESULT_VALUE_NAMES:
+        raise ResearchResultError("Result must contain exactly four durable values")
+    _reject_transient_values(result)
+    observations = result.get("strategy_daily_observations")
+    if (
+        not isinstance(observations, list)
+        or not observations
+        or any(not isinstance(row, Mapping) for row in observations)
+    ):
+        raise ResearchResultError("Strategy Daily Observations are invalid")
+    return {
+        "factor_summary": JsonPayload(copy.deepcopy(result["factor_summary"])),
+        "strategy_summary": JsonPayload(copy.deepcopy(result["strategy_summary"])),
+        "strategy_daily_observations": ParquetRowsPayload(
+            rows=tuple(dict(row) for row in observations),
+            contract=STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+        ),
+        "terminal_strategy_state": JsonPayload(copy.deepcopy(result["terminal_strategy_state"])),
+    }
+
+
+def read_result_bundle(bundle: VerifiedBundle) -> dict[str, object]:
+    if bundle.kind != "research.result" or set(bundle.payloads) != RESULT_VALUE_NAMES:
+        raise ResearchResultError("Result Bundle must contain exactly four durable values")
+    result = {
+        "factor_summary": _read_json_value(bundle, "factor_summary"),
+        "strategy_summary": _read_json_value(bundle, "strategy_summary"),
+        "strategy_daily_observations": _read_daily_observations(bundle),
+        "terminal_strategy_state": _read_json_value(bundle, "terminal_strategy_state"),
+    }
+    _reject_transient_values(result)
+    return result
 
 
 def build_result_payload(
@@ -25,8 +147,8 @@ def build_result_payload(
     factor = _mapping(artifacts, "factor_evaluation")
     strategy = _mapping(artifacts, "strategy_backtest")
     daily = _rows(strategy, "daily")
-    if len(daily) != 504:
-        raise ResearchResultError("Result requires exactly 504 Strategy observations")
+    if not daily:
+        raise ResearchResultError("Result requires a positive Research Period")
     return {
         "factor_summary": _factor_summary(factor),
         "strategy_summary": _strategy_summary(strategy, universe=universe),
@@ -66,8 +188,7 @@ def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
                 "ic_valid_session_count": int(ic["valid_session_count"]),
                 "rank_ic_valid_session_count": int(rank_ic["valid_session_count"]),
                 "quantile_valid_session_count": sum(
-                    isinstance(observation, Mapping)
-                    and observation.get("quantile_reason") is None
+                    isinstance(observation, Mapping) and observation.get("quantile_reason") is None
                     for observation in daily
                 ),
             },
@@ -126,9 +247,7 @@ def _strategy_daily_observations(
                 "net_cash": str(row["net_cash"]),
                 "transaction_cost_cny": canonical_decimal(session_cost),
                 "holdings_count": int(row["holdings_count"]),
-                "maximum_single_name_weight": float(
-                    row["maximum_single_name_weight"]
-                ),
+                "maximum_single_name_weight": float(row["maximum_single_name_weight"]),
                 "upper_limit_buy_rejections": counts["upper_limit_buy"],
                 "lower_limit_sell_rejections": counts["lower_limit_sell"],
                 "suspension_rejections": counts["suspension"],
@@ -207,3 +326,54 @@ def _remove_nested(value: dict[str, object], parent: str, child: str) -> None:
     nested = value.get(parent)
     if isinstance(nested, dict):
         nested.pop(child, None)
+
+
+def _read_json_value(bundle: VerifiedBundle, name: str) -> object:
+    payload = bundle.payloads[name]
+    if payload.media_type != "application/json" or payload.serialization != {
+        "format": "canonical-json",
+        "version": 1,
+    }:
+        raise ResearchResultError(f"Result value {name} has an invalid encoding")
+    try:
+        return json.loads(payload.content)
+    except (TypeError, ValueError) as error:
+        raise ResearchResultError(f"Result value {name} is invalid JSON") from error
+
+
+def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
+    payload = bundle.payloads["strategy_daily_observations"]
+    expected_serialization = {
+        "format": "canonical-parquet",
+        "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
+    }
+    if (
+        payload.media_type != "application/vnd.apache.parquet"
+        or payload.serialization != expected_serialization
+    ):
+        raise ResearchResultError("Strategy Daily Observations have an invalid encoding")
+    try:
+        table = pq.read_table(pa.BufferReader(payload.content))
+        if table.schema != STRATEGY_DAILY_OBSERVATIONS_CONTRACT.schema:
+            raise ResearchResultError("Strategy Daily Observations schema is invalid")
+        rows = canonicalize_parquet_rows(
+            table.to_pylist(),
+            STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+        )
+    except (ArrowException, ParquetContractError, TypeError, ValueError) as error:
+        raise ResearchResultError("Strategy Daily Observations are invalid") from error
+    if not rows:
+        raise ResearchResultError("Strategy Daily Observations cannot be empty")
+    return rows
+
+
+def _reject_transient_values(value: object) -> None:
+    if isinstance(value, Mapping):
+        forbidden = set(value) & FORBIDDEN_DURABLE_RESULT_KEYS
+        if forbidden:
+            raise ResearchResultError(f"Result contains transient value: {sorted(forbidden)[0]}")
+        for nested in value.values():
+            _reject_transient_values(nested)
+    elif isinstance(value, list | tuple):
+        for nested in value:
+            _reject_transient_values(nested)
