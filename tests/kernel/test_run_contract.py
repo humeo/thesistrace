@@ -42,8 +42,9 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
     accepted_kernel_run: RunOutput,
 ) -> None:
     artifacts = accepted_kernel_run.artifacts_snapshot()
-    ledger = artifacts["strategy_ledger"]
+    ledger = accepted_kernel_run.strategy_ledger_snapshot()
     assert isinstance(ledger, list) and len(ledger) == 504
+    assert "strategy_ledger" not in artifacts
     assert "strategy_ledger" not in accepted_kernel_run.track_state.output_snapshot()
 
     result = build_result_payload(

@@ -653,6 +653,7 @@ def run_strategy(
                     "cumulative_transaction_cost": canonical_decimal(cumulative_cost),
                     "gross_nav": canonical_decimal(gross_nav),
                     "net_nav": canonical_decimal(net_nav),
+                    "valuation_events": unique_events(valuation_events),
                 }
             )
 

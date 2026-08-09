@@ -171,21 +171,34 @@ class KernelState:
 @dataclass(frozen=True, init=False)
 class RunOutput:
     _artifacts_json: bytes = field(repr=False)
+    _strategy_ledger_json: bytes = field(repr=False)
     track_state: KernelState
 
     def __init__(
         self,
         *,
-        artifacts: dict[str, object],
+        artifacts: dict[str, dict[str, object]],
+        strategy_ledger: tuple[dict[str, object], ...],
         track_state: KernelState,
     ) -> None:
         object.__setattr__(self, "_artifacts_json", canonical_json_bytes(artifacts))
+        object.__setattr__(
+            self,
+            "_strategy_ledger_json",
+            canonical_json_bytes(strategy_ledger),
+        )
         object.__setattr__(self, "track_state", track_state)
 
-    def artifacts_snapshot(self) -> dict[str, object]:
+    def artifacts_snapshot(self) -> dict[str, dict[str, object]]:
         value = json.loads(self._artifacts_json)
         if not isinstance(value, dict):
             raise KernelRunError("Kernel Run artifacts snapshot is invalid")
+        return value
+
+    def strategy_ledger_snapshot(self) -> list[dict[str, object]]:
+        value = json.loads(self._strategy_ledger_json)
+        if not isinstance(value, list) or any(not isinstance(row, dict) for row in value):
+            raise KernelRunError("Kernel Strategy Ledger snapshot is invalid")
         return value
 
 
@@ -282,23 +295,16 @@ def _calculate(
         definition,
         origin_session=origin_session,
     )
-    artifacts = compose_output(
-        matrix,
-        labels,
-        factor,
-        strategy.finalized,
-        strategy_ledger=strategy.ledger,
-    )
-    retained_artifacts = dict(artifacts)
-    retained_artifacts.pop("strategy_ledger")
+    artifacts = compose_output(matrix, labels, factor, strategy.finalized)
     track_state = KernelState(
         run_input=run_input,
-        output=retained_artifacts,
+        output=artifacts,
         strategy_resume=strategy.resumable,
         origin_session=origin_session,
     )
     return RunOutput(
         artifacts=artifacts,
+        strategy_ledger=strategy.ledger,
         track_state=track_state,
     )
 
@@ -336,10 +342,8 @@ def compose_output(
     labels: dict[str, object],
     factor: dict[str, object],
     strategy: dict[str, object],
-    *,
-    strategy_ledger: tuple[dict[str, object], ...] | None = None,
-) -> dict[str, object]:
-    output: dict[str, object] = {
+) -> dict[str, dict[str, object]]:
+    return {
         "alpha_matrix": matrix,
         "forward_labels": labels,
         "factor_evaluation": factor,
@@ -363,6 +367,3 @@ def compose_output(
             "strategy": strategy["diagnostics"],
         },
     }
-    if strategy_ledger is not None:
-        output["strategy_ledger"] = [dict(row) for row in strategy_ledger]
-    return output

@@ -25,9 +25,10 @@ def test_kernel_transient_ledger_reconciles_every_session_from_the_strategy_tran
     )
     first = _kernel_run(canonical)
     repeated = _kernel_run(canonical)
-    ledger = first.artifacts_snapshot()["strategy_ledger"]
+    ledger = first.strategy_ledger_snapshot()
 
-    assert ledger == repeated.artifacts_snapshot()["strategy_ledger"]
+    assert ledger == repeated.strategy_ledger_snapshot()
+    assert first.track_state.output_snapshot() == repeated.track_state.output_snapshot()
     assert [row["session"] for row in ledger] == list(SESSIONS)
     assert ledger[0]["signal"] is None
     assert ledger[1]["signal"]["session"] == SESSIONS[0]
@@ -48,18 +49,7 @@ def test_kernel_transient_ledger_reconciles_every_session_from_the_strategy_tran
     assert ledger[-1]["signal"] is None
     assert ledger[-1]["intended_orders"] == []
 
-    for row in ledger:
-        position_value = sum(
-            Decimal(str(position["adjusted_units"]))
-            * Decimal(str(position["last_adjusted_price"]))
-            for position in row["positions"]
-        )
-        fill_cost = sum(Decimal(str(fill["cost"])) for fill in row["fills"])
-        assert Decimal(str(row["net_cash"])) >= 0
-        assert Decimal(str(row["net_cash"])) + position_value == Decimal(
-            str(row["net_nav"])
-        )
-        assert fill_cost == Decimal(str(row["transaction_cost_cny"]))
+    _assert_ledger_reconciles(ledger)
 
     assert "strategy_ledger" not in first.track_state.output_snapshot()
     assert "ledger" not in first.track_state.strategy_resume_snapshot()
@@ -242,6 +232,31 @@ def test_manual_small_order_uses_minimum_commission_without_negative_cash() -> N
     }
     assert all(day["net_cash"] >= 0 for day in _daily_ledger(result))
 
+    _, kernel_ledger = _kernel_ledger(canonical, holdings_count=2)
+    assert Decimal(str(kernel_ledger[2]["transaction_cost_cny"])) == Decimal("5.16")
+    assert Decimal(str(kernel_ledger[2]["net_cash"])) >= 0
+    _assert_ledger_reconciles(kernel_ledger)
+
+
+def test_kernel_ledger_records_star_board_specific_order_quantity() -> None:
+    canonical = _canonical(
+        opens={session: {A: "30", B: "60"} for session in SESSIONS},
+    )
+    canonical["instruments"][0]["board"] = "star"
+    _set_alpha_closes(
+        canonical,
+        {session: {A: "2", B: "1"} for session in SESSIONS},
+    )
+
+    _, ledger = _kernel_ledger(canonical, rebalance_interval=20)
+
+    intent = ledger[1]["intended_orders"][0]
+    filled_quantity = sum(int(fill["quantity"]) for fill in ledger[1]["fills"])
+    assert intent["legal_quantity"] == 333_333
+    assert filled_quantity >= 200
+    assert filled_quantity % 100 != 0
+    _assert_ledger_reconciles(ledger)
+
 
 def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> None:
     upper_limit_buy = _canonical(
@@ -269,6 +284,14 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
         session: () for session in SESSIONS
     }
     assert all(day["net_cash"] == Decimal("10000000") for day in _daily_ledger(rejected_buy))
+    _set_alpha_closes(
+        upper_limit_buy,
+        {session: {A: "2", B: "1"} for session in SESSIONS},
+    )
+    _, upper_ledger = _kernel_ledger(upper_limit_buy, rebalance_interval=20)
+    assert upper_ledger[1]["fills"] == []
+    assert upper_ledger[1]["rejections"][0]["reason"] == "upper_limit_buy"
+    _assert_ledger_reconciles(upper_ledger)
 
     suspended_buy = _canonical(
         opens={
@@ -287,6 +310,14 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
     assert _position_ledger(suspended_buy, buy_matrix, rebalance_interval=20) == {
         session: () for session in SESSIONS
     }
+    _set_alpha_closes(
+        suspended_buy,
+        {session: {A: "2", B: "1"} for session in SESSIONS},
+    )
+    _, suspension_ledger = _kernel_ledger(suspended_buy, rebalance_interval=20)
+    assert suspension_ledger[1]["fills"] == []
+    assert suspension_ledger[1]["rejections"][0]["reason"] == "suspension"
+    _assert_ledger_reconciles(suspension_ledger)
 
     lower_limit_sell = _canonical(
         opens={
@@ -315,6 +346,20 @@ def test_manual_rejections_never_create_false_fills_or_discard_a_holding() -> No
     assert _position_ledger(lower_limit_sell, sell_matrix)[SESSIONS[2]] == (
         (A, 999_600, Decimal("999600")),
     )
+    _set_alpha_closes(
+        lower_limit_sell,
+        {
+            SESSIONS[0]: {A: "2", B: "1"},
+            SESSIONS[1]: {A: "1", B: "2"},
+            SESSIONS[2]: {A: "1", B: "2"},
+            SESSIONS[3]: {A: "1", B: "2"},
+        },
+    )
+    _, lower_ledger = _kernel_ledger(lower_limit_sell)
+    assert any(item["reason"] == "lower_limit_sell" for item in lower_ledger[2]["rejections"])
+    assert lower_ledger[2]["fills"] == []
+    assert [position["instrument_id"] for position in lower_ledger[2]["positions"]] == [A]
+    _assert_ledger_reconciles(lower_ledger)
 
 
 def test_manual_adjusted_return_keeps_the_position_and_value_continuous() -> None:
@@ -341,6 +386,14 @@ def test_manual_adjusted_return_keeps_the_position_and_value_continuous() -> Non
         SESSIONS[3]: ((A, 999_600, Decimal("999600")),),
     }
     assert _orders(result) == [(SESSIONS[1], A, "buy", 1_000_000, 999_600)]
+    _set_alpha_closes(
+        canonical,
+        {session: {A: "2", B: "1"} for session in SESSIONS},
+    )
+    _, kernel_ledger = _kernel_ledger(canonical, rebalance_interval=20)
+    assert kernel_ledger[2]["net_nav"] == kernel_ledger[1]["net_nav"]
+    assert kernel_ledger[3]["net_nav"] == kernel_ledger[1]["net_nav"]
+    _assert_ledger_reconciles(kernel_ledger)
 
 
 def test_manual_delisting_writes_off_the_holding_without_a_false_sale() -> None:
@@ -379,6 +432,23 @@ def test_manual_delisting_writes_off_the_holding_without_a_false_sale() -> None:
     assert _position_ledger(canonical, matrix)[SESSIONS[2]] == ()
     assert _daily_ledger(result)[2]["net_cash"] == Decimal("901.24")
     assert _daily_ledger(result)[2]["net_nav"] == Decimal("901.24")
+    _set_alpha_closes(
+        canonical,
+        {
+            SESSIONS[0]: {A: "2", B: "1"},
+            SESSIONS[1]: {A: "1", B: "2"},
+            SESSIONS[2]: {B: "2"},
+            SESSIONS[3]: {B: "2"},
+        },
+    )
+    _, kernel_ledger = _kernel_ledger(canonical)
+    assert {
+        "session": SESSIONS[2],
+        "instrument_id": A,
+        "type": "terminal_delisting_writeoff",
+    } in kernel_ledger[2]["valuation_events"]
+    assert kernel_ledger[2]["positions"] == []
+    _assert_ledger_reconciles(kernel_ledger)
 
 
 def test_manual_historical_universe_excludes_a_future_stock_and_changes_on_schedule() -> None:
@@ -412,6 +482,11 @@ def test_manual_historical_universe_excludes_a_future_stock_and_changes_on_sched
     assert _position_ledger(canonical, matrix)[SESSIONS[2]] == (
         (B, 499_200, Decimal("499200")),
     )
+    _, kernel_ledger = _kernel_ledger(canonical)
+    assert kernel_ledger[1]["signal"]["selected_instrument_ids"] == [A]
+    assert kernel_ledger[2]["signal"]["selected_instrument_ids"] == [B]
+    assert [position["instrument_id"] for position in kernel_ledger[2]["positions"]] == [B]
+    _assert_ledger_reconciles(kernel_ledger)
 
 
 def _canonical(
@@ -529,7 +604,12 @@ def _definition(
     }
 
 
-def _kernel_run(canonical: dict[str, object]):
+def _kernel_run(
+    canonical: dict[str, object],
+    *,
+    holdings_count: int = 1,
+    rebalance_interval: int = 1,
+):
     return run(
         RunInput(
             canonical_data=canonical,
@@ -537,8 +617,8 @@ def _kernel_run(canonical: dict[str, object]):
             field_bindings=FIELD_BINDINGS,
             universe="manual",
             neutralization="none",
-            holdings_count=1,
-            rebalance_interval=1,
+            holdings_count=holdings_count,
+            rebalance_interval=rebalance_interval,
             initial_cash_cny="10000000",
             commission_rate_all_in="0.0003",
             commission_min_cny="5",
@@ -548,6 +628,50 @@ def _kernel_run(canonical: dict[str, object]):
             research_end_session=SESSIONS[-1],
         )
     )
+
+
+def _kernel_ledger(
+    canonical: dict[str, object],
+    *,
+    holdings_count: int = 1,
+    rebalance_interval: int = 1,
+):
+    output = _kernel_run(
+        canonical,
+        holdings_count=holdings_count,
+        rebalance_interval=rebalance_interval,
+    )
+    ledger = output.strategy_ledger_snapshot()
+    return output, ledger
+
+
+def _set_alpha_closes(
+    canonical: dict[str, object],
+    values: dict[str, dict[str, str]],
+) -> None:
+    for row in canonical["prices"]:
+        session = str(row["session"])
+        instrument_id = str(row["instrument_id"])
+        if instrument_id in values.get(session, {}):
+            row["close_adj"] = values[session][instrument_id]
+
+
+def _assert_ledger_reconciles(ledger: list[dict[str, object]]) -> None:
+    for row in ledger:
+        position_value = sum(
+            Decimal(str(position["adjusted_units"]))
+            * Decimal(str(position["last_adjusted_price"]))
+            for position in row["positions"]
+        )
+        fill_cost = sum(Decimal(str(fill["cost"])) for fill in row["fills"])
+        assert Decimal(str(row["net_cash"])) >= 0
+        assert Decimal(str(row["gross_cash"])) + position_value == Decimal(
+            str(row["gross_nav"])
+        )
+        assert Decimal(str(row["net_cash"])) + position_value == Decimal(
+            str(row["net_nav"])
+        )
+        assert fill_cost == Decimal(str(row["transaction_cost_cny"]))
 
 
 def _run(
