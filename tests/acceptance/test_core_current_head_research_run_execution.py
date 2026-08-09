@@ -89,11 +89,27 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             f"/api/research-runs/{run_id}/daily-tracks",
             json={"request_id": "attempt-start-head-track"},
         )
-        assert tracking.status_code == 409
-        assert tracking.json() == {
-            "detail": "Start Tracking is unavailable for current-data ResearchRuns"
+        assert tracking.status_code == 201
+        track = tracking.json()
+        assert track == {
+            "id": track["id"],
+            "status": "active",
+            "seed_run_id": run_id,
+            "definition_id": public_run["definition_id"],
+            "definition_revision": public_run["definition_revision"],
+            "result_checksum_sha256": track["result_checksum_sha256"],
+            "origin_session": sessions[-1],
+            "strategy_session": sessions[-1],
         }
-        assert client.get("/api/daily-tracks").json()["items"] == []
+        assert "release" not in str(track).lower()
+        assert "generation" not in str(track).lower()
+        assert client.get("/api/daily-tracks").json()["items"] == [track]
+        activation = _stored_tracking_activation(settings, track["id"])
+        assert activation["origin_session"].isoformat() == sessions[-1]
+        assert activation["current_checkpoint_session"].isoformat() == sessions[-1]
+        assert activation["checkpoint_count"] == 1
+        assert activation["progression_count"] == 0
+        assert activation["terminal_strategy_state"]["session"] == sessions[-1]
 
     with TestClient(create_app(settings)) as restarted:
         reopened = restarted.get(f"/api/research-runs/{run_id}")
@@ -102,6 +118,10 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         assert _stored_execution(settings, run_id)["attempt_count"] == 1
+        reopened_track = restarted.get(f"/api/daily-tracks/{track['id']}")
+        assert reopened_track.status_code == 200
+        assert "release" not in reopened_track.text.lower()
+        assert "generation" not in reopened_track.text.lower()
 
 
 @pytest.mark.skipif(
@@ -627,6 +647,40 @@ def _stored_execution(settings: CoreSettings, run_id: str) -> dict[str, object]:
                 WHERE run.id = %s
                 """,
                 (run_id,),
+            ).fetchone()
+        assert row is not None
+        return row
+    finally:
+        database.close()
+
+
+def _stored_tracking_activation(
+    settings: CoreSettings,
+    track_id: str,
+) -> dict[str, object]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT state.origin_session,
+                       checkpoint.boundary_session AS current_checkpoint_session,
+                       checkpoint.terminal_strategy_state,
+                       (SELECT count(*)
+                        FROM daily_tracks.session_checkpoints
+                        WHERE track_id = state.track_id) AS checkpoint_count,
+                       (SELECT count(*)
+                        FROM daily_tracks.session_progressions
+                        WHERE track_id = state.track_id) AS progression_count
+                FROM daily_tracks.session_tracking_states AS state
+                JOIN daily_tracks.session_checkpoints AS checkpoint
+                  ON checkpoint.track_id = state.track_id
+                 AND checkpoint.manifest_sha256 =
+                        state.current_checkpoint_manifest_sha256
+                WHERE state.track_id = %s
+                """,
+                (track_id,),
             ).fetchone()
         assert row is not None
         return row

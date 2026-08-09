@@ -445,13 +445,6 @@ class ResearchRunService:
                     raise ResearchRunTrackingUnavailable(
                         "Start Tracking requires a succeeded ResearchRun"
                     )
-                if isinstance(row.get("result_provenance"), Mapping) and isinstance(
-                    row["result_provenance"].get("data_generation_id"),
-                    str,
-                ):
-                    raise ResearchRunTrackingUnavailable(
-                        "Start Tracking is unavailable for current-data ResearchRuns"
-                    )
                 try:
                     origin = self._tracking_origin(transaction, row)
                 except PublicationUnavailableError:
@@ -564,7 +557,11 @@ class ResearchRunService:
         ):
             raise ResearchRunTrackingUnavailable
         data_generation_id = selected_provenance.get("data_generation_id")
-        if not isinstance(data_generation_id, str):
+        data_through_session = selected_provenance.get("data_through_session")
+        if not isinstance(data_generation_id, str) or not isinstance(
+            data_through_session,
+            str,
+        ):
             raise ResearchRunTrackingUnavailable
         bundle = self._publication.read_in_transaction(
             transaction,
@@ -589,7 +586,8 @@ class ResearchRunService:
             definition_id=str(row["definition_id"]),
             definition_revision=int(row["definition_revision"]),
             immutable_input=immutable_input.model_dump(mode="json"),
-            seed_release_id=data_generation_id,
+            seed_data_generation_id=data_generation_id,
+            seed_data_through_session=data_through_session,
             verified_result={
                 "kind": "research.result",
                 "research_run_id": str(row["id"]),

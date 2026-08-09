@@ -6,6 +6,7 @@ import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
@@ -27,7 +28,8 @@ from thesistrace.daily_track.models import (
     StopDailyTrackCommand,
     TrackingOrigin,
 )
-from thesistrace.data import NextRelease
+from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
+from thesistrace.data import DatasetLifecycle, NextRelease
 from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
@@ -141,6 +143,7 @@ class DailyTrackService:
         database: PostgresDatabase,
         *,
         publication: Publication | None = None,
+        dataset_lifecycle: DatasetLifecycle | None = None,
         next_release: NextReleaseLookup | None = None,
         load_canonical: CanonicalLoader | None = None,
         read_result_bundle: ResultBundleReader,
@@ -154,9 +157,11 @@ class DailyTrackService:
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
         self._database = database
         self._publication = publication
+        self._dataset_lifecycle = dataset_lifecycle
         self._next_release = next_release
         self._load_canonical = load_canonical
         self._read_result_bundle = read_result_bundle
+        self._session_coordinates = SessionCoordinateRepository(database)
         self._advance_kernel = advance_kernel
         self._progress = progress or (lambda _stage, _track_id, _target_id: None)
         self._lease_seconds = lease_seconds
@@ -196,25 +201,89 @@ class DailyTrackService:
             assert capacity is not None
             if int(capacity["count"]) >= ACTIVE_DAILY_TRACK_LIMIT:
                 raise DailyTrackActivationLimitReached("Active DailyTrack limit of 10 reached")
-            row = transaction.execute(
-                """
-                INSERT INTO daily_tracks.tracks (
-                    id, status, seed_run_id, origin,
-                    current_release_id, current_strategy_session
-                ) VALUES (%s, 'active', %s, %s, %s, %s)
-                RETURNING id, status, origin, current_release_id,
-                          current_strategy_session
-                """,
-                (
-                    f"track_{uuid4().hex[:20]}",
-                    origin.seed_run_id,
-                    Jsonb(origin.model_dump(mode="json")),
-                    origin.seed_release_id,
-                    origin.initial_strategy_state.session,
-                ),
-            ).fetchone()
+            if origin.seed_data_generation_id is not None:
+                row = self._activate_current(transaction, origin)
+            else:
+                row = transaction.execute(
+                    """
+                    INSERT INTO daily_tracks.tracks (
+                        id, status, seed_run_id, origin,
+                        current_release_id, current_strategy_session
+                    ) VALUES (%s, 'active', %s, %s, %s, %s)
+                    RETURNING id, status, origin, current_release_id,
+                              current_strategy_session
+                    """,
+                    (
+                        f"track_{uuid4().hex[:20]}",
+                        origin.seed_run_id,
+                        Jsonb(origin.model_dump(mode="json")),
+                        origin.seed_release_id,
+                        origin.initial_strategy_state.session,
+                    ),
+                ).fetchone()
             assert row is not None
         return _summary(row)
+
+    def _activate_current(
+        self,
+        transaction: PostgresTransaction,
+        origin: TrackingOrigin,
+    ) -> dict[str, object]:
+        if self._publication is None or origin.seed_data_generation_id is None:
+            raise RuntimeError("current-data DailyTrack activation is not configured")
+        track_id = f"track_{uuid4().hex[:20]}"
+        boundary = origin.initial_strategy_state.session
+        provenance = {
+            "schema_version": "daily-track-activation-checkpoint-v1",
+            "daily_track_id": track_id,
+            "seed_run_id": origin.seed_run_id,
+            "boundary_session": boundary,
+            "calculation_contracts": origin.calculation_contracts,
+        }
+        prepared = self._publication.prepare(
+            kind="daily-track.checkpoint",
+            payloads={
+                "checkpoint": JsonPayload(
+                    {
+                        "schema_version": "daily-track-activation-checkpoint-v1",
+                        "terminal_strategy_state": (
+                            origin.initial_strategy_state.model_dump(mode="json")
+                        ),
+                    }
+                )
+            },
+            provenance=provenance,
+        )
+        published = self._publication.record(transaction, prepared)
+        row = transaction.execute(
+            """
+            INSERT INTO daily_tracks.tracks (
+                id, status, seed_run_id, origin, current_release_id,
+                current_strategy_session, head_manifest_sha256
+            ) VALUES (%s, 'active', %s, %s, %s, %s, %s)
+            RETURNING id, status, origin, current_release_id,
+                      current_strategy_session
+            """,
+            (
+                track_id,
+                origin.seed_run_id,
+                Jsonb(origin.model_dump(mode="json")),
+                origin.seed_data_generation_id,
+                boundary,
+                published.manifest_sha256,
+            ),
+        ).fetchone()
+        assert row is not None
+        self._session_coordinates.activate(
+            transaction,
+            track_id=track_id,
+            origin_session=_session_date(boundary),
+            checkpoint_manifest_sha256=published.manifest_sha256,
+            terminal_strategy_state=origin.initial_strategy_state.model_dump(mode="json"),
+            data_generation_id=origin.seed_data_generation_id,
+            provenance=provenance,
+        )
+        return row
 
     def process_next(self) -> bool:
         self._require_progression_dependencies()
@@ -472,6 +541,20 @@ class DailyTrackService:
         return removed
 
     def get(self, track_id: str) -> DailyTrackDetail | None:
+        with self._database.transaction() as transaction:
+            current = transaction.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM daily_tracks.session_tracking_states
+                    WHERE track_id = %s
+                ) AS exists
+                """,
+                (track_id,),
+            ).fetchone()
+        assert current is not None
+        if current["exists"]:
+            return self._get_current(track_id)
         if self._publication is None or self._next_release is None:
             raise RuntimeError("DailyTrack detail dependencies are not configured")
         with self._database.transaction() as transaction:
@@ -507,6 +590,92 @@ class DailyTrackService:
         except Exception as error:
             logger.error(
                 "DailyTrack detail read failed",
+                extra={"track_id": track_id, "error_type": type(error).__name__},
+            )
+            raise DailyTrackDetailUnavailable("DailyTrack detail is unavailable") from error
+
+    def _get_current(self, track_id: str) -> DailyTrackDetail | None:
+        if self._publication is None or self._dataset_lifecycle is None:
+            raise RuntimeError("current-data DailyTrack detail is not configured")
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT id, status, origin, current_strategy_session,
+                       blocked_reason
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        origin = TrackingOrigin.model_validate(row["origin"])
+        try:
+            snapshot = self._session_coordinates.load(track_id)
+            seed_result = self._read_result_bundle(
+                self._publication.read(
+                    PublishedRef(
+                        manifest_sha256=(
+                            origin.verified_result.result_manifest_sha256
+                        ),
+                        kind=origin.verified_result.kind,
+                        provenance=_seed_result_provenance(origin),
+                    )
+                )
+            )
+            head = self._dataset_lifecycle.current_head()
+            if head is None:
+                raise RuntimeError("Dataset Head is not ready")
+            calendar = canonical_sessions(head.generation.canonical, "Dataset Head")
+            current_session = snapshot.track.current_checkpoint_session.isoformat()
+            current_index = calendar.index(current_session)
+            factor = _public_factor(
+                _mapping_value(seed_result.get("factor_summary"), "Factor Summary")
+            )
+            strategy_summary = _mapping_value(
+                seed_result.get("strategy_summary"),
+                "Strategy Summary",
+            )
+            observations = _mapping_rows(
+                seed_result.get("strategy_daily_observations"),
+                "Strategy observations",
+            )
+            universe = _origin_universe(origin)
+            return DailyTrackDetail.model_validate(
+                {
+                    "id": str(row["id"]),
+                    "status": row["status"],
+                    "origin": {
+                        "seed_run_id": origin.seed_run_id,
+                        "definition_id": origin.definition_id,
+                        "definition_revision": origin.definition_revision,
+                        "result_checksum_sha256": (
+                            origin.verified_result.result_checksum_sha256
+                        ),
+                        "strategy_session": origin.initial_strategy_state.session,
+                    },
+                    "strategy_session": current_session,
+                    "data_through_session": head.data_through_session,
+                    "lag_sessions": len(calendar) - current_index - 1,
+                    "blocked_reason": row["blocked_reason"],
+                    "factor": factor,
+                    "strategy": {
+                        "summary": {
+                            name: value
+                            for name, value in strategy_summary.items()
+                            if name != "benchmark"
+                        },
+                        "benchmark": {
+                            "universe": universe,
+                            "methodology": "selected_universe_equal_weight",
+                        },
+                        "observations": [dict(item) for item in observations],
+                    },
+                }
+            )
+        except Exception as error:
+            logger.error(
+                "current-data DailyTrack detail read failed",
                 extra={"track_id": track_id, "error_type": type(error).__name__},
             )
             raise DailyTrackDetailUnavailable("DailyTrack detail is unavailable") from error
@@ -640,15 +809,14 @@ class DailyTrackService:
                 "status": row["status"],
                 "origin": {
                     "seed_run_id": origin.seed_run_id,
-                    "seed_release_id": origin.seed_release_id,
                     "definition_id": origin.definition_id,
                     "definition_revision": origin.definition_revision,
                     "result_checksum_sha256": (origin.verified_result.result_checksum_sha256),
                     "strategy_session": origin.initial_strategy_state.session,
                 },
-                "head_release_id": str(row["current_release_id"]),
                 "strategy_session": str(row["current_strategy_session"]),
-                "lag_releases": lag_releases,
+                "data_through_session": str(row["current_strategy_session"]),
+                "lag_sessions": lag_releases,
                 "blocked_reason": row["blocked_reason"],
                 "factor": factor,
                 "strategy": {
@@ -1598,6 +1766,13 @@ def _stop_fingerprint(track_id: str) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
+def _session_date(value: str) -> date:
+    try:
+        return date.fromisoformat(value)
+    except ValueError as error:
+        raise RuntimeError("DailyTrack session is invalid") from error
+
+
 def _summary(row: object) -> DailyTrackSummary:
     assert isinstance(row, dict)
     origin = TrackingOrigin.model_validate(row["origin"])
@@ -1606,11 +1781,10 @@ def _summary(row: object) -> DailyTrackSummary:
         id=str(row["id"]),
         status=row["status"],
         seed_run_id=origin.seed_run_id,
-        seed_release_id=origin.seed_release_id,
-        current_release_id=str(row["current_release_id"]),
         definition_id=origin.definition_id,
         definition_revision=origin.definition_revision,
         result_checksum_sha256=verified_result.result_checksum_sha256,
+        origin_session=origin.initial_strategy_state.session,
         strategy_session=str(row["current_strategy_session"]),
     )
 
@@ -1659,13 +1833,23 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
         origin.immutable_input.get("semantic_versions"),
         "Tracking semantic versions",
     )
+    coordinate: dict[str, object]
+    if origin.seed_data_generation_id is not None:
+        assert origin.seed_data_through_session is not None
+        coordinate = {
+            "data_generation_id": origin.seed_data_generation_id,
+            "data_through_session": origin.seed_data_through_session,
+        }
+    else:
+        assert origin.seed_release_id is not None
+        coordinate = {"dataset_release_id": origin.seed_release_id}
     return {
         "schema_version": origin.verified_result.schema_version,
         "research_run_id": origin.seed_run_id,
         "immutable_input_sha256": hashlib.sha256(
             canonical_json_bytes(origin.immutable_input)
         ).hexdigest(),
-        "dataset_release_id": origin.seed_release_id,
+        **coordinate,
         "calculation_contracts": origin.calculation_contracts,
         "semantic_versions": dict(semantic_versions),
     }
