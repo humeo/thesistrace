@@ -773,7 +773,7 @@ def normalize_tushare_snapshot(
         ],
         "base_pool": base_pool,
         "liquidity_universes": liquidity_universes(
-            sessions, instruments, canonical_prices, trading_states
+            sessions, base_pool, canonical_prices, trading_states
         ),
         "industry_membership": industries,
         "st_designations": [
@@ -804,6 +804,7 @@ def normalize_tushare_increment(
     prior_prices = prior.get("prices")
     prior_states = prior.get("trading_states")
     prior_anchors = prior.get("adjustment_anchors")
+    prior_base_pool = prior.get("base_pool")
     if not all(
         isinstance(value, list)
         for value in (
@@ -812,6 +813,7 @@ def normalize_tushare_increment(
             prior_prices,
             prior_states,
             prior_anchors,
+            prior_base_pool,
         )
     ):
         raise TushareSourceError("INVALID_PREDECESSOR_CANONICAL", source_code=0)
@@ -993,9 +995,10 @@ def normalize_tushare_increment(
     all_sessions = [*prior_calendar, *sessions]
     all_prices = [*prior_prices, *canonical_prices]
     all_states = [*prior_states, *trading_states]
+    all_base_pool = [*prior_base_pool, *base_pool]
     universes = liquidity_universes(
         all_sessions,
-        instruments,
+        all_base_pool,
         all_prices,
         all_states,
     )

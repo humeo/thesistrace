@@ -74,6 +74,10 @@ def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
         "industry_membership": industry_membership(instruments, sessions),
         "st_designations": [],
     }
+    base_pool = [
+        {"session": session, "instrument_ids": [item["instrument_id"] for item in instruments]}
+        for session in sessions
+    ]
     canonical = {
         "schema_version": "canonical-eod-v1",
         "research_calendar": sessions,
@@ -89,13 +93,10 @@ def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
             }
             for instrument_id, anchor_factor in anchor_factors.items()
         ],
-        "base_pool": [
-            {"session": session, "instrument_ids": [item["instrument_id"] for item in instruments]}
-            for session in sessions
-        ],
+        "base_pool": base_pool,
         "liquidity_universes": liquidity_universes(
             sessions,
-            instruments,
+            base_pool,
             canonical_prices,
             trading_states,
         ),
