@@ -5,7 +5,6 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 from thesistrace.data.fields import AUTHORABLE_FIELDS
 
-BOOTSTRAP_RESEARCH_SESSION_COUNT = 756
 SOURCE_CORRECTABLE_PRICE_FIELDS = frozenset(
     {
         "open_raw",
@@ -48,9 +47,9 @@ def bootstrap_research_calendar(
     exchange_open_sessions: Sequence[Iterable[str]],
 ) -> list[str]:
     shared = _shared_open_sessions(exchange_open_sessions)
-    if len(shared) < BOOTSTRAP_RESEARCH_SESSION_COUNT:
+    if not shared:
         raise CanonicalMappingError("INSUFFICIENT_CALENDAR_COVERAGE")
-    return shared[-BOOTSTRAP_RESEARCH_SESSION_COUNT:]
+    return shared
 
 
 def research_sessions_after(

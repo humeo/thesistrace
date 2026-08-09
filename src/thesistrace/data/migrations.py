@@ -219,6 +219,40 @@ MIGRATIONS = MigrationPlan(
                 CREATE INDEX data_live_generation_candidates_idx
                     ON data.generation_candidates (generation_manifest_sha256)
                     WHERE status = 'live';
+
+                CREATE TABLE data.bootstrap_operations (
+                    idempotency_key text PRIMARY KEY CHECK (
+                        idempotency_key <> '' AND idempotency_key = btrim(idempotency_key)
+                    ),
+                    fingerprint text NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
+                    status text NOT NULL CHECK (
+                        status IN ('running', 'succeeded', 'failed')
+                    ),
+                    as_of timestamptz NOT NULL,
+                    request_start date NOT NULL,
+                    request_end date NOT NULL,
+                    generation_manifest_sha256 text NULL CHECK (
+                        generation_manifest_sha256 IS NULL
+                        OR generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
+                    data_through_session date NULL,
+                    prepared_at timestamptz NULL,
+                    failure_code text NULL,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    CHECK (request_start <= request_end),
+                    CHECK (
+                        (status = 'running' AND failure_code IS NULL)
+                        OR (
+                            status = 'succeeded'
+                            AND generation_manifest_sha256 IS NOT NULL
+                            AND data_through_session IS NOT NULL
+                            AND prepared_at IS NOT NULL
+                            AND failure_code IS NULL
+                        )
+                        OR (status = 'failed' AND failure_code IS NOT NULL)
+                    )
+                );
             """,
         ),
     ),

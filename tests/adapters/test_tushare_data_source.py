@@ -1,6 +1,6 @@
 import copy
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -13,7 +13,7 @@ from thesistrace.adapters.tushare_provider import (
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
-from thesistrace.data import CollectionPlan, DataSourceError
+from thesistrace.data import BootstrapCollectionPlan, CollectionPlan, DataSourceError
 from thesistrace.fixture import build_fixture
 
 
@@ -57,12 +57,10 @@ def normalizer_snapshot(session_keys: list[str]) -> dict[str, list[dict[str, obj
     ]
     return {
         "calendar_sse": [
-            {"exchange": "SSE", "cal_date": session, "is_open": "1"}
-            for session in session_keys
+            {"exchange": "SSE", "cal_date": session, "is_open": "1"} for session in session_keys
         ],
         "calendar_szse": [
-            {"exchange": "SZSE", "cal_date": session, "is_open": "1"}
-            for session in session_keys
+            {"exchange": "SZSE", "cal_date": session, "is_open": "1"} for session in session_keys
         ],
         "stock_basic": [
             {
@@ -115,19 +113,21 @@ def normalizer_snapshot(session_keys: list[str]) -> dict[str, list[dict[str, obj
 
 
 def normalizer_bootstrap_sessions() -> list[str]:
-    first = date(2023, 1, 1)
-    return [(first + timedelta(days=index)).strftime("%Y%m%d") for index in range(756)]
+    return ["20260803", "20260804", "20260805"]
 
 
 class RecordedProvider:
     def __init__(self) -> None:
-        self.bootstrap_dates: list[date] = []
+        self.bootstrap_windows: list[tuple[date, date]] = []
         self.incremental_calls: list[tuple[str, set[str], date]] = []
 
     def collect_bootstrap_snapshot(
-        self, as_of: date
+        self,
+        *,
+        start_date: date,
+        completed_through_date: date,
     ) -> dict[str, list[dict[str, object]]]:
-        self.bootstrap_dates.append(as_of)
+        self.bootstrap_windows.append((start_date, completed_through_date))
         return {"recorded": []}
 
     def collect_incremental_snapshot(
@@ -154,12 +154,17 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
         ),
     )
 
-    batch = TushareDataSource(
-        provider=provider,
-        clock=lambda: date(2026, 8, 3),
-    ).collect(CollectionPlan.bootstrap())
+    start = date.fromisoformat(str(canonical["research_calendar"][0]))
+    end = date.fromisoformat(str(canonical["research_calendar"][-1]))
+    batch = TushareDataSource(provider=provider).collect_bootstrap(
+        BootstrapCollectionPlan(
+            as_of=datetime(2026, 8, 3, 18, tzinfo=UTC),
+            start_date=start,
+            completed_through_date=end,
+        )
+    )
 
-    assert provider.bootstrap_dates == [date(2026, 8, 3)]
+    assert provider.bootstrap_windows == [(start, end)]
     assert batch.source_name == "tushare"
     assert batch.collection_kind == "bootstrap"
     assert batch.canonical["schema_version"] == "canonical-eod-v1"
@@ -203,13 +208,9 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
     ).collect(CollectionPlan.incremental(frontier, previous))
 
     known_codes = {
-        str(item["ts_code"])
-        for item in previous["instruments"]
-        if isinstance(item, dict)
+        str(item["ts_code"]) for item in previous["instruments"] if isinstance(item, dict)
     }
-    assert provider.incremental_calls == [
-        (frontier, known_codes, date(2026, 8, 4))
-    ]
+    assert provider.incremental_calls == [(frontier, known_codes, date(2026, 8, 4))]
     assert batch.canonical["research_calendar"] == [
         *previous["research_calendar"],
         appended,
@@ -236,13 +237,20 @@ def test_tushare_maps_provider_failures_to_data_source_categories(
 ) -> None:
     class FailingProvider(RecordedProvider):
         def collect_bootstrap_snapshot(
-            self, as_of: date
+            self,
+            *,
+            start_date: date,
+            completed_through_date: date,
         ) -> dict[str, list[dict[str, object]]]:
             raise TushareSourceError(reason_code, source_code=None)
 
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=FailingProvider()).collect(
-            CollectionPlan.bootstrap()
+        TushareDataSource(provider=FailingProvider()).collect_bootstrap(
+            BootstrapCollectionPlan(
+                as_of=datetime(2026, 8, 3, 18, tzinfo=UTC),
+                start_date=date(2025, 8, 3),
+                completed_through_date=date(2026, 8, 3),
+            )
         )
 
     assert failure.value.category == category
@@ -261,8 +269,12 @@ def test_tushare_increment_requires_previous_canonical() -> None:
 
 def test_tushare_rejects_malformed_provider_snapshots_as_source_data() -> None:
     with pytest.raises(DataSourceError) as failure:
-        TushareDataSource(provider=RecordedProvider()).collect(
-            CollectionPlan.bootstrap()
+        TushareDataSource(provider=RecordedProvider()).collect_bootstrap(
+            BootstrapCollectionPlan(
+                as_of=datetime(2026, 8, 3, 18, tzinfo=UTC),
+                start_date=date(2025, 8, 3),
+                completed_through_date=date(2026, 8, 3),
+            )
         )
 
     assert failure.value.category == "invalid_source_data"
@@ -288,7 +300,7 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
             "listed_to": "",
         }
     ]
-    assert len(canonical["prices"]) == 756
+    assert len(canonical["prices"]) == len(sessions)
     assert canonical["prices"][0]["volume_shares"] == "10000"
     assert canonical["prices"][0]["turnover_cny"] == "1000000.00"
 
@@ -369,18 +381,14 @@ def test_tushare_increment_rejects_historical_reference_changes() -> None:
     with pytest.raises(TushareSourceError) as instrument_failure:
         normalize_tushare_increment(instrument_change, canonical)
     assert (
-        instrument_failure.value.reason_code
-        == "HISTORICAL_INSTRUMENT_CORRECTION_REQUIRES_REVIEW"
+        instrument_failure.value.reason_code == "HISTORICAL_INSTRUMENT_CORRECTION_REQUIRES_REVIEW"
     )
 
     industry_change = copy.deepcopy(snapshot)
     industry_change["industry_membership"][0]["l1_code"] = "CHANGED"
     with pytest.raises(TushareSourceError) as industry_failure:
         normalize_tushare_increment(industry_change, canonical)
-    assert (
-        industry_failure.value.reason_code
-        == "HISTORICAL_INDUSTRY_CORRECTION_REQUIRES_REVIEW"
-    )
+    assert industry_failure.value.reason_code == "HISTORICAL_INDUSTRY_CORRECTION_REQUIRES_REVIEW"
 
 
 def test_tushare_rejects_responses_missing_requested_fields() -> None:
@@ -453,6 +461,112 @@ def test_tushare_provider_names_the_denied_contract() -> None:
         "source_code": 2002,
         "contract": "st",
     }
+
+
+def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_session() -> None:
+    class WindowRecordingAdapter(TushareAdapter):
+        def __init__(self) -> None:
+            super().__init__(token="secret", transport=RecordingTransport(), throttle_seconds=0)
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def query_paginated(
+            self,
+            api_name: str,
+            *,
+            params: Mapping[str, object],
+            fields: tuple[str, ...],
+            primary_key: tuple[str, ...],
+        ) -> list[dict[str, object]]:
+            del fields, primary_key
+            self.calls.append((api_name, dict(params)))
+            if api_name == "trade_cal":
+                exchange = str(params["exchange"])
+                return [
+                    {
+                        "exchange": exchange,
+                        "cal_date": "20260803",
+                        "is_open": "1",
+                        "pretrade_date": "20260731",
+                    },
+                    {
+                        "exchange": exchange,
+                        "cal_date": "20260804",
+                        "is_open": "0",
+                        "pretrade_date": "20260803",
+                    },
+                ]
+            if api_name == "stock_basic":
+                if params["list_status"] != "L":
+                    return []
+                return [
+                    {
+                        "ts_code": "600000.SH",
+                        "exchange": "SSE",
+                        "market": "主板",
+                        "list_status": "L",
+                        "list_date": "20220103",
+                        "delist_date": "",
+                    }
+                ]
+            if api_name == "daily":
+                session = "20220103" if params.get("trade_date") else "20260803"
+                return [
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": session,
+                        "open": "10",
+                        "high": "11",
+                        "low": "9",
+                        "close": "10.5",
+                        "pre_close": "10",
+                        "change": "0.5",
+                        "pct_chg": "5",
+                        "vol": "100",
+                        "amount": "1000",
+                    }
+                ]
+            if api_name == "adj_factor":
+                session = "20220103" if params.get("trade_date") else "20260803"
+                return [{"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}]
+            if api_name == "stk_limit":
+                return [
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": "20260803",
+                        "pre_close": "10",
+                        "up_limit": "11",
+                        "down_limit": "9",
+                    }
+                ]
+            if api_name == "index_member_all":
+                return [
+                    {
+                        "l1_code": "801010",
+                        "l2_code": "801011",
+                        "l3_code": "850111",
+                        "ts_code": "600000.SH",
+                        "in_date": "20220103",
+                        "out_date": "",
+                    }
+                ]
+            return []
+
+    provider = WindowRecordingAdapter()
+    snapshot = provider.collect_bootstrap_snapshot(
+        start_date=date(2025, 8, 4),
+        completed_through_date=date(2026, 8, 4),
+    )
+
+    calendar_calls = [params for api, params in provider.calls if api == "trade_cal"]
+    ranged_daily = next(
+        params for api, params in provider.calls if api == "daily" and "start_date" in params
+    )
+    assert calendar_calls == [
+        {"exchange": "SSE", "start_date": "20250804", "end_date": "20260804"},
+        {"exchange": "SZSE", "start_date": "20250804", "end_date": "20260804"},
+    ]
+    assert ranged_daily == {"start_date": "20250804", "end_date": "20260803"}
+    assert snapshot["daily"][0]["trade_date"] == "20260803"
 
 
 def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
@@ -676,11 +790,7 @@ def test_tushare_rejects_non_source_price_correction_fields(field: str) -> None:
 
 def test_tushare_adapter_has_no_product_or_infrastructure_knowledge() -> None:
     source = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "thesistrace"
-        / "adapters"
-        / "tushare_data.py"
+        Path(__file__).resolve().parents[2] / "src" / "thesistrace" / "adapters" / "tushare_data.py"
     ).read_text()
     for forbidden in (
         "release_id",

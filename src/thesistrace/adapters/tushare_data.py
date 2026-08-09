@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Mapping
-from datetime import date
+from datetime import date, datetime, time
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 from thesistrace.adapters.tushare_provider import (
     SOURCE_CONTRACT_VERSION,
@@ -11,14 +12,22 @@ from thesistrace.adapters.tushare_provider import (
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
-from thesistrace.data import CanonicalSourceBatch, CollectionPlan, DataSourceError
 from thesistrace.data.canonical_mapping import SOURCE_CORRECTABLE_PRICE_FIELDS
+from thesistrace.data.source import (
+    BootstrapCollectionPlan,
+    CanonicalSourceBatch,
+    CollectionPlan,
+    DataSourceError,
+    bootstrap_collection_plan,
+)
 
 
 class TushareProvider(Protocol):
     def collect_bootstrap_snapshot(
         self,
-        as_of: date,
+        *,
+        start_date: date,
+        completed_through_date: date,
     ) -> dict[str, list[dict[str, object]]]: ...
 
     def collect_incremental_snapshot(
@@ -43,8 +52,16 @@ class TushareDataSource:
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
         try:
             if plan.kind == "bootstrap":
-                snapshot = self._provider.collect_bootstrap_snapshot(self._clock())
-                lineage, canonical = normalize_tushare_snapshot(snapshot)
+                selected = self._clock()
+                return self.collect_bootstrap(
+                    bootstrap_collection_plan(
+                        datetime.combine(
+                            selected,
+                            time(23, 59),
+                            ZoneInfo("Asia/Shanghai"),
+                        )
+                    )
+                )
             else:
                 previous = plan.previous_canonical
                 if previous is None or plan.after_session is None:
@@ -76,9 +93,7 @@ class TushareDataSource:
                     lineage = {
                         "source": "tushare",
                         "source_contract_version": SOURCE_CONTRACT_VERSION,
-                        "responses": {
-                            key: value for key, value in sorted(snapshot.items())
-                        },
+                        "responses": {key: value for key, value in sorted(snapshot.items())},
                         "no_change": True,
                     }
                     canonical = copy.deepcopy(dict(previous))
@@ -104,6 +119,44 @@ class TushareDataSource:
         return CanonicalSourceBatch(
             source_name="tushare",
             collection_kind=plan.kind,
+            source_lineage=lineage,
+            canonical=canonical,
+            covered_session_range=(str(calendar[0]), str(calendar[-1])),
+        )
+
+    def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+        try:
+            snapshot = self._provider.collect_bootstrap_snapshot(
+                start_date=plan.start_date,
+                completed_through_date=plan.completed_through_date,
+            )
+            lineage, canonical = normalize_tushare_snapshot(snapshot)
+        except TushareSourceError as error:
+            raise DataSourceError(
+                _error_category(error.reason_code),
+                detail_code=error.reason_code,
+            ) from error
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="MALFORMED_PROVIDER_PAYLOAD",
+            ) from error
+        calendar = canonical.get("research_calendar")
+        if not isinstance(calendar, list) or not calendar:
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="MISSING_RESEARCH_CALENDAR",
+            )
+        if str(calendar[0]) < plan.start_date.isoformat() or str(calendar[-1]) > (
+            plan.completed_through_date.isoformat()
+        ):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="BOOTSTRAP_WINDOW_VIOLATION",
+            )
+        return CanonicalSourceBatch(
+            source_name="tushare",
+            collection_kind="bootstrap",
             source_lineage=lineage,
             canonical=canonical,
             covered_session_range=(str(calendar[0]), str(calendar[-1])),
@@ -162,8 +215,7 @@ def _materialize_increment(
     appended_universes = delta.get("liquidity_universes_append", {})
     replacement_universes = delta.get("liquidity_universes_replace", {})
     if not all(
-        isinstance(value, dict)
-        for value in (universes, appended_universes, replacement_universes)
+        isinstance(value, dict) for value in (universes, appended_universes, replacement_universes)
     ):
         raise DataSourceError(
             "invalid_source_data",
@@ -209,9 +261,7 @@ def _materialize_increment(
     price_by_position = {
         (str(row["session"]), str(row["instrument_id"])): row
         for row in prices
-        if isinstance(row, dict)
-        and "session" in row
-        and "instrument_id" in row
+        if isinstance(row, dict) and "session" in row and "instrument_id" in row
     }
     for correction in corrections:
         if not isinstance(correction, dict):

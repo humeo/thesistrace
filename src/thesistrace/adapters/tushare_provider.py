@@ -195,9 +195,14 @@ class TushareAdapter:
             "permissions": permissions,
         }
 
-    def collect_bootstrap_snapshot(self, as_of: date) -> dict[str, list[dict[str, object]]]:
-        end_date = as_of.strftime("%Y%m%d")
-        calendar_start = as_of.replace(year=as_of.year - 5).strftime("%Y%m%d")
+    def collect_bootstrap_snapshot(
+        self,
+        *,
+        start_date: date,
+        completed_through_date: date,
+    ) -> dict[str, list[dict[str, object]]]:
+        end_date = completed_through_date.strftime("%Y%m%d")
+        calendar_start = start_date.strftime("%Y%m%d")
         sse_calendar = self.query_paginated(
             "trade_cal",
             params={"exchange": "SSE", "start_date": calendar_start, "end_date": end_date},
@@ -210,7 +215,13 @@ class TushareAdapter:
             fields=("exchange", "cal_date", "is_open", "pretrade_date"),
             primary_key=("exchange", "cal_date"),
         )
-        start_date = calendar_start
+        shared_open = sorted(
+            {str(row["cal_date"]) for row in sse_calendar if str(row["is_open"]) == "1"}
+            & {str(row["cal_date"]) for row in szse_calendar if str(row["is_open"]) == "1"}
+        )
+        if not shared_open:
+            raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
+        end_date = shared_open[-1]
 
         stock_basic: list[dict[str, object]] = []
         for list_status in ("L", "D", "P"):
@@ -234,8 +245,7 @@ class TushareAdapter:
         stock_by_code = {str(row["ts_code"]): row for row in stock_basic}
         stock_basic = [stock_by_code[key] for key in sorted(stock_by_code)]
         anchor_daily, anchor_adjustments = self._collect_adjustment_anchors(
-            stock_basic,
-            as_of,
+            stock_basic, date.fromisoformat(f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}")
         )
 
         return {
@@ -246,7 +256,7 @@ class TushareAdapter:
             "anchor_adjustments": anchor_adjustments,
             "daily": self.query_paginated(
                 "daily",
-                params={"start_date": start_date, "end_date": end_date},
+                params={"start_date": calendar_start, "end_date": end_date},
                 fields=(
                     "ts_code",
                     "trade_date",
@@ -264,25 +274,25 @@ class TushareAdapter:
             ),
             "adjustments": self.query_paginated(
                 "adj_factor",
-                params={"start_date": start_date, "end_date": end_date},
+                params={"start_date": calendar_start, "end_date": end_date},
                 fields=("ts_code", "trade_date", "adj_factor"),
                 primary_key=("trade_date", "ts_code"),
             ),
             "suspensions": self.query_paginated(
                 "suspend_d",
-                params={"start_date": start_date, "end_date": end_date},
+                params={"start_date": calendar_start, "end_date": end_date},
                 fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
                 primary_key=("trade_date", "ts_code", "suspend_type"),
             ),
             "st": self.query_paginated(
                 "stock_st",
-                params={"start_date": start_date, "end_date": end_date},
+                params={"start_date": calendar_start, "end_date": end_date},
                 fields=("ts_code", "name", "trade_date", "type", "type_name"),
                 primary_key=("trade_date", "ts_code"),
             ),
             "price_limits": self.query_paginated(
                 "stk_limit",
-                params={"start_date": start_date, "end_date": end_date},
+                params={"start_date": calendar_start, "end_date": end_date},
                 fields=("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
                 primary_key=("trade_date", "ts_code"),
             ),

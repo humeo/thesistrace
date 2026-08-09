@@ -1,0 +1,320 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from thesistrace._postgres import PostgresDatabase
+from thesistrace.data import (
+    BootstrapCollectionPlan,
+    CanonicalSourceBatch,
+    DataOperator,
+    DataOperatorError,
+    DatasetLifecycle,
+    DataSourceError,
+    MountedGenerationStore,
+)
+from thesistrace.entrypoints.migrations import migrate_core
+from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.fixture import build_minimal_canonical_fixture
+
+AS_OF = datetime(2026, 8, 3, 10, tzinfo=UTC)
+PREPARED_AT = datetime(2026, 8, 9, 12, tzinfo=UTC)
+
+
+class RecordingBootstrapSource:
+    def __init__(self, *, failure: DataSourceError | None = None) -> None:
+        self.failure = failure
+        self.plans: list[BootstrapCollectionPlan] = []
+
+    def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+        self.plans.append(plan)
+        if self.failure is not None:
+            raise self.failure
+        canonical = build_minimal_canonical_fixture()
+        return CanonicalSourceBatch(
+            source_name="tushare-replay",
+            collection_kind="bootstrap",
+            source_lineage={"replay": "operator-integration-v1"},
+            canonical=canonical,
+            covered_session_range=("2026-08-07", "2026-08-07"),
+        )
+
+
+def test_private_operator_bootstraps_once_and_reopens_idempotently(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        source = RecordingBootstrapSource()
+        operator = DataOperator(database, tmp_path, source, clock=lambda: PREPARED_AT)
+
+        first = operator.bootstrap(idempotency_key="bootstrap-once", as_of=AS_OF)
+        repeated = operator.bootstrap(idempotency_key="bootstrap-once", as_of=AS_OF)
+
+        assert repeated == first
+        assert len(source.plans) == 1
+        assert source.plans[0].start_date.isoformat() == "2025-08-03"
+        assert source.plans[0].completed_through_date.isoformat() == "2026-08-03"
+        assert first.prepared_at == PREPARED_AT.isoformat()
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == first.generation_manifest_sha256
+        assert head.generation.canonical == build_minimal_canonical_fixture()
+
+        with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
+            operator.bootstrap(idempotency_key="cannot-overwrite", as_of=AS_OF)
+        with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
+            operator.bootstrap(idempotency_key="cannot-overwrite", as_of=AS_OF)
+        assert len(source.plans) == 1
+    finally:
+        database.close()
+
+
+def test_collection_failure_leaves_no_head_and_replays_sanitized_failure(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        source = RecordingBootstrapSource(
+            failure=DataSourceError("unavailable", detail_code="SECRET_PROVIDER_DETAIL")
+        )
+        operator = DataOperator(database, tmp_path, source, clock=lambda: PREPARED_AT)
+        for _ in range(2):
+            with pytest.raises(DataOperatorError) as failure:
+                operator.bootstrap(idempotency_key="source-failure", as_of=AS_OF)
+            assert failure.value.code == "SOURCE_UNAVAILABLE"
+        assert len(source.plans) == 1
+        assert DatasetLifecycle(database, tmp_path).current_head() is None
+        assert not (tmp_path / "HEAD.json").exists()
+    finally:
+        database.close()
+
+
+def test_validation_failure_and_head_cas_loser_never_replace_the_winner(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+
+        class InvalidSource(RecordingBootstrapSource):
+            def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+                batch = super().collect_bootstrap(plan)
+                batch.canonical["prices"] = []
+                return batch
+
+        invalid = InvalidSource()
+        with pytest.raises(DataOperatorError) as failure:
+            DataOperator(database, tmp_path, invalid, clock=lambda: PREPARED_AT).bootstrap(
+                idempotency_key="invalid-canonical",
+                as_of=AS_OF,
+            )
+        assert failure.value.code == "INVALID_CANONICAL_DATA"
+        assert DatasetLifecycle(database, tmp_path).current_head() is None
+
+        class WinnerPublishingSource(RecordingBootstrapSource):
+            def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+                winner = MountedGenerationStore(tmp_path).materialize(
+                    build_minimal_canonical_fixture(price_offset=9),
+                    prepared_at=PREPARED_AT,
+                    source_name="competing-operator",
+                    source_lineage={"winner": True},
+                )
+                lifecycle = DatasetLifecycle(database, tmp_path)
+                lifecycle.protect_candidate(
+                    operation_id="competing-bootstrap",
+                    generation_manifest_sha256=winner.manifest_sha256,
+                    lease_seconds=60,
+                )
+                lifecycle.compare_and_swap_head(
+                    expected_generation_manifest_sha256=None,
+                    candidate_generation_manifest_sha256=winner.manifest_sha256,
+                    operation_id="competing-bootstrap",
+                )
+                return super().collect_bootstrap(plan)
+
+        losing_source = WinnerPublishingSource()
+        with pytest.raises(DataOperatorError) as failure:
+            DataOperator(database, tmp_path, losing_source, clock=lambda: PREPARED_AT).bootstrap(
+                idempotency_key="cas-loser",
+                as_of=AS_OF,
+            )
+        assert failure.value.code == "HEAD_ALREADY_EXISTS"
+        head = DatasetLifecycle(database, tmp_path).current_head()
+        assert head is not None
+        assert head.generation.canonical == build_minimal_canonical_fixture(price_offset=9)
+        with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
+            DataOperator(database, tmp_path, losing_source, clock=lambda: PREPARED_AT).bootstrap(
+                idempotency_key="cas-loser",
+                as_of=AS_OF,
+            )
+        assert len(losing_source.plans) == 1
+    finally:
+        database.close()
+
+
+def test_real_private_command_bootstraps_from_tushare_replay(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    database.close()
+    replay = tmp_path / "bootstrap-replay.json"
+    mount = tmp_path / "mounted-data"
+    mount.mkdir()
+    replay.write_text(json.dumps(_replay_payload()))
+    environment = {
+        **os.environ,
+        "THESISTRACE_DATABASE_URL": core_settings.database_url,
+        "THESISTRACE_DATA_MOUNT": str(mount),
+    }
+    command = (
+        sys.executable,
+        "-m",
+        "thesistrace.entrypoints.data_operator",
+        "bootstrap",
+        "--idempotency-key",
+        "cli-replay",
+        "--as-of",
+        "2026-08-03T18:00:00+08:00",
+        "--replay",
+        str(replay),
+    )
+
+    first = subprocess.run(
+        command,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    second = subprocess.run(
+        command,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    assert json.loads(second.stdout) == json.loads(first.stdout)
+    outcome = json.loads(first.stdout)
+    assert outcome["status"] == "succeeded"
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    try:
+        head = DatasetLifecycle(database, mount).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == outcome["generation_manifest_sha256"]
+        assert head.data_through_session == "2026-08-03"
+        assert set(json.loads((mount / "HEAD.json").read_text())) == {
+            "format",
+            "version",
+            "generation_manifest_sha256",
+            "data_identity",
+            "dataset_coverage",
+            "data_through_session",
+            "prepared_at",
+        }
+    finally:
+        database.close()
+
+    malformed = tmp_path / "malformed-replay.json"
+    malformed.write_text('{"secret":"must-not-leak"}')
+    failed = subprocess.run(
+        (*command[:-1], str(malformed)),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert failed.returncode == 2
+    assert json.loads(failed.stderr) == {"status": "failed", "code": "OPERATOR_FAILURE"}
+    assert "must-not-leak" not in failed.stderr
+
+
+def _database(settings: CoreSettings) -> PostgresDatabase:
+    migrate_core(settings.database_url)
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    with database.transaction() as transaction:
+        transaction.execute(
+            "TRUNCATE data.bootstrap_operations, data.generation_pins, data.generation_candidates"
+        )
+    return database
+
+
+def _replay_payload() -> dict[str, object]:
+    session = "20260803"
+    daily = {
+        "ts_code": "600000.SH",
+        "trade_date": session,
+        "open": "10",
+        "high": "11",
+        "low": "9",
+        "close": "10.5",
+        "pre_close": "10",
+        "change": "0.5",
+        "pct_chg": "5",
+        "vol": "100",
+        "amount": "1000",
+    }
+    anchor = {**daily, "trade_date": "20220103"}
+    snapshot = {
+        "calendar_sse": [{"exchange": "SSE", "cal_date": session, "is_open": "1"}],
+        "calendar_szse": [{"exchange": "SZSE", "cal_date": session, "is_open": "1"}],
+        "stock_basic": [
+            {
+                "ts_code": "600000.SH",
+                "exchange": "SSE",
+                "market": "主板",
+                "list_date": "20220103",
+                "delist_date": "",
+            }
+        ],
+        "anchor_daily": [anchor],
+        "anchor_adjustments": [
+            {"ts_code": "600000.SH", "trade_date": "20220103", "adj_factor": "1"}
+        ],
+        "daily": [daily],
+        "adjustments": [{"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}],
+        "suspensions": [],
+        "st": [],
+        "price_limits": [
+            {
+                "ts_code": "600000.SH",
+                "trade_date": session,
+                "up_limit": "11",
+                "down_limit": "9",
+            }
+        ],
+        "industry_membership": [
+            {
+                "ts_code": "600000.SH",
+                "in_date": "20220103",
+                "out_date": "",
+                "l1_code": "801010",
+                "l2_code": "801011",
+                "l3_code": "850111",
+            }
+        ],
+    }
+    return {
+        "format": "thesistrace-tushare-bootstrap-replay",
+        "version": 1,
+        "request_start": "2025-08-03",
+        "request_end": "2026-08-03",
+        "snapshot": snapshot,
+    }

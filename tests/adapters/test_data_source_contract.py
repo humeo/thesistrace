@@ -11,7 +11,6 @@ from thesistrace.data import (
     DataSourceError,
 )
 from thesistrace.data.canonical_mapping import (
-    BOOTSTRAP_RESEARCH_SESSION_COUNT,
     CanonicalMappingError,
     bootstrap_research_calendar,
     research_sessions_after,
@@ -59,14 +58,14 @@ def test_data_owns_exchange_calendar_intersection_and_bootstrap_coverage() -> No
 
     bootstrap = bootstrap_research_calendar((sse, szse))
 
-    assert len(bootstrap) == BOOTSTRAP_RESEARCH_SESSION_COUNT
-    assert bootstrap == szse[-BOOTSTRAP_RESEARCH_SESSION_COUNT:]
+    assert bootstrap == szse
     assert research_sessions_after((sse, szse), bootstrap[-2]) == bootstrap[-1:]
 
 
-def test_data_rejects_insufficient_exchange_calendar_coverage() -> None:
+def test_data_accepts_any_positive_bootstrap_calendar_and_rejects_no_overlap() -> None:
+    assert bootstrap_research_calendar((("2026-08-03",), ("2026-08-03",))) == ["2026-08-03"]
     with pytest.raises(CanonicalMappingError) as failure:
-        bootstrap_research_calendar((("2026-08-03",), ("2026-08-03",)))
+        bootstrap_research_calendar((("2026-08-03",), ("2026-08-04",)))
 
     assert failure.value.detail_code == "INSUFFICIENT_CALENDAR_COVERAGE"
 
@@ -82,11 +81,7 @@ def test_product_data_contract_has_no_provider_or_collection_modes() -> None:
     )
 
     assert DataUpdateRequest.model_fields == {}
-    assert all(
-        word not in str(schema).lower()
-        for schema in schemas
-        for word in forbidden
-    )
+    assert all(word not in str(schema).lower() for schema in schemas for word in forbidden)
 
 
 def test_live_tushare_gate_is_separate_from_the_default_gate() -> None:
@@ -97,10 +92,6 @@ def test_live_tushare_gate_is_separate_from_the_default_gate() -> None:
     assert "scripts/check_live_tushare.py" not in default_gate
     assert "uv run python scripts/check_live_tushare.py" in live_gate
 
-    script = (
-        Path(__file__).resolve().parents[2]
-        / "scripts"
-        / "check_live_tushare.py"
-    ).read_text()
+    script = (Path(__file__).resolve().parents[2] / "scripts" / "check_live_tushare.py").read_text()
     assert '"preflight":' not in script
     assert '"source":' not in script

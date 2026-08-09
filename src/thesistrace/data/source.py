@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
 from typing import Protocol
+from zoneinfo import ZoneInfo
 
 DATA_SOURCE_ERROR_CATEGORIES = (
     "authorization",
@@ -63,5 +65,35 @@ class CanonicalSourceBatch:
     covered_session_range: tuple[str, str]
 
 
+@dataclass(frozen=True)
+class BootstrapCollectionPlan:
+    as_of: datetime
+    start_date: date
+    completed_through_date: date
+
+
+def bootstrap_collection_plan(as_of: datetime) -> BootstrapCollectionPlan:
+    if as_of.tzinfo is None:
+        raise ValueError("Bootstrap as-of instant must include a timezone")
+    shanghai = as_of.astimezone(ZoneInfo("Asia/Shanghai"))
+    local_date = shanghai.date()
+    try:
+        start_date = local_date.replace(year=local_date.year - 1)
+    except ValueError:
+        start_date = local_date.replace(year=local_date.year - 1, day=28)
+    completed_through = (
+        local_date if shanghai.time() >= time(16) else local_date - timedelta(days=1)
+    )
+    return BootstrapCollectionPlan(
+        as_of=as_of,
+        start_date=start_date,
+        completed_through_date=completed_through,
+    )
+
+
 class DataSource(Protocol):
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch: ...
+
+
+class BootstrapDataSource(Protocol):
+    def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch: ...

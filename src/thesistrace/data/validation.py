@@ -5,10 +5,21 @@ from thesistrace.data.source import CanonicalSourceBatch
 from thesistrace.publication.serialization import canonical_json_bytes
 
 PRICE_VALUE_FIELDS = (
-    "open_raw", "high_raw", "low_raw", "close_raw", "pre_close_raw",
-    "change_raw", "pct_change_raw", "volume_shares", "turnover_cny",
-    "adjustment_factor", "adjustment_anchor_factor", "open_adj", "high_adj",
-    "low_adj", "close_adj",
+    "open_raw",
+    "high_raw",
+    "low_raw",
+    "close_raw",
+    "pre_close_raw",
+    "change_raw",
+    "pct_change_raw",
+    "volume_shares",
+    "turnover_cny",
+    "adjustment_factor",
+    "adjustment_anchor_factor",
+    "open_adj",
+    "high_adj",
+    "low_adj",
+    "close_adj",
 )
 
 
@@ -25,11 +36,11 @@ def validate_release_batch(
     calendar = canonical.get("research_calendar")
     if canonical.get("schema_version") != "canonical-eod-v1":
         raise ValueError("Bootstrap canonical schema is invalid")
-    if not isinstance(calendar, list) or len(calendar) < 756 or calendar != sorted(set(calendar)):
-        raise ValueError("Bootstrap calendar or three-year coverage is invalid")
+    if not isinstance(calendar, list) or not calendar or calendar != sorted(set(calendar)):
+        raise ValueError("Bootstrap calendar coverage is invalid")
     if predecessor_session is None:
-        if batch.collection_kind != "bootstrap" or len(calendar) != 756:
-            raise ValueError("Bootstrap must contain exactly the fixed Research Window")
+        if batch.collection_kind != "bootstrap":
+            raise ValueError("Bootstrap collection kind is invalid")
     elif (
         batch.collection_kind != "incremental"
         or predecessor_session not in calendar
@@ -40,9 +51,7 @@ def validate_release_batch(
     if any(value.weekday() >= 5 for value in parsed_calendar):
         raise ValueError("Bootstrap Research Calendar contains a non-trading weekday")
     if batch.covered_session_range != (str(calendar[0]), str(calendar[-1])):
-        raise ValueError("Bootstrap calendar or three-year coverage is invalid")
-    if (parsed_calendar[-1] - parsed_calendar[0]).days < 1000:
-        raise ValueError("Bootstrap does not cover three calendar years")
+        raise ValueError("Bootstrap calendar coverage is invalid")
 
     instruments = _required_rows(canonical, "instruments")
     instrument_order = [str(row.get("instrument_id", "")) for row in instruments]
@@ -104,7 +113,8 @@ def validate_release_batch(
     if [str(row.get("instrument_id", "")) for row in anchors] != instrument_order:
         raise ValueError("Bootstrap Adjustment Anchor coverage is incomplete")
     for row in anchors:
-        if row.get("anchor_session") not in calendar:
+        anchor_session = _date(row.get("anchor_session"), "Adjustment Anchor")
+        if anchor_session > parsed_calendar[-1]:
             raise ValueError("Bootstrap Adjustment Anchor coverage is incomplete")
         if _decimal(row.get("anchor_factor"), "Adjustment Anchor.factor") <= 0:
             raise ValueError("Bootstrap Adjustment Anchor factor is invalid")
@@ -141,18 +151,22 @@ def validate_release_batch(
 
     fields = _required_rows(canonical, "field_catalog")
     field_ids = [str(field.get("field_id", "")) for field in fields]
-    if "" in field_ids or len(set(field_ids)) != len(field_ids) or any(
-        not all(
-            key in field
-            for key in (
-                "definition",
-                "unit",
-                "time_semantics",
-                "alpha_authorable",
-                "release_available_from",
+    if (
+        "" in field_ids
+        or len(set(field_ids)) != len(field_ids)
+        or any(
+            not all(
+                key in field
+                for key in (
+                    "definition",
+                    "unit",
+                    "time_semantics",
+                    "alpha_authorable",
+                    "release_available_from",
+                )
             )
+            for field in fields
         )
-        for field in fields
     ):
         raise ValueError("Bootstrap Field Catalog schema is invalid")
     canonical_json_bytes(canonical)

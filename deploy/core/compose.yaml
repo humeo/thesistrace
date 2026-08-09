@@ -5,6 +5,7 @@ x-core-environment: &core-environment
   THESISTRACE_S3_SECRET_ACCESS_KEY: rustfsadmin
   THESISTRACE_S3_BUCKET: thesistrace-local
   THESISTRACE_S3_REGION: us-east-1
+  THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
 
 x-backend: &backend
   build:
@@ -12,6 +13,8 @@ x-backend: &backend
     dockerfile: deploy/core/Dockerfile.backend
   environment: *core-environment
   init: true
+  volumes:
+    - canonical-data:/var/lib/thesistrace/canonical-data
 
 services:
   postgres:
@@ -97,5 +100,6 @@ services:
       retries: 60
 
 volumes:
+  canonical-data:
   postgres-data:
   rustfs-data:

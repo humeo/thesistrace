@@ -15,7 +15,7 @@ def test_data_rejects_provider_output_that_breaks_canonical_coverage(
         covered_session_range=(batch.covered_session_range[0], "2099-01-01"),
     )
 
-    with pytest.raises(ValueError, match="calendar or three-year coverage"):
+    with pytest.raises(ValueError, match="calendar coverage"):
         validate_bootstrap_batch(invalid)
 
 

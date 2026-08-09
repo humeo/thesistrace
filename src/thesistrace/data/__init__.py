@@ -21,23 +21,32 @@ from thesistrace.data.lifecycle import (
     GenerationPin,
 )
 from thesistrace.data.models import DataOverview, ReleaseHistory, ReleaseSummary, UpdateAcceptance
+from thesistrace.data.operator import BootstrapOutcome, DataOperator, DataOperatorError
 from thesistrace.data.service import DataService, NextRelease
 from thesistrace.data.source import (
     DATA_SOURCE_ERROR_CATEGORIES,
+    BootstrapCollectionPlan,
+    BootstrapDataSource,
     CanonicalSourceBatch,
     CollectionPlan,
     DataSource,
     DataSourceError,
+    bootstrap_collection_plan,
 )
 
 __all__ = [
     "AuthorableField",
+    "BootstrapCollectionPlan",
+    "BootstrapDataSource",
+    "BootstrapOutcome",
     "CanonicalSourceBatch",
     "CollectionPlan",
     "DATA_SOURCE_ERROR_CATEGORIES",
     "DataOverview",
     "DataLifecycleError",
     "DataNotReady",
+    "DataOperator",
+    "DataOperatorError",
     "DataService",
     "DatasetHead",
     "DatasetHeadConflict",
@@ -56,4 +65,5 @@ __all__ = [
     "ReleaseSummary",
     "UpdateAcceptance",
     "authorable_field_bindings",
+    "bootstrap_collection_plan",
 ]
