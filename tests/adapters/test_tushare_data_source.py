@@ -339,6 +339,34 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
     validate_release_batch(batch, predecessor_session=previous["research_calendar"][-1])
 
 
+def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> None:
+    _source, previous = normalize_tushare_snapshot(normalizer_snapshot(["20260701"]))
+    snapshot = normalizer_snapshot(["20260701", "20260702"])
+
+    class ShortCoverageProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            known_ts_codes: set[str],
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            self.incremental_calls.append((last_session, known_ts_codes, as_of))
+            return copy.deepcopy(snapshot)
+
+    plan = refresh_collection_plan(datetime(2026, 7, 2, 18, tzinfo=UTC), previous)
+    batch = TushareDataSource(provider=ShortCoverageProvider()).collect(plan)
+
+    assert batch.canonical["research_calendar"] == ["2026-07-01", "2026-07-02"]
+    assert len(batch.canonical["prices"]) == 2
+    for rows in batch.canonical["liquidity_universes"].values():
+        assert [row["instrument_ids"] for row in rows] == [
+            ["equity:600000.SH"],
+            ["equity:600000.SH"],
+        ]
+    validate_release_batch(batch, predecessor_session="2026-07-01")
+
+
 @pytest.mark.parametrize(
     ("reason_code", "category"),
     (

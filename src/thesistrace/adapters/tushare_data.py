@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable, Mapping
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from typing import Protocol
 
@@ -12,7 +12,10 @@ from thesistrace.adapters.tushare_provider import (
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
-from thesistrace.data.canonical_mapping import SOURCE_CORRECTABLE_PRICE_FIELDS
+from thesistrace.data.canonical_mapping import (
+    SOURCE_CORRECTABLE_PRICE_FIELDS,
+    liquidity_universes,
+)
 from thesistrace.data.source import (
     BootstrapCollectionPlan,
     CanonicalSourceBatch,
@@ -104,6 +107,9 @@ class TushareDataSource:
                 canonical = copy.deepcopy(dict(previous))
             else:
                 canonical = _materialize_increment(normalization_previous, delta)
+                if plan.kind == "refresh":
+                    _remove_synthetic_predecessor(canonical, request_start)
+                    _recompute_liquidity_universes(canonical)
         except TushareSourceError as error:
             raise DataSourceError(
                 _error_category(error.reason_code),
@@ -312,10 +318,10 @@ def _canonical_before_overlap(
         )
     prefix_sessions = [str(value) for value in calendar if str(value) < overlap_start_session]
     if not prefix_sessions:
-        raise DataSourceError(
-            "invalid_source_data",
-            detail_code="REFRESH_OVERLAP_REQUIRES_PREDECESSOR",
-        )
+        cursor = date.fromisoformat(overlap_start_session) - timedelta(days=1)
+        while cursor.weekday() >= 5:
+            cursor -= timedelta(days=1)
+        prefix_sessions = [cursor.isoformat()]
     prefix = copy.deepcopy(dict(previous))
     prefix["research_calendar"] = prefix_sessions
     for table in ("prices", "trading_states", "price_limits", "base_pool"):
@@ -347,6 +353,55 @@ def _canonical_before_overlap(
         if isinstance(rows, list)
     }
     return prefix
+
+
+def _remove_synthetic_predecessor(
+    canonical: dict[str, object],
+    overlap_start_session: str,
+) -> None:
+    calendar = canonical.get("research_calendar")
+    if not isinstance(calendar, list) or not calendar:
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_CANONICAL_INCREMENT",
+        )
+    first = str(calendar[0])
+    if first >= overlap_start_session:
+        return
+    if len(calendar) < 2 or str(calendar[1]) != overlap_start_session:
+        return
+    for table in ("prices", "trading_states", "price_limits", "base_pool"):
+        rows = canonical.get(table)
+        if not isinstance(rows, list):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INVALID_CANONICAL_INCREMENT",
+            )
+        if any(isinstance(row, dict) and str(row.get("session", "")) == first for row in rows):
+            return
+    canonical["research_calendar"] = calendar[1:]
+
+
+def _recompute_liquidity_universes(canonical: dict[str, object]) -> None:
+    calendar = canonical.get("research_calendar")
+    base_pool = canonical.get("base_pool")
+    prices = canonical.get("prices")
+    states = canonical.get("trading_states")
+    if not all(isinstance(value, list) for value in (calendar, base_pool, prices, states)):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INVALID_CANONICAL_INCREMENT",
+        )
+    assert isinstance(calendar, list)
+    assert isinstance(base_pool, list)
+    assert isinstance(prices, list)
+    assert isinstance(states, list)
+    canonical["liquidity_universes"] = liquidity_universes(
+        [str(value) for value in calendar],
+        base_pool,
+        prices,
+        states,
+    )
 
 
 def _preserve_ordinary_overlap_absence(
