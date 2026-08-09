@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal
 
 from thesistrace.data.fields import AUTHORABLE_FIELDS
@@ -82,35 +82,36 @@ def liquidity_universes(
     states: list[dict[str, str]],
 ) -> dict[str, list[dict[str, object]]]:
     turnover = {
-        (row["session"], row["instrument_id"]): Decimal(row["turnover_cny"])
-        for row in prices
+        (row["session"], row["instrument_id"]): Decimal(row["turnover_cny"]) for row in prices
     }
     trading_state_by_position = {
         (row["session"], row["instrument_id"]): row["state"] for row in states
     }
+    coverage_start = sessions[0] if sessions else ""
     ranked_by_session: list[list[str]] = []
     for session_index, _session in enumerate(sessions):
-        if session_index < 19:
-            ranked_by_session.append([])
-            continue
-        window = sessions[session_index - 19 : session_index + 1]
+        window = sessions[max(0, session_index - 19) : session_index + 1]
+        expanding_at_coverage_start = session_index < 19
         scored: list[tuple[Decimal, str]] = []
         for instrument in instruments:
             instrument_id = instrument["instrument_id"]
+            if expanding_at_coverage_start and not _listed_on_session(instrument, coverage_start):
+                continue
             values: list[Decimal] = []
             for window_session in window:
-                value = turnover.get((window_session, instrument_id))
-                if value is not None:
-                    values.append(value)
-                elif (
-                    trading_state_by_position.get((window_session, instrument_id))
-                    == "full_session_suspension"
-                ):
+                if not _listed_on_session(instrument, window_session):
+                    break
+                state = trading_state_by_position.get((window_session, instrument_id))
+                if state == "full_session_suspension":
                     values.append(Decimal(0))
-            if len(values) == 20:
-                scored.append((sum(values, Decimal(0)) / 20, instrument_id))
-        scored.sort(key=lambda item: item[1])
-        scored.sort(key=lambda item: item[0], reverse=True)
+                    continue
+                value = turnover.get((window_session, instrument_id))
+                if value is None:
+                    break
+                values.append(value)
+            if len(values) == len(window):
+                scored.append((sum(values, Decimal(0)) / Decimal(len(window)), instrument_id))
+        scored.sort(key=lambda item: (-item[0], item[1]))
         ranked_by_session.append([instrument_id for _, instrument_id in scored])
 
     universes: dict[str, list[dict[str, object]]] = {}
@@ -119,11 +120,17 @@ def liquidity_universes(
             {
                 "session": session,
                 "instrument_ids": ranked_by_session[index][:size],
-                "status": "available" if index >= 19 else "insufficient_history",
+                "status": "available",
             }
             for index, session in enumerate(sessions)
         ]
     return universes
+
+
+def _listed_on_session(instrument: Mapping[str, str], session: str) -> bool:
+    listed_from = str(instrument.get("listed_from", ""))
+    listed_to = str(instrument.get("listed_to", ""))
+    return (not listed_from or listed_from <= session) and (not listed_to or session < listed_to)
 
 
 def field_catalog(available_from: str) -> list[dict[str, object]]:
