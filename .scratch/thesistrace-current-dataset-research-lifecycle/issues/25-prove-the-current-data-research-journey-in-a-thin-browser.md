@@ -6,7 +6,7 @@ Refresh, garbage-collection, or Reset matrices.
 
 **Blocked by:** 09 — Serve the mounted Head as read-only Data Overview; 13 — Admit dated ResearchRuns against current Data; 14 — Execute each Attempt against its start-time Head; 17 — Start and catch up a DailyTrack from terminal state.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 - [ ] The browser runs against real API, Worker, PostgreSQL, RustFS, and a prepared temporary Mounted Canonical Data Store rather than mocked HTTP responses.
 - [ ] Data page shows only read-only Data Overview and manual read refresh, with no Update control, mutation polling, Release or Generation identifier, history, or operator state.
