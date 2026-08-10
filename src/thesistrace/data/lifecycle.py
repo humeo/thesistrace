@@ -300,7 +300,7 @@ class DatasetLifecycle:
             ).fetchall()
             return tuple(_pin(row) for row in rows)
 
-    def retention_roots_in_transaction(
+    def retention_root_ids_in_transaction(
         self,
         transaction: PostgresTransaction,
     ) -> tuple[str, ...]:
@@ -308,7 +308,6 @@ class DatasetLifecycle:
         roots: set[str] = set()
         pointer = self._heads.current_pointer()
         if pointer is not None:
-            self._heads.resolve(pointer)
             roots.add(pointer.generation_manifest_sha256)
         roots.update(
             str(row["generation_manifest_sha256"])

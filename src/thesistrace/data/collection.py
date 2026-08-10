@@ -46,6 +46,7 @@ class DataGarbageCollector:
     def collect(self, *, idempotency_key: str) -> CollectionOutcome:
         key = _identity(idempotency_key)
         with self._database.session_advisory_lock(_COLLECTION_LOCK):
+            self._reconcile_abandoned()
             try:
                 self._ensure_plan(key)
                 failure_code = self._execute_plan(key)
@@ -56,65 +57,88 @@ class DataGarbageCollector:
             return self._outcome(key)
 
     def _ensure_plan(self, key: str) -> None:
-        with self._database.transaction() as transaction:
-            lock_data_lifecycle(transaction)
-            existing = transaction.execute(
-                """
-                SELECT status
-                FROM data.collection_operations
-                WHERE idempotency_key = %s
-                FOR UPDATE
-                """,
-                (key,),
-            ).fetchone()
-            if existing is not None:
-                if existing["status"] == "succeeded":
-                    return
+        for _ in range(4):
+            root_ids = self._snapshot_root_ids()
+            retained = self._validated_retained_files(root_ids)
+            inventory = self._generations.inventory()
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
                 if _data_work_is_active(transaction):
                     raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
-                retained = self._retained_files(transaction)
-                targets = _targets(transaction, key)
-                if retained & targets:
-                    raise DataCollectionError("COLLECTION_ROOT_SET_CHANGED")
-                transaction.execute(
+                if self._lifecycle.retention_root_ids_in_transaction(transaction) != root_ids:
+                    continue
+                existing = transaction.execute(
                     """
-                    UPDATE data.collection_operations
-                    SET status = 'running', failure_code = NULL,
-                        finished_at = NULL, updated_at = now()
+                    SELECT status
+                    FROM data.collection_operations
                     WHERE idempotency_key = %s
+                    FOR UPDATE
                     """,
                     (key,),
-                )
+                ).fetchone()
+                if existing is not None and existing["status"] == "succeeded":
+                    return
+                if existing is None:
+                    targets = tuple(sorted(inventory - retained))
+                    plan_sha256 = hashlib.sha256(
+                        canonical_json_bytes(
+                            [{"kind": target.kind, "sha256": target.sha256} for target in targets]
+                        )
+                    ).hexdigest()
+                    transaction.execute(
+                        """
+                        INSERT INTO data.collection_operations (
+                            idempotency_key, plan_sha256, status, target_count
+                        ) VALUES (%s, %s, 'running', %s)
+                        """,
+                        (key, plan_sha256, len(targets)),
+                    )
+                    with transaction.cursor() as cursor:
+                        cursor.executemany(
+                            """
+                            INSERT INTO data.collection_targets (
+                                idempotency_key, ordinal, file_kind, sha256, status
+                            ) VALUES (%s, %s, %s, %s, 'pending')
+                            """,
+                            [
+                                (key, ordinal, target.kind, target.sha256)
+                                for ordinal, target in enumerate(targets)
+                            ],
+                        )
+                else:
+                    if retained & _targets(transaction, key):
+                        raise DataCollectionError("COLLECTION_ROOT_SET_CHANGED")
+                    transaction.execute(
+                        """
+                        UPDATE data.collection_operations
+                        SET status = 'running', failure_code = NULL,
+                            finished_at = NULL, updated_at = now()
+                        WHERE idempotency_key = %s
+                        """,
+                        (key,),
+                    )
+                _replace_roots(transaction, key, root_ids)
                 return
-            if _data_work_is_active(transaction):
-                raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
-            retained = self._retained_files(transaction)
-            targets = tuple(sorted(self._generations.inventory() - retained))
-            plan_sha256 = hashlib.sha256(
-                canonical_json_bytes(
-                    [{"kind": target.kind, "sha256": target.sha256} for target in targets]
-                )
-            ).hexdigest()
+        raise DataCollectionError("COLLECTION_ROOTS_CHANGED")
+
+    def _reconcile_abandoned(self) -> None:
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
             transaction.execute(
                 """
-                INSERT INTO data.collection_operations (
-                    idempotency_key, plan_sha256, status, target_count
-                ) VALUES (%s, %s, 'running', %s)
-                """,
-                (key, plan_sha256, len(targets)),
+                UPDATE data.collection_operations
+                SET status = 'failed', failure_code = 'COLLECTION_ABANDONED',
+                    finished_at = now(), updated_at = now()
+                WHERE status = 'running'
+                """
             )
-            with transaction.cursor() as cursor:
-                cursor.executemany(
-                    """
-                    INSERT INTO data.collection_targets (
-                        idempotency_key, ordinal, file_kind, sha256, status
-                    ) VALUES (%s, %s, %s, %s, 'pending')
-                    """,
-                    [
-                        (key, ordinal, target.kind, target.sha256)
-                        for ordinal, target in enumerate(targets)
-                    ],
-                )
+
+    def _snapshot_root_ids(self) -> tuple[str, ...]:
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            if _data_work_is_active(transaction):
+                raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
+            return self._lifecycle.retention_root_ids_in_transaction(transaction)
 
     def _execute_plan(self, key: str) -> str | None:
         while True:
@@ -163,7 +187,9 @@ class DataGarbageCollector:
             if row is None:
                 return None
             reference = GenerationFileRef(str(row["file_kind"]), str(row["sha256"]))
-            if reference in self._retained_files(transaction):
+            current_roots = set(self._lifecycle.retention_root_ids_in_transaction(transaction))
+            planned_roots = _planned_roots(transaction, key)
+            if not current_roots.issubset(planned_roots):
                 failure_code = "COLLECTION_ROOT_SET_CHANGED"
                 _fail_operation(transaction, key, failure_code)
             else:
@@ -227,12 +253,12 @@ class DataGarbageCollector:
         with self._database.transaction() as transaction:
             _fail_operation(transaction, key, failure_code)
 
-    def _retained_files(
+    def _validated_retained_files(
         self,
-        transaction: PostgresTransaction,
+        root_ids: tuple[str, ...],
     ) -> frozenset[GenerationFileRef]:
         retained: set[GenerationFileRef] = set()
-        for manifest_sha256 in self._lifecycle.retention_roots_in_transaction(transaction):
+        for manifest_sha256 in root_ids:
             retained.update(self._generations.referenced_files(manifest_sha256))
         return frozenset(retained)
 
@@ -300,6 +326,43 @@ def _targets(
         (key,),
     ).fetchall()
     return frozenset(GenerationFileRef(str(row["file_kind"]), str(row["sha256"])) for row in rows)
+
+
+def _replace_roots(
+    transaction: PostgresTransaction,
+    key: str,
+    root_ids: tuple[str, ...],
+) -> None:
+    transaction.execute(
+        "DELETE FROM data.collection_roots WHERE idempotency_key = %s",
+        (key,),
+    )
+    with transaction.cursor() as cursor:
+        cursor.executemany(
+            """
+            INSERT INTO data.collection_roots (
+                idempotency_key, generation_manifest_sha256
+            ) VALUES (%s, %s)
+            """,
+            [(key, root_id) for root_id in root_ids],
+        )
+
+
+def _planned_roots(
+    transaction: PostgresTransaction,
+    key: str,
+) -> set[str]:
+    return {
+        str(row["generation_manifest_sha256"])
+        for row in transaction.execute(
+            """
+            SELECT generation_manifest_sha256
+            FROM data.collection_roots
+            WHERE idempotency_key = %s
+            """,
+            (key,),
+        ).fetchall()
+    }
 
 
 def _identity(value: str) -> str:

@@ -383,6 +383,16 @@ MIGRATIONS = MigrationPlan(
                         OR (status = 'deleted' AND deleted_at IS NOT NULL)
                     )
                 );
+
+                CREATE TABLE data.collection_roots (
+                    idempotency_key text NOT NULL REFERENCES data.collection_operations(
+                        idempotency_key
+                    ) ON DELETE CASCADE,
+                    generation_manifest_sha256 text NOT NULL CHECK (
+                        generation_manifest_sha256 ~ '^[0-9a-f]{64}$'
+                    ),
+                    PRIMARY KEY (idempotency_key, generation_manifest_sha256)
+                );
             """,
         ),
     ),

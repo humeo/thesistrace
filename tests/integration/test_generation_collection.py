@@ -283,6 +283,137 @@ def test_collection_uses_the_same_fence_as_pin_release_and_head_move(
         database.close()
 
 
+def test_retained_generation_validation_does_not_hold_the_lifecycle_fence(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrate_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    validating = threading.Event()
+    continue_validation = threading.Event()
+    try:
+        _clear_collection_state(database)
+        store = MountedGenerationStore(tmp_path)
+        lifecycle = DatasetLifecycle(database, tmp_path)
+        head = _materialize(store, ordinal=1)
+        next_head = _materialize(store, ordinal=2)
+        _materialize(store, ordinal=3)
+        _install_head(lifecycle, head, operation_id="validation-head")
+        lifecycle.protect_candidate(
+            operation_id="validation-next-head",
+            generation_manifest_sha256=next_head,
+            lease_seconds=60,
+        )
+        original_referenced_files = MountedGenerationStore.referenced_files
+        blocked_once = False
+
+        def blocked_validation(
+            self: MountedGenerationStore,
+            manifest_sha256: str,
+        ) -> frozenset[object]:
+            nonlocal blocked_once
+            if not blocked_once:
+                blocked_once = True
+                validating.set()
+                if not continue_validation.wait(timeout=20):
+                    raise AssertionError("retained validation barrier was not released")
+            return original_referenced_files(self, manifest_sha256)
+
+        monkeypatch.setattr(MountedGenerationStore, "referenced_files", blocked_validation)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            collection = executor.submit(
+                DataGarbageCollector(database, tmp_path).collect,
+                idempotency_key="validation-outside-fence",
+            )
+            assert validating.wait(timeout=20)
+            pin = lifecycle.pin_current(
+                owner_kind="research_run_attempt",
+                owner_id="validation-concurrent-pin",
+                lease_seconds=60,
+            )
+            lifecycle.release_pin(pin.id, owner_id=pin.owner_id)
+            moved = lifecycle.compare_and_swap_head(
+                expected_generation_manifest_sha256=head,
+                candidate_generation_manifest_sha256=next_head,
+                operation_id="validation-next-head",
+            )
+            assert moved.generation_manifest_sha256 == next_head
+            continue_validation.set()
+            assert collection.result(timeout=20).status == "succeeded"
+    finally:
+        continue_validation.set()
+        database.close()
+
+
+def test_abandoned_collector_is_reconciled_by_the_next_operator_session(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrate_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    recovery_database: PostgresDatabase | None = None
+    try:
+        _clear_collection_state(database)
+        store = MountedGenerationStore(tmp_path)
+        lifecycle = DatasetLifecycle(database, tmp_path)
+        head = _materialize(store, ordinal=1)
+        retired = _materialize(store, ordinal=2)
+        _install_head(lifecycle, head, operation_id="abandoned-head")
+        original_delete = MountedGenerationStore.delete_file
+
+        def crash_collector(
+            self: MountedGenerationStore,
+            reference: object,
+        ) -> bool:
+            del self, reference
+            raise AssertionError("injected collector process loss")
+
+        monkeypatch.setattr(MountedGenerationStore, "delete_file", crash_collector)
+        with pytest.raises(AssertionError, match="process loss"):
+            DataGarbageCollector(database, tmp_path).collect(idempotency_key="abandoned-collection")
+        with database.transaction() as transaction:
+            assert transaction.execute(
+                """
+                SELECT status, failure_code FROM data.collection_operations
+                WHERE idempotency_key = 'abandoned-collection'
+                """
+            ).fetchone() == {"status": "running", "failure_code": None}
+
+        monkeypatch.setattr(MountedGenerationStore, "delete_file", original_delete)
+        recovery_database = PostgresDatabase(core_settings.database_url)
+        recovery_database.open()
+        recovered = DataGarbageCollector(recovery_database, tmp_path).collect(
+            idempotency_key="post-crash-collection"
+        )
+
+        assert recovered.status == "succeeded"
+        with recovery_database.transaction() as transaction:
+            assert transaction.execute(
+                """
+                SELECT status, failure_code FROM data.collection_operations
+                WHERE idempotency_key = 'abandoned-collection'
+                """
+            ).fetchone() == {
+                "status": "failed",
+                "failure_code": "COLLECTION_ABANDONED",
+            }
+        _assert_generation_missing(store, retired)
+        lifecycle.protect_candidate(
+            operation_id="post-crash-candidate",
+            generation_manifest_sha256=head,
+            lease_seconds=60,
+        )
+        lifecycle.release_candidate(operation_id="post-crash-candidate")
+    finally:
+        if recovery_database is not None:
+            recovery_database.close()
+        database.close()
+
+
 def test_materialized_refresh_candidate_is_never_planned_before_registration(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -407,7 +538,8 @@ def _clear_collection_state(database: PostgresDatabase) -> None:
     with database.transaction() as transaction:
         transaction.execute(
             """
-            TRUNCATE data.collection_targets, data.collection_operations,
+            TRUNCATE data.collection_roots, data.collection_targets,
+                     data.collection_operations,
                      data.generation_pins, data.generation_candidates
             """
         )
