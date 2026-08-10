@@ -7,7 +7,8 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from threading import Event, Thread
 
@@ -31,13 +32,7 @@ from thesistrace.daily_track.checkpoint import (
     restore_tracking_origin,
     terminal_strategy_state,
 )
-from thesistrace.data import (
-    CanonicalSourceBatch,
-    CollectionPlan,
-    DataRefreshService,
-    DatasetLifecycle,
-    MountedGenerationStore,
-)
+from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -763,6 +758,14 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         }
 
         corrected = _two_instrument_canonical(seed_sessions, corrected=True)
+        replay_root = tmp_path / "operator-replays"
+        replay_root.mkdir()
+        correction_replay = replay_root / "correction.json"
+        _write_refresh_replay(
+            correction_replay,
+            corrected,
+            request_start=seed_sessions[0],
+        )
         submitted = _run_data_operator(
             settings,
             [
@@ -770,19 +773,25 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
                 "--idempotency-key",
                 "forward-only-correction",
                 "--as-of",
-                "2026-08-10T09:00:00+00:00",
+                "2026-08-05T09:00:00+00:00",
             ],
         )
         assert submitted["status"] == "accepted"
-        refresh = DataRefreshService(
-            runtime.database,
-            settings.data_mount,
-            clock=lambda: datetime(2026, 8, 10, 9, 30, tzinfo=UTC),
+        processed = _run_data_operator(
+            settings,
+            ["work-refresh", "--replay", os.fspath(correction_replay)],
         )
-        assert refresh.process_next(_StaticRefreshSource(corrected)) is True
-        correction_outcome = refresh.inspect("forward-only-correction")
-        assert correction_outcome.status == "succeeded"
-        assert correction_outcome.outcome == "published"
+        assert processed == {"status": "processed"}
+        correction_outcome = _run_data_operator(
+            settings,
+            [
+                "inspect-refresh",
+                "--idempotency-key",
+                "forward-only-correction",
+            ],
+        )
+        assert correction_outcome["status"] == "succeeded"
+        assert correction_outcome["outcome"] == "published"
         correction_head = DatasetLifecycle(
             runtime.database,
             settings.data_mount,
@@ -791,7 +800,8 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert correction_head.generation_manifest_sha256 != seed_head
         assert correction_head.data_through_session == seed_sessions[-1]
 
-        assert runtime.daily_tracks.process_next() is False
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
         assert _tracking_checkpoint_history(settings, track_id) == before_history
         unchanged_state = _stored_tracking_activation(settings, track_id)
         assert unchanged_state["current_checkpoint_manifest_sha256"] == before_state[
@@ -809,64 +819,62 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         }
         assert "correction" not in overview.text.lower()
 
-        future_sessions = (*seed_sessions, "2026-08-06", "2026-08-07", "2026-08-10")
-        corrected_future = _two_instrument_canonical(future_sessions, corrected=True)
+        impact_sessions = (
+            *seed_sessions,
+            *_weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=3),
+        )
+        corrected_impact = _two_instrument_canonical(impact_sessions, corrected=True)
+        impact_replay = replay_root / "impact.json"
+        _write_refresh_replay(
+            impact_replay,
+            corrected_impact,
+            request_start=seed_sessions[0],
+        )
         submitted = _run_data_operator(
             settings,
             [
                 "refresh",
                 "--idempotency-key",
-                "forward-only-new-sessions",
+                "forward-only-impact-sessions",
                 "--as-of",
-                "2026-08-11T09:00:00+00:00",
+                f"{impact_sessions[-1]}T09:00:00+00:00",
             ],
         )
         assert submitted["status"] == "accepted"
-        later_refresh = DataRefreshService(
-            runtime.database,
-            settings.data_mount,
-            clock=lambda: datetime(2026, 8, 11, 9, 30, tzinfo=UTC),
+        processed = _run_data_operator(
+            settings,
+            ["work-refresh", "--replay", os.fspath(impact_replay)],
         )
-        assert later_refresh.process_next(_StaticRefreshSource(corrected_future)) is True
+        assert processed == {"status": "processed"}
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
-        final_detail = client.get(f"/api/daily-tracks/{track_id}")
-        assert final_detail.status_code == 200
-        assert final_detail.json()["strategy_session"] == future_sessions[-1]
-        assert "correction" not in final_detail.text.lower()
-        final_state = _stored_tracking_activation(settings, track_id)
-        assert final_state["checkpoint_count"] == 2
-        assert _tracking_checkpoint_history(settings, track_id)[0] == before_history[0]
-        assert _position_ids(final_state["terminal_strategy_state"]) == {
+        impact_detail = client.get(f"/api/daily-tracks/{track_id}")
+        assert impact_detail.status_code == 200
+        assert impact_detail.json()["strategy_session"] == impact_sessions[-1]
+        assert "correction" not in impact_detail.text.lower()
+        impact_state = _stored_tracking_activation(settings, track_id)
+        assert impact_state["checkpoint_count"] == 2
+        impact_history = _tracking_checkpoint_history(settings, track_id)
+        assert impact_history[0] == before_history[0]
+        assert _position_ids(impact_state["terminal_strategy_state"]) == {
             "equity:000002.SZ"
         }
-        final_payload = _checkpoint_payload(runtime.publication, final_state)
-        checkpoint_text = json.dumps(final_payload, sort_keys=True)
-        assert '"orders"' not in checkpoint_text
-        assert '"fills"' not in checkpoint_text
-        horizons = final_payload["factor_summary"]["horizons"]
-        assert isinstance(horizons, dict)
-        for horizon in horizons.values():
-            assert isinstance(horizon, dict)
-            coverage = horizon["coverage"]
-            assert isinstance(coverage, dict)
-            assert coverage["signal_session_count"] <= 504
 
         counterfactual_prior = restore_tracking_origin(
             TrackingOrigin.model_validate(before_state["origin"]),
             before_state["terminal_strategy_state"],
             seed_canonical,
         )
-        uncorrected_future = _two_instrument_canonical(
-            future_sessions,
+        uncorrected_impact = _two_instrument_canonical(
+            impact_sessions,
             corrected=False,
         )
         counterfactual = advance(
             AdvanceInput(
                 prior_state=counterfactual_prior,
-                target_canonical_release=uncorrected_future,
-                appended_sessions=list(future_sessions[len(seed_sessions) :]),
+                target_canonical_release=uncorrected_impact,
+                appended_sessions=list(impact_sessions[len(seed_sessions) :]),
                 continuation=advance_continuation(
                     run_input=counterfactual_prior.run_input_with_canonical(
                         seed_canonical
@@ -880,6 +888,83 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert _position_ids(terminal_strategy_state(counterfactual)) == {
             "equity:000001.SZ"
         }
+
+        future_sessions = (
+            *impact_sessions,
+            *_weekday_sessions_after(date.fromisoformat(impact_sessions[-1]), count=506),
+        )
+        corrected_future = _two_instrument_canonical(future_sessions, corrected=True)
+        future_replay = replay_root / "future.json"
+        _write_refresh_replay(
+            future_replay,
+            corrected_future,
+            request_start=seed_sessions[0],
+        )
+        submitted = _run_data_operator(
+            settings,
+            [
+                "refresh",
+                "--idempotency-key",
+                "forward-only-window-sessions",
+                "--as-of",
+                f"{future_sessions[-1]}T09:00:00+00:00",
+            ],
+        )
+        assert submitted["status"] == "accepted"
+        processed = _run_data_operator(
+            settings,
+            ["work-refresh", "--replay", os.fspath(future_replay)],
+        )
+        assert processed == {"status": "processed"}
+        completed = _run_worker_once(settings, timeout=180)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        final_detail = client.get(f"/api/daily-tracks/{track_id}")
+        assert final_detail.status_code == 200
+        assert final_detail.json()["strategy_session"] == future_sessions[-1]
+        assert "correction" not in final_detail.text.lower()
+        final_state = _stored_tracking_activation(settings, track_id)
+        assert final_state["checkpoint_count"] == 3
+        assert _tracking_checkpoint_history(settings, track_id)[:2] == impact_history
+        final_payload = _checkpoint_payload(runtime.publication, final_state)
+        checkpoint_text = json.dumps(final_payload, sort_keys=True)
+        assert '"orders"' not in checkpoint_text
+        assert '"fills"' not in checkpoint_text
+
+        reference_prior = restore_tracking_origin(
+            TrackingOrigin.model_validate(before_state["origin"]),
+            before_state["terminal_strategy_state"],
+            seed_canonical,
+        )
+        reference = advance(
+            AdvanceInput(
+                prior_state=reference_prior,
+                target_canonical_release=corrected_future,
+                appended_sessions=list(future_sessions[len(seed_sessions) :]),
+                continuation=advance_continuation(
+                    run_input=reference_prior.run_input_with_canonical(seed_canonical),
+                    prior_continuation=empty_continuation(),
+                    target_canonical=seed_canonical,
+                    appended_sessions=list(seed_sessions),
+                ),
+            )
+        )
+        reference_horizons = reference.output_snapshot()["factor_evaluation"][
+            "horizons"
+        ]
+        horizons = final_payload["factor_summary"]["horizons"]
+        assert isinstance(horizons, dict)
+        for horizon_id, horizon in horizons.items():
+            assert isinstance(horizon, dict)
+            reference_horizon = reference_horizons[horizon_id]
+            reference_daily = reference_horizon["daily"]
+            assert [item["session"] for item in reference_daily] == list(
+                future_sessions[-504:]
+            )
+            assert horizon["summary"] == reference_horizon["summary"]
+            coverage = horizon["coverage"]
+            assert isinstance(coverage, dict)
+            assert coverage["signal_session_count"] == 504
 
 
 @pytest.mark.skipif(
@@ -1340,7 +1425,12 @@ def _two_instrument_canonical(
         anchor["instrument_id"] = instrument_id
         anchors.append(anchor)
         industry = copy.deepcopy(template["industry_membership"][0])
-        industry["instrument_id"] = instrument_id
+        industry.update(
+            instrument_id=instrument_id,
+            sw2021_l1="801010",
+            sw2021_l2="801011",
+            sw2021_l3="850111",
+        )
         industries.append(industry)
 
     prices: list[dict[str, object]] = []
@@ -1421,20 +1511,158 @@ def _two_instrument_canonical(
     }
 
 
-class _StaticRefreshSource:
-    def __init__(self, canonical: dict[str, object]) -> None:
-        self._canonical = canonical
+def _weekday_sessions_after(start: date, *, count: int) -> tuple[str, ...]:
+    sessions: list[str] = []
+    cursor = start
+    while len(sessions) < count:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            sessions.append(cursor.isoformat())
+    return tuple(sessions)
 
-    def collect(self, _plan: CollectionPlan) -> CanonicalSourceBatch:
-        calendar = self._canonical["research_calendar"]
-        assert isinstance(calendar, list)
-        return CanonicalSourceBatch(
-            source_name="forward-only-refresh-test",
-            collection_kind="refresh",
-            source_lineage={"fixture": "forward-only-v1"},
-            canonical=copy.deepcopy(self._canonical),
-            covered_session_range=(str(calendar[0]), str(calendar[-1])),
-        )
+
+def _write_refresh_replay(
+    path: Path,
+    canonical: dict[str, object],
+    *,
+    request_start: str,
+) -> None:
+    calendar = canonical["research_calendar"]
+    instruments = canonical["instruments"]
+    prices = canonical["prices"]
+    limits = canonical["price_limits"]
+    industries = canonical["industry_membership"]
+    assert isinstance(calendar, list)
+    assert isinstance(instruments, list)
+    assert isinstance(prices, list)
+    assert isinstance(limits, list)
+    assert isinstance(industries, list)
+    open_dates = {str(session).replace("-", "") for session in calendar}
+    calendar_dates: list[str] = []
+    cursor = date.fromisoformat(request_start)
+    request_end = date.fromisoformat(str(calendar[-1]))
+    while cursor <= request_end:
+        calendar_dates.append(cursor.strftime("%Y%m%d"))
+        cursor += timedelta(days=1)
+    daily = [
+        {
+            "ts_code": _ts_code(canonical, str(price["instrument_id"])),
+            "trade_date": str(price["session"]).replace("-", ""),
+            "open": price["open_raw"],
+            "high": price["high_raw"],
+            "low": price["low_raw"],
+            "close": price["close_raw"],
+            "pre_close": price["pre_close_raw"],
+            "change": price["change_raw"],
+            "pct_chg": price["pct_change_raw"],
+            "vol": str(Decimal(str(price["volume_shares"])) / Decimal(100)),
+            "amount": str(Decimal(str(price["turnover_cny"])) / Decimal(1000)),
+        }
+        for price in prices
+        if isinstance(price, dict)
+    ]
+    snapshot = {
+        "calendar_sse": [
+            {
+                "exchange": "SSE",
+                "cal_date": calendar_date,
+                "is_open": "1" if calendar_date in open_dates else "0",
+            }
+            for calendar_date in calendar_dates
+        ],
+        "calendar_szse": [
+            {
+                "exchange": "SZSE",
+                "cal_date": calendar_date,
+                "is_open": "1" if calendar_date in open_dates else "0",
+            }
+            for calendar_date in calendar_dates
+        ],
+        "stock_basic": [
+            {
+                "ts_code": instrument["ts_code"],
+                "exchange": "SZSE",
+                "market": "主板",
+                "list_date": str(instrument["listed_from"]).replace("-", ""),
+                "delist_date": str(instrument["listed_to"]).replace("-", ""),
+            }
+            for instrument in instruments
+            if isinstance(instrument, dict)
+        ],
+        "anchor_daily": [
+            row
+            for row in daily
+            if row["trade_date"] == str(calendar[0]).replace("-", "")
+        ],
+        "anchor_adjustments": [
+            {
+                "ts_code": instrument["ts_code"],
+                "trade_date": str(calendar[0]).replace("-", ""),
+                "adj_factor": "1",
+            }
+            for instrument in instruments
+            if isinstance(instrument, dict)
+        ],
+        "daily": daily,
+        "adjustments": [
+            {
+                "ts_code": _ts_code(canonical, str(price["instrument_id"])),
+                "trade_date": str(price["session"]).replace("-", ""),
+                "adj_factor": price["adjustment_factor"],
+            }
+            for price in prices
+            if isinstance(price, dict)
+        ],
+        "suspensions": [],
+        "st": [],
+        "price_limits": [
+            {
+                "ts_code": _ts_code(canonical, str(limit["instrument_id"])),
+                "trade_date": str(limit["session"]).replace("-", ""),
+                "up_limit": limit["upper"],
+                "down_limit": limit["lower"],
+            }
+            for limit in limits
+            if isinstance(limit, dict)
+        ],
+        "industry_membership": [
+            {
+                "ts_code": _ts_code(canonical, str(industry["instrument_id"])),
+                "in_date": str(industry["active_from"]).replace("-", ""),
+                "out_date": str(industry["active_to"]).replace("-", ""),
+                "l1_code": "801010",
+                "l2_code": "801011",
+                "l3_code": "850111",
+            }
+            for industry in industries
+            if isinstance(industry, dict)
+        ],
+    }
+    replay = {
+        "format": "thesistrace-tushare-refresh-replay",
+        "version": 1,
+        "request_start": request_start,
+        "request_end": str(calendar[-1]),
+        "known_ts_codes": sorted(
+            str(instrument["ts_code"])
+            for instrument in instruments
+            if isinstance(instrument, dict)
+        ),
+        "snapshot": snapshot,
+    }
+    path.write_text(
+        json.dumps(replay, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+
+def _ts_code(canonical: dict[str, object], instrument_id: str) -> str:
+    instruments = canonical["instruments"]
+    assert isinstance(instruments, list)
+    for instrument in instruments:
+        if isinstance(instrument, dict) and instrument["instrument_id"] == instrument_id:
+            return str(instrument["ts_code"])
+    raise AssertionError(f"unknown fixture instrument: {instrument_id}")
 
 
 def _publish_canonical_head(
@@ -1825,7 +2053,11 @@ def _remove_publication_rejection(
         database.close()
 
 
-def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
+def _run_worker_once(
+    settings: CoreSettings,
+    *,
+    timeout: int = 30,
+) -> subprocess.CompletedProcess[str]:
     environment = {
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
@@ -1841,7 +2073,7 @@ def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]
         check=False,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=timeout,
         env=environment,
     )
 

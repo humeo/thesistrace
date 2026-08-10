@@ -562,6 +562,7 @@ def _advance_factor(
                 str(item["session"]): dict(item)
                 for item in partial_daily
                 if isinstance(item, Mapping)
+                and str(item.get("session")) in selected_set
             }
         )
         if set(by_session) != selected_set:
