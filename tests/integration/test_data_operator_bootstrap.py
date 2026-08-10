@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -234,10 +235,21 @@ def test_expired_bootstrap_attempt_is_fenced_and_taken_over_without_sleep(
 def test_active_bootstrap_heartbeat_prevents_lease_takeover(
     core_settings: CoreSettings,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = _database(core_settings)
     entered_source = threading.Event()
     release_source = threading.Event()
+    entered_candidate_publish = threading.Event()
+    release_candidate_publish = threading.Event()
+    original_cas = DatasetLifecycle.compare_and_swap_head
+
+    def barrier_cas(self: DatasetLifecycle, **kwargs: object):
+        entered_candidate_publish.set()
+        assert release_candidate_publish.wait(timeout=10)
+        return original_cas(self, **kwargs)
+
+    monkeypatch.setattr(DatasetLifecycle, "compare_and_swap_head", barrier_cas)
 
     class BlockingSource(RecordingBootstrapSource):
         def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
@@ -266,21 +278,16 @@ def test_active_bootstrap_heartbeat_prevents_lease_takeover(
                 WHERE idempotency_key = 'heartbeat'
                 """
             )
-        deadline = time.monotonic() + 5
-        renewed = False
-        while time.monotonic() < deadline:
-            with database.transaction() as transaction:
-                row = transaction.execute(
-                    """
-                    SELECT lease_expires_at > now() AS renewed
-                    FROM data.bootstrap_operations
-                    WHERE idempotency_key = 'heartbeat'
-                    """
-                ).fetchone()
-            if row is not None and row["renewed"]:
-                renewed = True
-                break
-        assert renewed
+        _wait_for_database_row(
+            database,
+            query="""
+                SELECT lease_expires_at > now() AS renewed
+                FROM data.bootstrap_operations
+                WHERE idempotency_key = 'heartbeat'
+            """,
+            matches=lambda row: row is not None and bool(row["renewed"]),
+            description="Bootstrap operation lease renewal",
+        )
         with pytest.raises(DataOperatorError) as duplicate:
             DataOperator(database, tmp_path, RecordingBootstrapSource()).bootstrap(
                 idempotency_key="heartbeat",
@@ -289,9 +296,35 @@ def test_active_bootstrap_heartbeat_prevents_lease_takeover(
         assert duplicate.value.code == "BOOTSTRAP_IN_PROGRESS"
 
         release_source.set()
-        assert future.result(timeout=10).status == "succeeded"
+        assert entered_candidate_publish.wait(timeout=60)
+        with database.transaction() as transaction:
+            candidate = transaction.execute(
+                """
+                SELECT lease_expires_at, updated_at
+                FROM data.generation_candidates
+                WHERE status = 'live'
+                """
+            ).fetchone()
+        assert candidate is not None
+        _wait_for_database_row(
+            database,
+            query="""
+                SELECT lease_expires_at, updated_at
+                FROM data.generation_candidates
+                WHERE status = 'live'
+            """,
+            matches=lambda row: (
+                row is not None
+                and row["updated_at"] > candidate["updated_at"]
+                and row["lease_expires_at"] > candidate["lease_expires_at"]
+            ),
+            description="protected Generation candidate lease renewal",
+        )
+        release_candidate_publish.set()
+        assert future.result(timeout=60).status == "succeeded"
     finally:
         release_source.set()
+        release_candidate_publish.set()
         executor.shutdown(wait=True)
         database.close()
 
@@ -564,6 +597,26 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
             "TRUNCATE data.bootstrap_operations, data.generation_pins, data.generation_candidates"
         )
     return database
+
+
+def _wait_for_database_row(
+    database: PostgresDatabase,
+    *,
+    query: str,
+    matches: Callable[[dict[str, object] | None], bool],
+    description: str,
+    timeout: float = 5,
+) -> dict[str, object]:
+    deadline = time.monotonic() + timeout
+    last_row: dict[str, object] | None = None
+    while time.monotonic() < deadline:
+        with database.transaction() as transaction:
+            last_row = transaction.execute(query).fetchone()
+        if matches(last_row):
+            assert last_row is not None
+            return last_row
+        time.sleep(0.05)
+    pytest.fail(f"timed out waiting for {description}; last database row={last_row!r}")
 
 
 def _replay_payload() -> dict[str, object]:

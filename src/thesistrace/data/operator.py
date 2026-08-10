@@ -233,6 +233,7 @@ class DataOperator:
         while not stopped.wait(self._heartbeat_seconds):
             try:
                 with self._database.transaction() as transaction:
+                    lock_data_lifecycle(transaction)
                     renewed = transaction.execute(
                         """
                         UPDATE data.bootstrap_operations
@@ -244,14 +245,27 @@ class DataOperator:
                         """,
                         (self._lease_seconds, key, owner_token),
                     )
+                    if renewed.rowcount != 1:
+                        raise RuntimeError("Bootstrap operation heartbeat lost ownership")
+                    transaction.execute(
+                        """
+                        UPDATE data.generation_candidates
+                        SET lease_expires_at = now() + make_interval(secs => %s),
+                            updated_at = now()
+                        WHERE operation_id = %s
+                          AND status = 'live'
+                          AND lease_expires_at > now()
+                        """,
+                        (
+                            self._lease_seconds,
+                            _operation_id(key, owner_token),
+                        ),
+                    )
             except Exception as error:
                 logger.error(
                     "Bootstrap operation heartbeat failed",
                     extra={"error_type": type(error).__name__},
                 )
-                failed.set()
-                return
-            if renewed.rowcount != 1:
                 failed.set()
                 return
 
