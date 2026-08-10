@@ -14,6 +14,9 @@ from thesistrace.adapters.tushare_provider import HttpTushareTransport, TushareA
 from thesistrace.adapters.tushare_replay import ReplayTushareProvider
 from thesistrace.data import (
     BootstrapOutcome,
+    CollectionOutcome,
+    DataCollectionError,
+    DataGarbageCollector,
     DataOperator,
     DataOperatorError,
     DataRefreshError,
@@ -27,7 +30,7 @@ def main(arguments: list[str] | None = None) -> None:
     logging.getLogger("psycopg.pool").disabled = True
     try:
         outcome = _run(arguments)
-    except (DataOperatorError, DataRefreshError) as error:
+    except (DataCollectionError, DataOperatorError, DataRefreshError) as error:
         _failure(error.code)
     except Exception:
         _failure("OPERATOR_FAILURE")
@@ -35,7 +38,9 @@ def main(arguments: list[str] | None = None) -> None:
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
-def _run(arguments: list[str] | None = None) -> BootstrapOutcome | RefreshOutcome | dict[str, str]:
+def _run(
+    arguments: list[str] | None = None,
+) -> BootstrapOutcome | CollectionOutcome | RefreshOutcome | dict[str, str]:
     parser = argparse.ArgumentParser(description="ThesisTrace private Data Operator v1")
     subcommands = parser.add_subparsers(dest="command", required=True)
     bootstrap = subcommands.add_parser("bootstrap")
@@ -49,6 +54,8 @@ def _run(arguments: list[str] | None = None) -> BootstrapOutcome | RefreshOutcom
     inspect.add_argument("--idempotency-key", required=True)
     work = subcommands.add_parser("work-refresh")
     work.add_argument("--replay", type=Path)
+    collect = subcommands.add_parser("collect")
+    collect.add_argument("--idempotency-key", required=True)
     parsed = parser.parse_args(arguments)
 
     transport: HttpTushareTransport | None = None
@@ -66,6 +73,10 @@ def _run(arguments: list[str] | None = None) -> BootstrapOutcome | RefreshOutcom
             )
         if parsed.command == "inspect-refresh":
             return DataRefreshService(database, mount_root).inspect(parsed.idempotency_key)
+        if parsed.command == "collect":
+            return DataGarbageCollector(database, mount_root).collect(
+                idempotency_key=parsed.idempotency_key
+            )
 
         replay = parsed.replay
         if replay is not None:

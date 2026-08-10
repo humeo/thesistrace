@@ -58,6 +58,17 @@ class AddressedFileStore:
         except OSError as error:
             raise AddressedFileError("addressed filesystem write failed or is unsafe") from error
 
+    def delete(self, target: Path) -> bool:
+        try:
+            with self._open_parent(target, create=False) as (parent_fd, name):
+                return _delete_entry(parent_fd, name)
+        except FileNotFoundError:
+            return False
+        except AddressedFileError:
+            raise
+        except OSError as error:
+            raise AddressedFileError("addressed filesystem deletion failed or is unsafe") from error
+
     def _store_entry(
         self,
         parent_fd: int,
@@ -188,6 +199,26 @@ def _create_temporary(parent_fd: int) -> tuple[str, int]:
             return name, os.open(name, flags, 0o600, dir_fd=parent_fd)
         except FileExistsError:
             continue
+
+
+def _delete_entry(parent_fd: int, name: str) -> bool:
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return False
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise AddressedFileError("addressed file is not a regular file")
+    finally:
+        os.close(descriptor)
+    try:
+        os.unlink(name, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return False
+    _fsync_directory(parent_fd)
+    return True
 
 
 def _relative_address(path: Path, root: Path) -> Path:

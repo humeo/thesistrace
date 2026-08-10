@@ -1,4 +1,9 @@
 from thesistrace.data.admission import DatasetAdmissionService, DatasetAdmissionSnapshot
+from thesistrace.data.collection import (
+    CollectionOutcome,
+    DataCollectionError,
+    DataGarbageCollector,
+)
 from thesistrace.data.fields import (
     AuthorableField,
     authorable_field_bindings,
@@ -45,8 +50,11 @@ __all__ = [
     "BootstrapOutcome",
     "CanonicalSourceBatch",
     "CollectionPlan",
+    "CollectionOutcome",
     "DATA_SOURCE_ERROR_CATEGORIES",
     "DataOverview",
+    "DataCollectionError",
+    "DataGarbageCollector",
     "DataRefreshError",
     "DataRefreshService",
     "DatasetAdmissionService",

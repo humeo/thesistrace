@@ -15,3 +15,19 @@ def test_versioned_data_operator_is_not_registered_in_product_surfaces() -> None
     assert "TushareDataSource" not in runtime
     assert "TushareAdapter" not in runtime
     assert "data operator" not in web.lower()
+
+
+def test_generation_collection_is_only_wired_to_the_private_operator() -> None:
+    root = Path(__file__).resolve().parents[2]
+    operator = (root / "src/thesistrace/entrypoints/data_operator.py").read_text()
+    ordinary_paths = (
+        "src/thesistrace/entrypoints/http.py",
+        "src/thesistrace/entrypoints/runtime.py",
+        "src/thesistrace/entrypoints/worker.py",
+        "src/thesistrace/data/refresh.py",
+    )
+
+    assert "DataGarbageCollector" in operator
+    assert 'add_parser("collect")' in operator
+    for path in ordinary_paths:
+        assert "DataGarbageCollector" not in (root / path).read_text()

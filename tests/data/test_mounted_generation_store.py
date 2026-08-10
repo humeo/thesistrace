@@ -537,6 +537,26 @@ def test_link_race_loser_syncs_the_winner_directory_entry(
     )
 
 
+def test_addressed_file_deletion_is_idempotent_and_cannot_follow_a_symlink(
+    tmp_path: Path,
+) -> None:
+    content = b"retired immutable object"
+    sha256 = hashlib.sha256(content).hexdigest()
+    target = tmp_path / "objects" / "sha256" / sha256[:2] / f"{sha256}.parquet"
+    files = AddressedFileStore(tmp_path)
+    files.store(target, sha256, content)
+
+    assert files.delete(target) is True
+    assert files.delete(target) is False
+
+    external = tmp_path.parent / f"{tmp_path.name}-external"
+    external.write_bytes(b"must remain")
+    target.symlink_to(external)
+    with pytest.raises(AddressedFileError, match="unsafe"):
+        files.delete(target)
+    assert external.read_bytes() == b"must remain"
+
+
 def _canonical() -> dict[str, object]:
     sessions = _research_sessions(GENERATION_SESSION_PARTITION_COUNT + 1)
     instruments = (

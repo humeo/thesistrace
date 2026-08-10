@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -55,6 +56,12 @@ class MountedGeneration:
     field_availability: tuple[str, ...]
     preparation: dict[str, str]
     canonical: dict[str, object]
+
+
+@dataclass(frozen=True, order=True)
+class GenerationFileRef:
+    kind: str
+    sha256: str
 
 
 class MountedGenerationStore:
@@ -170,6 +177,49 @@ class MountedGenerationStore:
             preparation={str(key): str(value) for key, value in preparation.items()},
             canonical=canonical,
         )
+
+    def referenced_files(self, manifest_sha256: str) -> frozenset[GenerationFileRef]:
+        self.open_generation(manifest_sha256)
+        root = self._read_manifest(manifest_sha256)
+        references = {GenerationFileRef("manifest", manifest_sha256)}
+        tables = root["tables"]
+        assert isinstance(tables, list)
+        for table in tables:
+            assert isinstance(table, Mapping)
+            table_sha256 = str(table["manifest_sha256"])
+            references.add(GenerationFileRef("manifest", table_sha256))
+            table_manifest = self._read_manifest(table_sha256)
+            objects = table_manifest["objects"]
+            assert isinstance(objects, list)
+            references.update(
+                GenerationFileRef("object", str(object_ref["sha256"]))
+                for object_ref in objects
+                if isinstance(object_ref, Mapping)
+            )
+        return frozenset(references)
+
+    def inventory(self) -> frozenset[GenerationFileRef]:
+        references = {
+            GenerationFileRef("manifest", sha256)
+            for sha256 in _inventory_sha256(self._root, "manifests", ".json")
+        }
+        references.update(
+            GenerationFileRef("object", sha256)
+            for sha256 in _inventory_sha256(self._root, "objects", ".parquet")
+        )
+        return frozenset(references)
+
+    def delete_file(self, reference: GenerationFileRef) -> bool:
+        if reference.kind == "manifest":
+            target = self._manifest_path(reference.sha256)
+        elif reference.kind == "object":
+            target = self._object_path(reference.sha256)
+        else:
+            raise GenerationStoreError("Generation file kind is invalid")
+        try:
+            return self._files.delete(target)
+        except AddressedFileError as error:
+            raise GenerationStoreError("Generation file deletion failed or is unsafe") from error
 
     def _materialize_table(
         self,
@@ -376,6 +426,41 @@ class MountedGenerationStore:
         return self._root / "objects" / "sha256" / sha256[:2] / f"{sha256}.parquet"
 
 
+def _inventory_sha256(root: Path, directory: str, suffix: str) -> tuple[str, ...]:
+    base = root / directory / "sha256"
+    try:
+        with os.scandir(base) as entries:
+            prefixes = sorted(entries, key=lambda entry: entry.name)
+    except FileNotFoundError:
+        return ()
+    except OSError as error:
+        raise GenerationStoreError("Generation inventory is unreadable or unsafe") from error
+    sha256s: list[str] = []
+    for prefix in prefixes:
+        if (
+            len(prefix.name) != 2
+            or any(character not in "0123456789abcdef" for character in prefix.name)
+            or not prefix.is_dir(follow_symlinks=False)
+        ):
+            raise GenerationStoreError("Generation inventory is unreadable or unsafe")
+        try:
+            with os.scandir(prefix.path) as directory_entries:
+                entries = sorted(directory_entries, key=lambda entry: entry.name)
+        except OSError as error:
+            raise GenerationStoreError("Generation inventory is unreadable or unsafe") from error
+        for entry in entries:
+            if entry.name.startswith(".candidate-"):
+                continue
+            if not entry.is_file(follow_symlinks=False) or not entry.name.endswith(suffix):
+                raise GenerationStoreError("Generation inventory is unreadable or unsafe")
+            sha256 = entry.name[: -len(suffix)]
+            _require_sha256(sha256)
+            if sha256[:2] != prefix.name:
+                raise GenerationStoreError("Generation inventory is unreadable or unsafe")
+            sha256s.append(sha256)
+    return tuple(sha256s)
+
+
 def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
     required = {
         "schema_version",
@@ -578,6 +663,7 @@ __all__ = (
     "GENERATION_MANIFEST_MAX_BYTES",
     "GENERATION_SESSION_PARTITION_COUNT",
     "GenerationStoreError",
+    "GenerationFileRef",
     "MountedGeneration",
     "MountedGenerationStore",
 )

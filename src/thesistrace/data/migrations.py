@@ -333,5 +333,57 @@ MIGRATIONS = MigrationPlan(
                     WHERE status IN ('accepted', 'running');
             """,
         ),
+        Migration(
+            name="0007_explicit_generation_collection",
+            statement="""
+                CREATE TABLE data.collection_operations (
+                    idempotency_key text PRIMARY KEY CHECK (
+                        idempotency_key <> '' AND idempotency_key = btrim(idempotency_key)
+                    ),
+                    plan_sha256 text NOT NULL CHECK (plan_sha256 ~ '^[0-9a-f]{64}$'),
+                    status text NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                    target_count integer NOT NULL CHECK (target_count >= 0),
+                    deleted_count integer NOT NULL DEFAULT 0 CHECK (
+                        deleted_count >= 0 AND deleted_count <= target_count
+                    ),
+                    failure_code text NULL,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    finished_at timestamptz NULL,
+                    CHECK (
+                        (
+                            status = 'running'
+                            AND failure_code IS NULL AND finished_at IS NULL
+                        )
+                        OR (
+                            status = 'succeeded'
+                            AND deleted_count = target_count
+                            AND failure_code IS NULL AND finished_at IS NOT NULL
+                        )
+                        OR (
+                            status = 'failed'
+                            AND failure_code IS NOT NULL AND finished_at IS NOT NULL
+                        )
+                    )
+                );
+
+                CREATE TABLE data.collection_targets (
+                    idempotency_key text NOT NULL REFERENCES data.collection_operations(
+                        idempotency_key
+                    ) ON DELETE CASCADE,
+                    ordinal integer NOT NULL CHECK (ordinal >= 0),
+                    file_kind text NOT NULL CHECK (file_kind IN ('manifest', 'object')),
+                    sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
+                    status text NOT NULL CHECK (status IN ('pending', 'deleted')),
+                    deleted_at timestamptz NULL,
+                    PRIMARY KEY (idempotency_key, ordinal),
+                    UNIQUE (idempotency_key, file_kind, sha256),
+                    CHECK (
+                        (status = 'pending' AND deleted_at IS NULL)
+                        OR (status = 'deleted' AND deleted_at IS NOT NULL)
+                    )
+                );
+            """,
+        ),
     ),
 )

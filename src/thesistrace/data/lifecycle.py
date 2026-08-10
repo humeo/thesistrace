@@ -298,6 +298,38 @@ class DatasetLifecycle:
             ).fetchall()
             return tuple(_pin(row) for row in rows)
 
+    def retention_roots_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+    ) -> tuple[str, ...]:
+        lock_data_lifecycle(transaction)
+        roots: set[str] = set()
+        pointer = self._heads.current_pointer()
+        if pointer is not None:
+            self._heads.resolve(pointer)
+            roots.add(pointer.generation_manifest_sha256)
+        roots.update(
+            str(row["generation_manifest_sha256"])
+            for row in transaction.execute(
+                """
+                SELECT generation_manifest_sha256
+                FROM data.generation_pins
+                WHERE status = 'active'
+                """
+            ).fetchall()
+        )
+        roots.update(
+            str(row["generation_manifest_sha256"])
+            for row in transaction.execute(
+                """
+                SELECT generation_manifest_sha256
+                FROM data.generation_candidates
+                WHERE status = 'live'
+                """
+            ).fetchall()
+        )
+        return tuple(sorted(roots))
+
 
 def lock_data_lifecycle(transaction: PostgresTransaction) -> None:
     transaction.execute(
