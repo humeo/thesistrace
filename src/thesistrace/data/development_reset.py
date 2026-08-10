@@ -356,6 +356,27 @@ class DevelopmentReset:
             ).fetchall()
         for row in rows:
             digest = str(row["object_sha256"])
+            with self._database.transaction() as transaction:
+                retained = transaction.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM publication.manifest_objects
+                        WHERE object_sha256 = %s
+                    ) AS retained
+                    """,
+                    (digest,),
+                ).fetchone()
+                if retained is not None and retained["retained"]:
+                    transaction.execute(
+                        """
+                        UPDATE data.development_reset_objects
+                        SET status = 'preserved', updated_at = now()
+                        WHERE idempotency_key = %s AND object_sha256 = %s
+                          AND status = 'pending'
+                        """,
+                        (key, digest),
+                    )
+                    continue
             try:
                 self._s3.delete_object(Bucket=self._bucket, Key=_object_key(digest))
             except (BotoCoreError, ClientError) as error:

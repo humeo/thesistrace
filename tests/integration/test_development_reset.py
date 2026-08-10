@@ -308,6 +308,16 @@ def test_development_reset_boundary_failures_retry_the_fixed_plan(
         before_retry = _reset_plan_counts(database, key)
         assert before_retry["status"] == "failed"
 
+        retained_ref: PublishedRef | None = None
+        if boundary == "rustfs":
+            retained_after_failure = publication.prepare(
+                kind="unrelated-after-reset-failure",
+                payloads={"owned": JsonPayload({"boundary": boundary})},
+                provenance={"owner": "new-unrelated"},
+            )
+            with database.transaction() as transaction:
+                retained_ref = publication.record(transaction, retained_after_failure)
+
         if boundary == "postgres":
             with database.transaction() as transaction:
                 transaction.execute(
@@ -337,6 +347,9 @@ def test_development_reset_boundary_failures_retry_the_fixed_plan(
         assert after_retry["path_targets"] == before_retry["path_targets"]
         assert list(mount.iterdir()) == []
         assert _state_counts(database)["runs"] == 0
+        if retained_ref is not None:
+            assert recovered.preserved_object_count == 1
+            assert publication.read(retained_ref).payloads["owned"].content
     finally:
         database.close()
 
