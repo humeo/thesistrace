@@ -236,6 +236,7 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
                     target_canonical=prior_c,
                     appended_sessions=calendar_c[: len(sessions)],
                 ),
+                calculation_scope="forward_tracking",
             )
         )
         checkpoint_c = project_tracking_checkpoint(
@@ -257,6 +258,7 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
                     target_canonical=prior_d,
                     appended_sessions=calendar_d[:-1],
                 ),
+                calculation_scope="forward_tracking",
             )
         )
         assert progressed["terminal_strategy_state"] == terminal_strategy_state(
@@ -477,6 +479,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
                     target_canonical=recovery_prior_canonical,
                     appended_sessions=recovered_calendar[: len(seed_sessions)],
                 ),
+                calculation_scope="forward_tracking",
             )
         )
         assert recovered_state["terminal_strategy_state"] == terminal_strategy_state(
@@ -854,6 +857,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
                     target_canonical=seed_canonical,
                     appended_sessions=list(seed_sessions),
                 ),
+                calculation_scope="forward_tracking",
             )
         )
         assert _position_ids(terminal_strategy_state(counterfactual)) == {

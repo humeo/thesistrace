@@ -263,6 +263,7 @@ def test_explicit_period_advance_matches_batch_across_irregular_chunks(
                 ),
                 appended_sessions=[SESSIONS[index] for index in chunk],
                 continuation=continuation_snapshot(actual),
+                calculation_scope="research_period",
             )
         )
 
@@ -303,6 +304,7 @@ def test_explicit_period_advance_rebuilds_the_same_bounded_continuation() -> Non
             target_canonical_release=complete,
             appended_sessions=list(SESSIONS[3:]),
             continuation=continuation_snapshot(seed),
+            calculation_scope="research_period",
         )
     )
 
@@ -366,6 +368,7 @@ def test_bounded_continuation_preserves_full_explicit_period_results(
                 ),
                 appended_sessions=appended,
                 continuation=bounded,
+                calculation_scope="research_period",
             )
         )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from typing import Literal
 
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
@@ -42,6 +43,7 @@ class AdvanceInput:
     _target_canonical_json: bytes = field(repr=False)
     _appended_sessions: tuple[str, ...] = field(repr=False)
     _continuation_json: bytes = field(repr=False)
+    _calculation_scope: Literal["research_period", "forward_tracking"]
 
     def __init__(
         self,
@@ -50,7 +52,24 @@ class AdvanceInput:
         target_canonical_release: dict[str, object],
         appended_sessions: list[str],
         continuation: Mapping[str, object],
+        calculation_scope: Literal["research_period", "forward_tracking"],
     ) -> None:
+        if calculation_scope not in {"research_period", "forward_tracking"}:
+            raise KernelRunError("Advance calculation scope is invalid")
+        run_input = prior_state.run_input_with_canonical(prior_state.canonical_snapshot())
+        has_research_period = (
+            run_input.research_start_session is not None
+            and run_input.research_end_session is not None
+        )
+        if calculation_scope == "research_period" and not has_research_period:
+            raise KernelRunError("Research Period Advance requires explicit boundaries")
+        if calculation_scope == "forward_tracking" and (
+            run_input.research_start_session is not None
+            or run_input.research_end_session is not None
+        ):
+            raise KernelRunError(
+                "Forward Tracking Advance cannot carry Research Period boundaries"
+            )
         object.__setattr__(self, "_prior_state", prior_state)
         object.__setattr__(
             self,
@@ -63,6 +82,7 @@ class AdvanceInput:
             "_continuation_json",
             canonical_json_bytes(continuation),
         )
+        object.__setattr__(self, "_calculation_scope", calculation_scope)
 
     def prior_state(self) -> KernelState:
         return self._prior_state
@@ -82,6 +102,10 @@ class AdvanceInput:
             raise KernelRunError("Advance continuation snapshot is invalid")
         return value
 
+    @property
+    def calculation_scope(self) -> Literal["research_period", "forward_tracking"]:
+        return self._calculation_scope
+
 
 def advance(advance_input: AdvanceInput) -> KernelState:
     prior = advance_input.prior_state()
@@ -96,12 +120,11 @@ def advance(advance_input: AdvanceInput) -> KernelState:
         advance_input.appended_sessions_snapshot(),
     )
     new_sessions = advance_input.appended_sessions_snapshot()
-    prior_run_input = prior.run_input_with_canonical(prior.canonical_snapshot())
     run_input = prior.run_input_with_canonical(
         canonical,
         research_end_session=(
             new_sessions[-1]
-            if prior_run_input.research_end_session is not None
+            if advance_input.calculation_scope == "research_period"
             else None
         ),
     )
@@ -112,8 +135,8 @@ def advance(advance_input: AdvanceInput) -> KernelState:
         new_sessions,
         prior.session_count,
     )
-    research_sessions = _research_period_sessions(run_input, canonical)
-    if research_sessions is not None:
+    if advance_input.calculation_scope == "research_period":
+        research_sessions = _research_period_sessions(run_input, canonical)
         if _alpha_session_ids(matrix) != research_sessions:
             matrix = _rebuild_explicit_alpha(run_input, canonical, research_sessions)
         labels = build_forward_labels(
@@ -560,9 +583,7 @@ def _alpha_session_ids(matrix: Mapping[str, object]) -> list[str]:
 def _research_period_sessions(
     run_input: RunInput,
     canonical: dict[str, object],
-) -> list[str] | None:
-    if run_input.research_start_session is None and run_input.research_end_session is None:
-        return None
+) -> list[str]:
     if run_input.research_start_session is None or run_input.research_end_session is None:
         raise KernelRunError("Advance Research Period boundaries are incomplete")
     calendar = canonical_sessions(canonical, "Canonical")

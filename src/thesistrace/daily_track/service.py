@@ -1125,6 +1125,7 @@ class DailyTrackService:
                     target_canonical_release=target,
                     appended_sessions=appended_sessions,
                     continuation=continuation_snapshot(state),
+                    calculation_scope="research_period",
                 )
             )
             expected_provenance = {
@@ -1554,6 +1555,7 @@ class DailyTrackService:
                 target_canonical_release=claim.canonical,
                 appended_sessions=list(claim.target_sessions),
                 continuation=continuation,
+                calculation_scope="forward_tracking",
             )
         )
         if state.boundary_session != claim.target_sessions[-1]:
@@ -2055,6 +2057,7 @@ class DailyTrackService:
                 target_canonical_release=target_canonical,
                 appended_sessions=appended_sessions,
                 continuation=continuation,
+                calculation_scope="research_period",
             )
         )
         if state.boundary_session != appended_sessions[

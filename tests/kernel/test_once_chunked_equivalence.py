@@ -27,6 +27,7 @@ def test_one_batch_and_multi_advance_reach_exactly_the_same_kernel_state(
             target_canonical_release=complete,
             appended_sessions=new_sessions,
             continuation=continuation_snapshot(seed),
+            calculation_scope="research_period",
         )
     )
     chunked = seed
@@ -37,6 +38,7 @@ def test_one_batch_and_multi_advance_reach_exactly_the_same_kernel_state(
                 target_canonical_release=_target_through(complete, chunk[-1]),
                 appended_sessions=chunk,
                 continuation=continuation_snapshot(chunked),
+                calculation_scope="research_period",
             )
         )
 

@@ -4,7 +4,6 @@ from decimal import Decimal
 import pytest
 from fixture_sessions import append_fixture_session
 
-import thesistrace.research_kernel.kernel_advance as advance_module
 from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
     restore_tracking_checkpoint,
@@ -21,10 +20,7 @@ from thesistrace.research_kernel import (
     run,
 )
 from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
-from thesistrace.research_kernel.strategy import (
-    StrategyTransition,
-    advance_strategy_metric_state,
-)
+from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -39,7 +35,6 @@ FIELD_BINDINGS = {
 def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     accepted_calculation_case: dict[str, object],
     accepted_kernel_state: KernelState,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     definition = accepted_calculation_case["definition"]
     canonical = accepted_calculation_case["canonical"]
@@ -53,76 +48,15 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
         target_canonical_release=complete,
         appended_sessions=list(appended["research_calendar"]),
         continuation=continuation_snapshot(prior),
-    )
-
-    calls: dict[str, object] = {"label_sessions": [], "strategy_calls": []}
-    original_alpha = advance_module.evaluate_alpha_matrix
-    original_labels = advance_module.build_forward_labels
-    original_factor = advance_module.evaluate_factor
-    original_strategy_transition = advance_module.transition_strategy
-
-    def observed_alpha(
-        calculation_window: dict[str, object],
-        **kwargs: object,
-    ) -> dict[str, object]:
-        calls["alpha_session_count"] = len(calculation_window["research_calendar"])
-        return original_alpha(calculation_window, **kwargs)
-
-    def observed_labels(
-        calculation_canonical: dict[str, object],
-        matrix: dict[str, object],
-        **kwargs: object,
-    ) -> dict[str, object]:
-        signal_sessions = kwargs.get("signal_sessions")
-        assert isinstance(signal_sessions, list)
-        calls["label_sessions"].append(len(signal_sessions))
-        return original_labels(calculation_canonical, matrix, **kwargs)
-
-    def observed_strategy_transition(
-        calculation_canonical: dict[str, object],
-        matrix: dict[str, object],
-        calculation_definition: dict[str, object],
-        **kwargs: object,
-    ) -> StrategyTransition:
-        continuation = kwargs.get("continuation")
-        assert isinstance(continuation, dict)
-        prior_daily_count = len(continuation["daily"])
-        transition = original_strategy_transition(
-            calculation_canonical,
-            matrix,
-            calculation_definition,
-            **kwargs,
-        )
-        calls["strategy_calls"].append(
-            (
-                prior_daily_count,
-                len(transition.finalized["daily"]),
-                len(transition.resumable["daily"]),
-            )
-        )
-        return transition
-
-    def observed_factor(labels: dict[str, object]) -> dict[str, object]:
-        horizons = labels["horizons"]
-        assert isinstance(horizons, dict)
-        calls["factor_sessions"] = [
-            len(horizons[horizon]["sessions"]) for horizon in sorted(horizons, key=int)
-        ]
-        return original_factor(labels)
-
-    monkeypatch.setattr(advance_module, "evaluate_alpha_matrix", observed_alpha)
-    monkeypatch.setattr(advance_module, "build_forward_labels", observed_labels)
-    monkeypatch.setattr(advance_module, "evaluate_factor", observed_factor)
-    monkeypatch.setattr(
-        advance_module,
-        "transition_strategy",
-        observed_strategy_transition,
+        calculation_scope="research_period",
     )
 
     appended["research_calendar"] = []
     result = advance(advance_input)
     expected_input = _run_input(complete, definition)
     expected = run(expected_input).artifacts_snapshot()
+    output = result.output_snapshot()
+    expected_sessions = list(complete["research_calendar"])[20:]
 
     assert result.output_snapshot() == expected
     assert result.origin_session == prior.origin_session
@@ -141,12 +75,23 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     } & set(AdvanceInput.__dataclass_fields__)
     for field_name in AdvanceInput.__dataclass_fields__:
         assert not isinstance(getattr(advance_input, field_name), (dict, list, set))
-    assert calls == {
-        "alpha_session_count": 21,
-        "label_sessions": [45],
-        "factor_sessions": [45, 45, 45],
-        "strategy_calls": [(43, 45, 44)],
-    }
+    assert [item["session"] for item in output["alpha_matrix"]["sessions"]] == (
+        expected_sessions
+    )
+    assert [item["session"] for item in output["strategy_backtest"]["daily"]] == (
+        expected_sessions
+    )
+    for horizon in ("1", "5", "20"):
+        assert [
+            item["session"] for item in output["forward_labels"]["horizons"][horizon]["sessions"]
+        ] == expected_sessions
+        assert [
+            item["session"]
+            for item in output["factor_evaluation"]["horizons"][horizon]["daily"]
+        ] == expected_sessions
+    bounded = continuation_snapshot(result)
+    assert len(bounded["pending_alpha"]) <= 21
+    assert len(bounded["rolling_factor"]) <= 3 * 504
 
 
 def test_kernel_advance_rejects_static_contract_replacement(
@@ -168,6 +113,7 @@ def test_kernel_advance_rejects_static_contract_replacement(
                 target_canonical_release=complete,
                 appended_sessions=list(appended["research_calendar"]),
                 continuation=continuation_snapshot(prior),
+                calculation_scope="research_period",
             )
         )
 
@@ -182,12 +128,24 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
     prior = accepted_kernel_state
+    with pytest.raises(
+        ValueError,
+        match="Forward Tracking Advance cannot carry Research Period boundaries",
+    ):
+        AdvanceInput(
+            prior_state=prior,
+            target_canonical_release=complete,
+            appended_sessions=list(appended["research_calendar"]),
+            continuation=continuation_snapshot(prior),
+            calculation_scope="forward_tracking",
+        )
     expected = advance(
         AdvanceInput(
             prior_state=prior,
             target_canonical_release=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
+            calculation_scope="research_period",
         )
     )
     continuation = continuation_snapshot(prior)
@@ -225,6 +183,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
             target_canonical_release=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation,
+            calculation_scope="research_period",
         )
     )
 
@@ -247,6 +206,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
             prior_state=compact_prior,
             target_canonical_release=complete,
             appended_sessions=list(appended["research_calendar"]),
+            calculation_scope="research_period",
         )
 
 
@@ -292,12 +252,25 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions(
         origin_session=explicit_seed.origin_session,
     )
 
+    with pytest.raises(
+        ValueError,
+        match="Research Period Advance requires explicit boundaries",
+    ):
+        AdvanceInput(
+            prior_state=seed,
+            target_canonical_release=target_canonical,
+            appended_sessions=calendar[21:],
+            continuation=continuation_snapshot(seed),
+            calculation_scope="research_period",
+        )
+
     advanced = advance(
         AdvanceInput(
             prior_state=seed,
             target_canonical_release=target_canonical,
             appended_sessions=calendar[21:],
             continuation=continuation_snapshot(seed),
+            calculation_scope="forward_tracking",
         )
     )
 
@@ -323,6 +296,7 @@ def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
             target_canonical_release=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
+            calculation_scope="research_period",
         )
     )
 
@@ -366,6 +340,7 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
             target_canonical_release=uncorrected,
             appended_sessions=appended_sessions,
             continuation=continuation_snapshot(prior),
+            calculation_scope="research_period",
         )
     )
     ordinary = advance(
@@ -374,6 +349,7 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
             target_canonical_release=corrected,
             appended_sessions=appended_sessions,
             continuation=continuation_snapshot(prior),
+            calculation_scope="research_period",
         )
     )
     rebuilt = advance_continuation(
@@ -431,6 +407,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
             target_canonical_release=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
+            calculation_scope="research_period",
         )
     )
 
@@ -475,6 +452,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
             target_canonical_release=complete_next,
             appended_sessions=list(appended_next["research_calendar"]),
             continuation=continuation_snapshot(advanced),
+            calculation_scope="research_period",
         )
     )
     actual = advance(
@@ -483,6 +461,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
             target_canonical_release=complete_next,
             appended_sessions=list(appended_next["research_calendar"]),
             continuation=continuation_snapshot(advanced),
+            calculation_scope="forward_tracking",
         )
     )
 
@@ -529,6 +508,7 @@ def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state
             target_canonical_release=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
+            calculation_scope="research_period",
         )
     )
 
@@ -560,6 +540,7 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
             target_canonical_release=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(result.track_state),
+            calculation_scope="research_period",
         )
     )
     complete_input = _run_input(complete, definition)
