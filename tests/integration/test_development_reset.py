@@ -14,12 +14,17 @@ import pytest
 from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 
-from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace._postgres import (
+    MigrationPlan,
+    PostgresDatabase,
+    PostgresTransaction,
+    apply_migrations,
+)
 from thesistrace.data import DatasetLifecycle, DevelopmentReset, DevelopmentResetError
 from thesistrace.data import development_reset as reset_module
 from thesistrace.data.operator import BootstrapOutcome, DataOperator
 from thesistrace.data.source import BootstrapCollectionPlan, CanonicalSourceBatch
-from thesistrace.entrypoints.migrations import migrate_core
+from thesistrace.entrypoints.migrations import CORE_MIGRATION_PLANS
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import (
@@ -36,7 +41,7 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
     tmp_path: Path,
 ) -> None:
     _drop_product_schemas(core_settings)
-    migrate_core(core_settings.database_url)
+    _migrate_reset_schema(core_settings.database_url)
     mount = tmp_path / "canonical-data"
     mount.mkdir()
     (mount / "HEAD.json").write_text("legacy-head")
@@ -147,7 +152,7 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
         with database.transaction() as transaction:
             assert transaction.execute(
                 "SELECT count(*) AS count FROM data.fields WHERE field_id = 'field_unrelated'"
-            ).fetchone() == {"count": 1}
+            ).fetchone() == {"count": 0}
             assert transaction.execute(
                 "SELECT count(*) AS count FROM publication.manifests WHERE sha256 = %s",
                 (target.manifest_sha256,),
@@ -189,7 +194,7 @@ def test_development_reset_rejects_unsafe_mounts_without_a_plan(
     unsafe_kind: str,
 ) -> None:
     _drop_product_schemas(core_settings)
-    migrate_core(core_settings.database_url)
+    _migrate_reset_schema(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     outside = tmp_path / "outside"
@@ -242,7 +247,7 @@ def test_development_reset_boundary_failures_retry_the_fixed_plan(
     boundary: str,
 ) -> None:
     _drop_product_schemas(core_settings)
-    migrate_core(core_settings.database_url)
+    _migrate_reset_schema(core_settings.database_url)
     mount = tmp_path / "canonical-data"
     mount.mkdir()
     (mount / "legacy.bin").write_bytes(b"legacy")
@@ -360,7 +365,7 @@ def test_development_reset_retry_is_bound_to_the_original_rustfs_bucket(
     tmp_path: Path,
 ) -> None:
     _drop_product_schemas(core_settings)
-    migrate_core(core_settings.database_url)
+    _migrate_reset_schema(core_settings.database_url)
     mount = tmp_path / "canonical-data"
     mount.mkdir()
     database = PostgresDatabase(core_settings.database_url)
@@ -413,7 +418,7 @@ def test_development_reset_fences_a_concurrent_publication_record(
     tmp_path: Path,
 ) -> None:
     _drop_product_schemas(core_settings)
-    migrate_core(core_settings.database_url)
+    _migrate_reset_schema(core_settings.database_url)
     mount = tmp_path / "canonical-data"
     mount.mkdir()
     (mount / "legacy.bin").write_bytes(b"legacy")
@@ -514,7 +519,7 @@ def test_development_reset_serializes_a_concurrent_bootstrap_mount_write(
     tmp_path: Path,
 ) -> None:
     _drop_product_schemas(core_settings)
-    migrate_core(core_settings.database_url)
+    _migrate_reset_schema(core_settings.database_url)
     mount = tmp_path / "canonical-data"
     mount.mkdir()
     (mount / "legacy.bin").write_bytes(b"legacy")
@@ -607,7 +612,7 @@ def test_development_reset_preserves_a_replacement_at_a_planned_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _drop_product_schemas(core_settings)
-    migrate_core(core_settings.database_url)
+    _migrate_reset_schema(core_settings.database_url)
     mount = tmp_path / "canonical-data"
     mount.mkdir()
     target_path = mount / "legacy.bin"
@@ -740,6 +745,24 @@ def _drop_product_schemas(settings: CoreSettings) -> None:
                 "data",
             ):
                 transaction.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+    finally:
+        database.close()
+
+
+def _migrate_reset_schema(database_url: str) -> None:
+    database = PostgresDatabase(database_url)
+    database.open()
+    try:
+        for plan in CORE_MIGRATION_PLANS:
+            selected = plan
+            if plan.schema in {"data", "daily_tracks"}:
+                selected = MigrationPlan(
+                    schema=plan.schema,
+                    ledger_table=plan.ledger_table,
+                    lock_name=plan.lock_name,
+                    migrations=plan.migrations[:-1],
+                )
+            apply_migrations(database, selected)
     finally:
         database.close()
 

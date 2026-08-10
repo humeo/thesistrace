@@ -8,21 +8,14 @@ from pathlib import Path
 from threading import Event
 
 import pytest
-from fastapi.testclient import TestClient
-from psycopg.errors import DuplicateTable, ForeignKeyViolation
+from psycopg.errors import ForeignKeyViolation
 from psycopg.types.json import Jsonb
 
-from thesistrace._postgres import (
-    MigrationPlan,
-    PostgresDatabase,
-    apply_migrations,
-)
-from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
+from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track.session_persistence import (
     SessionCoordinateConflict,
     SessionCoordinateRepository,
 )
-from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.migrations import CORE_MIGRATION_PLANS, migrate_core
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
@@ -549,205 +542,6 @@ def test_relational_coordinates_cannot_disagree_with_checkpoint_ancestry() -> No
         database.close()
 
 
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_session_coordinate_migration_is_repeatable_and_failure_preserves_state() -> None:
-    settings = CoreSettings.from_environment()
-    _drop_product_schemas(settings.database_url)
-    migrate_core(settings.database_url)
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        _insert_parent_track(database, track_id="track_legacy_untouched")
-        with database.transaction() as transaction:
-            transaction.execute(
-                """
-                INSERT INTO definitions.records (id, revision, content)
-                VALUES (
-                    'definition_preserved', 1,
-                    '{"schema_version":"research-definition-v1"}'::jsonb
-                )
-                """
-            )
-            transaction.execute(
-                "DELETE FROM daily_tracks.schema_migrations WHERE name = %s",
-                ("0008_session_coordinate_persistence",),
-            )
-            _drop_session_coordinate_objects(transaction)
-            transaction.execute(
-                "CREATE TABLE daily_tracks.session_tracking_states (sentinel text)"
-            )
-
-        with pytest.raises(DuplicateTable):
-            migrate_core(settings.database_url)
-
-        with database.transaction() as transaction:
-            definition = transaction.execute(
-                "SELECT id, revision FROM definitions.records WHERE id = %s",
-                ("definition_preserved",),
-            ).fetchone()
-            legacy = transaction.execute(
-                "SELECT id, current_release_id FROM daily_tracks.tracks WHERE id = %s",
-                ("track_legacy_untouched",),
-            ).fetchone()
-            ledger = transaction.execute(
-                "SELECT count(*) AS count FROM daily_tracks.schema_migrations WHERE name = %s",
-                ("0008_session_coordinate_persistence",),
-            ).fetchone()
-            transaction.execute("DROP TABLE daily_tracks.session_tracking_states")
-        assert definition == {"id": "definition_preserved", "revision": 1}
-        assert legacy == {
-            "id": "track_legacy_untouched",
-            "current_release_id": "legacy_release",
-        }
-        assert ledger == {"count": 0}
-    finally:
-        database.close()
-
-    assert migrate_core(settings.database_url) == (
-        "daily_tracks.0008_session_coordinate_persistence",
-    )
-    assert migrate_core(settings.database_url) == ()
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_upgrade_backfills_blocked_session_progression_before_public_retry(
-    tmp_path: Path,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    _drop_product_schemas(settings.database_url)
-    _migrate_through_daily_track_0008(settings.database_url)
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    track_id = "track_session_upgrade_retry"
-    progression_id = "progression_session_upgrade_retry"
-    try:
-        strategy_state = _strategy_state("2026-08-03", "10000000")
-        origin = {
-            "seed_run_id": "run_session_upgrade_retry",
-            "definition_id": "definition_session_upgrade_retry",
-            "definition_revision": 1,
-            "immutable_input": {},
-            "seed_data_generation_id": "generation_seed",
-            "seed_data_through_session": "2026-08-03",
-            "verified_result": {
-                "kind": "research.result",
-                "research_run_id": "run_session_upgrade_retry",
-                "schema_version": "research-result-v1",
-                "result_manifest_sha256": "f" * 64,
-                "result_checksum_sha256": "e" * 64,
-            },
-            "initial_strategy_state": strategy_state,
-            "calculation_contracts": {},
-        }
-        with database.transaction() as transaction:
-            transaction.execute(
-                """
-                INSERT INTO daily_tracks.tracks (
-                    id, status, seed_run_id, origin, current_release_id,
-                    current_strategy_session, execution_fence
-                ) VALUES (%s, 'active', %s, %s, %s, %s, 1)
-                """,
-                (
-                    track_id,
-                    origin["seed_run_id"],
-                    Jsonb(origin),
-                    "legacy-coordinate-placeholder",
-                    "2026-08-03",
-                ),
-            )
-            repository = SessionCoordinateRepository(database)
-            repository.activate(
-                transaction,
-                track_id=track_id,
-                origin_session=date(2026, 8, 3),
-                checkpoint_manifest_sha256="a" * 64,
-                terminal_strategy_state=strategy_state,
-                data_generation_id="generation_seed",
-                provenance={"kind": "activation"},
-            )
-            repository.start_progression(
-                transaction,
-                progression_id=progression_id,
-                track_id=track_id,
-                expected_checkpoint_manifest_sha256="a" * 64,
-                generation_sessions=(date(2026, 8, 3), date(2026, 8, 4)),
-                target_sessions=(date(2026, 8, 4),),
-                data_generation_id="generation_advance",
-                provenance={"kind": "advance"},
-            )
-            transaction.execute(
-                """
-                UPDATE daily_tracks.session_progressions
-                SET status = 'blocked', finished_at = now()
-                WHERE id = %s
-                """,
-                (progression_id,),
-            )
-            transaction.execute(
-                """
-                UPDATE daily_tracks.tracks
-                SET status = 'blocked', blocked_target_release_id = %s,
-                    blocked_reason = %s
-                WHERE id = %s
-                """,
-                (
-                    progression_id,
-                    "DailyTrack could not process the current dataset.",
-                    track_id,
-                ),
-            )
-    finally:
-        database.close()
-
-    assert migrate_core(settings.database_url) == (
-        "daily_tracks.0009_session_coordinate_application_contract",
-    )
-
-    with TestClient(create_app(settings)) as client:
-        retried = client.post(
-            f"/api/daily-tracks/{track_id}/retry",
-            json={"request_id": "session-upgrade-retry"},
-        )
-        assert retried.status_code == 202
-        assert retried.json()["status"] == "active"
-
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            upgraded = transaction.execute(
-                """
-                SELECT track.status, track.blocked_target_release_id,
-                       track.blocked_progression_id, progression.status
-                           AS progression_status,
-                       receipt.progression_id AS receipt_progression_id,
-                       receipt.target_release_id AS receipt_target_release_id
-                FROM daily_tracks.tracks AS track
-                JOIN daily_tracks.session_progressions AS progression
-                  ON progression.track_id = track.id
-                JOIN daily_tracks.retry_receipts AS receipt
-                  ON receipt.track_id = track.id
-                WHERE track.id = %s
-                """,
-                (track_id,),
-            ).fetchone()
-        assert upgraded == {
-            "status": "active",
-            "blocked_target_release_id": None,
-            "blocked_progression_id": None,
-            "progression_status": "running",
-            "receipt_progression_id": progression_id,
-            "receipt_target_release_id": None,
-        }
-    finally:
-        database.close()
-
 
 def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
     origin = {
@@ -755,7 +549,8 @@ def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
         "definition_id": f"definition_{track_id}",
         "definition_revision": 1,
         "immutable_input": {},
-        "seed_release_id": "legacy_release",
+        "seed_data_generation_id": "generation_seed",
+        "seed_data_through_session": "2026-08-03",
         "verified_result": {
             "kind": "research.result",
             "research_run_id": f"run_{track_id}",
@@ -770,31 +565,12 @@ def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
         transaction.execute(
             """
             INSERT INTO daily_tracks.tracks (
-                id, status, seed_run_id, origin, current_release_id,
-                current_strategy_session
-            ) VALUES (%s, 'active', %s, %s, 'legacy_release', '2026-08-03')
+                id, status, seed_run_id, origin
+            ) VALUES (%s, 'active', %s, %s)
             """,
             (track_id, f"run_{track_id}", Jsonb(origin)),
         )
 
-
-def _migrate_through_daily_track_0008(database_url: str) -> None:
-    database = PostgresDatabase(database_url)
-    database.open()
-    try:
-        for plan in CORE_MIGRATION_PLANS[:-1]:
-            apply_migrations(database, plan)
-        apply_migrations(
-            database,
-            MigrationPlan(
-                schema=DAILY_TRACK_MIGRATIONS.schema,
-                ledger_table=DAILY_TRACK_MIGRATIONS.ledger_table,
-                lock_name=DAILY_TRACK_MIGRATIONS.lock_name,
-                migrations=DAILY_TRACK_MIGRATIONS.migrations[:-1],
-            ),
-        )
-    finally:
-        database.close()
 
 
 def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
@@ -900,15 +676,6 @@ def _session_counts(database: PostgresDatabase, track_id: str) -> dict[str, int]
     }
 
 
-def _drop_session_coordinate_objects(transaction) -> None:
-    transaction.execute(
-        """
-        DROP TABLE daily_tracks.session_progression_attempts,
-                   daily_tracks.session_tracking_states,
-                   daily_tracks.session_checkpoints,
-                   daily_tracks.session_progressions CASCADE;
-        """
-    )
 
 
 def _drop_product_schemas(database_url: str) -> None:

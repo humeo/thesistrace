@@ -457,5 +457,35 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0009_contract_permanent_dataset_release_path",
+            statement="""
+                DO $migration$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM data.releases)
+                       OR EXISTS (SELECT 1 FROM data.update_receipts)
+                       OR EXISTS (SELECT 1 FROM data.update_attempts)
+                       OR EXISTS (SELECT 1 FROM data.release_fields)
+                       OR EXISTS (SELECT 1 FROM data.fields)
+                       OR EXISTS (
+                           SELECT 1 FROM data.state
+                           WHERE latest_release_id IS NOT NULL
+                       ) THEN
+                        RAISE EXCEPTION '%',
+                            'UNSUPPORTED_LEGACY_DATASET_RELEASE_STATE: '
+                            || 'run the private development-reset command or perform '
+                            || 'a separately managed migration before current-data cutover';
+                    END IF;
+                END
+                $migration$;
+
+                DROP TABLE data.release_fields;
+                DROP TABLE data.update_attempts;
+                DROP TABLE data.update_receipts;
+                DROP TABLE data.fields;
+                DROP TABLE data.state;
+                DROP TABLE data.releases;
+            """,
+        ),
     ),
 )

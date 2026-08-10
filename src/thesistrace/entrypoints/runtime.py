@@ -12,11 +12,11 @@ import boto3
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.data import (
-    DataService,
     DatasetAdmissionService,
     DatasetLifecycle,
     DatasetOverviewService,
     MountedGenerationStore,
+    authorable_fields,
 )
 from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.migrations import verify_core_migrations
@@ -93,7 +93,6 @@ def core_environment_is_configured(
 @dataclass(frozen=True)
 class CoreRuntime:
     database: PostgresDatabase
-    data: DataService
     data_overview: DatasetOverviewService
     definitions: DefinitionService
     research_runs: ResearchRunService
@@ -118,7 +117,6 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)
-        data = DataService(database, publication)
         data_overview = DatasetOverviewService(database, settings.data_mount)
         data_overview.validate_startup()
         dataset_admission = DatasetAdmissionService(database, settings.data_mount)
@@ -141,11 +139,10 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         )
         yield CoreRuntime(
             database=database,
-            data=data,
             data_overview=data_overview,
             definitions=DefinitionService(
                 database,
-                authorable_fields=data.authorable_fields,
+                authorable_fields=authorable_fields,
                 operator_catalog=operator_catalog,
                 validate_alpha=validate_normalized_alpha,
                 current_dataset=dataset_admission.current,

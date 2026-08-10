@@ -396,7 +396,68 @@ MIGRATIONS = MigrationPlan(
                         OR
                         (target_release_id IS NULL
                             AND progression_id IS NOT NULL)
+                );
+            """,
+        ),
+        Migration(
+            name="0010_contract_release_coordinate_storage",
+            statement="""
+                DO $migration$
+                BEGIN
+                    IF EXISTS (SELECT 1 FROM daily_tracks.progressions)
+                       OR EXISTS (SELECT 1 FROM daily_tracks.checkpoints)
+                       OR EXISTS (SELECT 1 FROM daily_tracks.progression_attempts)
+                       OR EXISTS (
+                           SELECT 1 FROM daily_tracks.tracks
+                           WHERE current_release_id IS NOT NULL
+                              OR current_strategy_session IS NOT NULL
+                              OR head_manifest_sha256 IS NOT NULL
+                              OR blocked_target_release_id IS NOT NULL
+                       )
+                       OR EXISTS (
+                           SELECT 1 FROM daily_tracks.retry_receipts
+                           WHERE target_release_id IS NOT NULL
+                       )
+                       OR EXISTS (
+                           SELECT 1 FROM daily_tracks.tracks AS track
+                           WHERE NOT EXISTS (
+                               SELECT 1
+                               FROM daily_tracks.session_tracking_states AS state
+                               WHERE state.track_id = track.id
+                           )
+                       ) THEN
+                        RAISE EXCEPTION '%',
+                            'UNSUPPORTED_LEGACY_DATASET_RELEASE_STATE: '
+                            || 'run the private development-reset command or perform '
+                            || 'a separately managed migration before current-data cutover';
+                    END IF;
+                END
+                $migration$;
+
+                DROP TABLE daily_tracks.progression_attempts;
+                DROP TABLE daily_tracks.checkpoints;
+                DROP TABLE daily_tracks.progressions;
+
+                ALTER TABLE daily_tracks.tracks
+                    DROP CONSTRAINT tracks_lifecycle_state_check,
+                    DROP COLUMN current_release_id,
+                    DROP COLUMN current_strategy_session,
+                    DROP COLUMN head_manifest_sha256,
+                    DROP COLUMN blocked_target_release_id,
+                    ADD CONSTRAINT tracks_lifecycle_state_check CHECK (
+                        (status IN ('active', 'stopped')
+                            AND blocked_progression_id IS NULL
+                            AND blocked_reason IS NULL)
+                        OR
+                        (status = 'blocked'
+                            AND blocked_progression_id IS NOT NULL
+                            AND blocked_reason IS NOT NULL)
                     );
+
+                ALTER TABLE daily_tracks.retry_receipts
+                    DROP CONSTRAINT retry_receipts_one_target_check,
+                    DROP COLUMN target_release_id,
+                    ALTER COLUMN progression_id SET NOT NULL;
             """,
         ),
     ),

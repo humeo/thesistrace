@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from botocore.client import BaseClient
 
+from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.publication import (
     JsonPayload,
@@ -10,6 +11,11 @@ from thesistrace.publication import (
     PublicationVerificationError,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
+
+
+@pytest.fixture(autouse=True)
+def _migrated_core(core_settings: CoreSettings) -> None:
+    migrate_core(core_settings.database_url)
 
 
 def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
@@ -73,7 +79,7 @@ def test_rollback_leaves_an_invisible_orphan_and_preserves_previous_reference(
     with open_core_runtime(core_settings) as runtime:
         _reset_product_probe(runtime.database)
         baseline = runtime.publication.prepare(
-            kind="data.release",
+            kind="publication.probe",
             payloads={"canonical": JsonPayload({"release": 1})},
             provenance={"sequence": 1},
         )
@@ -88,7 +94,7 @@ def test_rollback_leaves_an_invisible_orphan_and_preserves_previous_reference(
             )
 
         candidate = runtime.publication.prepare(
-            kind="data.release",
+            kind="publication.probe",
             payloads={"canonical": JsonPayload({"release": 2})},
             provenance={"sequence": 2},
         )

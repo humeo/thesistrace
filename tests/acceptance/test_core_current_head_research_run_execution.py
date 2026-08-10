@@ -139,10 +139,6 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert activation["checkpoint_count"] == 1
         assert activation["progression_count"] == 0
         assert activation["terminal_strategy_state"]["session"] == sessions[-1]
-        assert activation["legacy_current_release_id"] is None
-        assert activation["legacy_current_strategy_session"] is None
-        assert activation["legacy_head_manifest_sha256"] is None
-        assert activation["legacy_blocked_target_release_id"] is None
         replay = client.post(
             f"/api/research-runs/{run_id}/daily-tracks",
             json={"request_id": "attempt-start-head-track"},
@@ -217,10 +213,6 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert progressed["checkpoint_count"] == 3
         assert progressed["progression_count"] == 2
         assert progressed["active_pin_count"] == 0
-        assert progressed["legacy_current_release_id"] is None
-        assert progressed["legacy_current_strategy_session"] is None
-        assert progressed["legacy_head_manifest_sha256"] is None
-        assert progressed["legacy_blocked_target_release_id"] is None
         proof = runtime.daily_tracks.verify_persisted_equivalence(track["id"])
         assert proof.status == "equivalent"
         assert proof.head_session == latest_sessions[-1]
@@ -1927,12 +1919,6 @@ def _stored_tracking_activation(
             row = transaction.execute(
                 """
                 SELECT track.status AS track_status,
-                       track.current_release_id AS legacy_current_release_id,
-                       track.current_strategy_session
-                           AS legacy_current_strategy_session,
-                       track.head_manifest_sha256 AS legacy_head_manifest_sha256,
-                       track.blocked_target_release_id
-                           AS legacy_blocked_target_release_id,
                        state.origin_session,
                        track.origin,
                        state.current_checkpoint_manifest_sha256,

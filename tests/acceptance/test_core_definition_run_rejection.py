@@ -1,10 +1,11 @@
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
+from pathlib import Path
 from threading import Barrier
 
 import pytest
 from core_runtime import create_migrated_test_app as create_app
 from fastapi.testclient import TestClient
-from fixture_release import publish_fixture_release
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
@@ -14,8 +15,10 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
-    settings = CoreSettings.from_environment()
+def test_rejected_run_saves_once_and_replays_without_a_research_run(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     _drop_definitions_schema(settings)
 
     with TestClient(create_app(settings)) as client:
@@ -40,12 +43,13 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
         assert outcome["definition"]["name"] == "Needs Alpha"
         assert outcome["definition"]["hypothesis"] is None
         assert {issue["field"] for issue in outcome["issues"]} == {
+            "start_date",
+            "end_date",
             "alpha",
             "universe",
             "neutralization",
             "holdings_count",
             "rebalance_every_sessions",
-            "dataset_release",
         }
         assert "hypothesis" not in {issue["field"] for issue in outcome["issues"]}
         assert _durable_counts(settings) == {
@@ -99,6 +103,8 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
 
         complete_without_hypothesis = {
             "request_id": "only-data-is-missing",
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-05",
             "alpha": {
                 "operator_id": "ts_mean",
                 "operands": [
@@ -118,19 +124,18 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
         assert data_rejected.status_code == 200
         assert data_rejected.json()["issues"] == [
             {
-                "code": "DATASET_RELEASE_REQUIRED",
-                "field": "dataset_release",
-                "message": "Publish canonical Data before running research",
+                "code": "DATA_NOT_READY",
+                "field": "data",
+                "message": "Current Dataset is not ready",
             }
         ]
         assert data_rejected.json()["definition"]["hypothesis"] is None
 
-        publish_fixture_release(client)
-        replay_after_data_changed = client.post(
+        replay_after_data_check = client.post(
             "/api/definitions/run",
             json=complete_without_hypothesis,
         )
-        assert replay_after_data_changed.json() == data_rejected.json()
+        assert replay_after_data_check.json() == data_rejected.json()
         assert client.post("/api/definitions/run", json=command).json() == outcome
 
 
@@ -138,8 +143,8 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run() -> None:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_concurrent_request_ids_serialize_without_pool_reentry() -> None:
-    settings = CoreSettings.from_environment()
+def test_concurrent_request_ids_serialize_without_pool_reentry(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     _drop_definitions_schema(settings)
 
     with TestClient(create_app(settings)) as client_a, TestClient(create_app(settings)) as client_b:

@@ -677,7 +677,6 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
     run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
-    data_source = (ROOT / "src" / "thesistrace" / "data" / "service.py").read_text()
     worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
     assert "CREATE TABLE daily_tracks.tracks" in track_migrations
@@ -706,8 +705,6 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "daily_tracks." not in run_source
     assert "research_runs." not in track_source
     assert "research_runs." not in track_migrations
-    assert "def next_release(" in data_source
-    assert "daily_tracks" not in data_source
     for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
         assert f"{sql_verb} data." not in track_source
     assert "AdvanceInput(" in track_source
@@ -728,6 +725,31 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
         "next_release",
     ):
         assert legacy_coordinate not in track_source
+
+
+def test_permanent_runtime_has_only_the_mounted_current_data_path() -> None:
+    runtime = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
+    worker = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
+    http = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
+    data_exports = (ROOT / "src" / "thesistrace" / "data" / "__init__.py").read_text()
+    data_migrations = (ROOT / "src" / "thesistrace" / "data" / "migrations.py").read_text()
+    track_migrations = (
+        ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py"
+    ).read_text()
+
+    assert not (ROOT / "src" / "thesistrace" / "data" / "service.py").exists()
+    for source in (runtime, worker, http, data_exports):
+        assert "DataService" not in source
+        assert "FixtureDataSource" not in source
+        assert "TushareDataSource" not in source
+        assert "latest_release" not in source
+        assert "next_release" not in source
+    assert "DROP TABLE data.releases" in data_migrations
+    assert "DROP TABLE data.state" in data_migrations
+    assert "DROP TABLE daily_tracks.progressions" in track_migrations
+    assert "DROP COLUMN current_release_id" in track_migrations
+    assert '"/api/data/releases' not in http
+    assert '"/api/data/update' not in http
 
 
 def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> None:

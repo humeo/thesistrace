@@ -7,6 +7,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import NoReturn
 
 import boto3
 
@@ -28,7 +29,10 @@ from thesistrace.data import (
     DevelopmentResetOutcome,
     RefreshOutcome,
 )
-from thesistrace.entrypoints.migrations import verify_core_migrations
+from thesistrace.entrypoints.migrations import (
+    verify_core_migrations,
+    verify_development_reset_migrations,
+)
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -88,7 +92,10 @@ def _run(
         mount_root = Path(_environment("THESISTRACE_DATA_MOUNT"))
         database = PostgresDatabase(database_url)
         database.open()
-        verify_core_migrations(database)
+        if parsed.command == "development-reset":
+            verify_development_reset_migrations(database)
+        else:
+            verify_core_migrations(database)
         if parsed.command == "refresh":
             return DataRefreshService(database, mount_root).submit(
                 idempotency_key=parsed.idempotency_key,
@@ -148,7 +155,7 @@ def _run(
             transport.close()
 
 
-def _failure(code: str) -> None:
+def _failure(code: str) -> NoReturn:
     print(
         json.dumps({"status": "failed", "code": code}, sort_keys=True),
         file=sys.stderr,

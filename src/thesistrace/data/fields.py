@@ -49,6 +49,10 @@ AUTHORABLE_FIELDS = (
 )
 
 
+def authorable_fields() -> tuple[AuthorableField, ...]:
+    return AUTHORABLE_FIELDS
+
+
 def authorable_field_bindings() -> dict[str, str]:
     """Return Data-owned stable field IDs bound to Kernel evaluation names."""
     return {field.field_id: field.evaluation_name for field in AUTHORABLE_FIELDS}

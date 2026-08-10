@@ -8,10 +8,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import LiteralString
 
 from botocore.client import BaseClient
 from botocore.exceptions import BotoCoreError, ClientError
 from psycopg import Error as PsycopgError
+from psycopg import sql
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.lifecycle import MOUNTED_DATA_MUTATION_LOCK
@@ -241,36 +243,38 @@ class DevelopmentReset:
             if operation["postgres_done"]:
                 return
             transaction.execute("DELETE FROM definitions.run_receipts")
-            transaction.execute(
-                """
-                TRUNCATE
-                    daily_tracks.session_progression_attempts,
-                    daily_tracks.session_tracking_states,
-                    daily_tracks.session_progressions,
-                    daily_tracks.session_checkpoints,
-                    daily_tracks.progression_attempts,
-                    daily_tracks.retry_receipts,
-                    daily_tracks.stop_receipts,
-                    daily_tracks.checkpoints,
-                    daily_tracks.progressions,
-                    daily_tracks.tracks,
-                    research_runs.start_tracking_receipts,
-                    research_runs.rerun_receipts,
-                    research_runs.cancel_receipts,
-                    research_runs.attempts,
-                    research_runs.runs
-                """
+            _truncate_existing(
+                transaction,
+                (
+                    "daily_tracks.session_progression_attempts",
+                    "daily_tracks.session_tracking_states",
+                    "daily_tracks.session_progressions",
+                    "daily_tracks.session_checkpoints",
+                    "daily_tracks.progression_attempts",
+                    "daily_tracks.retry_receipts",
+                    "daily_tracks.stop_receipts",
+                    "daily_tracks.checkpoints",
+                    "daily_tracks.progressions",
+                    "daily_tracks.tracks",
+                    "research_runs.start_tracking_receipts",
+                    "research_runs.rerun_receipts",
+                    "research_runs.cancel_receipts",
+                    "research_runs.attempts",
+                    "research_runs.runs",
+                ),
             )
-            transaction.execute(
-                """
-                UPDATE data.state
-                SET status = 'idle', latest_update_outcome = NULL,
-                    latest_release_id = NULL, updated_at = now()
-                WHERE singleton = 1
-                """
-            )
+            if _relation_exists(transaction, "data.state"):
+                transaction.execute(
+                    """
+                    UPDATE data.state
+                    SET status = 'idle', latest_update_outcome = NULL,
+                        latest_release_id = NULL, updated_at = now()
+                    WHERE singleton = 1
+                    """
+                )
             for table in (
                 "release_fields",
+                "fields",
                 "update_attempts",
                 "update_receipts",
                 "releases",
@@ -282,7 +286,9 @@ class DevelopmentReset:
                 "collection_targets",
                 "collection_operations",
             ):
-                transaction.execute(f"DELETE FROM data.{table}")
+                relation = f"data.{table}"
+                if _relation_exists(transaction, relation):
+                    transaction.execute(f"DELETE FROM {relation}")
             transaction.execute(
                 "UPDATE data.current_dataset_state SET last_refresh_at = NULL WHERE singleton = 1"
             )
@@ -661,27 +667,83 @@ def _delete_relative(
 
 
 def _target_manifests(transaction: PostgresTransaction) -> tuple[str, ...]:
-    rows = transaction.execute(
+    manifests: set[str] = set()
+
+    def collect(statement: LiteralString) -> None:
+        manifests.update(
+            str(row["manifest_sha256"])
+            for row in transaction.execute(statement).fetchall()
+        )
+
+    collect(
         """
-        SELECT DISTINCT manifest_sha256
-        FROM (
-            SELECT result_manifest_sha256 AS manifest_sha256
-            FROM research_runs.runs
-            WHERE result_manifest_sha256 IS NOT NULL
-            UNION ALL
-            SELECT manifest_sha256 FROM data.releases
-            UNION ALL
-            SELECT head_manifest_sha256 FROM daily_tracks.tracks
+        SELECT result_manifest_sha256 AS manifest_sha256
+        FROM research_runs.runs
+        WHERE result_manifest_sha256 IS NOT NULL
+        """
+    )
+    collect(
+        """
+        SELECT sha256 AS manifest_sha256
+        FROM publication.manifests
+        WHERE kind = 'data.release'
+        """
+    )
+    if _relation_exists(transaction, "data.releases"):
+        collect("SELECT manifest_sha256 FROM data.releases")
+    if _column_exists(transaction, "daily_tracks", "tracks", "head_manifest_sha256"):
+        collect(
+            """
+            SELECT head_manifest_sha256 AS manifest_sha256
+            FROM daily_tracks.tracks
             WHERE head_manifest_sha256 IS NOT NULL
-            UNION ALL
-            SELECT manifest_sha256 FROM daily_tracks.checkpoints
-            UNION ALL
-            SELECT manifest_sha256 FROM daily_tracks.session_checkpoints
-        ) AS target
-        ORDER BY manifest_sha256
+            """
+        )
+    if _relation_exists(transaction, "daily_tracks.checkpoints"):
+        collect("SELECT manifest_sha256 FROM daily_tracks.checkpoints")
+    collect("SELECT manifest_sha256 FROM daily_tracks.session_checkpoints")
+    return tuple(sorted(manifests))
+
+
+def _truncate_existing(
+    transaction: PostgresTransaction,
+    relations: tuple[str, ...],
+) -> None:
+    selected = tuple(
+        relation for relation in relations if _relation_exists(transaction, relation)
+    )
+    if selected:
+        transaction.execute(
+            sql.SQL("TRUNCATE {}").format(
+                sql.SQL(", ").join(
+                    sql.Identifier(*relation.split(".", maxsplit=1))
+                    for relation in selected
+                )
+            )
+        )
+
+
+def _relation_exists(transaction: PostgresTransaction, relation: str) -> bool:
+    row = transaction.execute("SELECT to_regclass(%s) AS value", (relation,)).fetchone()
+    return bool(row and row["value"] is not None)
+
+
+def _column_exists(
+    transaction: PostgresTransaction,
+    schema: str,
+    table: str,
+    column: str,
+) -> bool:
+    row = transaction.execute(
         """
-    ).fetchall()
-    return tuple(str(row["manifest_sha256"]) for row in rows)
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema = %s AND table_name = %s AND column_name = %s
+        ) AS value
+        """,
+        (schema, table, column),
+    ).fetchone()
+    return bool(row and row["value"])
 
 
 def _manifest_objects(
