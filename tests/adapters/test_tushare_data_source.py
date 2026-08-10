@@ -725,7 +725,7 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
     assert all(payload["token"] == "deployment-secret-token" for payload in transport.payloads)
 
 
-@pytest.mark.parametrize("denied_code", [2002, 40203])
+@pytest.mark.parametrize("denied_code", [2002])
 def test_tushare_provider_names_the_denied_contract_and_api(denied_code: int) -> None:
     provider = TushareAdapter(
         token="secret",
@@ -744,27 +744,102 @@ def test_tushare_provider_names_the_denied_contract_and_api(denied_code: int) ->
     }
 
 
-def test_tushare_provider_names_a_denied_api_outside_preflight() -> None:
+def test_tushare_provider_retries_rate_limit_with_exponential_backoff() -> None:
+    class RateLimitedTransport:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+            self.calls += 1
+            if self.calls < 3:
+                return {"code": 40203, "msg": "rate limited", "data": None}
+            fields = str(payload["fields"]).split(",")
+            return {"code": 0, "msg": "", "data": {"fields": fields, "items": []}}
+
+    transport = RateLimitedTransport()
+    sleeps: list[float] = []
+    progress: list[dict[str, object]] = []
+    provider = TushareAdapter(
+        token="secret",
+        transport=transport,
+        throttle_seconds=0,
+        rate_limit_backoff_seconds=2,
+        max_attempts=3,
+        sleeper=sleeps.append,
+        progress=progress.append,
+    )
+
+    assert provider.query(
+        "adj_factor",
+        params={"trade_date": "20260803"},
+        fields=("ts_code",),
+    ) == []
+    assert transport.calls == 3
+    assert sleeps == [2, 4]
+    assert progress == [
+        {
+            "event": "rate_limited",
+            "api_name": "adj_factor",
+            "attempt": 1,
+            "retry_in_seconds": 2,
+        },
+        {
+            "event": "rate_limited",
+            "api_name": "adj_factor",
+            "attempt": 2,
+            "retry_in_seconds": 4,
+        },
+    ]
+
+
+def test_tushare_provider_paces_each_upstream_request() -> None:
+    sleeps: list[float] = []
+    provider = TushareAdapter(
+        token="secret",
+        transport=RecordingTransport(),
+        throttle_seconds=0.5,
+        sleeper=sleeps.append,
+    )
+
+    provider.query("daily", params={"trade_date": "20260803"}, fields=("ts_code",))
+    provider.query("adj_factor", params={"trade_date": "20260803"}, fields=("ts_code",))
+
+    assert sleeps == [0.5, 0.5]
+
+
+def test_tushare_provider_reports_exhausted_rate_limit_as_unavailable() -> None:
+    sleeps: list[float] = []
     provider = TushareAdapter(
         token="secret",
         transport=RecordingTransport(denied_api="adj_factor", denied_code=40203),
         throttle_seconds=0,
+        rate_limit_backoff_seconds=2,
+        max_attempts=3,
+        sleeper=sleeps.append,
     )
 
     with pytest.raises(TushareSourceError) as failure:
         provider.query("adj_factor", params={"trade_date": "20260803"}, fields=("ts_code",))
 
     assert failure.value.diagnostic() == {
-        "reason_code": "MISSING_PERMISSION",
+        "reason_code": "UPSTREAM_RATE_LIMITED",
         "source_code": 40203,
         "api_name": "adj_factor",
     }
+    assert sleeps == [2, 4]
 
 
 def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_session() -> None:
+    progress: list[dict[str, object]] = []
+
     class WindowRecordingAdapter(TushareAdapter):
         def __init__(self) -> None:
-            super().__init__(token="secret", transport=RecordingTransport(), throttle_seconds=0)
+            super().__init__(
+                token="secret",
+                transport=RecordingTransport(),
+                throttle_seconds=0,
+                progress=progress.append,
+            )
             self.calls: list[tuple[str, dict[str, object]]] = []
 
         def query_paginated(
@@ -867,6 +942,34 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
     assert snapshot["daily"][0]["trade_date"] == "20260803"
     assert "st" not in snapshot
     assert all(api_name != "stock_st" for api_name, _params in provider.calls)
+    phase_events = [event for event in progress if event["event"] == "collection_phase"]
+    assert [(event["phase"], event["status"]) for event in phase_events] == [
+        ("calendar", "started"),
+        ("calendar", "completed"),
+        ("instrument_reference", "started"),
+        ("instrument_reference", "completed"),
+        ("adjustment_anchors", "started"),
+        ("adjustment_anchors", "completed"),
+        ("market_facts", "started"),
+        ("market_facts", "completed"),
+        ("industry", "started"),
+        ("industry", "completed"),
+    ]
+    assert phase_events[-1]["membership_rows"] == 1
+    anchor_progress = [
+        event
+        for event in progress
+        if event["event"] == "collection_progress"
+        and event["phase"] == "adjustment_anchors"
+    ]
+    assert anchor_progress[-1] == {
+        "event": "collection_progress",
+        "phase": "adjustment_anchors",
+        "completed_listing_dates": 1,
+        "total_listing_dates": 1,
+        "resolved_instruments": 1,
+        "total_instruments": 1,
+    }
 
 
 def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:

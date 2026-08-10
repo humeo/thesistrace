@@ -192,7 +192,7 @@ class TushareDataSource:
 def _error_category(reason_code: str) -> str:
     if reason_code in {"TOKEN_MISSING", "MISSING_PERMISSION"}:
         return "authorization"
-    if reason_code == "UPSTREAM_UNAVAILABLE":
+    if reason_code in {"UPSTREAM_UNAVAILABLE", "UPSTREAM_RATE_LIMITED"}:
         return "unavailable"
     return "invalid_source_data"
 

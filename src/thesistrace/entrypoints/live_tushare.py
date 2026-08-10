@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import UTC, date, datetime
 from typing import Protocol
 
@@ -36,7 +37,7 @@ def main(
         if not token:
             raise SystemExit("TUSHARE_TOKEN is required for the live Tushare gate")
         transport = HttpTushareTransport()
-        provider = TushareAdapter(token=token, transport=transport)
+        provider = TushareAdapter(token=token, transport=transport, progress=_print_progress)
     try:
         try:
             preflight = provider.preflight()
@@ -88,3 +89,11 @@ def main(
 
 def _print_report(report: dict[str, object]) -> None:
     print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+
+
+def _print_progress(event: dict[str, object]) -> None:
+    print(
+        json.dumps(event, ensure_ascii=False, sort_keys=True),
+        file=sys.stderr,
+        flush=True,
+    )

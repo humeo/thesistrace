@@ -86,6 +86,51 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
         database.close()
 
 
+def test_private_operator_reports_bootstrap_progress(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    progress: list[dict[str, object]] = []
+    try:
+        outcome = DataOperator(
+            database,
+            tmp_path,
+            RecordingBootstrapSource(),
+            clock=iter((PREPARED_AT, COMPLETED_AT)).__next__,
+            progress=progress.append,
+        ).bootstrap(idempotency_key="bootstrap-progress", as_of=AS_OF)
+
+        assert outcome.status == "succeeded"
+        assert [event["phase"] for event in progress] == [
+            "claimed",
+            "source_collection",
+            "source_collection",
+            "validation",
+            "validation",
+            "materialization",
+            "materialization",
+            "publication",
+            "publication",
+        ]
+        assert [event["status"] for event in progress] == [
+            "completed",
+            "started",
+            "completed",
+            "started",
+            "completed",
+            "started",
+            "completed",
+            "started",
+            "completed",
+        ]
+        assert progress[0]["request_start"] == "2025-08-03"
+        assert progress[0]["request_end"] == "2026-08-03"
+        assert progress[-1]["data_through_session"] == "2026-08-07"
+    finally:
+        database.close()
+
+
 def test_collection_failure_leaves_no_head_and_replays_sanitized_failure(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -524,6 +569,21 @@ def test_real_private_command_bootstraps_from_tushare_replay(
     assert first.returncode == 0, first.stderr
     outcome = json.loads(first.stdout)
     assert outcome["status"] == "succeeded"
+    progress = [json.loads(line) for line in first.stderr.splitlines()]
+    assert progress[0] == {
+        "event": "bootstrap_progress",
+        "idempotency_key": "cli-replay",
+        "phase": "claimed",
+        "request_end": "2026-08-03",
+        "request_start": "2025-08-03",
+        "status": "completed",
+    }
+    assert progress[-1] == {
+        "data_through_session": "2026-08-03",
+        "event": "bootstrap_progress",
+        "phase": "publication",
+        "status": "completed",
+    }
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:

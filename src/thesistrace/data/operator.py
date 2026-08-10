@@ -79,6 +79,7 @@ class DataOperator:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         lease_seconds: float = _BOOTSTRAP_LEASE_SECONDS,
         heartbeat_seconds: float = _BOOTSTRAP_HEARTBEAT_SECONDS,
+        progress: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0 or heartbeat_seconds >= lease_seconds:
             raise ValueError("Bootstrap lease and heartbeat intervals are invalid")
@@ -89,6 +90,7 @@ class DataOperator:
         self._generations = MountedGenerationStore(mount_root)
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
+        self._progress = progress or (lambda _event: None)
 
     def bootstrap(self, *, idempotency_key: str, as_of: datetime) -> BootstrapOutcome:
         with mounted_data_mutation_lock(self._database):
@@ -114,6 +116,15 @@ class DataOperator:
 
         owner_token = claim.owner_token
         operation_id = _operation_id(key, owner_token)
+        self._progress(
+            {
+                "phase": "claimed",
+                "status": "completed",
+                "idempotency_key": key,
+                "request_start": plan.start_date.isoformat(),
+                "request_end": plan.completed_through_date.isoformat(),
+            }
+        )
         candidate_manifest: str | None = None
         candidate_live = False
         try:
@@ -135,17 +146,35 @@ class DataOperator:
                     return outcome
                 if current_head is not None:
                     raise DataOperatorError("HEAD_ALREADY_EXISTS")
+                self._progress({"phase": "source_collection", "status": "started"})
                 batch = self._source.collect_bootstrap(plan)
+                self._progress(
+                    {
+                        "phase": "source_collection",
+                        "status": "completed",
+                        "covered_session_range": list(batch.covered_session_range),
+                    }
+                )
                 heartbeat.assert_owned()
+                self._progress({"phase": "validation", "status": "started"})
                 expanded = _apply_bootstrap_expansion(batch)
                 validate_bootstrap_batch(expanded)
+                self._progress({"phase": "validation", "status": "completed"})
                 heartbeat.assert_owned()
                 materialized_at = self._operator_time()
+                self._progress({"phase": "materialization", "status": "started"})
                 generation = self._generations.materialize(
                     expanded.canonical,
                     prepared_at=materialized_at,
                     source_name=expanded.source_name,
                     source_lineage=expanded.source_lineage,
+                )
+                self._progress(
+                    {
+                        "phase": "materialization",
+                        "status": "completed",
+                        "generation_manifest_sha256": generation.manifest_sha256,
+                    }
                 )
                 heartbeat.assert_owned()
                 candidate_manifest = generation.manifest_sha256
@@ -158,6 +187,7 @@ class DataOperator:
                 self._record_candidate(key, owner_token, candidate_manifest)
                 heartbeat.assert_owned()
                 try:
+                    self._progress({"phase": "publication", "status": "started"})
                     completed_at = self._operator_time()
                     head = self._lifecycle.compare_and_swap_head(
                         expected_generation_manifest_sha256=None,
@@ -175,6 +205,13 @@ class DataOperator:
                     self._complete(key, owner_token, outcome)
                 except RuntimeError as error:
                     raise DataOperatorError("BOOTSTRAP_COMPLETION_PENDING") from error
+                self._progress(
+                    {
+                        "phase": "publication",
+                        "status": "completed",
+                        "data_through_session": outcome.data_through_session,
+                    }
+                )
                 return outcome
         except DataOperatorError as error:
             if error.code == "BOOTSTRAP_COMPLETION_PENDING":

@@ -182,7 +182,7 @@ def test_live_tushare_gate_reports_the_exact_failed_permission(
     }
 
 
-def test_live_tushare_gate_preserves_preflight_evidence_when_bootstrap_fails(
+def test_live_tushare_gate_reports_rate_limit_after_successful_preflight(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     preflight = {
@@ -205,7 +205,7 @@ def test_live_tushare_gate_preserves_preflight_evidence_when_bootstrap_fails(
             completed_through_date: date,
         ) -> dict[str, list[dict[str, object]]]:
             raise TushareSourceError(
-                "MISSING_PERMISSION",
+                "UPSTREAM_RATE_LIMITED",
                 source_code=40203,
                 api_name="adj_factor",
             )
@@ -222,8 +222,8 @@ def test_live_tushare_gate_preserves_preflight_evidence_when_bootstrap_fails(
         "failed_check": "bootstrap_collection",
         "provider_preflight": preflight,
         "error": {
-            "category": "authorization",
-            "reason_code": "MISSING_PERMISSION",
+            "category": "unavailable",
+            "reason_code": "UPSTREAM_RATE_LIMITED",
             "source_code": 40203,
             "api_name": "adj_factor",
         },

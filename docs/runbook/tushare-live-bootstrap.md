@@ -29,6 +29,20 @@ This limitation is explicit: a successful check does not prove ST coverage.
 The token is sent only in Tushare request bodies and is not written to product
 state, Publication objects, logs, or test evidence.
 
+The private `thesistrace-data-operator-v1 bootstrap` command writes JSON Lines
+progress to stderr while reserving stdout for its single final outcome. Progress
+identifies collection, validation, materialization, and publication phases;
+long adjustment-anchor collection reports completed listing dates and resolved
+instrument counts. Tushare rate limiting is reported with the affected API,
+attempt number, and next retry delay. Source tokens and response bodies are
+never included.
+
+Tushare response code `40203` is treated as rate limiting and retried with
+exponential backoff. Response code `2002` remains a missing-permission failure.
+The live adapter also paces every upstream request so the documented 2000-point
+access tier does not use the high-frequency request profile intended for higher
+tiers.
+
 This credential-dependent command is deliberately outside `pnpm check`. A
 successful run proves adapter access and source coverage; it does not publish
 through a hidden runtime or prove a production schedule.

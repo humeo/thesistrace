@@ -13,7 +13,11 @@ import boto3
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_data import TushareDataSource
-from thesistrace.adapters.tushare_provider import HttpTushareTransport, TushareAdapter
+from thesistrace.adapters.tushare_provider import (
+    HttpTushareTransport,
+    TushareAdapter,
+    TushareSourceError,
+)
 from thesistrace.adapters.tushare_replay import ReplayTushareProvider
 from thesistrace.data import (
     BootstrapOutcome,
@@ -24,6 +28,7 @@ from thesistrace.data import (
     DataOperatorError,
     DataRefreshError,
     DataRefreshService,
+    DataSourceError,
     DevelopmentReset,
     DevelopmentResetError,
     DevelopmentResetOutcome,
@@ -45,7 +50,7 @@ def main(arguments: list[str] | None = None) -> None:
         DataRefreshError,
         DevelopmentResetError,
     ) as error:
-        _failure(error.code)
+        _failure(error.code, diagnostic=_failure_diagnostic(error))
     except Exception:
         _failure("OPERATOR_FAILURE")
     payload = outcome if isinstance(outcome, dict) else outcome.__dict__
@@ -139,10 +144,16 @@ def _run(
             provider = TushareAdapter(
                 token=_environment("THESISTRACE_TUSHARE_TOKEN"),
                 transport=transport,
+                progress=_progress,
             )
         source = TushareDataSource(provider=provider)
         if parsed.command == "bootstrap":
-            return DataOperator(database, mount_root, source).bootstrap(
+            return DataOperator(
+                database,
+                mount_root,
+                source,
+                progress=lambda event: _progress({"event": "bootstrap_progress", **event}),
+            ).bootstrap(
                 idempotency_key=parsed.idempotency_key,
                 as_of=datetime.fromisoformat(parsed.as_of),
             )
@@ -155,12 +166,41 @@ def _run(
             transport.close()
 
 
-def _failure(code: str) -> NoReturn:
+def _failure(code: str, *, diagnostic: dict[str, object] | None = None) -> NoReturn:
+    payload: dict[str, object] = {"status": "failed", "code": code}
+    if diagnostic is not None:
+        payload["error"] = diagnostic
     print(
-        json.dumps({"status": "failed", "code": code}, sort_keys=True),
+        json.dumps(payload, sort_keys=True),
         file=sys.stderr,
     )
     raise SystemExit(2) from None
+
+
+def _progress(event: dict[str, object]) -> None:
+    print(
+        json.dumps(event, sort_keys=True, separators=(",", ":")),
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _failure_diagnostic(error: BaseException) -> dict[str, object] | None:
+    current: BaseException | None = error
+    data_error: DataSourceError | None = None
+    source_error: TushareSourceError | None = None
+    while current is not None:
+        if isinstance(current, DataSourceError):
+            data_error = current
+        if isinstance(current, TushareSourceError):
+            source_error = current
+        current = current.__cause__
+    if source_error is None:
+        return None
+    diagnostic = source_error.diagnostic()
+    if data_error is not None:
+        diagnostic["category"] = data_error.category
+    return diagnostic
 
 
 def _environment(name: str) -> str:

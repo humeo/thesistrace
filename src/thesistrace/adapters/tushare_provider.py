@@ -163,9 +163,11 @@ class TushareAdapter:
         token: str,
         transport: TushareTransport,
         page_size: int = 5_000,
-        throttle_seconds: float = 0.12,
-        max_attempts: int = 3,
+        throttle_seconds: float = 0.5,
+        rate_limit_backoff_seconds: float = 2.0,
+        max_attempts: int = 6,
         sleeper: Callable[[float], None] = time.sleep,
+        progress: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         if not token:
             raise TushareSourceError("TOKEN_MISSING", source_code=None)
@@ -173,8 +175,10 @@ class TushareAdapter:
         self._transport = transport
         self._page_size = page_size
         self._throttle_seconds = throttle_seconds
+        self._rate_limit_backoff_seconds = rate_limit_backoff_seconds
         self._max_attempts = max_attempts
         self._sleeper = sleeper
+        self._progress = progress or (lambda _event: None)
 
     def preflight(self) -> dict[str, object]:
         permissions: list[dict[str, str]] = []
@@ -207,6 +211,15 @@ class TushareAdapter:
     ) -> dict[str, list[dict[str, object]]]:
         end_date = completed_through_date.strftime("%Y%m%d")
         calendar_start = start_date.strftime("%Y%m%d")
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "calendar",
+                "status": "started",
+                "request_start": start_date.isoformat(),
+                "request_end": completed_through_date.isoformat(),
+            }
+        )
         sse_calendar = self.query_paginated(
             "trade_cal",
             params={"exchange": "SSE", "start_date": calendar_start, "end_date": end_date},
@@ -226,7 +239,19 @@ class TushareAdapter:
         if not shared_open:
             raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
         end_date = shared_open[-1]
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "calendar",
+                "status": "completed",
+                "research_session_count": len(shared_open),
+                "latest_open_session": end_date,
+            }
+        )
 
+        self._progress(
+            {"event": "collection_phase", "phase": "instrument_reference", "status": "started"}
+        )
         stock_basic: list[dict[str, object]] = []
         for list_status in ("L", "D", "P"):
             stock_basic.extend(
@@ -248,64 +273,116 @@ class TushareAdapter:
             )
         stock_by_code = {str(row["ts_code"]): row for row in stock_basic}
         stock_basic = [stock_by_code[key] for key in sorted(stock_by_code)]
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "instrument_reference",
+                "status": "completed",
+                "instrument_count": len(stock_basic),
+            }
+        )
+        self._progress(
+            {"event": "collection_phase", "phase": "adjustment_anchors", "status": "started"}
+        )
         anchor_daily, anchor_adjustments = self._collect_adjustment_anchors(
             stock_basic, date.fromisoformat(f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}")
         )
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "adjustment_anchors",
+                "status": "completed",
+                "anchor_count": len(anchor_adjustments),
+            }
+        )
 
+        self._progress(
+            {"event": "collection_phase", "phase": "market_facts", "status": "started"}
+        )
+        daily = self.query_paginated(
+            "daily",
+            params={"start_date": calendar_start, "end_date": end_date},
+            fields=(
+                "ts_code",
+                "trade_date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "pre_close",
+                "change",
+                "pct_chg",
+                "vol",
+                "amount",
+            ),
+            primary_key=("trade_date", "ts_code"),
+        )
+        adjustments = self.query_paginated(
+            "adj_factor",
+            params={"start_date": calendar_start, "end_date": end_date},
+            fields=("ts_code", "trade_date", "adj_factor"),
+            primary_key=("trade_date", "ts_code"),
+        )
+        suspensions = self.query_paginated(
+            "suspend_d",
+            params={"start_date": calendar_start, "end_date": end_date},
+            fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
+            primary_key=("trade_date", "ts_code", "suspend_type"),
+        )
+        price_limits = self.query_paginated(
+            "stk_limit",
+            params={"start_date": calendar_start, "end_date": end_date},
+            fields=("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
+            primary_key=("trade_date", "ts_code"),
+        )
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "market_facts",
+                "status": "completed",
+                "daily_rows": len(daily),
+                "adjustment_rows": len(adjustments),
+                "suspension_rows": len(suspensions),
+                "price_limit_rows": len(price_limits),
+            }
+        )
+
+        self._progress(
+            {"event": "collection_phase", "phase": "industry", "status": "started"}
+        )
+        industry_classification = self.query_paginated(
+            "index_classify",
+            params={"src": "SW2021"},
+            fields=("index_code", "industry_name", "level", "src"),
+            primary_key=("index_code",),
+        )
+        industry_membership = self.query_paginated(
+            "index_member_all",
+            params={},
+            fields=("l1_code", "l2_code", "l3_code", "ts_code", "in_date", "out_date"),
+            primary_key=("ts_code", "in_date", "l3_code"),
+        )
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "industry",
+                "status": "completed",
+                "classification_rows": len(industry_classification),
+                "membership_rows": len(industry_membership),
+            }
+        )
         return {
             "calendar_sse": sse_calendar,
             "calendar_szse": szse_calendar,
             "stock_basic": stock_basic,
             "anchor_daily": anchor_daily,
             "anchor_adjustments": anchor_adjustments,
-            "daily": self.query_paginated(
-                "daily",
-                params={"start_date": calendar_start, "end_date": end_date},
-                fields=(
-                    "ts_code",
-                    "trade_date",
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "pre_close",
-                    "change",
-                    "pct_chg",
-                    "vol",
-                    "amount",
-                ),
-                primary_key=("trade_date", "ts_code"),
-            ),
-            "adjustments": self.query_paginated(
-                "adj_factor",
-                params={"start_date": calendar_start, "end_date": end_date},
-                fields=("ts_code", "trade_date", "adj_factor"),
-                primary_key=("trade_date", "ts_code"),
-            ),
-            "suspensions": self.query_paginated(
-                "suspend_d",
-                params={"start_date": calendar_start, "end_date": end_date},
-                fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
-                primary_key=("trade_date", "ts_code", "suspend_type"),
-            ),
-            "price_limits": self.query_paginated(
-                "stk_limit",
-                params={"start_date": calendar_start, "end_date": end_date},
-                fields=("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
-                primary_key=("trade_date", "ts_code"),
-            ),
-            "industry_classification": self.query_paginated(
-                "index_classify",
-                params={"src": "SW2021"},
-                fields=("index_code", "industry_name", "level", "src"),
-                primary_key=("index_code",),
-            ),
-            "industry_membership": self.query_paginated(
-                "index_member_all",
-                params={},
-                fields=("l1_code", "l2_code", "l3_code", "ts_code", "in_date", "out_date"),
-                primary_key=("ts_code", "in_date", "l3_code"),
-            ),
+            "daily": daily,
+            "adjustments": adjustments,
+            "suspensions": suspensions,
+            "price_limits": price_limits,
+            "industry_classification": industry_classification,
+            "industry_membership": industry_membership,
         }
 
     def collect_incremental_snapshot(
@@ -432,7 +509,9 @@ class TushareAdapter:
             "amount",
         )
         unresolved: list[dict[str, str]] = []
-        for listing_date, instruments in sorted(by_listing_date.items()):
+        listing_groups = sorted(by_listing_date.items())
+        total_instruments = sum(len(instruments) for _date, instruments in listing_groups)
+        for listing_index, (listing_date, instruments) in enumerate(listing_groups, start=1):
             daily = self.query_paginated(
                 "daily",
                 params={"trade_date": listing_date},
@@ -454,10 +533,21 @@ class TushareAdapter:
                     anchor_adjustments.append(adjustment_by_code[code])
                 else:
                     unresolved.append(instrument)
+            if listing_index % 25 == 0 or listing_index == len(listing_groups):
+                self._progress(
+                    {
+                        "event": "collection_progress",
+                        "phase": "adjustment_anchors",
+                        "completed_listing_dates": listing_index,
+                        "total_listing_dates": len(listing_groups),
+                        "resolved_instruments": len(anchor_adjustments),
+                        "total_instruments": total_instruments,
+                    }
+                )
             if self._throttle_seconds:
                 self._sleeper(self._throttle_seconds)
 
-        for instrument in unresolved:
+        for unresolved_index, instrument in enumerate(unresolved, start=1):
             daily, adjustment = self._search_adjustment_anchor(
                 instrument,
                 as_of,
@@ -465,6 +555,15 @@ class TushareAdapter:
             )
             anchor_daily.append(daily)
             anchor_adjustments.append(adjustment)
+            if unresolved_index % 50 == 0 or unresolved_index == len(unresolved):
+                self._progress(
+                    {
+                        "event": "collection_progress",
+                        "phase": "adjustment_anchor_search",
+                        "completed_instruments": unresolved_index,
+                        "total_instruments": len(unresolved),
+                    }
+                )
         return anchor_daily, anchor_adjustments
 
     def _search_adjustment_anchor(
@@ -570,6 +669,8 @@ class TushareAdapter:
 
     def _request_with_retry(self, payload: dict[str, object]) -> dict[str, object]:
         for attempt in range(1, self._max_attempts + 1):
+            if self._throttle_seconds:
+                self._sleeper(self._throttle_seconds)
             try:
                 result = self._transport.post(payload)
             except httpx.HTTPStatusError as error:
@@ -591,8 +692,22 @@ class TushareAdapter:
             code = result.get("code")
             if code == 0:
                 return result
-            if code in {2002, 40203}:
-                raise TushareSourceError("MISSING_PERMISSION", source_code=int(code))
+            if code == 2002:
+                raise TushareSourceError("MISSING_PERMISSION", source_code=code)
+            if code == 40203:
+                if attempt < self._max_attempts:
+                    retry_in_seconds = self._rate_limit_backoff_seconds * (2 ** (attempt - 1))
+                    self._progress(
+                        {
+                            "event": "rate_limited",
+                            "api_name": str(payload["api_name"]),
+                            "attempt": attempt,
+                            "retry_in_seconds": retry_in_seconds,
+                        }
+                    )
+                    self._sleeper(retry_in_seconds)
+                    continue
+                raise TushareSourceError("UPSTREAM_RATE_LIMITED", source_code=code)
             if code in {429, 500, -2001} and attempt < self._max_attempts:
                 self._sleeper(self._throttle_seconds * attempt)
                 continue
