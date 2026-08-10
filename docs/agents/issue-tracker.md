@@ -7,7 +7,15 @@ Issues and specs (you may know a spec as a PRD) for this repo live as markdown f
 - One feature per directory: `.scratch/<feature-slug>/`
 - The spec is `.scratch/<feature-slug>/spec.md`
 - Implementation issues are one file per ticket at `.scratch/<feature-slug>/issues/<NN>-<slug>.md`, numbered from `01` — never a single combined tickets file
-- Triage state is recorded as a `Status:` line near the top of each issue file (see `triage-labels.md` for the role strings)
+- Before implementation, triage state is recorded as a `Status:` line near the
+  top of each issue file (see `triage-labels.md` for the five role strings).
+- `complete` is a terminal delivery state, not a sixth triage label. An
+  implementation issue may use `**Status:** complete` only after its acceptance
+  criteria are checked, required verification has passed, review findings are
+  closed, and the work is committed.
+- A feature spec may use `Status: complete` only after every implementation
+  issue is complete and the feature's final gate has passed. Until then its
+  `Status:` remains one of the canonical triage roles.
 - Comments and conversation history append to the bottom of the file under a `## Comments` heading
 
 ## When a skill says "publish to the issue tracker"

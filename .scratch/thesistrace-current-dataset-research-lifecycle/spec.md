@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: complete
 
 # ThesisTrace Current Dataset Research Lifecycle
 
@@ -684,11 +684,12 @@ restarts this expansion.
   Data, ResearchRun, Result, or DailyTrack lifecycle references follow this
   specification instead. No new tracker label is invented for this precedence
   rule.
-- The current implementation still contains exact 756-session validation,
-  final-504 slicing, fixed one-MiB publication, Run-admission Dataset Release
-  binding, public Data Update and release-history routes, Fixture-backed Core
-  runtime data, and release-chain DailyTrack progression. Passing existing
-  tests without removing those behaviors is not completion of this spec.
+- At specification publication time, the implementation still contained exact
+  756-session validation, final-504 slicing, fixed one-MiB publication,
+  Run-admission Dataset Release binding, public Data Update and release-history
+  routes, Fixture-backed Core runtime data, and release-chain DailyTrack
+  progression. Tickets 01 through 24 removed those active-product paths; the
+  architecture guards and final gates prevent their accidental reintroduction.
 - The number 504 remains valid in two deliberately separate places: one MiB per
   504 Research Period sessions for Result capacity, and the latest 504 signal
   sessions in a DailyTrack Factor Summary Snapshot. Neither is a ResearchRun
@@ -696,6 +697,6 @@ restarts this expansion.
 - “No correction log” means no per-value correction/change-set product. It does
   not prohibit sanitized operational attempt logs, error classifications,
   metrics, or traces needed to run and diagnose Data Refresh safely.
-- Publication of this `ready-for-agent` spec does not create implementation
-  tickets or begin implementation. Ticket decomposition remains a separate
-  explicitly invoked workflow.
+- This specification was implemented and verified through tickets 01 through
+  26. Future lifecycle changes require a new explicitly scoped effort rather
+  than reopening the completed implementation implicitly.

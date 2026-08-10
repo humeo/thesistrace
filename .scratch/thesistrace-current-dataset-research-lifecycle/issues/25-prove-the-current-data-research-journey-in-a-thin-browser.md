@@ -8,11 +8,24 @@ Refresh, garbage-collection, or Reset matrices.
 
 **Status:** complete
 
-- [ ] The browser runs against real API, Worker, PostgreSQL, RustFS, and a prepared temporary Mounted Canonical Data Store rather than mocked HTTP responses.
-- [ ] Data page shows only read-only Data Overview and manual read refresh, with no Update control, mutation polling, Release or Generation identifier, history, or operator state.
-- [ ] Definition authoring visibly requires both dates for Run and demonstrates at least one actionable date error without creating a ResearchRun.
-- [ ] A short dated ResearchRun progresses through the real Worker to success and renders Factor Summary, Strategy Summary, variable Daily Observations, and Terminal Strategy State.
-- [ ] The successful Result explicitly starts a DailyTrack whose visible state continues from the historical terminal account and progresses toward current Head.
-- [ ] No page exposes Data Operator Attempts, pin or fence internals, object or manifest locations, Generation browsing, or DailyTrack Checkpoint manifests; legitimate ResearchRun lifecycle status and permitted provenance remain visible under their product contract.
-- [ ] State waits use timeout-bounded condition polling rather than fixed sleeps, and failure evidence includes a screenshot, request responses, and relevant service logs.
-- [ ] Default execution is network-independent and uses no paid credentials; the journey does not duplicate full backend failure matrices.
+- [x] The browser runs against real API, Worker, PostgreSQL, RustFS, and a prepared temporary Mounted Canonical Data Store rather than mocked HTTP responses.
+- [x] Data page shows only read-only Data Overview and manual read refresh, with no Update control, mutation polling, Release or Generation identifier, history, or operator state.
+- [x] Definition authoring visibly requires both dates for Run and demonstrates at least one actionable date error without creating a ResearchRun.
+- [x] A short dated ResearchRun progresses through the real Worker to success and renders Factor Summary, Strategy Summary, variable Daily Observations, and Terminal Strategy State.
+- [x] The successful Result explicitly starts a DailyTrack whose visible state continues from the historical terminal account and progresses toward current Head.
+- [x] No page exposes Data Operator Attempts, pin or fence internals, object or manifest locations, Generation browsing, or DailyTrack Checkpoint manifests; legitimate ResearchRun lifecycle status and permitted provenance remain visible under their product contract.
+- [x] State waits use timeout-bounded condition polling rather than fixed sleeps, and failure evidence includes a screenshot, request responses, and relevant service logs.
+- [x] Default execution is network-independent and uses no paid credentials; the journey does not duplicate full backend failure matrices.
+
+## Comments
+
+- Implemented by `7ed8f76 feat(web): prove current data research journey`; the
+  offline-browser review fix is `ef7bc92 fix(web): keep browser gate offline`.
+- The real isolated browser journey run
+  `20260810t102849z-29952-2f677e3c` passed `1 passed in 23.4s`; Web typecheck and
+  all five rendered shell suites (`8 tests`) passed. The runner used real API,
+  Worker, PostgreSQL, RustFS, and a prepared temporary mounted store, then
+  removed its isolated containers, network, volumes, and host data.
+- The journey records API responses, rejects every non-local browser request,
+  uses bounded state polling, and retains screenshots plus service evidence on
+  failure. Standards and Spec reviews ended with zero material findings.
