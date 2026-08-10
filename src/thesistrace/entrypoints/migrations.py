@@ -11,6 +11,7 @@ from thesistrace._postgres import (
     verify_migrations,
 )
 from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
+from thesistrace.data.lifecycle import CURRENT_DATA_CUTOVER_LOCK
 from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
 from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
@@ -28,7 +29,6 @@ LEGACY_DATASET_RELEASE_DIAGNOSTIC = (
     "UNSUPPORTED_LEGACY_DATASET_RELEASE_STATE: run the private development-reset "
     "command or perform a separately managed migration before current-data cutover"
 )
-_CURRENT_DATA_CUTOVER_LOCK = "thesistrace-current-data-cutover"
 _CONTRACTION_MIGRATIONS = {
     "data": "0009_contract_permanent_dataset_release_path",
     "daily_tracks": "0010_contract_release_coordinate_storage",
@@ -39,7 +39,7 @@ def migrate_core(database_url: str) -> tuple[str, ...]:
     database = PostgresDatabase(database_url)
     database.open()
     try:
-        with database.session_advisory_lock(_CURRENT_DATA_CUTOVER_LOCK):
+        with database.session_advisory_lock(CURRENT_DATA_CUTOVER_LOCK):
             guard_legacy_dataset_release_state(database)
             return tuple(
                 f"{plan.schema}.{migration}"

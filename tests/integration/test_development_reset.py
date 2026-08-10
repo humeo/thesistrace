@@ -24,7 +24,7 @@ from thesistrace.data import DatasetLifecycle, DevelopmentReset, DevelopmentRese
 from thesistrace.data import development_reset as reset_module
 from thesistrace.data.operator import BootstrapOutcome, DataOperator
 from thesistrace.data.source import BootstrapCollectionPlan, CanonicalSourceBatch
-from thesistrace.entrypoints.migrations import CORE_MIGRATION_PLANS
+from thesistrace.entrypoints.migrations import CORE_MIGRATION_PLANS, migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import (
@@ -599,6 +599,87 @@ def test_development_reset_serializes_a_concurrent_bootstrap_mount_write(
         head = DatasetLifecycle(database, mount).current_head()
         assert head is not None
         assert head.generation_manifest_sha256 == bootstrap_outcome.generation_manifest_sha256
+    finally:
+        allow_delete.set()
+        observer.close()
+        database.close()
+
+
+def test_development_reset_serializes_the_current_data_cutover(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+    tmp_path: Path,
+) -> None:
+    _drop_product_schemas(core_settings)
+    _migrate_reset_schema(core_settings.database_url)
+    mount = tmp_path / "canonical-data"
+    mount.mkdir()
+    (mount / "legacy.bin").write_bytes(b"legacy")
+    database = PostgresDatabase(core_settings.database_url)
+    observer = PostgresDatabase(core_settings.database_url)
+    database.open()
+    observer.open()
+    publication = Publication(database, rustfs_admin, bucket=core_settings.s3_bucket)
+    target = publication.prepare(
+        kind="development-reset-cutover-race",
+        payloads={"owned": JsonPayload({"owned": "legacy"})},
+        provenance={"owner": "legacy"},
+    )
+    delete_entered = threading.Event()
+    allow_delete = threading.Event()
+    reset_result: list[object] = []
+    migration_result: list[object] = []
+    try:
+        with database.transaction() as transaction:
+            publication.record(transaction, target)
+            _insert_legacy_state(transaction, target.manifest_sha256)
+
+        def execute_reset() -> None:
+            try:
+                reset_result.append(
+                    DevelopmentReset(
+                        database,
+                        _BlockingDeleteS3(rustfs_admin, delete_entered, allow_delete),  # type: ignore[arg-type]
+                        bucket=core_settings.s3_bucket,
+                        mount_root=mount,
+                    ).execute(
+                        idempotency_key="cutover-race-reset",
+                        environment_name="development",
+                        confirmation="reset:development",
+                    )
+                )
+            except Exception as error:  # pragma: no cover - asserted below
+                reset_result.append(error)
+
+        def execute_migration() -> None:
+            try:
+                migration_result.append(migrate_core(core_settings.database_url))
+            except Exception as error:  # pragma: no cover - asserted below
+                migration_result.append(error)
+
+        reset_thread = threading.Thread(target=execute_reset)
+        reset_thread.start()
+        assert delete_entered.wait(timeout=10)
+        migration_thread = threading.Thread(target=execute_migration)
+        migration_thread.start()
+        _wait_for_advisory_wait(observer)
+        assert migration_result == []
+
+        allow_delete.set()
+        reset_thread.join(timeout=10)
+        migration_thread.join(timeout=10)
+
+        assert not reset_thread.is_alive()
+        assert not migration_thread.is_alive()
+        assert len(reset_result) == 1
+        assert isinstance(reset_result[0], reset_module.DevelopmentResetOutcome)
+        assert migration_result == [
+            (
+                "data.0009_contract_permanent_dataset_release_path",
+                "daily_tracks.0010_contract_release_coordinate_storage",
+            )
+        ]
+        assert list(mount.iterdir()) == []
     finally:
         allow_delete.set()
         observer.close()

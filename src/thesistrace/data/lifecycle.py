@@ -13,6 +13,7 @@ from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.head_store import DatasetHead, MountedDatasetHeadStore
 
 _LIFECYCLE_LOCK = "thesistrace-mounted-data-lifecycle"
+CURRENT_DATA_CUTOVER_LOCK = "thesistrace-current-data-cutover"
 MOUNTED_DATA_MUTATION_LOCK = "thesistrace-mounted-data-mutation"
 _OWNER_KINDS = {"research_run_attempt", "tracking_advance_attempt"}
 

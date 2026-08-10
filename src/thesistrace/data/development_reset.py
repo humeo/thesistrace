@@ -16,7 +16,10 @@ from psycopg import Error as PsycopgError
 from psycopg import sql
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.data.lifecycle import MOUNTED_DATA_MUTATION_LOCK
+from thesistrace.data.lifecycle import (
+    CURRENT_DATA_CUTOVER_LOCK,
+    MOUNTED_DATA_MUTATION_LOCK,
+)
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.publication.service import PUBLICATION_MUTATION_LOCK
 
@@ -94,6 +97,7 @@ class DevelopmentReset:
                 )
             ).hexdigest()
             with self._database.session_advisory_locks(
+                CURRENT_DATA_CUTOVER_LOCK,
                 _RESET_LOCK,
                 MOUNTED_DATA_MUTATION_LOCK,
                 PUBLICATION_MUTATION_LOCK,
