@@ -6,7 +6,7 @@ downloading or mutating market data.
 
 **Blocked by:** 14 — Execute each Attempt against its start-time Head; 22 — Contract fixed Research Period compatibility; 24 — Contract the permanent Dataset Release path.
 
-**Status:** ready-for-agent
+**Status:** complete
 
 - [ ] Final backend and Web images start with real runtime dependencies and one mounted, prepared, compatible Canonical Data Store.
 - [ ] Fresh database migration, liveness, system health, and readiness pass, and public Coverage and data-through match the prepared Head.
