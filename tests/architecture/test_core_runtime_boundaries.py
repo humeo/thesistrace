@@ -792,8 +792,10 @@ def test_research_run_owns_its_embedded_result_product_projection() -> None:
     assert '"observations": observations' in run_source
     assert "publication." not in http_source
     assert '"/api/research-runs/{run_id}/result"' not in http_source
+    assert '"terminal_strategy_state"' in run_source[run_source.index("def _public_result(") :]
     for private_field in (
-        '"terminal_strategy_state"',
+        '"last_daily_observation"',
+        '"metric_state"',
         '"result_manifest_sha256"',
         '"result_provenance"',
     ):

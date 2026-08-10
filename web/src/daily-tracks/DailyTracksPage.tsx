@@ -4,6 +4,7 @@ import {
   DailyTrackAnalysisView,
   type DailyTrackAnalysis,
 } from "./DailyTrackAnalysisView";
+import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
 
 type DailyTrackSummary = {
   id: string;
@@ -16,7 +17,7 @@ type DailyTrackSummary = {
   strategy_session: string;
 };
 
-type DailyTrackDetail = {
+export type DailyTrackDetail = {
   id: string;
   status: "active" | "blocked" | "stopped";
   origin: {
@@ -25,6 +26,7 @@ type DailyTrackDetail = {
     definition_revision: number;
     result_checksum_sha256: string;
     strategy_session: string;
+    terminal_account: TerminalStrategyState;
   };
   strategy_session: string;
   data_through_session: string;
@@ -212,28 +214,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
           ) : null}
         </div>
 
-        <section className="research-result-section">
-          <div className="section-heading">
-            <p className="eyebrow">Immutable starting point</p>
-            <h2>Tracking Origin</h2>
-          </div>
-          <div className="research-run-facts">
-            <p>
-              <strong>Seed ResearchRun</strong>{" "}
-              <a href={`/research-runs/${track.origin.seed_run_id}`}>
-                {track.origin.seed_run_id}
-              </a>
-            </p>
-            <p>
-              <strong>Definition</strong>{" "}
-              <a href={`/definitions/${track.origin.definition_id}`}>
-                Revision {track.origin.definition_revision}
-              </a>
-            </p>
-            <p><strong>Origin strategy session</strong> {track.origin.strategy_session}</p>
-            <p><strong>Result checksum</strong> {track.origin.result_checksum_sha256}</p>
-          </div>
-        </section>
+        <TrackingOriginView origin={track.origin} />
 
         <DailyTrackAnalysisView analysis={analysis} />
       </section>
@@ -251,6 +232,34 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
           </li>
         ))}
       </ol>
+    </section>
+  );
+}
+
+export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origin"] }) {
+  return (
+    <section className="research-result-section">
+      <div className="section-heading">
+        <p className="eyebrow">Immutable starting account</p>
+        <h2>Tracking Origin</h2>
+      </div>
+      <div className="research-run-facts">
+        <p>
+          <strong>Seed ResearchRun</strong>{" "}
+          <a href={`/research-runs/${origin.seed_run_id}`}>{origin.seed_run_id}</a>
+        </p>
+        <p>
+          <strong>Definition</strong>{" "}
+          <a href={`/definitions/${origin.definition_id}`}>
+            Revision {origin.definition_revision}
+          </a>
+        </p>
+        <p><strong>Origin strategy session</strong> {origin.strategy_session}</p>
+        <p><strong>Origin net NAV</strong> {origin.terminal_account.net_nav}</p>
+        <p><strong>Origin net cash</strong> {origin.terminal_account.net_cash}</p>
+        <p><strong>Origin holdings</strong> {origin.terminal_account.positions.length}</p>
+        <p><strong>Result checksum</strong> {origin.result_checksum_sha256}</p>
+      </div>
     </section>
   );
 }

@@ -664,6 +664,21 @@ class DailyTrackService:
                             origin.verified_result.result_checksum_sha256
                         ),
                         "strategy_session": origin.initial_strategy_state.session,
+                        "terminal_account": {
+                            name: getattr(origin.initial_strategy_state, name)
+                            for name in (
+                                "session",
+                                "gross_cash",
+                                "net_cash",
+                                "gross_nav",
+                                "net_nav",
+                                "benchmark_nav",
+                                "cumulative_transaction_cost",
+                                "positions",
+                                "rebalance_phase",
+                                "pending_signal",
+                            )
+                        },
                     },
                     "strategy_session": current_session,
                     "data_through_session": head.data_through_session,

@@ -47,6 +47,32 @@ type StrategyMetrics = {
   transaction_costs: { cumulative_amount: number };
 };
 
+export type TerminalStrategyState = {
+  session: string;
+  gross_cash: string;
+  net_cash: string;
+  gross_nav: string;
+  net_nav: string;
+  benchmark_nav: string;
+  cumulative_transaction_cost: string;
+  positions: Array<{
+    instrument_id: string;
+    execution_shares: number;
+    adjusted_units: string;
+    last_adjusted_price: string;
+  }>;
+  rebalance_phase: {
+    origin_session: string;
+    report_session_count: number;
+    rebalance_interval: number;
+    completed_intervals: number;
+  };
+  pending_signal: {
+    signal_session: string;
+    execution: "next_research_session_open";
+  } | null;
+};
+
 type ResearchResult = {
   factor: { horizons: Record<"1" | "5" | "20", FactorHorizon> };
   strategy: {
@@ -62,6 +88,7 @@ type ResearchResult = {
     };
     observations: StrategyObservation[];
   };
+  terminal_strategy_state: TerminalStrategyState;
   provenance: {
     schema_version: string;
     research_run_id: string;
@@ -402,14 +429,14 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   );
 }
 
-function ResearchResultView({ result }: { result: ResearchResult }) {
+export function ResearchResultView({ result }: { result: ResearchResult }) {
   const metrics = result.strategy.summary.metrics;
   return (
     <div className="research-result">
       <section className="research-result-section">
         <div className="section-heading">
           <p className="eyebrow">Predictive evidence</p>
-          <h2>Factor Evaluation</h2>
+          <h2>Factor Summary</h2>
         </div>
         <div className="factor-horizons">
           {FACTOR_HORIZONS.map((name) => (
@@ -421,7 +448,7 @@ function ResearchResultView({ result }: { result: ResearchResult }) {
       <section className="research-result-section">
         <div className="section-heading">
           <p className="eyebrow">One fill path · net is primary</p>
-          <h2>Strategy / Benchmark</h2>
+          <h2>Strategy Summary</h2>
           <p>Selected universe {result.strategy.benchmark.universe}</p>
         </div>
         <div className="strategy-metrics">
@@ -447,6 +474,9 @@ function ResearchResultView({ result }: { result: ResearchResult }) {
         <StrategyBenchmarkChart observations={result.strategy.observations} />
       </section>
 
+      <DailyObservationsTable observations={result.strategy.observations} />
+      <TerminalStrategyStateView state={result.terminal_strategy_state} />
+
       <section className="research-result-section research-provenance">
         <div className="section-heading">
           <p className="eyebrow">Run inputs and calculation contracts</p>
@@ -465,6 +495,85 @@ function ResearchResultView({ result }: { result: ResearchResult }) {
         </dl>
       </section>
     </div>
+  );
+}
+
+function DailyObservationsTable({ observations }: { observations: StrategyObservation[] }) {
+  return (
+    <section className="research-result-section">
+      <div className="section-heading">
+        <p className="eyebrow">Research-period account observations</p>
+        <h2>Daily Observations</h2>
+      </div>
+      <div className="result-table-scroll">
+        <table aria-label="Daily Observations">
+          <thead>
+            <tr>
+              <th>Session</th>
+              <th>Net NAV</th>
+              <th>Net cash</th>
+              <th>Holdings</th>
+              <th>Transaction cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {observations.map((observation) => (
+              <tr key={observation.session}>
+                <td>{observation.session}</td>
+                <td>{observation.net_nav}</td>
+                <td>{observation.net_cash}</td>
+                <td>{observation.holdings_count}</td>
+                <td>{observation.transaction_cost_cny}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+export function TerminalStrategyStateView({ state }: { state: TerminalStrategyState }) {
+  return (
+    <section className="research-result-section" aria-label="Terminal Strategy State">
+      <div className="section-heading">
+        <p className="eyebrow">Retained account at the Research Period boundary</p>
+        <h2>Terminal Strategy State</h2>
+      </div>
+      <div className="strategy-metrics">
+        <Metric label="Session" value={state.session} />
+        <Metric label="Net NAV" value={state.net_nav} />
+        <Metric label="Net cash" value={state.net_cash} />
+        <Metric label="Holdings" value={String(state.positions.length)} />
+        <Metric label="Cumulative costs" value={state.cumulative_transaction_cost} />
+      </div>
+      {state.positions.length === 0 ? (
+        <p>No terminal holdings.</p>
+      ) : (
+        <div className="result-table-scroll">
+          <table aria-label="Terminal holdings">
+            <thead>
+              <tr><th>Instrument</th><th>Shares</th><th>Adjusted units</th><th>Last price</th></tr>
+            </thead>
+            <tbody>
+              {state.positions.map((position) => (
+                <tr key={position.instrument_id}>
+                  <td>{position.instrument_id}</td>
+                  <td>{position.execution_shares}</td>
+                  <td>{position.adjusted_units}</td>
+                  <td>{position.last_adjusted_price}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <p>
+        {state.pending_signal
+          ? `Signal from ${state.pending_signal.signal_session} remains pending for the next Research Session open.`
+          : "No pending signal at this boundary."}
+      </p>
+    </section>
   );
 }
 

@@ -28,10 +28,14 @@ services:
       <<: *test-environment
     ports:
       - 127.0.0.1::8100
+    volumes:
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
 
   worker:
     environment:
       <<: *test-environment
+    volumes:
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
 
   web:
     ports:

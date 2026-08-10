@@ -1204,10 +1204,12 @@ def _public_result(
     factor = stored.get("factor_summary")
     strategy_summary = stored.get("strategy_summary")
     observations = stored.get("strategy_daily_observations")
+    terminal_strategy_state = stored.get("terminal_strategy_state")
     if (
         not isinstance(factor, Mapping)
         or not isinstance(strategy_summary, Mapping)
         or not isinstance(observations, list)
+        or not isinstance(terminal_strategy_state, Mapping)
     ):
         raise ResearchRunResultUnavailable
     stored_horizons = factor.get("horizons")
@@ -1238,6 +1240,21 @@ def _public_result(
                 "summary": public_strategy_summary,
                 "benchmark": benchmark,
                 "observations": observations,
+            },
+            "terminal_strategy_state": {
+                name: terminal_strategy_state[name]
+                for name in (
+                    "session",
+                    "gross_cash",
+                    "net_cash",
+                    "gross_nav",
+                    "net_nav",
+                    "benchmark_nav",
+                    "cumulative_transaction_cost",
+                    "positions",
+                    "rebalance_phase",
+                    "pending_signal",
+                )
             },
             "provenance": {
                 name: provenance[name]

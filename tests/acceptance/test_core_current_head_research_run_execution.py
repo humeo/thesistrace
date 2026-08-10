@@ -96,7 +96,12 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             "end_date",
             "result",
         }
-        assert set(public_run["result"]) == {"factor", "strategy", "provenance"}
+        assert set(public_run["result"]) == {
+            "factor",
+            "strategy",
+            "terminal_strategy_state",
+            "provenance",
+        }
         assert set(public_run["result"]["provenance"]) == {
             "schema_version",
             "research_run_id",
@@ -105,6 +110,23 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             "semantic_versions",
         }
         assert len(public_run["result"]["strategy"]["observations"]) == 3
+        terminal_account = public_run["result"]["terminal_strategy_state"]
+        assert terminal_account["session"] == sessions[-1]
+        assert terminal_account["net_nav"] == public_run["result"]["strategy"][
+            "observations"
+        ][-1]["net_nav"]
+        assert set(terminal_account) == {
+            "session",
+            "gross_cash",
+            "net_cash",
+            "gross_nav",
+            "net_nav",
+            "benchmark_nav",
+            "cumulative_transaction_cost",
+            "positions",
+            "rebalance_phase",
+            "pending_signal",
+        }
         assert "generation" not in str(public_run).lower()
 
         stored = _stored_execution(settings, run_id)
@@ -133,6 +155,9 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert "release" not in str(track).lower()
         assert "generation" not in str(track).lower()
         assert client.get("/api/daily-tracks").json()["items"] == [track]
+        track_detail = client.get(f"/api/daily-tracks/{track['id']}")
+        assert track_detail.status_code == 200
+        assert track_detail.json()["origin"]["terminal_account"] == terminal_account
         activation = _stored_tracking_activation(settings, track["id"])
         assert activation["origin_session"].isoformat() == sessions[-1]
         assert activation["current_checkpoint_session"].isoformat() == sessions[-1]

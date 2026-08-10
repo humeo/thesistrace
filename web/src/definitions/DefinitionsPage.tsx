@@ -31,6 +31,7 @@ export function ResearchDateFields({
   return (
     <fieldset>
       <legend>Research period</legend>
+      <p>Both dates are required to run; incomplete drafts can still be saved.</p>
       <label>
         Start date
         <input

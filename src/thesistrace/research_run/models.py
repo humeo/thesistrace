@@ -151,6 +151,48 @@ class StrategyResult(BaseModel):
     observations: list[StrategyDailyObservation]
 
 
+class TerminalStrategyPosition(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    instrument_id: str
+    execution_shares: int
+    adjusted_units: str
+    last_adjusted_price: str
+
+
+class TerminalRebalancePhase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    origin_session: str
+    report_session_count: int
+    rebalance_interval: int
+    completed_intervals: int
+
+
+class TerminalPendingSignal(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    signal_session: str
+    execution: Literal["next_research_session_open"]
+
+
+class TerminalStrategyStateView(BaseModel):
+    """Product account boundary; continuation accumulators remain private."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: str
+    gross_cash: str
+    net_cash: str
+    gross_nav: str
+    net_nav: str
+    benchmark_nav: str
+    cumulative_transaction_cost: str
+    positions: list[TerminalStrategyPosition]
+    rebalance_phase: TerminalRebalancePhase
+    pending_signal: TerminalPendingSignal | None
+
+
 class ResultProvenance(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -166,6 +208,7 @@ class ResearchRunResult(BaseModel):
 
     factor: FactorResult
     strategy: StrategyResult
+    terminal_strategy_state: TerminalStrategyStateView
     provenance: ResultProvenance
 
 

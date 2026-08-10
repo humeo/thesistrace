@@ -82,6 +82,46 @@ class DailyTrackList(BaseModel):
     next_cursor: str | None
 
 
+class DailyTrackOriginPosition(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    instrument_id: str
+    execution_shares: int
+    adjusted_units: str
+    last_adjusted_price: str
+
+
+class DailyTrackOriginRebalancePhase(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    origin_session: str
+    report_session_count: int
+    rebalance_interval: int
+    completed_intervals: int
+
+
+class DailyTrackOriginPendingSignal(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    signal_session: str
+    execution: Literal["next_research_session_open"]
+
+
+class DailyTrackOriginAccount(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    session: str
+    gross_cash: str
+    net_cash: str
+    gross_nav: str
+    net_nav: str
+    benchmark_nav: str
+    cumulative_transaction_cost: str
+    positions: list[DailyTrackOriginPosition]
+    rebalance_phase: DailyTrackOriginRebalancePhase
+    pending_signal: DailyTrackOriginPendingSignal | None
+
+
 class DailyTrackOriginView(BaseModel):
     """Stable product identity of the value state from which Tracking started."""
 
@@ -92,6 +132,7 @@ class DailyTrackOriginView(BaseModel):
     definition_revision: int
     result_checksum_sha256: str
     strategy_session: str
+    terminal_account: DailyTrackOriginAccount
 
 
 class DailyTrackFactorCoverage(BaseModel):
