@@ -5,6 +5,8 @@ import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+import pytest
+
 from thesistrace.daily_track.cache import (
     MAX_WORKING_CACHE_BYTES,
     _DailyTrackWorkingCache,
@@ -22,31 +24,46 @@ CONTINUATION = {
 }
 
 
-def test_working_cache_loads_verified_state_and_discards_invalid_entries(
-    tmp_path: Path,
-) -> None:
-    cache = _DailyTrackWorkingCache(tmp_path / "cache")
-    path = cache.path(TRACK_ID)
-
-    _store(cache)
-    assert _load(cache) == CONTINUATION
-
-    damage_cases: tuple[tuple[str, Callable[[Path], None]], ...] = (
+@pytest.mark.parametrize(
+    ("damage", "mutate"),
+    [
+        ("valid", None),
         ("missing", lambda target: target.unlink()),
         ("corrupt", lambda target: target.write_text("{", encoding="utf-8")),
-        ("stale-basis", lambda target: _replace(target, "basis_sha256", "basis-b")),
-        ("stale-head", lambda target: _replace(target, "head_manifest_sha256", "other")),
+        (
+            "stale-basis",
+            lambda target: _replace(target, "basis_sha256", "basis-b"),
+        ),
+        (
+            "stale-head",
+            lambda target: _replace(target, "head_manifest_sha256", "other"),
+        ),
         ("stale-fence", lambda target: _replace(target, "fence", FENCE - 1)),
         (
             "oversized",
             lambda target: target.write_bytes(b"x" * (MAX_WORKING_CACHE_BYTES + 1)),
         ),
-    )
-    for _name, damage in damage_cases:
-        _store(cache)
-        damage(path)
-        assert _load(cache) is None
-        assert not path.exists()
+    ],
+    ids=lambda value: value if isinstance(value, str) else None,
+)
+def test_working_cache_validates_one_independent_entry(
+    tmp_path: Path,
+    damage: str,
+    mutate: Callable[[Path], object] | None,
+) -> None:
+    cache = _DailyTrackWorkingCache(tmp_path / "cache")
+    path = cache.path(TRACK_ID)
+
+    _store(cache)
+    if mutate is None:
+        assert damage == "valid"
+        assert _load(cache) == CONTINUATION
+        assert path.exists()
+        return
+
+    mutate(path)
+    assert _load(cache) is None
+    assert not path.exists()
 
 
 def _store(cache: _DailyTrackWorkingCache) -> None:

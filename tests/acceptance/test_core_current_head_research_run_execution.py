@@ -10,7 +10,8 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from threading import Event, Thread
+from threading import Barrier, Event, Thread
+from time import monotonic
 
 import boto3
 import pytest
@@ -371,19 +372,72 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             completed = _run_worker_once(settings)
             assert completed.returncode == 0, completed.stdout + completed.stderr
 
-        tracks: list[dict[str, object]] = []
-        for index, run_id in enumerate(run_ids[:10]):
+        same_seed_barrier = Barrier(4)
+
+        def start_same_seed(index: int):
+            same_seed_barrier.wait(timeout=10)
+            return client.post(
+                f"/api/research-runs/{run_ids[0]}/daily-tracks",
+                json={"request_id": f"current-track-same-seed-{index}"},
+            )
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            same_seed_futures = [
+                executor.submit(start_same_seed, index) for index in range(4)
+            ]
+            same_seed_responses = [
+                future.result(timeout=30) for future in same_seed_futures
+            ]
+        assert [response.status_code for response in same_seed_responses] == [201] * 4
+        first_track = same_seed_responses[0].json()
+        assert [response.json() for response in same_seed_responses] == [
+            first_track
+        ] * 4
+        assert client.get("/api/daily-tracks").json()["items"] == [first_track]
+
+        tracks: list[dict[str, object]] = [first_track]
+        for index, run_id in enumerate(run_ids[1:9], start=1):
             started = client.post(
                 f"/api/research-runs/{run_id}/daily-tracks",
                 json={"request_id": f"current-track-capacity-start-{index}"},
             )
             assert started.status_code == 201
             tracks.append(started.json())
-        rejected = client.post(
-            f"/api/research-runs/{run_ids[-1]}/daily-tracks",
-            json={"request_id": "current-track-capacity-eleventh"},
+        assert len(client.get("/api/daily-tracks").json()["items"]) == 9
+
+        capacity_barrier = Barrier(2)
+
+        def race_capacity(index: int):
+            capacity_barrier.wait(timeout=10)
+            return client.post(
+                f"/api/research-runs/{run_ids[9 + index]}/daily-tracks",
+                json={"request_id": f"current-track-capacity-race-{index}"},
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            capacity_futures = [
+                executor.submit(race_capacity, index) for index in range(2)
+            ]
+            capacity_responses = [
+                future.result(timeout=30) for future in capacity_futures
+            ]
+        assert sorted(response.status_code for response in capacity_responses) == [
+            201,
+            409,
+        ]
+        rejected_index = next(
+            index
+            for index, response in enumerate(capacity_responses)
+            if response.status_code == 409
         )
-        assert rejected.status_code == 409
+        rejected_run_id = run_ids[9 + rejected_index]
+        assert len(
+            [
+                item
+                for item in client.get("/api/daily-tracks").json()["items"]
+                if item["status"] in {"active", "blocked"}
+            ]
+        ) == 10
 
         stopped = client.post(
             f"/api/daily-tracks/{tracks[0]['id']}/stop",
@@ -391,10 +445,102 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         )
         assert stopped.status_code == 202
         admitted = client.post(
-            f"/api/research-runs/{run_ids[-1]}/daily-tracks",
-            json={"request_id": "current-track-capacity-eleventh"},
+            f"/api/research-runs/{rejected_run_id}/daily-tracks",
+            json={"request_id": "current-track-capacity-after-stop"},
         )
         assert admitted.status_code == 201
+        final_tracks = client.get("/api/daily-tracks").json()["items"]
+        assert len(final_tracks) == 11
+        assert len(
+            [item for item in final_tracks if item["status"] in {"active", "blocked"}]
+        ) == 10
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    migrate_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+    entered_kernel = Event()
+    release_kernel = Event()
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/definitions/run",
+            json=_run_command("tracking-live-owner"),
+        )
+        assert accepted.status_code == 200
+        run_id = str(accepted.json()["run"]["id"])
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        tracking = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "tracking-live-owner-activate"},
+        )
+        assert tracking.status_code == 201
+        track_id = str(tracking.json()["id"])
+        _publish_head(
+            settings,
+            sessions=(*seed_sessions, "2026-08-06"),
+            price_offset=1,
+            expected_manifest=seed_head,
+        )
+        runtime = client.app.state.core_runtime
+
+        def block_kernel(value: AdvanceInput):
+            entered_kernel.set()
+            if not release_kernel.wait(timeout=10):
+                raise TimeoutError("live-owner kernel was not released")
+            return advance(value)
+
+        owner = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            advance_kernel=block_kernel,
+            lease_seconds=0.4,
+            heartbeat_seconds=0.05,
+        )
+        duplicate = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(owner.process_next)
+            assert entered_kernel.wait(timeout=10)
+            initial_timing = _live_tracking_attempt_timing(settings, track_id)
+            try:
+                renewed_timing = _wait_for_tracking_lease_renewal(
+                    settings,
+                    track_id,
+                    after_heartbeat=initial_timing["heartbeat_at"],
+                )
+                assert renewed_timing["lease_expires_at"] > initial_timing[
+                    "lease_expires_at"
+                ]
+                assert duplicate.process_next() is False
+            finally:
+                release_kernel.set()
+            assert future.result(timeout=20) is True
+
+        detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert detail["strategy_session"] == "2026-08-06"
+        stored = _stored_tracking_activation(settings, track_id)
+        assert stored["progression_count"] == 1
+        assert stored["checkpoint_count"] == 2
+        assert stored["active_pin_count"] == 0
 
 
 @pytest.mark.skipif(
@@ -493,6 +639,20 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         )
         assert retry.status_code == 202
         assert retry.json()["status"] == "active"
+        retry_replay = restarted.post(
+            f"/api/daily-tracks/{first_track['id']}/retry",
+            json={"request_id": "track-recovery-retry"},
+        )
+        assert retry_replay.status_code == 202
+        assert retry_replay.json() == retry.json()
+        retry_conflict = restarted.post(
+            f"/api/daily-tracks/{control_track['id']}/retry",
+            json={"request_id": "track-recovery-retry"},
+        )
+        assert retry_conflict.status_code == 409
+        assert retry_conflict.json() == {
+            "detail": "DailyTrack Retry request_id conflicts"
+        }
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
@@ -667,65 +827,42 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert intact_processor.process_next() is True
         assert cache_processor.process_next() is True
         cache_path = next(cache_root.glob("*.json"))
-        damage_cases = (
-            ("2026-08-14", "valid"),
-            ("2026-08-17", "missing"),
-            ("2026-08-18", "corrupt"),
-            ("2026-08-19", "stale-generation"),
-            ("2026-08-20", "stale-fence"),
-            ("2026-08-21", "oversized"),
+        cache_path.write_text("{", encoding="utf-8")
+        cache_sessions = (*cache_sessions, "2026-08-14")
+        cache_head = _publish_head(
+            settings,
+            sessions=cache_sessions,
+            price_offset=4,
+            expected_manifest=cache_head,
         )
-        for session, damage in damage_cases:
-            if damage == "valid":
-                pass
-            elif damage == "missing":
-                cache_path.unlink()
-            elif damage == "corrupt":
-                cache_path.write_text("{", encoding="utf-8")
-            elif damage == "oversized":
-                cache_path.write_bytes(b"x" * (MAX_WORKING_CACHE_BYTES + 1))
-            else:
-                entry = json.loads(cache_path.read_text(encoding="utf-8"))
-                if damage == "stale-generation":
-                    entry["basis_sha256"] = "stale-generation"
-                else:
-                    entry["fence"] = int(entry["fence"]) - 1
-                cache_path.write_text(json.dumps(entry), encoding="utf-8")
-            cache_sessions = (*cache_sessions, session)
-            cache_head = _publish_head(
-                settings,
-                sessions=cache_sessions,
-                price_offset=4,
-                expected_manifest=cache_head,
-            )
-            assert intact_processor.process_next() is True
-            assert cache_processor.process_next() is True
-            intact_detail = restarted.get(
-                f"/api/daily-tracks/{first_track['id']}"
-            ).json()
-            cache_detail = restarted.get(
-                f"/api/daily-tracks/{control_track['id']}"
-            ).json()
-            assert intact_detail["factor"] == cache_detail["factor"]
-            assert intact_detail["strategy"] == cache_detail["strategy"]
-            assert cache_detail["strategy_session"] == session
-            assert [
-                item["session"] for item in cache_detail["strategy"]["observations"]
-            ] == list(cache_sessions)
-            assert cache_path.exists()
-            assert cache_path.stat().st_size <= MAX_WORKING_CACHE_BYTES
-            intact_checkpoint = _stored_tracking_activation(
-                settings,
-                str(first_track["id"]),
-            )
-            damaged_checkpoint = _stored_tracking_activation(
-                settings,
-                str(control_track["id"]),
-            )
-            assert _checkpoint_payload(
-                runtime.publication,
-                intact_checkpoint,
-            ) == _checkpoint_payload(runtime.publication, damaged_checkpoint)
+        assert intact_processor.process_next() is True
+        assert cache_processor.process_next() is True
+        intact_detail = restarted.get(
+            f"/api/daily-tracks/{first_track['id']}"
+        ).json()
+        cache_detail = restarted.get(
+            f"/api/daily-tracks/{control_track['id']}"
+        ).json()
+        assert intact_detail["factor"] == cache_detail["factor"]
+        assert intact_detail["strategy"] == cache_detail["strategy"]
+        assert cache_detail["strategy_session"] == cache_sessions[-1]
+        assert [
+            item["session"] for item in cache_detail["strategy"]["observations"]
+        ] == list(cache_sessions)
+        assert cache_path.exists()
+        assert cache_path.stat().st_size <= MAX_WORKING_CACHE_BYTES
+        intact_checkpoint = _stored_tracking_activation(
+            settings,
+            str(first_track["id"]),
+        )
+        damaged_checkpoint = _stored_tracking_activation(
+            settings,
+            str(control_track["id"]),
+        )
+        assert _checkpoint_payload(
+            runtime.publication,
+            intact_checkpoint,
+        ) == _checkpoint_payload(runtime.publication, damaged_checkpoint)
 
         authoritative = _stored_tracking_activation(
             settings,
@@ -1902,6 +2039,54 @@ def _expire_current_tracking_attempt(settings: CoreSettings, track_id: str) -> N
         assert expired.rowcount == 1
     finally:
         database.close()
+
+
+def _live_tracking_attempt_timing(
+    settings: CoreSettings,
+    track_id: str,
+) -> dict[str, datetime]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT heartbeat_at, lease_expires_at
+                FROM daily_tracks.session_progression_attempts
+                WHERE track_id = %s AND status = 'running'
+                """,
+                (track_id,),
+            ).fetchone()
+        assert row is not None
+        heartbeat_at = row["heartbeat_at"]
+        lease_expires_at = row["lease_expires_at"]
+        assert isinstance(heartbeat_at, datetime)
+        assert isinstance(lease_expires_at, datetime)
+        return {
+            "heartbeat_at": heartbeat_at,
+            "lease_expires_at": lease_expires_at,
+        }
+    finally:
+        database.close()
+
+
+def _wait_for_tracking_lease_renewal(
+    settings: CoreSettings,
+    track_id: str,
+    *,
+    after_heartbeat: datetime,
+) -> dict[str, datetime]:
+    deadline = monotonic() + 5
+    poll_interval = Event()
+    latest: dict[str, datetime] | None = None
+    while monotonic() < deadline:
+        latest = _live_tracking_attempt_timing(settings, track_id)
+        if latest["heartbeat_at"] > after_heartbeat:
+            return latest
+        poll_interval.wait(timeout=0.02)
+    raise AssertionError(
+        f"DailyTrack lease was not renewed; latest attempt timing was {latest!r}"
+    )
 
 
 def _checkpoint_payload(

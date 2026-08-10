@@ -353,7 +353,22 @@ MIGRATIONS = MigrationPlan(
                     ALTER COLUMN current_strategy_session DROP NOT NULL,
                     ADD COLUMN blocked_progression_id text NULL
                         REFERENCES daily_tracks.session_progressions(id),
-                    DROP CONSTRAINT tracks_lifecycle_state_check,
+                    DROP CONSTRAINT tracks_lifecycle_state_check;
+
+                UPDATE daily_tracks.tracks AS track
+                SET blocked_progression_id = track.blocked_target_release_id,
+                    blocked_target_release_id = NULL
+                WHERE track.status = 'blocked'
+                  AND track.blocked_progression_id IS NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM daily_tracks.session_progressions AS progression
+                      WHERE progression.id = track.blocked_target_release_id
+                        AND progression.track_id = track.id
+                        AND progression.status = 'blocked'
+                  );
+
+                ALTER TABLE daily_tracks.tracks
                     ADD CONSTRAINT tracks_lifecycle_state_check CHECK (
                         (status IN ('active', 'stopped')
                             AND blocked_target_release_id IS NULL
