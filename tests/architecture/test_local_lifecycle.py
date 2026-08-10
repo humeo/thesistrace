@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import os
 import signal
@@ -32,6 +33,8 @@ if arguments[0] == "inspect":
     raise SystemExit(0)
 if arguments[:2] == ["network", "inspect"]:
     print("true")
+    raise SystemExit(0)
+if arguments[:2] == ["image", "tag"]:
     raise SystemExit(0)
 
 project = arguments[arguments.index("--project-name") + 1]
@@ -87,7 +90,20 @@ if "down" in arguments:
     uv = tmp_path / "uv"
     uv.write_text(
         """#!/bin/sh
-trap 'if [ -n "${TEST_SIGNAL_FILE:-}" ]; then printf TERM > "$TEST_SIGNAL_FILE"; fi; exit 143' TERM
+release_pipe=
+cleanup_fake_pytest() {
+  if [ -n "$release_pipe" ]; then
+    rm -f -- "$release_pipe"
+  fi
+}
+terminate_fake_pytest() {
+  cleanup_fake_pytest
+  if [ -n "${TEST_SIGNAL_FILE:-}" ]; then
+    printf TERM > "$TEST_SIGNAL_FILE"
+  fi
+  exit 143
+}
+trap terminate_fake_pytest TERM
 printf 'uv %s db=%s s3=%s bucket=%s\\n' \
   "$*" "$THESISTRACE_DATABASE_URL" "$THESISTRACE_S3_ENDPOINT_URL" \
   "$THESISTRACE_S3_BUCKET" >> "$TEST_COMMAND_LOG"
@@ -100,8 +116,21 @@ for argument in "$@"; do
       ;;
   esac
 done
-sleep "${FAKE_PYTEST_DELAY:-0}"
-exit "${FAKE_PYTEST_STATUS:-0}"
+case " $* " in
+  *" pytest "*)
+    if [ -n "${FAKE_PYTEST_READY_DIR:-}" ] && \
+       [ -z "${THESISTRACE_DATABASE_RESTART_PHASE:-}" ]; then
+      mkdir -p "$FAKE_PYTEST_READY_DIR" "$FAKE_PYTEST_RELEASE_DIR"
+      release_pipe="$FAKE_PYTEST_RELEASE_DIR/$$"
+      mkfifo "$release_pipe"
+      : > "$FAKE_PYTEST_READY_DIR/$$"
+      IFS= read -r _ < "$release_pipe"
+      cleanup_fake_pytest
+    fi
+    exit "${FAKE_PYTEST_STATUS:-0}"
+    ;;
+esac
+exit 0
 """
     )
     uv.chmod(0o755)
@@ -170,7 +199,7 @@ def test_development_reset_rejects_every_noncanonical_project(project_name: str)
     environment = {**os.environ, "THESISTRACE_DEV_PROJECT_NAME": project_name}
 
     completed = subprocess.run(
-        ["mise", "exec", "--", "pnpm", "dev:reset"],
+        [ROOT / "scripts" / "dev-runtime", "reset"],
         cwd=ROOT,
         env=environment,
         capture_output=True,
@@ -202,11 +231,20 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
     assert ".venv" in dockerignore
     assert "node_modules" in dockerignore
     assert "web/node_modules" in dockerignore
+    assert "web/.test-workspace" in dockerignore
+    assert "web/test-results" in dockerignore
+    assert "web/playwright-report" in dockerignore
     assert "node_modules" not in backend
     assert "node_modules" not in web
+    assert backend.index("uv sync --frozen --no-dev --no-install-project") < backend.index(
+        "COPY src ./src"
+    )
+    assert backend.index("COPY src ./src") < backend.rindex("uv sync --frozen --no-dev")
+    assert "--mount=type=cache,target=/root/.cache/uv" in backend
     assert "node:24.14.0-bookworm-slim" in web
     assert "nginx:1.27.5-alpine" in web
     assert "pnpm@11.9.0" in web
+    assert "--mount=type=cache,target=/root/.local/share/pnpm/store" in web
     assert "pnpm --dir web build" in web
     assert "COPY --from=build /app/web/dist" in web
 
@@ -478,9 +516,30 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert completed.returncode == 0, completed.stderr
     run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
     assert not (tmp_path / "runs" / run_id / "canonical-data").exists()
+    metadata = (tmp_path / "runs" / run_id / "run.txt").read_text().splitlines()
+    assert len([line for line in metadata if line.startswith("git_revision=")]) == 1
+    assert len(
+        [
+            line
+            for line in metadata
+            if line in {"git_worktree_dirty=true", "git_worktree_dirty=false"}
+        ]
+    ) == 1
+    for phase in (
+        "integration-infrastructure",
+        "integration-migration",
+        "integration-pytest",
+        "integration-database-restart",
+    ):
+        assert any(
+            line.startswith(f"phase={phase} seconds=") and line.endswith(" status=0")
+            for line in metadata
+        )
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
-    assert "up --detach --build --wait --wait-timeout 300 postgres rustfs migrate" in commands
+    assert "up --detach --wait --wait-timeout 300 postgres rustfs" in commands
+    assert "--build" not in commands
+    assert "uv run thesistrace-migrate" in commands
     assert "uv run pytest -q tests/integration tests/acceptance" in commands
     assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:41001" in commands
     assert "s3=http://127.0.0.1:41002" in commands
@@ -504,13 +563,24 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     )
 
     assert completed.returncode == 0, completed.stderr
+    project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
+    assert commands.count("build migrate web\n") == 1
     assert (
-        "up --detach --build --wait --wait-timeout 300 postgres rustfs migrate\n"
+        f"docker image tag {project_name}-migrate {project_name}-api\n" in commands
+    )
+    assert (
+        f"docker image tag {project_name}-migrate {project_name}-worker\n" in commands
+    )
+    assert (
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs migrate\n"
         in commands
     )
-    assert "up --detach --build --wait --wait-timeout 300 api worker web\n" in commands
+    assert "wait migrate\n" in commands
+    assert "up --detach --no-build --wait --wait-timeout 300 api worker web\n" in commands
+    assert "--build" not in commands
+    assert "uv run thesistrace-migrate" not in commands
     assert "bun run --cwd web test:e2e origin=http://127.0.0.1:41004" in commands
     assert "thesistrace-api" not in commands
     assert "thesistrace-worker" not in commands
@@ -518,7 +588,7 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert "down --volumes --remove-orphans" in commands
 
 
-def test_complete_gate_delegates_to_canonical_constituents_in_cost_order() -> None:
+def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate() -> None:
     package = json.loads((ROOT / "package.json").read_text())
     scripts = package["scripts"]
 
@@ -527,6 +597,11 @@ def test_complete_gate_delegates_to_canonical_constituents_in_cost_order() -> No
         "pnpm test",
         "pnpm test:integration",
         "pnpm test:e2e",
+    ]
+    assert scripts["check:release"] == "pnpm check && pnpm test:image-smoke"
+    assert scripts["check:release"].split(" && ") == [
+        "pnpm check",
+        "pnpm test:image-smoke",
     ]
     assert scripts["test:integration"] == "./scripts/test-runtime integration"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
@@ -548,6 +623,40 @@ def test_production_image_smoke_runs_entirely_inside_an_internal_network() -> No
     assert 'test "$network_internal" = true' in test_runtime
     assert 'expected["attempt_count"] == 1' in smoke
     assert "read_result_bundle" in smoke
+
+
+def test_production_image_smoke_builds_once_and_reuses_the_images(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
+    commands = command_log.read_text()
+    assert commands.count("build migrate web\n") == 1
+    assert (
+        f"docker image tag {project_name}-migrate {project_name}-api\n" in commands
+    )
+    assert (
+        f"docker image tag {project_name}-migrate {project_name}-worker\n" in commands
+    )
+    assert (
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs migrate\n"
+        in commands
+    )
+    assert "wait migrate\n" in commands
+    assert "up --detach --no-build --wait --wait-timeout 300 api worker web\n" in commands
+    assert "up --detach --no-build --wait --wait-timeout 120 api worker\n" in commands
+    assert "--build" not in commands
 
 
 def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
@@ -729,7 +838,10 @@ def test_test_runtime_forwards_termination_before_evidence_and_cleanup(
 ) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
     signal_file = tmp_path / "pytest-signal"
-    environment["FAKE_PYTEST_DELAY"] = "30"
+    ready_dir = tmp_path / "pytest-ready"
+    release_dir = tmp_path / "pytest-release"
+    environment["FAKE_PYTEST_READY_DIR"] = str(ready_dir)
+    environment["FAKE_PYTEST_RELEASE_DIR"] = str(release_dir)
     environment["TEST_SIGNAL_FILE"] = str(signal_file)
     process = subprocess.Popen(
         [ROOT / "scripts" / "test-runtime", "integration"],
@@ -739,15 +851,16 @@ def test_test_runtime_forwards_termination_before_evidence_and_cleanup(
         stderr=subprocess.PIPE,
         text=True,
     )
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        if command_log.exists() and "uv run pytest" in command_log.read_text():
-            break
-        time.sleep(0.05)
-    else:
+    try:
+        _wait_for_fake_pytest_workers(
+            ready_dir,
+            count=1,
+            command_log=command_log,
+        )
+    except BaseException:
         process.kill()
         process.communicate()
-        pytest.fail("the fake Pytest child did not start")
+        raise
 
     process.terminate()
     process.communicate(timeout=10)
@@ -763,7 +876,10 @@ def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
     tmp_path: Path,
 ) -> None:
     command_log, environment = _fake_test_runtime_commands(tmp_path)
-    environment["FAKE_PYTEST_DELAY"] = "0.3"
+    ready_dir = tmp_path / "pytest-ready"
+    release_dir = tmp_path / "pytest-release"
+    environment["FAKE_PYTEST_READY_DIR"] = str(ready_dir)
+    environment["FAKE_PYTEST_RELEASE_DIR"] = str(release_dir)
     processes = [
         subprocess.Popen(
             [ROOT / "scripts" / "test-runtime", "integration"],
@@ -776,7 +892,24 @@ def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
         for _ in range(2)
     ]
 
-    results = [process.communicate(timeout=10) for process in processes]
+    try:
+        worker_pids = _wait_for_fake_pytest_workers(
+            ready_dir,
+            count=2,
+            command_log=command_log,
+        )
+        assert all(process.poll() is None for process in processes)
+        _release_fake_pytest_workers(
+            release_dir,
+            worker_pids,
+            command_log=command_log,
+        )
+        results = [process.communicate(timeout=10) for process in processes]
+    except BaseException:
+        for process in processes:
+            process.kill()
+            process.communicate()
+        raise
     assert [process.returncode for process in processes] == [0, 0], results
 
     run_directories = sorted((tmp_path / "runs").iterdir())
@@ -797,6 +930,66 @@ def test_two_concurrent_test_runs_have_disjoint_resources_and_state(
         assert f"resources {project}_default {project}_postgres-data" in commands
         assert f"bucket={project}" in commands
     assert "thesistrace-dev" not in commands
+
+
+def _wait_for_fake_pytest_workers(
+    ready_dir: Path,
+    *,
+    count: int,
+    command_log: Path,
+    timeout: float = 10,
+) -> list[int]:
+    deadline = time.monotonic() + timeout
+    observed: list[Path] = []
+    while time.monotonic() < deadline:
+        observed = sorted(ready_dir.iterdir()) if ready_dir.exists() else []
+        if len(observed) == count:
+            return [int(path.name) for path in observed]
+        time.sleep(0.01)
+    commands = command_log.read_text() if command_log.exists() else "<no command log>"
+    pytest.fail(
+        f"expected {count} blocked fake Pytest workers; "
+        f"observed={[path.name for path in observed]!r}; commands={commands!r}"
+    )
+
+
+def _release_fake_pytest_workers(
+    release_dir: Path,
+    worker_pids: list[int],
+    *,
+    command_log: Path,
+    timeout: float = 10,
+) -> None:
+    for worker_pid in worker_pids:
+        release_pipe = release_dir / str(worker_pid)
+        deadline = time.monotonic() + timeout
+        last_error: OSError | None = None
+        while time.monotonic() < deadline:
+            try:
+                descriptor = os.open(release_pipe, os.O_WRONLY | os.O_NONBLOCK)
+            except OSError as error:
+                if error.errno not in {errno.ENOENT, errno.ENXIO}:
+                    raise
+                last_error = error
+                time.sleep(0.01)
+                continue
+            try:
+                payload = b"continue\n"
+                written = os.write(descriptor, payload)
+                if written != len(payload):
+                    pytest.fail(
+                        f"partial fake Pytest release for worker {worker_pid}: "
+                        f"wrote {written} of {len(payload)} bytes"
+                    )
+                break
+            finally:
+                os.close(descriptor)
+        else:
+            commands = command_log.read_text() if command_log.exists() else "<no command log>"
+            pytest.fail(
+                f"timed out releasing fake Pytest worker {worker_pid}; "
+                f"last_error={last_error!r}; commands={commands!r}"
+            )
 
 
 def test_active_documentation_exposes_the_complete_mise_pnpm_lifecycle() -> None:

@@ -7,14 +7,14 @@ from thesistrace.research_kernel.strategy import equal_weight_benchmark_return
 EXPECTED_CHECKSUMS = {
     "alpha": "f01531eccc3d83f1965aaabf807515fc4905288b678be90e16e96c571533bcd9",
     "labels": {
-        "1": "e1dc8426e781721a6edf2c51183efecc9e2fa58442aca6d5365b871f2a7f3a76",
-        "5": "b6d1365bd73eca934d14d1e522c9010a2a9113aa51de78c9d038bc578c358f2f",
-        "20": "181b9c2f9846ac4f5c4f6c07dea4381203992b596f56c3e8a443f7dad802b5ab",
+        "1": "ecdafbd877477678e9f8109f2ebedc02d652e83b31fe67a183b2cd71fbe23703",
+        "5": "779e6534d8c197eeb19e3accd1e4013f357f71e577a3faabdc8f46f642ed0ea2",
+        "20": "0a26cfe3b21ccaaf3562f36278ab2e0538dcf1fe3f3a5ecfed22196b863f3df7",
     },
     "factor": {
-        "1": "df83b228089bff71f4ca11ff17ed8c3bcef1bc5aac62f6b9bc79924328fac460",
-        "5": "454d36118c0e2043ccc9fedaa583a31baeb44f7efe67f32649698352c63ed60a",
-        "20": "e39a9104975254cabbfc1836a6e2bd4803add54a0ad07a83528ccfe396ede443",
+        "1": "4d4fdb43398436b3ac1b2d9be92f8ef7f65b0e4a4da21b995898da8f9d9a74c6",
+        "5": "3a8858ed6144f82cc9317910ec4c8133b9dd441bec4c5d1ceacae2b5197da505",
+        "20": "74809f05078de529c6b65d5337572000a70f006f02462916aeaf007f507ec457",
     },
     "strategy": "086d662a6db387761ee55a361a164edfc6e13321c8ac806d2c2b63dc80e6cc0d",
 }
@@ -50,9 +50,9 @@ def test_accepted_quantitative_boundaries_are_frozen(
         horizon: labels["horizons"][horizon]["sessions"][-1]["unavailable"]
         for horizon in ("1", "5", "20")
     } == {
-        "1": {"right_censored_by_release_end": 35},
-        "5": {"right_censored_by_release_end": 35},
-        "20": {"right_censored_by_release_end": 35},
+        "1": {"right_censored_by_research_period_end": 35},
+        "5": {"right_censored_by_research_period_end": 35},
+        "20": {"right_censored_by_research_period_end": 35},
     }
 
     assert {

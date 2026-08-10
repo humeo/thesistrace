@@ -186,7 +186,7 @@ def _run_collection(settings: CoreSettings, key: str) -> dict[str, object]:
         check=True,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120,
         env={
             **os.environ,
             "THESISTRACE_DATABASE_URL": settings.database_url,

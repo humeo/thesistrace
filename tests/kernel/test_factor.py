@@ -52,7 +52,7 @@ def test_forward_labels_use_next_open_timing_and_explicit_period_limits() -> Non
 
     last = labels["horizons"]["20"]["sessions"][-1]
     assert last["samples"] == []
-    assert last["unavailable"]["right_censored_by_release_end"] == len(last["alpha_values"])
+    assert last["unavailable"]["right_censored_by_research_period_end"] == len(last["alpha_values"])
 
 
 def test_factor_day_handles_small_samples_constants_ties_and_missing() -> None:

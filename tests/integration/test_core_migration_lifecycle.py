@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import sys
 
 import pytest
 from fastapi.testclient import TestClient
@@ -27,7 +28,7 @@ def test_explicit_migration_is_idempotent_and_required_before_startup() -> None:
             pass
 
     missing_worker = subprocess.run(
-        ["uv", "run", "thesistrace-worker", "--once"],
+        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
         capture_output=True,
         check=False,
         text=True,
@@ -45,7 +46,7 @@ def test_explicit_migration_is_idempotent_and_required_before_startup() -> None:
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/data").status_code == 200
     worker = subprocess.run(
-        ["uv", "run", "thesistrace-worker", "--once"],
+        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
         capture_output=True,
         check=False,
         text=True,
@@ -56,7 +57,7 @@ def test_explicit_migration_is_idempotent_and_required_before_startup() -> None:
 
 def _run_migration_command() -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["uv", "run", "thesistrace-migrate"],
+        [sys.executable, "-m", "thesistrace.entrypoints.migrate"],
         capture_output=True,
         check=False,
         text=True,

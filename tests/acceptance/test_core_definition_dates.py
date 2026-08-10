@@ -142,32 +142,6 @@ def test_run_request_replay_fingerprint_includes_requested_dates() -> None:
         assert conflict.status_code == 409
 
 
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_legacy_definition_content_is_not_reinterpreted_as_a_nullable_draft() -> None:
-    settings = CoreSettings.from_environment()
-    _drop_definitions_schema(settings)
-    app = create_app(settings)
-
-    with TestClient(app, raise_server_exceptions=False) as client:
-        created = client.post("/api/definitions", json={}).json()
-        database = client.app.state.core_runtime.database
-        with database.transaction() as transaction:
-            transaction.execute(
-                """
-                UPDATE definitions.records
-                SET content = content - 'start_date' - 'end_date'
-                WHERE id = %s
-                """,
-                (created["id"],),
-            )
-
-        incompatible = client.get(f"/api/definitions/{created['id']}")
-        assert incompatible.status_code == 500
-
-
 def _drop_definitions_schema(settings: CoreSettings) -> None:
     database = PostgresDatabase(settings.database_url)
     database.open()

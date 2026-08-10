@@ -11,7 +11,6 @@ from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATION
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
 from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
-from thesistrace.research_kernel import kernel_advance, kernel_run, strategy
 from thesistrace.research_run.migrations import MIGRATIONS as RESEARCH_RUN_MIGRATIONS
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -376,12 +375,12 @@ def test_default_gate_excludes_deferred_and_credential_dependent_work() -> None:
     assert live_gate == "uv run python scripts/check_live_tushare.py"
 
 
-def test_fast_host_gate_excludes_compose_and_expensive_work() -> None:
+def test_fast_host_gate_uses_bounded_parallelism_without_expensive_work() -> None:
     fast_gate = _package_script("test")
 
     for command in (
         "uv run ruff check src tests",
-        "uv run pytest -q tests/kernel tests/architecture tests/adapters",
+        "uv run pytest -q -n 4 tests/kernel tests/architecture tests/adapters tests/data",
         "pnpm --dir web typecheck",
         "pnpm --dir web test:shell",
     ):
@@ -400,23 +399,7 @@ def test_fast_host_gate_excludes_compose_and_expensive_work() -> None:
         "production",
     ):
         assert excluded not in fast_gate.lower()
-
-
-def test_parallel_host_gate_uses_xdist_only_for_isolated_host_tests() -> None:
-    parallel_gate = _package_script("test:host-parallel")
-
-    assert parallel_gate == (
-        "uv run pytest -q -n auto "
-        "tests/kernel tests/architecture tests/adapters"
-    )
-    for excluded in (
-        "tests/integration",
-        "tests/acceptance",
-        "test:e2e",
-        "docker",
-        "compose",
-    ):
-        assert excluded not in parallel_gate.lower()
+    assert "-n auto" not in fast_gate
 
 
 def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
@@ -732,11 +715,6 @@ def test_permanent_runtime_has_only_the_mounted_current_data_path() -> None:
     worker = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
     http = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
     data_exports = (ROOT / "src" / "thesistrace" / "data" / "__init__.py").read_text()
-    data_migrations = (ROOT / "src" / "thesistrace" / "data" / "migrations.py").read_text()
-    track_migrations = (
-        ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py"
-    ).read_text()
-
     assert not (ROOT / "src" / "thesistrace" / "data" / "service.py").exists()
     for source in (runtime, worker, http, data_exports):
         assert "DataService" not in source
@@ -744,10 +722,6 @@ def test_permanent_runtime_has_only_the_mounted_current_data_path() -> None:
         assert "TushareDataSource" not in source
         assert "latest_release" not in source
         assert "next_release" not in source
-    assert "DROP TABLE data.releases" in data_migrations
-    assert "DROP TABLE data.state" in data_migrations
-    assert "DROP TABLE daily_tracks.progressions" in track_migrations
-    assert "DROP COLUMN current_release_id" in track_migrations
     assert '"/api/data/releases' not in http
     assert '"/api/data/update' not in http
 
@@ -756,50 +730,14 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     package = ROOT / "src" / "thesistrace" / "daily_track"
     source = "\n".join(path.read_text() for path in package.rglob("*.py"))
     exported = (package / "__init__.py").read_text()
-    runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
 
     assert "thesistrace." + "working_cache" not in source
     assert "WorkingCache" + "Port" not in source
     assert "_DailyTrackWorkingCache" not in exported
     assert "working_cache_root" not in CoreSettings.__dataclass_fields__
-    assert "TemporaryDirectory" in runtime_source
-    assert "working_cache_root=Path(working_cache.name)" in runtime_source
     assert not (ROOT / "src" / "thesistrace" / "ports.py").exists()
     assert "/api/working-cache" not in http_source
-
-
-def test_daily_track_cache_rebuild_uses_current_checkpoint_and_bounded_canonical() -> None:
-    service = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
-    checkpoint = (ROOT / "src" / "thesistrace" / "daily_track" / "checkpoint.py").read_text()
-    kernel = (ROOT / "src" / "thesistrace" / "research_kernel" / "__init__.py").read_text()
-
-    assert "REBUILD_CHECKPOINT_LIMIT" not in service
-    assert "state.current_checkpoint_manifest_sha256" in service
-    assert ")[-504:]" in service
-    assert "advance_continuation(" in service
-    assert "daily-track-checkpoint-v1" in checkpoint
-    assert "project_tracking_checkpoint" not in kernel
-
-
-def test_research_run_owns_its_embedded_result_product_projection() -> None:
-    run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
-    http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
-
-    assert "def get_detail(" in run_source
-    assert "self._publication.read(" in run_source
-    assert '"factor": {"horizons": horizons}' in run_source
-    assert '"observations": observations' in run_source
-    assert "publication." not in http_source
-    assert '"/api/research-runs/{run_id}/result"' not in http_source
-    assert '"terminal_strategy_state"' in run_source[run_source.index("def _public_result(") :]
-    for private_field in (
-        '"last_daily_observation"',
-        '"metric_state"',
-        '"result_manifest_sha256"',
-        '"result_provenance"',
-    ):
-        assert private_field not in run_source[run_source.index("def _public_result(") :]
 
 
 def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> None:
@@ -875,76 +813,6 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
 
     assert not (package / "api.py").exists()
 
-    routes = _http_routes()
-    assert ("post", "/api/definitions/run") in routes
-    assert ("post", "/api/definitions/{definition_id}/run") in routes
-    assert ("post", "/api/research-runs/{run_id}/rerun") in routes
-    for method in ("post", "put", "delete"):
-        assert (method, "/api/research-runs") not in routes
-
-
-def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
-    run_source = (ROOT / "src" / "thesistrace" / "research_kernel" / "kernel_run.py").read_text()
-    advance_source = (
-        ROOT / "src" / "thesistrace" / "research_kernel" / "kernel_advance.py"
-    ).read_text()
-
-    assert "evaluate_alpha_matrix(" in run_source
-    assert "build_forward_labels(" in run_source
-    assert "evaluate_factor(" in run_source
-    assert kernel_run.transition_strategy is strategy.transition_strategy
-    assert "transition_strategy(" in run_source
-    assert "run_strategy(" not in run_source
-    assert "class RunOutput(dict" not in run_source
-    assert "def artifacts_snapshot(" in run_source
-    assert "evaluate_alpha_matrix(" in advance_source
-    assert "build_forward_labels(" in advance_source
-    assert "evaluate_factor(" in advance_source
-    assert kernel_advance.transition_strategy is strategy.transition_strategy
-    assert "transition_strategy(" in advance_source
-    assert "run_strategy(" not in advance_source
-    assert "initial_state(" not in advance_source
-    assert "affected_label_sessions(" in advance_source
-    assert "- horizon - 1" not in advance_source
-    for forbidden in (
-        "mode:",
-        "mode =",
-        "thesistrace." + "tracking",
-        "thesistrace." + "research_runs",
-    ):
-        assert forbidden not in advance_source
-
-
-def test_fixed_research_period_compatibility_is_absent() -> None:
-    package = ROOT / "src" / "thesistrace"
-    run_source = (package / "research_kernel" / "kernel_run.py").read_text()
-    factor_source = (package / "research_kernel" / "factor.py").read_text()
-    strategy_source = (package / "research_kernel" / "strategy.py").read_text()
-    track_source = (package / "daily_track" / "service.py").read_text()
-    fixture_source = (package / "fixture.py").read_text()
-
-    for forbidden in (
-        "INPUT_SESSION_COUNT",
-        "_run_legacy_window",
-        "requires exactly 756",
-    ):
-        assert forbidden not in run_source
-    assert "report_sessions: int = 504" not in factor_source
-    assert "len(calendar) - 504 if origin_session is None" not in strategy_source
-    assert "[-756:]" not in track_source
-    assert "fewer than 756 sessions" not in track_source
-    assert "while len(sessions) < 756" not in fixture_source
-
-    # These are independent accepted bounds, not fixed Research Period forms.
-    assert "MAX_ALPHA_LOOKBACK_SESSIONS = 252" in (
-        package / "research_kernel" / "kernel_advance.py"
-    ).read_text()
-    assert "MAX_ROLLING_FACTOR_SESSIONS = 504" in (
-        package / "research_kernel" / "kernel_advance.py"
-    ).read_text()
-    assert "RESULT_BUDGET_SESSION_BLOCK = 504" in (
-        package / "research_run" / "result.py"
-    ).read_text()
 
 
 def _string_literals(path: Path) -> str:

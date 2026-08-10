@@ -567,7 +567,7 @@ change resource shapes, actions, or URLs.
 
 ## Verification
 
-The default Core gate, `mise exec -- pnpm check`, has three seams in increasing
+The standard Core gate, `mise exec -- pnpm check`, has three seams in increasing
 cost order:
 
 1. `pnpm test` keeps lint, pure Python tests, TypeScript checking, and the Web
@@ -577,17 +577,20 @@ cost order:
    idempotency, claims, retries, fencing, publication failure, and restart
    recovery.
 3. `pnpm test:e2e` creates the complete disposable Compose topology and drives
-   it from host Playwright through Data Update, Save, Run, Result, Rerun,
-   DailyTrack start, later Data Update, automatic advance, blocked Retry, and
-   Stop.
+   it from host Playwright through the read-only Data Overview, Definition
+   Save, one short dated Run, Result rendering, DailyTrack start, and automatic
+   catch-up on prepared current data.
 
-The complete gate also proves that an invalid Run saves the Definition without
-creating a ResearchRun; Rerun keeps the original input and Release; Cancel
-rejects late results; and a succeeded Result Bundle stays within one MiB.
+The standard gate also proves that an invalid Run saves the Definition without
+creating a ResearchRun; Rerun keeps the original research question while a new
+Attempt selects the then-current Head; Cancel rejects late results; and Result
+publication enforces its session-scaled byte budget atomically.
 
 `pnpm check` must contain only Core tests and the Core browser flow. Live
 Tushare verification is an explicit separate gate. Hosted, login, tenancy,
 deployment, and archived Hosted V2 tests are absent from the default gate.
+`pnpm check:release` runs that standard gate once and then adds the Production
+Image Smoke; it is the authoritative all-local-tests release gate.
 Lifecycle operation and evidence handling are documented in the
 [local lifecycle guide](../runbook/local-lifecycle.md).
 

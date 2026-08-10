@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from thesistrace.adapters.fixture_data import FixtureDataSource
@@ -20,14 +18,8 @@ def test_fixture_implements_only_the_canonical_collection_contract(
         batch.canonical["research_calendar"][-1],
     )
     evidence = repr(batch).lower()
-    assert "release_id" not in evidence
     assert "manifest" not in evidence
     assert "bucket" not in evidence
-    source = (
-        Path(__file__).resolve().parents[2] / "src" / "thesistrace" / "adapters" / "fixture_data.py"
-    ).read_text()
-    for forbidden in ("release", "postgres", "publication", "s3", "research_run", "daily_track"):
-        assert forbidden not in source.lower()
 
 
 def test_fixture_collects_direct_and_wider_incremental_source_gaps(

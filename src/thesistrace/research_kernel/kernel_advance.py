@@ -49,7 +49,7 @@ class AdvanceInput:
         self,
         *,
         prior_state: KernelState,
-        target_canonical_release: dict[str, object],
+        target_canonical_data: dict[str, object],
         appended_sessions: list[str],
         continuation: Mapping[str, object],
         calculation_scope: Literal["research_period", "forward_tracking"],
@@ -74,7 +74,7 @@ class AdvanceInput:
         object.__setattr__(
             self,
             "_target_canonical_json",
-            canonical_json_bytes(target_canonical_release),
+            canonical_json_bytes(target_canonical_data),
         )
         object.__setattr__(self, "_appended_sessions", tuple(appended_sessions))
         object.__setattr__(
@@ -114,7 +114,7 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     prior_output = _with_continuation(prior_output, continuation)
     prior_matrix = _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix")
     prior_factor = _mapping(prior_output.get("factor_evaluation"), "prior Factor")
-    canonical = _accept_target_canonical_release(
+    canonical = _accept_target_canonical_data(
         prior.canonical_snapshot(),
         advance_input.target_canonical_snapshot(),
         advance_input.appended_sessions_snapshot(),
@@ -540,7 +540,7 @@ def _advance_factor(
     return {"horizons": horizons}
 
 
-def _accept_target_canonical_release(
+def _accept_target_canonical_data(
     prior: dict[str, object],
     target: dict[str, object],
     appended_sessions: list[str],

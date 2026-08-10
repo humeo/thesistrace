@@ -8,7 +8,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import LiteralString
+from typing import LiteralString, cast
 
 import pytest
 from botocore.client import BaseClient
@@ -186,12 +186,34 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
 
 @pytest.mark.parametrize(
     "unsafe_kind",
-    ("filesystem-root", "broad-root", "workspace", "unapproved-name", "symlink"),
+    ("filesystem-root", "broad-root", "workspace", "unapproved-name"),
 )
-def test_development_reset_rejects_unsafe_mounts_without_a_plan(
-    core_settings: CoreSettings,
+def test_development_reset_rejects_unsafe_mount_before_opening_dependencies(
     tmp_path: Path,
     unsafe_kind: str,
+) -> None:
+    if unsafe_kind == "filesystem-root":
+        mount = Path("/")
+    elif unsafe_kind == "broad-root":
+        mount = Path("/private/tmp")
+    elif unsafe_kind == "workspace":
+        mount = Path(__file__).resolve().parents[2]
+    else:
+        mount = tmp_path / "unrelated-tree"
+        mount.mkdir()
+
+    with pytest.raises(DevelopmentResetError, match="RESET_MOUNT_UNSAFE"):
+        DevelopmentReset(
+            cast(PostgresDatabase, None),
+            cast(BaseClient, None),
+            bucket="unused",
+            mount_root=mount,
+        )
+
+
+def test_development_reset_rejects_symlinked_mount_content_without_a_plan(
+    core_settings: CoreSettings,
+    tmp_path: Path,
 ) -> None:
     _drop_product_schemas(core_settings)
     _migrate_reset_schema(core_settings.database_url)
@@ -200,19 +222,9 @@ def test_development_reset_rejects_unsafe_mounts_without_a_plan(
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "preserved.txt").write_text("safe")
-    if unsafe_kind == "filesystem-root":
-        mount = Path("/")
-    elif unsafe_kind == "broad-root":
-        mount = Path("/private/tmp")
-    elif unsafe_kind == "workspace":
-        mount = Path(__file__).resolve().parents[2]
-    elif unsafe_kind == "unapproved-name":
-        mount = tmp_path / "unrelated-tree"
-        mount.mkdir()
-    else:
-        mount = tmp_path / "canonical-data"
-        mount.mkdir()
-        (mount / "escape").symlink_to(outside, target_is_directory=True)
+    mount = tmp_path / "canonical-data"
+    mount.mkdir()
+    (mount / "escape").symlink_to(outside, target_is_directory=True)
     try:
         completed = _run_reset(
             environment={
@@ -221,7 +233,7 @@ def test_development_reset_rejects_unsafe_mounts_without_a_plan(
             },
             environment_name="development",
             confirmation="reset:development",
-            key=f"unsafe-{unsafe_kind}",
+            key="unsafe-symlink",
         )
 
         assert completed.returncode == 2

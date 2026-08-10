@@ -257,7 +257,7 @@ def test_explicit_period_advance_matches_batch_across_irregular_chunks(
         actual = advance(
             AdvanceInput(
                 prior_state=actual,
-                target_canonical_release=slice_canonical_sessions(
+                target_canonical_data=slice_canonical_sessions(
                     complete,
                     list(SESSIONS[: SESSIONS.index(boundary) + 1]),
                 ),
@@ -301,7 +301,7 @@ def test_explicit_period_advance_rebuilds_the_same_bounded_continuation() -> Non
     actual = advance(
         AdvanceInput(
             prior_state=seed,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(SESSIONS[3:]),
             continuation=continuation_snapshot(seed),
             calculation_scope="research_period",
@@ -362,7 +362,7 @@ def test_bounded_continuation_preserves_full_explicit_period_results(
         actual = advance(
             AdvanceInput(
                 prior_state=compact_prior,
-                target_canonical_release=slice_canonical_sessions(
+                target_canonical_data=slice_canonical_sessions(
                     complete,
                     sessions[:cursor],
                 ),

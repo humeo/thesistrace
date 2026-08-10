@@ -1203,7 +1203,7 @@ class DailyTrackService:
         state = self._advance_kernel(
             AdvanceInput(
                 prior_state=prior,
-                target_canonical_release=claim.canonical,
+                target_canonical_data=claim.canonical,
                 appended_sessions=list(claim.target_sessions),
                 continuation=continuation,
                 calculation_scope="forward_tracking",

@@ -42,3 +42,9 @@ Run the current backend, frontend, and browser acceptance checks with:
 ```sh
 mise exec -- pnpm check
 ```
+
+Before a release, include the final Production Image Smoke with:
+
+```sh
+mise exec -- pnpm check:release
+```

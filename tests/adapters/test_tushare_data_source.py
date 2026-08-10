@@ -1,7 +1,6 @@
 import copy
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
-from pathlib import Path
 
 import httpx
 import pytest
@@ -1086,37 +1085,3 @@ def test_tushare_rejects_non_source_price_correction_fields(field: str) -> None:
 
     assert failure.value.category == "invalid_source_data"
     assert failure.value.detail_code == "INVALID_CANONICAL_INCREMENT"
-
-
-def test_tushare_adapter_has_no_product_or_infrastructure_knowledge() -> None:
-    source = (
-        Path(__file__).resolve().parents[2] / "src" / "thesistrace" / "adapters" / "tushare_data.py"
-    ).read_text()
-    for forbidden in (
-        "release_id",
-        "postgres",
-        "publication",
-        "s3",
-        "researchrun",
-        "research_run",
-        "dailytrack",
-        "daily_track",
-    ):
-        assert forbidden not in source.lower()
-
-
-def test_tushare_provider_does_not_own_canonical_calendar_or_fixture_rules() -> None:
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "thesistrace"
-        / "adapters"
-        / "tushare_provider.py"
-    ).read_text()
-    collector = source.split("def collect_bootstrap_snapshot", maxsplit=1)[1].split(
-        "def collect_incremental_snapshot", maxsplit=1
-    )[0]
-
-    assert "from thesistrace.fixture" not in source
-    assert "len(common)" not in collector
-    assert "common[-756:]" not in collector

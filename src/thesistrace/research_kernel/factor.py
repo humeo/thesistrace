@@ -57,7 +57,7 @@ def build_forward_labels(
             for alpha in alpha_values:
                 instrument_id = str(alpha["instrument_id"])
                 if exit_index >= len(calendar):
-                    reason = "right_censored_by_release_end"
+                    reason = "right_censored_by_research_period_end"
                     unavailable[reason] += 1
                     resolutions.append(
                         {

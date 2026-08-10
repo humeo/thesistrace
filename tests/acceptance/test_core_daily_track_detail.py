@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import sys
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -17,7 +19,6 @@ from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.fixture import build_minimal_canonical_fixture
-from thesistrace.research_kernel import RunInput, run
 
 
 @pytest.mark.skipif(
@@ -72,9 +73,8 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         )
         first_advance = _run_worker_once(settings)
         assert first_advance.returncode == 0, first_advance.stdout + first_advance.stderr
-        assert client.get(f"/api/daily-tracks/{track_id}").json()["strategy_session"] == (
-            sessions[302]
-        )
+        first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert first_detail["strategy_session"] == sessions[302]
 
         _publish_head(
             settings,
@@ -96,25 +96,30 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             "signal_session_count"
         ] == 504
 
-    canonical = _canonical(sessions)
-    reference = run(
-        _kernel_input(
-            canonical,
-            start_session=sessions[0],
-            end_session=sessions[-1],
-        )
-    ).artifacts_snapshot()["strategy_backtest"]
+    # One share lot is bought on the second session at a constant CNY 10 open.
+    # The hand-calculated oracle is independent of the batch Kernel and proves
+    # that metrics still start at the Tracking Origin, before the retained window.
     actual_metrics = detail["strategy"]["summary"]["metrics"]
-    for name in (
-        "net_cumulative_return",
-        "benchmark_cumulative_return",
-        "annualized_excess_return",
-        "sharpe",
-    ):
-        assert actual_metrics[name] == reference["metrics"][name]
-    assert actual_metrics["transaction_costs"]["cumulative_amount"] == reference[
-        "metrics"
-    ]["transaction_costs"]["cumulative_amount"]
+    initial_cash = Decimal("10000000")
+    notional = Decimal(999_600) * Decimal(10)
+    expected_cost = notional * (Decimal("0.0003") + Decimal("0.00001"))
+    expected_wealth = (initial_cash - expected_cost) / initial_cash
+    return_intervals = len(sessions) - 1
+    expected_net_return = float(expected_wealth - 1)
+    expected_annualized_return = float(expected_wealth) ** (
+        252 / return_intervals
+    ) - 1
+
+    assert actual_metrics["transaction_costs"]["cumulative_amount"] == float(
+        expected_cost
+    )
+    assert actual_metrics["net_cumulative_return"] == expected_net_return
+    assert actual_metrics["benchmark_cumulative_return"] == 0.0
+    assert actual_metrics["annualized_excess_return"] == expected_annualized_return
+    assert actual_metrics["sharpe"] == pytest.approx(
+        -math.sqrt(252 / return_intervals),
+        rel=1e-12,
+    )
 
 
 def _publish_head(
@@ -171,30 +176,6 @@ def _canonical(sessions: tuple[str, ...]) -> dict[str, object]:
             for name in ("top300", "top1000", "top2000", "top3000")
         },
     }
-
-
-def _kernel_input(
-    canonical: dict[str, object],
-    *,
-    start_session: str,
-    end_session: str,
-) -> RunInput:
-    return RunInput(
-        canonical_data=canonical,
-        alpha_expression={"field_id": "price.close.adjusted"},
-        field_bindings={"price.close.adjusted": "close_adj"},
-        universe="top300",
-        neutralization="none",
-        holdings_count=1,
-        rebalance_interval=1,
-        initial_cash_cny="10000000",
-        commission_rate_all_in="0.0003",
-        commission_min_cny="5",
-        stamp_duty_sell_rate="0.0005",
-        transfer_fee_rate="0.00001",
-        research_start_session=start_session,
-        research_end_session=end_session,
-    )
 
 
 def _run_command(

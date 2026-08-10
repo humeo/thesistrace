@@ -45,7 +45,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     prior_output = prior.output_snapshot()
     advance_input = AdvanceInput(
         prior_state=prior,
-        target_canonical_release=complete,
+        target_canonical_data=complete,
         appended_sessions=list(appended["research_calendar"]),
         continuation=continuation_snapshot(prior),
         calculation_scope="research_period",
@@ -64,17 +64,6 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     assert result.boundary_session == complete["research_calendar"][-1]
     assert prior.output_snapshot() == prior_output
     assert prior.session_count == len(canonical["research_calendar"])
-    assert not {
-        "run_id",
-        "release_id",
-        "request_id",
-        "transaction",
-        "object_key",
-        "workspace_id",
-        "mode",
-    } & set(AdvanceInput.__dataclass_fields__)
-    for field_name in AdvanceInput.__dataclass_fields__:
-        assert not isinstance(getattr(advance_input, field_name), (dict, list, set))
     assert [item["session"] for item in output["alpha_matrix"]["sessions"]] == (
         expected_sessions
     )
@@ -110,7 +99,7 @@ def test_kernel_advance_rejects_static_contract_replacement(
         advance(
             AdvanceInput(
                 prior_state=prior,
-                target_canonical_release=complete,
+                target_canonical_data=complete,
                 appended_sessions=list(appended["research_calendar"]),
                 continuation=continuation_snapshot(prior),
                 calculation_scope="research_period",
@@ -134,7 +123,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     ):
         AdvanceInput(
             prior_state=prior,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="forward_tracking",
@@ -142,7 +131,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     expected = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -180,7 +169,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     actual = advance(
         AdvanceInput(
             prior_state=compact_prior,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation,
             calculation_scope="research_period",
@@ -204,7 +193,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     with pytest.raises(TypeError, match="continuation"):
         AdvanceInput(
             prior_state=compact_prior,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             calculation_scope="research_period",
         )
@@ -258,7 +247,7 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions(
     ):
         AdvanceInput(
             prior_state=seed,
-            target_canonical_release=target_canonical,
+            target_canonical_data=target_canonical,
             appended_sessions=calendar[21:],
             continuation=continuation_snapshot(seed),
             calculation_scope="research_period",
@@ -267,7 +256,7 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions(
     advanced = advance(
         AdvanceInput(
             prior_state=seed,
-            target_canonical_release=target_canonical,
+            target_canonical_data=target_canonical,
             appended_sessions=calendar[21:],
             continuation=continuation_snapshot(seed),
             calculation_scope="forward_tracking",
@@ -293,7 +282,7 @@ def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
     expected = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -337,7 +326,7 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
     uncorrected_ordinary = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_release=uncorrected,
+            target_canonical_data=uncorrected,
             appended_sessions=appended_sessions,
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -346,7 +335,7 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
     ordinary = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_release=corrected,
+            target_canonical_data=corrected,
             appended_sessions=appended_sessions,
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -404,7 +393,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     advanced = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -449,7 +438,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     expected = advance(
         AdvanceInput(
             prior_state=advanced,
-            target_canonical_release=complete_next,
+            target_canonical_data=complete_next,
             appended_sessions=list(appended_next["research_calendar"]),
             continuation=continuation_snapshot(advanced),
             calculation_scope="research_period",
@@ -458,7 +447,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     actual = advance(
         AdvanceInput(
             prior_state=restored,
-            target_canonical_release=complete_next,
+            target_canonical_data=complete_next,
             appended_sessions=list(appended_next["research_calendar"]),
             continuation=continuation_snapshot(advanced),
             calculation_scope="forward_tracking",
@@ -505,7 +494,7 @@ def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state
     result = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -537,7 +526,7 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
     advanced = advance(
         AdvanceInput(
             prior_state=result.track_state,
-            target_canonical_release=complete,
+            target_canonical_data=complete,
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(result.track_state),
             calculation_scope="research_period",

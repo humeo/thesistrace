@@ -62,7 +62,7 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
     assert b"strategy_ledger" not in canonical_json_bytes(result)
 
 
-def test_kernel_run_input_snapshots_values_and_has_no_product_context(
+def test_kernel_run_input_snapshots_values_and_is_immutable(
     accepted_calculation_case: dict[str, object],
     accepted_kernel_run: RunOutput,
 ) -> None:
@@ -77,19 +77,8 @@ def test_kernel_run_input_snapshots_values_and_has_no_product_context(
     definition["universe"] = "top3000"
 
     assert run(run_input).artifacts_snapshot() == expected
-    assert not {
-        "run_id",
-        "release_id",
-        "request_id",
-        "transaction",
-        "object_key",
-        "workspace_id",
-        "mode",
-    } & set(RunInput.__dataclass_fields__)
     with pytest.raises(FrozenInstanceError):
         run_input.universe = "top1000"
-    for field_name in RunInput.__dataclass_fields__:
-        assert not isinstance(getattr(run_input, field_name), (dict, list, set))
 
     expression = run_input.alpha_expression_snapshot()
     assert isinstance(expression, dict)

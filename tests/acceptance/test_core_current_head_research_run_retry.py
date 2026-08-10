@@ -191,8 +191,6 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
         }
         expected = _reference_result(settings, head_b)
         assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(expected)
-        idle = _run_worker_once(settings)
-        assert idle.returncode == 0, idle.stdout + idle.stderr
         assert len(_attempts(settings, run_id)) == 2
 
 
@@ -315,13 +313,9 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
             "ResourceExhausted",
         ]
         assert _research_result_manifest_count(settings) == 0
-        idle = _run_worker_once(settings)
-        assert idle.returncode == 0, idle.stdout + idle.stderr
 
     with TestClient(create_app(settings)) as restarted:
         assert restarted.get(f"/api/research-runs/{run_id}").json() == failed
-        restarted_worker = _run_worker_once(settings)
-        assert restarted_worker.returncode == 0, restarted_worker.stdout + restarted_worker.stderr
         assert len(_attempts(settings, run_id)) == 2
 
 

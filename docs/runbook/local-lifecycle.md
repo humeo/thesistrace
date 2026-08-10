@@ -102,7 +102,7 @@ Worker, and verifies the same Head, Result manifest, readiness, and single
 Attempt remain authoritative. It records image identities, health/exit state,
 network isolation, and before/after results under the run evidence directory.
 
-Before merge, run the complete fail-fast gate:
+Before merge, run the standard fail-fast gate:
 
 ```sh
 mise exec -- pnpm check
@@ -115,11 +115,21 @@ loopback ports, distinct `thesistrace-test-*` project identities, separate
 volumes, and isolated object-store buckets. They never address or clean
 `thesistrace-dev`.
 
+Before a release, run every local seam, including the final image qualification:
+
+```sh
+mise exec -- pnpm check:release
+```
+
+`pnpm check:release` runs `pnpm check` once and then `pnpm test:image-smoke`.
+It does not repeat the standard gate.
+
 ## Evidence, cleanup, and interactive diagnosis
 
 Each Test run records metadata and artifacts under
 `.local/test-runs/<run-id>/`. `run.txt` binds the run identity to its exact
-Compose project and records ports, cleanup status, and final status. Available
+Compose project and records the Git revision/dirty state, ports, each named
+phase's elapsed seconds and status, cleanup status, and final status. Available
 evidence includes JUnit XML or the Playwright HTML report and failure artifacts.
 When a Test fails, the runner also captures Compose status, timestamped logs,
 and container inspection before cleanup.

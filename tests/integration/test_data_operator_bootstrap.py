@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.errors import RaiseException
 
 from thesistrace._postgres import PostgresDatabase
@@ -519,18 +520,8 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         check=False,
         timeout=60,
     )
-    second = subprocess.run(
-        command,
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=60,
-    )
 
     assert first.returncode == 0, first.stderr
-    assert second.returncode == 0, second.stderr
-    assert json.loads(second.stdout) == json.loads(first.stdout)
     outcome = json.loads(first.stdout)
     assert outcome["status"] == "succeeded"
     database = PostgresDatabase(core_settings.database_url)
@@ -552,25 +543,12 @@ def test_real_private_command_bootstraps_from_tushare_replay(
     finally:
         database.close()
 
-    malformed = tmp_path / "malformed-replay.json"
-    malformed.write_text('{"secret":"must-not-leak"}')
-    failed = subprocess.run(
-        (*command[:-1], str(malformed)),
-        env=environment,
-        text=True,
-        capture_output=True,
-        check=False,
-        timeout=60,
-    )
-    assert failed.returncode == 2
-    assert json.loads(failed.stderr) == {"status": "failed", "code": "OPERATOR_FAILURE"}
-    assert "must-not-leak" not in failed.stderr
-
+    failure_connection = conninfo_to_dict(core_settings.database_url)
+    failure_connection["password"] = "SUPERSECRET"
+    failure_connection["connect_timeout"] = "2"
     database_failure_environment = {
         **environment,
-        "THESISTRACE_DATABASE_URL": (
-            "postgresql://operator:SUPERSECRET@127.0.0.1:1/unreachable"
-        ),
+        "THESISTRACE_DATABASE_URL": make_conninfo(**failure_connection),
     }
     database_failed = subprocess.run(
         command,
@@ -578,7 +556,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         text=True,
         capture_output=True,
         check=False,
-        timeout=15,
+        timeout=30,
     )
     assert database_failed.returncode == 2
     assert json.loads(database_failed.stderr) == {

@@ -26,7 +26,7 @@ def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
         prepared = runtime.publication.prepare(
             kind="research.result",
             payloads={"summary": JsonPayload({"annualized_return": 0.12})},
-            provenance={"run_id": "run-001", "release_id": "release-001"},
+            provenance={"run_id": "run-001", "data_generation_id": "generation-001"},
         )
         assert prepared.payload_sha256s["summary"] not in runtime.publication.find_orphan_sha256s(
             uploaded_before=datetime.now(UTC) - timedelta(minutes=5)
@@ -65,7 +65,7 @@ def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
         assert verified.kind == "research.result"
         assert verified.provenance == {
             "run_id": "run-001",
-            "release_id": "release-001",
+            "data_generation_id": "generation-001",
         }
         assert verified.payloads["summary"].content == canonical_json_bytes(
             {"annualized_return": 0.12}

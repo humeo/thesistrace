@@ -29,6 +29,11 @@ the all-cash baseline at the first Research Session, schedules orders only when
 execution and one later valuation session remain inside the period, and ends
 with a Terminal Valuation that retains rather than liquidates holdings.
 
+The retained right-censoring classification is
+`right_censored_by_research_period_end`; it replaces ADR-0086's obsolete
+`right_censored_by_release_end` name without changing the classification's
+meaning.
+
 The durable Result contract remains exactly the current four top-level values:
 `factor_summary`, `strategy_summary`, `strategy_daily_observations`, and
 `terminal_strategy_state`. Its exact byte budget scales with the period as

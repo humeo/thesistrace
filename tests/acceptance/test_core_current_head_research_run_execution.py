@@ -263,7 +263,7 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         reference_c = advance(
             AdvanceInput(
                 prior_state=reference_origin,
-                target_canonical_release=canonical_c,
+                target_canonical_data=canonical_c,
                 appended_sessions=list(extended_sessions[len(sessions) :]),
                 continuation=advance_continuation(
                     run_input=reference_origin.run_input_with_canonical(prior_c),
@@ -285,7 +285,7 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         reference_d = advance(
             AdvanceInput(
                 prior_state=restored_c,
-                target_canonical_release=canonical_d,
+                target_canonical_data=canonical_d,
                 appended_sessions=[latest_sessions[-1]],
                 continuation=advance_continuation(
                     run_input=restored_c.run_input_with_canonical(prior_d),
@@ -385,9 +385,16 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             )
             assert accepted.status_code == 200
             run_ids.append(str(accepted.json()["run"]["id"]))
-        for _run_id in run_ids:
-            completed = _run_worker_once(settings)
-            assert completed.returncode == 0, completed.stdout + completed.stderr
+        # Keep one real Worker process boundary; the remaining capacity seeds still
+        # execute through the production service, Kernel, PostgreSQL, and RustFS.
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        runtime = client.app.state.core_runtime
+        for _ in run_ids[1:]:
+            assert runtime.research_runs.process_next() is True
+        assert runtime.research_runs.process_next() is False
+        for run_id in run_ids:
+            assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
 
         same_seed_barrier = Barrier(4)
 
@@ -712,7 +719,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         recovery_reference = advance(
             AdvanceInput(
                 prior_state=recovery_origin,
-                target_canonical_release=recovered_canonical,
+                target_canonical_data=recovered_canonical,
                 appended_sessions=list(recovered_sessions[len(seed_sessions) :]),
                 continuation=advance_continuation(
                     run_input=recovery_origin.run_input_with_canonical(
@@ -1061,7 +1068,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         counterfactual = advance(
             AdvanceInput(
                 prior_state=counterfactual_prior,
-                target_canonical_release=uncorrected_impact,
+                target_canonical_data=uncorrected_impact,
                 appended_sessions=list(impact_sessions[len(seed_sessions) :]),
                 continuation=advance_continuation(
                     run_input=counterfactual_prior.run_input_with_canonical(

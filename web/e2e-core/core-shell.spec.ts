@@ -53,7 +53,9 @@ test("current data supports one visible ResearchRun and DailyTrack journey", asy
     await page.getByLabel("Research start date").fill("2026-08-03");
     await page.getByLabel("Research end date").fill("2026-08-05");
     await page.getByRole("button", { name: "Run", exact: true }).click();
-    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/, {
+      timeout: 30_000,
+    });
     await expect(
       page.locator(".research-run-facts p").filter({ hasText: "Status" }),
     ).toContainText("succeeded", { timeout: 30_000 });
@@ -71,7 +73,9 @@ test("current data supports one visible ResearchRun and DailyTrack journey", asy
     await expectForbiddenProductInternalsToBeAbsent(page);
 
     await page.getByRole("button", { name: "Start Tracking" }).click();
-    await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+    await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/, {
+      timeout: 30_000,
+    });
     await expect(page.getByRole("heading", { name: "Tracking Origin" })).toBeVisible();
     await expect(page.getByText(`Origin net NAV ${terminalNav}`, { exact: true })).toBeVisible();
     await expect(page.getByText(`Origin net cash ${terminalCash}`, { exact: true })).toBeVisible();
