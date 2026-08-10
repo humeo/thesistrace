@@ -90,10 +90,10 @@ exit "${FAKE_PYTEST_STATUS:-0}"
 """
     )
     uv.chmod(0o755)
-    pnpm = tmp_path / "pnpm"
-    pnpm.write_text(
+    bun = tmp_path / "bun"
+    bun.write_text(
         """#!/bin/sh
-printf 'pnpm %s origin=%s evidence=%s\\n' \
+printf 'bun %s origin=%s evidence=%s\\n' \
   "$*" "$THESISTRACE_TEST_WEB_ORIGIN" "$THESISTRACE_TEST_EVIDENCE_DIR" \
   >> "$TEST_COMMAND_LOG"
 mkdir -p "$THESISTRACE_TEST_EVIDENCE_DIR/playwright-report"
@@ -109,7 +109,7 @@ fi
 exit "${FAKE_PLAYWRIGHT_STATUS:-0}"
 """
     )
-    pnpm.chmod(0o755)
+    bun.chmod(0o755)
     environment = {
         **os.environ,
         "PATH": f"{tmp_path}:{os.environ['PATH']}",
@@ -488,8 +488,12 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert completed.returncode == 0, completed.stderr
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
-    assert "up --detach --build --wait --wait-timeout 300\n" in commands
-    assert "pnpm --dir web test:e2e origin=http://127.0.0.1:41004" in commands
+    assert (
+        "up --detach --build --wait --wait-timeout 300 postgres rustfs migrate\n"
+        in commands
+    )
+    assert "up --detach --build --wait --wait-timeout 300 api worker web\n" in commands
+    assert "bun run --cwd web test:e2e origin=http://127.0.0.1:41004" in commands
     assert "thesistrace-api" not in commands
     assert "thesistrace-worker" not in commands
     assert "vite --host" not in commands
@@ -537,6 +541,18 @@ def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:
         assert host_application not in active_sources
 
 
+def test_web_assets_do_not_depend_on_the_public_network() -> None:
+    active_web_source = "\n".join(
+        path.read_text()
+        for path in (ROOT / "web" / "src").rglob("*")
+        if path.is_file() and path.suffix in {".css", ".ts", ".tsx"}
+    )
+
+    assert "fonts.googleapis.com" not in active_web_source
+    assert "fonts.gstatic.com" not in active_web_source
+    assert "@import url(\"http" not in active_web_source
+
+
 def test_failed_e2e_groups_playwright_and_compose_evidence_before_cleanup(
     tmp_path: Path,
 ) -> None:
@@ -564,7 +580,7 @@ def test_failed_e2e_groups_playwright_and_compose_evidence_before_cleanup(
     assert (evidence / "compose-logs.txt").exists()
     assert (evidence / "container-inspect.txt").exists()
     commands = command_log.read_text()
-    assert commands.index("pnpm --dir web test:e2e") < commands.index("ps --all")
+    assert commands.index("bun run --cwd web test:e2e") < commands.index("ps --all")
     assert commands.index("ps --all") < commands.index("down --volumes")
 
 

@@ -3,6 +3,13 @@ import { expect, test, type Locator, type Page, type TestInfo } from "@playwrigh
 test("current data supports one visible ResearchRun and DailyTrack journey", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const responses: string[] = [];
+  const externalRequests: string[] = [];
+  page.on("request", (request) => {
+    const hostname = new URL(request.url()).hostname;
+    if (hostname !== "127.0.0.1" && hostname !== "localhost") {
+      externalRequests.push(request.url());
+    }
+  });
   page.on("response", (response) => {
     if (response.url().includes("/api/")) {
       responses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
@@ -78,8 +85,13 @@ test("current data supports one visible ResearchRun and DailyTrack journey", asy
     ).toContain("Up to date");
     await expect(page.getByText("Strategy session 2026-08-11", { exact: true })).toBeVisible();
     await expectForbiddenProductInternalsToBeAbsent(page);
+    expect(externalRequests, "browser journey must remain local-only").toEqual([]);
   } finally {
     await attachResponses(testInfo, responses);
+    await testInfo.attach("external-requests.json", {
+      body: Buffer.from(`${JSON.stringify(externalRequests, null, 2)}\n`, "utf8"),
+      contentType: "application/json",
+    });
   }
 });
 
