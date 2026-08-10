@@ -687,7 +687,6 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "blocked_progression_id" in track_migrations
     assert "CREATE TABLE daily_tracks.retry_receipts" in track_migrations
     assert "CREATE TABLE daily_tracks.stop_receipts" in track_migrations
-    assert "MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3" in track_source
     assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
     assert '"daily_tracks.activation.capacity"' in track_source
     assert "def _record_current_failure(" in track_source

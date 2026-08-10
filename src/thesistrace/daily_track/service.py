@@ -65,7 +65,6 @@ ResultBundleReader = Callable[[VerifiedBundle], dict[str, object]]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
-MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3
 ACTIVE_DAILY_TRACK_LIMIT = 10
 PUBLIC_BLOCKED_REASON = "DailyTrack could not process the current dataset."
 
