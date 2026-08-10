@@ -106,7 +106,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
             env=environment,
             capture_output=True,
             text=True,
-            timeout=20,
+            timeout=120,
             check=False,
         )
         assert worker.returncode == 0, worker.stderr

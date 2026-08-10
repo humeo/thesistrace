@@ -84,6 +84,7 @@ def _before_restart(
         "public_result_sha256": hashlib.sha256(canonical_json_bytes(detail)).hexdigest(),
         "result_manifest_sha256": durable["manifest_sha256"],
         "attempt_count": durable["attempt_count"],
+        "execution_snapshot": durable["execution_snapshot"],
         "overview": EXPECTED_OVERVIEW,
         "mounted_data_sha256": mounted_data_sha256,
     }
@@ -105,6 +106,7 @@ def _after_restart(
     durable = _durable_result(settings, run_id)
     assert durable["manifest_sha256"] == expected["result_manifest_sha256"]
     assert durable["attempt_count"] == expected["attempt_count"] == 1
+    assert durable["execution_snapshot"] == expected["execution_snapshot"]
     assert _directory_sha256(settings.data_mount) == expected["mounted_data_sha256"]
     return {
         "run_id": run_id,
@@ -150,10 +152,14 @@ def _durable_result(settings: CoreSettings, run_id: str) -> dict[str, object]:
         with database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT result_manifest_sha256, result_provenance,
-                       (SELECT count(*) FROM research_runs.attempts
-                        WHERE run_id = research_runs.runs.id) AS attempt_count
-                FROM research_runs.runs WHERE id = %s
+                SELECT run.result_manifest_sha256, run.result_provenance,
+                       to_jsonb(run.*) AS run_snapshot,
+                       coalesce((
+                           SELECT jsonb_agg(to_jsonb(attempt.*) ORDER BY attempt.ordinal)
+                           FROM research_runs.attempts AS attempt
+                           WHERE attempt.run_id = run.id
+                       ), '[]'::jsonb) AS attempt_snapshots
+                FROM research_runs.runs AS run WHERE run.id = %s
                 """,
                 (run_id,),
             ).fetchone()
@@ -175,7 +181,11 @@ def _durable_result(settings: CoreSettings, run_id: str) -> dict[str, object]:
         }
         return {
             "manifest_sha256": manifest_sha256,
-            "attempt_count": int(row["attempt_count"]),
+            "attempt_count": len(row["attempt_snapshots"]),
+            "execution_snapshot": {
+                "run": row["run_snapshot"],
+                "attempts": row["attempt_snapshots"],
+            },
         }
     finally:
         s3.close()

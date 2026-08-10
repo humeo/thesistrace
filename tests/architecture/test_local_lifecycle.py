@@ -30,6 +30,9 @@ with log.open("a") as stream:
 if arguments[0] == "inspect":
     print("container inspection")
     raise SystemExit(0)
+if arguments[:2] == ["network", "inspect"]:
+    print("true")
+    raise SystemExit(0)
 
 project = arguments[arguments.index("--project-name") + 1]
 if "up" in arguments:
@@ -64,6 +67,18 @@ elif "ps" in arguments:
     print("test services")
 elif "logs" in arguments:
     print("test logs")
+elif "images" in arguments:
+    print('{"ID":"sha256:test-image"}')
+smoke_script = next(
+    (argument for argument in arguments if argument.endswith("production_image_smoke.py")),
+    None,
+)
+if "run" in arguments and smoke_script is not None:
+    phase = arguments[arguments.index(smoke_script) + 1]
+    failing_phase = os.environ.get("FAKE_IMAGE_SMOKE_PHASE", "before")
+    if phase == failing_phase and os.environ.get("FAKE_IMAGE_SMOKE_STATUS"):
+        print(f"fake {phase} image smoke failure", file=sys.stderr)
+        raise SystemExit(int(os.environ["FAKE_IMAGE_SMOKE_STATUS"]))
 if "down" in arguments:
     raise SystemExit(int(os.environ.get("FAKE_CLEANUP_STATUS", "0")))
 """
@@ -533,6 +548,37 @@ def test_production_image_smoke_runs_entirely_inside_an_internal_network() -> No
     assert 'test "$network_internal" = true' in test_runtime
     assert 'expected["attempt_count"] == 1' in smoke
     assert "read_result_bundle" in smoke
+
+
+def test_failed_image_smoke_persists_runner_diagnostics_before_cleanup(
+    tmp_path: Path,
+) -> None:
+    command_log, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_IMAGE_SMOKE_STATUS"] = "9"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "image-smoke"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 9
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    evidence = tmp_path / "runs" / run_id / "evidence"
+    assert "fake before image smoke failure" in (
+        evidence / "smoke-before.stderr.log"
+    ).read_text()
+    assert (evidence / "compose-ps.txt").exists()
+    assert (evidence / "compose-logs.txt").exists()
+    assert (evidence / "container-inspect.txt").exists()
+    commands = command_log.read_text()
+    assert commands.index("production_image_smoke.py before") < commands.rindex(
+        "ps --all"
+    )
+    assert commands.rindex("ps --all") < commands.index("down --volumes")
 
 
 def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:
