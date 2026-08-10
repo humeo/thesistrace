@@ -9,6 +9,12 @@ x-test-environment: &test-environment
 
 services:
   postgres:
+    command:
+      - postgres
+      - -c
+      - checkpoint_timeout=30min
+      - -c
+      - max_wal_size=2GB
     environment:
       POSTGRES_DB: thesistrace
       POSTGRES_USER: thesistrace

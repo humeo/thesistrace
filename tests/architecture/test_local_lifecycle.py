@@ -418,6 +418,10 @@ def test_test_overlay_uses_random_loopback_ports_and_project_scoped_volumes() ->
         assert f"127.0.0.1::{port}" in overlay
     for development_port in (55432, 59010, 8101, 5274):
         assert str(development_port) not in overlay
+    assert "checkpoint_timeout=30min" in overlay
+    assert "max_wal_size=2GB" in overlay
+    assert "fsync=off" not in overlay
+    assert "synchronous_commit=off" not in overlay
     assert "postgres-data:" in base
     assert "rustfs-data:" in base
     assert "name:" not in base.split("volumes:", maxsplit=1)[1]
