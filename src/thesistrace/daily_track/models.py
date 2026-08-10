@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 
@@ -55,22 +55,11 @@ class TrackingOrigin(BaseModel):
     definition_id: str
     definition_revision: int
     immutable_input: dict[str, object]
-    seed_release_id: str | None = None
-    seed_data_generation_id: str | None = None
-    seed_data_through_session: str | None = None
+    seed_data_generation_id: str
+    seed_data_through_session: str
     verified_result: VerifiedResultOrigin
     initial_strategy_state: InitialStrategyState
     calculation_contracts: dict[str, object]
-
-    @model_validator(mode="after")
-    def one_seed_data_coordinate(self) -> TrackingOrigin:
-        if (self.seed_release_id is None) == (self.seed_data_generation_id is None):
-            raise ValueError("Tracking Origin requires one seed data coordinate")
-        if (self.seed_data_generation_id is None) != (
-            self.seed_data_through_session is None
-        ):
-            raise ValueError("current-data Tracking Origin is incomplete")
-        return self
 
 
 class DailyTrackSummary(BaseModel):

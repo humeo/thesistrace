@@ -96,11 +96,11 @@ def restore_tracking_checkpoint(
         stamp_duty_sell_rate=str(contract["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(contract["transfer_fee_rate"]),
     )
-    sessions = canonical_sessions(canonical, "DailyTrack Head Dataset Release")
+    sessions = canonical_sessions(canonical, "DailyTrack Canonical Data")
     if len(sessions) != int(value["session_count"]) or sessions[-1] != str(
         value["boundary_session"]
     ):
-        raise KernelRunError("DailyTrack Checkpoint boundary does not match its Dataset Release")
+        raise KernelRunError("DailyTrack Checkpoint boundary does not match Canonical Data")
     factor_summary = _mapping(value.get("factor_summary"), "Factor Summary")
     factor_horizons = _mapping(factor_summary.get("horizons"), "Factor horizons")
     if set(factor_horizons) != {"1", "5", "20"}:

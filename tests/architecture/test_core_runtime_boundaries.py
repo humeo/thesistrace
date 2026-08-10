@@ -681,16 +681,16 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
     assert "CREATE TABLE daily_tracks.tracks" in track_migrations
-    assert "CREATE TABLE daily_tracks.progressions" in track_migrations
-    assert "CREATE TABLE daily_tracks.checkpoints" in track_migrations
-    assert "0004_blocked_track_failure_isolation" in track_migrations
-    assert "blocked_target_release_id" in track_migrations
+    assert "CREATE TABLE daily_tracks.session_progressions" in track_migrations
+    assert "CREATE TABLE daily_tracks.session_checkpoints" in track_migrations
+    assert "0009_session_coordinate_application_contract" in track_migrations
+    assert "blocked_progression_id" in track_migrations
     assert "CREATE TABLE daily_tracks.retry_receipts" in track_migrations
     assert "CREATE TABLE daily_tracks.stop_receipts" in track_migrations
     assert "MAX_AUTOMATIC_PROGRESSION_ATTEMPTS = 3" in track_source
     assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
     assert '"daily_tracks.activation.capacity"' in track_source
-    assert "def _record_progression_failure(" in track_source
+    assert "def _record_current_failure(" in track_source
     assert "def reconcile_stopped_working_cache(" in track_source
     assert "def activate(" in track_source
     assert "def resolve_activation(" not in track_source
@@ -720,6 +720,15 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert '"/api/daily-tracks/{track_id}/stop"' in http_source
     assert '@app.post("/api/daily-tracks"' not in http_source
     assert '@app.delete("/api/daily-tracks' not in http_source
+    for legacy_coordinate in (
+        "seed_release_id",
+        "current_release_id",
+        "target_release_id",
+        "predecessor_release_id",
+        "blocked_target_release_id",
+        "next_release",
+    ):
+        assert legacy_coordinate not in track_source
 
 
 def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> None:
@@ -739,14 +748,14 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     assert "/api/working-cache" not in http_source
 
 
-def test_daily_track_cache_rebuild_has_a_fixed_checkpoint_tail() -> None:
+def test_daily_track_cache_rebuild_uses_current_checkpoint_and_bounded_canonical() -> None:
     service = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
     checkpoint = (ROOT / "src" / "thesistrace" / "daily_track" / "checkpoint.py").read_text()
     kernel = (ROOT / "src" / "thesistrace" / "research_kernel" / "__init__.py").read_text()
 
-    assert "REBUILD_CHECKPOINT_LIMIT = 525" in service
-    assert "LIMIT %s" in service
-    assert "_rebuild_prior_state" not in service
+    assert "REBUILD_CHECKPOINT_LIMIT" not in service
+    assert "state.current_checkpoint_manifest_sha256" in service
+    assert ")[-504:]" in service
     assert "advance_continuation(" in service
     assert "daily-track-checkpoint-v1" in checkpoint
     assert "project_tracking_checkpoint" not in kernel

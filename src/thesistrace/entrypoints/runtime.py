@@ -129,8 +129,6 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             publication=publication,
             dataset_lifecycle=dataset_lifecycle,
             generation_store=generation_store,
-            next_release=data.next_release,
-            load_canonical=data.load_canonical,
             read_result_bundle=read_result_bundle,
             working_cache_root=Path(working_cache.name) / "daily-tracks",
         )

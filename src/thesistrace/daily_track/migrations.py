@@ -345,5 +345,44 @@ MIGRATIONS = MigrationPlan(
                     );
             """,
         ),
+        Migration(
+            name="0009_session_coordinate_application_contract",
+            statement="""
+                ALTER TABLE daily_tracks.tracks
+                    ALTER COLUMN current_release_id DROP NOT NULL,
+                    ALTER COLUMN current_strategy_session DROP NOT NULL,
+                    ADD COLUMN blocked_progression_id text NULL
+                        REFERENCES daily_tracks.session_progressions(id),
+                    DROP CONSTRAINT tracks_lifecycle_state_check,
+                    ADD CONSTRAINT tracks_lifecycle_state_check CHECK (
+                        (status IN ('active', 'stopped')
+                            AND blocked_target_release_id IS NULL
+                            AND blocked_progression_id IS NULL
+                            AND blocked_reason IS NULL)
+                        OR
+                        (status = 'blocked'
+                            AND blocked_reason IS NOT NULL
+                            AND (
+                                (blocked_target_release_id IS NOT NULL
+                                    AND blocked_progression_id IS NULL)
+                                OR
+                                (blocked_target_release_id IS NULL
+                                    AND blocked_progression_id IS NOT NULL)
+                            ))
+                    );
+
+                ALTER TABLE daily_tracks.retry_receipts
+                    ALTER COLUMN target_release_id DROP NOT NULL,
+                    ADD COLUMN progression_id text NULL
+                        REFERENCES daily_tracks.session_progressions(id),
+                    ADD CONSTRAINT retry_receipts_one_target_check CHECK (
+                        (target_release_id IS NOT NULL
+                            AND progression_id IS NULL)
+                        OR
+                        (target_release_id IS NULL
+                            AND progression_id IS NOT NULL)
+                    );
+            """,
+        ),
     ),
 )

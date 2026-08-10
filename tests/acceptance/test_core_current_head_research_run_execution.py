@@ -138,6 +138,10 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert activation["checkpoint_count"] == 1
         assert activation["progression_count"] == 0
         assert activation["terminal_strategy_state"]["session"] == sessions[-1]
+        assert activation["legacy_current_release_id"] is None
+        assert activation["legacy_current_strategy_session"] is None
+        assert activation["legacy_head_manifest_sha256"] is None
+        assert activation["legacy_blocked_target_release_id"] is None
         replay = client.post(
             f"/api/research-runs/{run_id}/daily-tracks",
             json={"request_id": "attempt-start-head-track"},
@@ -169,8 +173,6 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
                 settings.data_mount,
             ),
             generation_store=MountedGenerationStore(settings.data_mount),
-            next_release=runtime.data.next_release,
-            load_canonical=runtime.data.load_canonical,
             read_result_bundle=read_result_bundle,
             progress=tracking_barrier,
         )
@@ -194,7 +196,6 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
 
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
-        assert client.app.state.core_runtime.daily_tracks.process_next() is False
 
         caught_up = client.get(f"/api/daily-tracks/{track['id']}")
         assert caught_up.status_code == 200
@@ -215,6 +216,22 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert progressed["checkpoint_count"] == 3
         assert progressed["progression_count"] == 2
         assert progressed["active_pin_count"] == 0
+        assert progressed["legacy_current_release_id"] is None
+        assert progressed["legacy_current_strategy_session"] is None
+        assert progressed["legacy_head_manifest_sha256"] is None
+        assert progressed["legacy_blocked_target_release_id"] is None
+        proof = runtime.daily_tracks.verify_persisted_equivalence(track["id"])
+        assert proof.status == "equivalent"
+        assert proof.head_session == latest_sessions[-1]
+        assert proof.session_sequence == (
+            sessions[-1],
+            *extended_sessions[len(sessions) :],
+            latest_sessions[-1],
+        )
+        assert proof.checkpoint_count == 2
+        assert len(proof.checkpoint_evidence_sha256s) == 2
+        assert "release" not in repr(proof).lower()
+        assert "generation" not in repr(proof).lower()
         origin = TrackingOrigin.model_validate(progressed["origin"])
         store = MountedGenerationStore(settings.data_mount)
         canonical_c = store.open_generation(head_c).canonical
@@ -284,8 +301,6 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            next_release=runtime.data.next_release,
-            load_canonical=runtime.data.load_canonical,
             read_result_bundle=read_result_bundle,
             progress=stop_barrier,
         )
@@ -327,6 +342,59 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert reopened_track.status_code == 200
         assert "release" not in reopened_track.text.lower()
         assert "generation" not in reopened_track.text.lower()
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    migrate_core(settings.database_url)
+    _publish_head(
+        settings,
+        sessions=("2026-08-03", "2026-08-04", "2026-08-05"),
+        price_offset=0,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        run_ids: list[str] = []
+        for index in range(11):
+            accepted = client.post(
+                "/api/definitions/run",
+                json=_run_command(f"current-track-capacity-{index}"),
+            )
+            assert accepted.status_code == 200
+            run_ids.append(str(accepted.json()["run"]["id"]))
+        for _run_id in run_ids:
+            completed = _run_worker_once(settings)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        tracks: list[dict[str, object]] = []
+        for index, run_id in enumerate(run_ids[:10]):
+            started = client.post(
+                f"/api/research-runs/{run_id}/daily-tracks",
+                json={"request_id": f"current-track-capacity-start-{index}"},
+            )
+            assert started.status_code == 201
+            tracks.append(started.json())
+        rejected = client.post(
+            f"/api/research-runs/{run_ids[-1]}/daily-tracks",
+            json={"request_id": "current-track-capacity-eleventh"},
+        )
+        assert rejected.status_code == 409
+
+        stopped = client.post(
+            f"/api/daily-tracks/{tracks[0]['id']}/stop",
+            json={"request_id": "current-track-capacity-stop"},
+        )
+        assert stopped.status_code == 202
+        admitted = client.post(
+            f"/api/research-runs/{run_ids[-1]}/daily-tracks",
+            json={"request_id": "current-track-capacity-eleventh"},
+        )
+        assert admitted.status_code == 201
 
 
 @pytest.mark.skipif(
@@ -379,8 +447,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            next_release=runtime.data.next_release,
-            load_canonical=runtime.data.load_canonical,
             read_result_bundle=read_result_bundle,
             advance_kernel=fail_after_calculation,
         )
@@ -507,8 +573,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            next_release=runtime.data.next_release,
-            load_canonical=runtime.data.load_canonical,
             read_result_bundle=read_result_bundle,
             progress=stale_barrier,
         )
@@ -590,8 +654,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            next_release=runtime.data.next_release,
-            load_canonical=runtime.data.load_canonical,
             read_result_bundle=read_result_bundle,
         )
         cache_processor = DailyTrackService(
@@ -599,8 +661,6 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
-            next_release=runtime.data.next_release,
-            load_canonical=runtime.data.load_canonical,
             read_result_bundle=read_result_bundle,
             working_cache_root=cache_root,
         )
@@ -1730,6 +1790,12 @@ def _stored_tracking_activation(
             row = transaction.execute(
                 """
                 SELECT track.status AS track_status,
+                       track.current_release_id AS legacy_current_release_id,
+                       track.current_strategy_session
+                           AS legacy_current_strategy_session,
+                       track.head_manifest_sha256 AS legacy_head_manifest_sha256,
+                       track.blocked_target_release_id
+                           AS legacy_blocked_target_release_id,
                        state.origin_session,
                        track.origin,
                        state.current_checkpoint_manifest_sha256,
