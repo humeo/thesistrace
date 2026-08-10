@@ -405,6 +405,9 @@ MIGRATIONS = MigrationPlan(
                     fingerprint text NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
                     environment_name text NOT NULL,
                     mount_root text NOT NULL,
+                    mount_device bigint NOT NULL CHECK (mount_device >= 0),
+                    mount_inode bigint NOT NULL CHECK (mount_inode > 0),
+                    storage_identity text NOT NULL,
                     status text NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
                     postgres_done boolean NOT NULL DEFAULT false,
                     failure_code text NULL,
@@ -446,6 +449,8 @@ MIGRATIONS = MigrationPlan(
                         relative_path <> '' AND relative_path !~ '(^|/)\\.\\.?(/|$)'
                     ),
                     entry_kind text NOT NULL CHECK (entry_kind IN ('file', 'directory')),
+                    entry_device bigint NOT NULL CHECK (entry_device >= 0),
+                    entry_inode bigint NOT NULL CHECK (entry_inode > 0),
                     status text NOT NULL CHECK (status IN ('pending', 'deleted')),
                     updated_at timestamptz NOT NULL DEFAULT now(),
                     PRIMARY KEY (idempotency_key, relative_path)

@@ -30,6 +30,7 @@ from thesistrace.publication.serialization import (
 MANIFEST_SCHEMA_VERSION = 1
 OBJECT_READ_ATTEMPTS = 3
 IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
+PUBLICATION_MUTATION_LOCK = "thesistrace-publication-mutation"
 TRANSIENT_S3_ERRORS = (
     ConnectionClosedError,
     ConnectTimeoutError,
@@ -212,6 +213,14 @@ class Publication:
         transaction: PostgresTransaction,
         prepared: PreparedPublication,
     ) -> PublishedRef:
+        # Development Reset holds the matching session-level advisory lock while it
+        # removes legacy publication records and bytes. Taking the transaction-level
+        # form here prevents a manifest from being committed against an object that
+        # Reset is concurrently deleting.
+        transaction.execute(
+            "SELECT pg_advisory_xact_lock(hashtext(%s))",
+            (PUBLICATION_MUTATION_LOCK,),
+        )
         self.verify_prepared(prepared)
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
         objects = _manifest_objects(manifest)
@@ -415,9 +424,7 @@ class Publication:
                     "Publication bucket could not be created"
                 ) from error
         except TRANSIENT_S3_ERRORS as error:
-            raise PublicationUnavailableError(
-                "Publication bucket could not be reached"
-            ) from error
+            raise PublicationUnavailableError("Publication bucket could not be reached") from error
 
     def _put_immutable(self, digest: str, content: bytes, *, media_type: str) -> None:
         if self._object_exists(digest):

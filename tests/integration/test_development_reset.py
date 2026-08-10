@@ -4,7 +4,9 @@ import json
 import os
 import subprocess
 import sys
+import threading
 from pathlib import Path
+from typing import LiteralString
 
 import pytest
 from botocore.client import BaseClient
@@ -15,7 +17,7 @@ from thesistrace.data import DevelopmentReset, DevelopmentResetError
 from thesistrace.data import development_reset as reset_module
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
-from thesistrace.publication import JsonPayload, Publication
+from thesistrace.publication import JsonPayload, Publication, PublicationVerificationError
 
 
 def test_private_development_reset_is_guarded_scoped_and_reference_aware(
@@ -48,13 +50,24 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
         payloads={"shared": JsonPayload({"shared": "preserve"})},
         provenance={"owner": "unrelated"},
     )
+    release = publication.prepare(
+        kind="legacy-dataset-release",
+        payloads={"release": JsonPayload({"owned": "legacy release"})},
+        provenance={"owner": "legacy-release"},
+    )
     try:
         with database.transaction() as transaction:
             publication.record(transaction, target)
             publication.record(transaction, retained)
-            _insert_legacy_state(transaction, target.manifest_sha256)
+            publication.record(transaction, release)
+            _insert_legacy_state(
+                transaction,
+                target.manifest_sha256,
+                release_manifest_sha256=release.manifest_sha256,
+            )
         shared = target.payload_sha256s["shared"]
         owned = target.payload_sha256s["owned"]
+        release_owned = release.payload_sha256s["release"]
         assert shared == retained.payload_sha256s["shared"]
         environment = _operator_environment(core_settings, mount)
 
@@ -107,7 +120,7 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
         assert replayed.returncode == 0, replayed.stderr
         assert json.loads(replayed.stdout) == json.loads(accepted.stdout)
         assert json.loads(accepted.stdout) == {
-            "deleted_object_count": 1,
+            "deleted_object_count": 2,
             "deleted_path_count": 3,
             "preserved_object_count": 1,
             "status": "succeeded",
@@ -132,6 +145,10 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
                 (retained.manifest_sha256,),
             ).fetchone() == {"count": 1}
             assert transaction.execute(
+                "SELECT count(*) AS count FROM publication.manifests WHERE sha256 = %s",
+                (release.manifest_sha256,),
+            ).fetchone() == {"count": 0}
+            assert transaction.execute(
                 "SELECT count(*) AS count FROM publication.objects WHERE sha256 = %s",
                 (shared,),
             ).fetchone() == {"count": 1}
@@ -141,6 +158,7 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
             ).fetchone() == {"count": 0}
         assert _object_exists(rustfs_admin, core_settings.s3_bucket, shared)
         assert not _object_exists(rustfs_admin, core_settings.s3_bucket, owned)
+        assert not _object_exists(rustfs_admin, core_settings.s3_bucket, release_owned)
         assert mount.is_dir()
         assert list(mount.iterdir()) == []
         assert outside.read_text() == "preserve me"
@@ -148,7 +166,10 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
         database.close()
 
 
-@pytest.mark.parametrize("unsafe_kind", ("filesystem-root", "broad-root", "workspace", "symlink"))
+@pytest.mark.parametrize(
+    "unsafe_kind",
+    ("filesystem-root", "broad-root", "workspace", "unapproved-name", "symlink"),
+)
 def test_development_reset_rejects_unsafe_mounts_without_a_plan(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -167,8 +188,11 @@ def test_development_reset_rejects_unsafe_mounts_without_a_plan(
         mount = Path("/private/tmp")
     elif unsafe_kind == "workspace":
         mount = Path(__file__).resolve().parents[2]
+    elif unsafe_kind == "unapproved-name":
+        mount = tmp_path / "unrelated-tree"
+        mount.mkdir()
     else:
-        mount = tmp_path / "mount"
+        mount = tmp_path / "canonical-data"
         mount.mkdir()
         (mount / "escape").symlink_to(outside, target_is_directory=True)
     try:
@@ -304,7 +328,205 @@ def test_development_reset_boundary_failures_retry_the_fixed_plan(
         database.close()
 
 
-def _insert_legacy_state(transaction: PostgresTransaction, manifest_sha256: str) -> None:
+def test_development_reset_retry_is_bound_to_the_original_rustfs_bucket(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+    tmp_path: Path,
+) -> None:
+    _drop_product_schemas(core_settings)
+    migrate_core(core_settings.database_url)
+    mount = tmp_path / "canonical-data"
+    mount.mkdir()
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    publication = Publication(database, rustfs_admin, bucket=core_settings.s3_bucket)
+    target = publication.prepare(
+        kind="development-reset-storage-target",
+        payloads={"owned": JsonPayload({"owned": "storage-bound"})},
+        provenance={"owner": "legacy"},
+    )
+    key = "storage-bound-reset"
+    try:
+        with database.transaction() as transaction:
+            publication.record(transaction, target)
+            _insert_legacy_state(transaction, target.manifest_sha256)
+        with pytest.raises(DevelopmentResetError) as failed:
+            DevelopmentReset(
+                database,
+                _FailDeleteS3(rustfs_admin),  # type: ignore[arg-type]
+                bucket=core_settings.s3_bucket,
+                mount_root=mount,
+            ).execute(
+                idempotency_key=key,
+                environment_name="development",
+                confirmation="reset:development",
+            )
+        assert failed.value.code == "RESET_OBJECT_DELETE_FAILED"
+        fixed_plan = _reset_plan_counts(database, key)
+
+        with pytest.raises(DevelopmentResetError) as conflict:
+            DevelopmentReset(
+                database,
+                rustfs_admin,
+                bucket=f"{core_settings.s3_bucket}-different",
+                mount_root=mount,
+            ).execute(
+                idempotency_key=key,
+                environment_name="development",
+                confirmation="reset:development",
+            )
+        assert conflict.value.code == "RESET_IDEMPOTENCY_CONFLICT"
+        assert _reset_plan_counts(database, key) == fixed_plan
+    finally:
+        database.close()
+
+
+def test_development_reset_fences_a_concurrent_publication_record(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+    tmp_path: Path,
+) -> None:
+    _drop_product_schemas(core_settings)
+    migrate_core(core_settings.database_url)
+    mount = tmp_path / "canonical-data"
+    mount.mkdir()
+    (mount / "legacy.bin").write_bytes(b"legacy")
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    publication = Publication(database, rustfs_admin, bucket=core_settings.s3_bucket)
+    target = publication.prepare(
+        kind="development-reset-race-target",
+        payloads={"owned": JsonPayload({"same": "bytes"})},
+        provenance={"owner": "legacy"},
+    )
+    pending = publication.prepare(
+        kind="concurrent-publication",
+        payloads={"owned": JsonPayload({"same": "bytes"})},
+        provenance={"owner": "concurrent"},
+    )
+    delete_entered = threading.Event()
+    allow_delete = threading.Event()
+    reset_result: list[object] = []
+    record_result: list[object] = []
+    try:
+        with database.transaction() as transaction:
+            publication.record(transaction, target)
+            _insert_legacy_state(transaction, target.manifest_sha256)
+        blocking_s3 = _BlockingDeleteS3(rustfs_admin, delete_entered, allow_delete)
+
+        def execute_reset() -> None:
+            try:
+                reset_result.append(
+                    DevelopmentReset(
+                        database,
+                        blocking_s3,  # type: ignore[arg-type]
+                        bucket=core_settings.s3_bucket,
+                        mount_root=mount,
+                    ).execute(
+                        idempotency_key="publication-race-reset",
+                        environment_name="development",
+                        confirmation="reset:development",
+                    )
+                )
+            except Exception as error:  # pragma: no cover - asserted below
+                reset_result.append(error)
+
+        def record_pending() -> None:
+            try:
+                with database.transaction() as transaction:
+                    record_result.append(publication.record(transaction, pending))
+            except Exception as error:
+                record_result.append(error)
+
+        reset_thread = threading.Thread(target=execute_reset)
+        reset_thread.start()
+        assert delete_entered.wait(timeout=10)
+        record_thread = threading.Thread(target=record_pending)
+        record_thread.start()
+        record_thread.join(timeout=0.2)
+        assert record_thread.is_alive()
+        allow_delete.set()
+        reset_thread.join(timeout=10)
+        record_thread.join(timeout=10)
+
+        assert not reset_thread.is_alive()
+        assert not record_thread.is_alive()
+        assert len(reset_result) == 1
+        assert isinstance(reset_result[0], reset_module.DevelopmentResetOutcome)
+        assert len(record_result) == 1
+        assert isinstance(record_result[0], PublicationVerificationError)
+        with database.transaction() as transaction:
+            assert transaction.execute(
+                "SELECT count(*) AS count FROM publication.manifests WHERE sha256 = %s",
+                (pending.manifest_sha256,),
+            ).fetchone() == {"count": 0}
+    finally:
+        allow_delete.set()
+        database.close()
+
+
+def test_development_reset_preserves_a_replacement_at_a_planned_path(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _drop_product_schemas(core_settings)
+    migrate_core(core_settings.database_url)
+    mount = tmp_path / "canonical-data"
+    mount.mkdir()
+    target_path = mount / "legacy.bin"
+    target_path.write_bytes(b"planned")
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    original_delete_relative = reset_module._delete_relative
+    key = "mount-replacement-reset"
+    try:
+        monkeypatch.setattr(
+            reset_module,
+            "_delete_relative",
+            lambda *_arguments: (_ for _ in ()).throw(OSError("injected")),
+        )
+        with pytest.raises(DevelopmentResetError) as failed:
+            DevelopmentReset(
+                database,
+                rustfs_admin,
+                bucket=core_settings.s3_bucket,
+                mount_root=mount,
+            ).execute(
+                idempotency_key=key,
+                environment_name="development",
+                confirmation="reset:development",
+            )
+        assert failed.value.code == "RESET_MOUNT_DELETE_FAILED"
+        target_path.unlink()
+        target_path.write_bytes(b"replacement")
+        monkeypatch.setattr(reset_module, "_delete_relative", original_delete_relative)
+
+        with pytest.raises(DevelopmentResetError) as changed:
+            DevelopmentReset(
+                database,
+                rustfs_admin,
+                bucket=core_settings.s3_bucket,
+                mount_root=mount,
+            ).execute(
+                idempotency_key=key,
+                environment_name="development",
+                confirmation="reset:development",
+            )
+        assert changed.value.code == "RESET_MOUNT_TARGET_CHANGED"
+        assert target_path.read_bytes() == b"replacement"
+    finally:
+        database.close()
+
+
+def _insert_legacy_state(
+    transaction: PostgresTransaction,
+    manifest_sha256: str,
+    *,
+    release_manifest_sha256: str | None = None,
+) -> None:
+    release_manifest = release_manifest_sha256 or manifest_sha256
     transaction.execute(
         """
         INSERT INTO definitions.records (id, revision, content)
@@ -363,7 +585,7 @@ def _insert_legacy_state(transaction: PostgresTransaction, manifest_sha256: str)
             '2026-08-03', '2026-08-03', 2
         )
         """,
-        ("a" * 64,),
+        (release_manifest,),
     )
     transaction.execute(
         "UPDATE data.state SET latest_release_id = 'release_legacy' WHERE singleton = 1"
@@ -389,31 +611,19 @@ def _drop_product_schemas(settings: CoreSettings) -> None:
 
 def _state_counts(database: PostgresDatabase) -> dict[str, int]:
     with database.transaction() as transaction:
+
+        def count(sql: LiteralString) -> int:
+            row = transaction.execute(sql).fetchone()
+            assert row is not None
+            return int(row["count"])
+
         return {
-            "definitions": int(
-                transaction.execute("SELECT count(*) AS count FROM definitions.records").fetchone()[
-                    "count"
-                ]
-            ),
-            "runs": int(
-                transaction.execute("SELECT count(*) AS count FROM research_runs.runs").fetchone()[
-                    "count"
-                ]
-            ),
-            "tracks": int(
-                transaction.execute("SELECT count(*) AS count FROM daily_tracks.tracks").fetchone()[
-                    "count"
-                ]
-            ),
-            "releases": int(
-                transaction.execute("SELECT count(*) AS count FROM data.releases").fetchone()[
-                    "count"
-                ]
-            ),
-            "reset_operations": int(
-                transaction.execute(
-                    "SELECT count(*) AS count FROM data.development_reset_operations"
-                ).fetchone()["count"]
+            "definitions": count("SELECT count(*) AS count FROM definitions.records"),
+            "runs": count("SELECT count(*) AS count FROM research_runs.runs"),
+            "tracks": count("SELECT count(*) AS count FROM daily_tracks.tracks"),
+            "releases": count("SELECT count(*) AS count FROM data.releases"),
+            "reset_operations": count(
+                "SELECT count(*) AS count FROM data.development_reset_operations"
             ),
         }
 
@@ -483,6 +693,10 @@ class _FailDeleteS3:
     def __init__(self, delegate: BaseClient) -> None:
         self._delegate = delegate
 
+    @property
+    def meta(self) -> object:
+        return self._delegate.meta
+
     def head_object(self, **kwargs: object) -> object:
         return self._delegate.head_object(**kwargs)  # type: ignore[arg-type]
 
@@ -491,6 +705,31 @@ class _FailDeleteS3:
             {"Error": {"Code": "InternalError", "Message": "injected"}},
             "DeleteObject",
         )
+
+
+class _BlockingDeleteS3:
+    def __init__(
+        self,
+        delegate: BaseClient,
+        entered: threading.Event,
+        allowed: threading.Event,
+    ) -> None:
+        self._delegate = delegate
+        self._entered = entered
+        self._allowed = allowed
+
+    @property
+    def meta(self) -> object:
+        return self._delegate.meta
+
+    def head_object(self, **kwargs: object) -> object:
+        return self._delegate.head_object(**kwargs)  # type: ignore[arg-type]
+
+    def delete_object(self, **kwargs: object) -> object:
+        self._entered.set()
+        if not self._allowed.wait(timeout=10):
+            raise RuntimeError("test did not release blocked RustFS delete")
+        return self._delegate.delete_object(**kwargs)  # type: ignore[arg-type]
 
 
 def _object_exists(s3: BaseClient, bucket: str, digest: str) -> bool:
