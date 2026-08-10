@@ -20,6 +20,7 @@ from thesistrace.research_kernel import (
     run,
 )
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.kernel_run import calculation_definition, compose_output
 from thesistrace.research_kernel.strategy import (
@@ -269,6 +270,47 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
                 appended_sessions=list(appended["research_calendar"]),
             )
         )
+
+
+def test_compact_advance_retains_exact_latest_504_factor_sessions(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    canonical = accepted_calculation_case["canonical"]
+    definition = copy.deepcopy(accepted_calculation_case["definition"])
+    assert isinstance(canonical, dict)
+    assert isinstance(definition, dict)
+    definition["alpha"] = {"expression": {"field_id": "price.close.adjusted"}}
+    calendar = list(canonical["research_calendar"][:525])
+    seed_canonical = slice_canonical_sessions(canonical, calendar[:21])
+    target_canonical = slice_canonical_sessions(canonical, calendar)
+    explicit_seed = run(
+        _run_input(
+            seed_canonical,
+            definition,
+            research_start_session=calendar[0],
+            research_end_session=calendar[20],
+        )
+    ).track_state
+    seed = KernelState(
+        run_input=_run_input(seed_canonical, definition),
+        output=explicit_seed.output_snapshot(),
+        strategy_resume=explicit_seed.strategy_resume_snapshot(),
+        origin_session=explicit_seed.origin_session,
+    )
+
+    advanced = advance(
+        AdvanceInput(
+            prior_state=seed,
+            target_canonical_release=target_canonical,
+            appended_sessions=calendar[21:],
+            continuation=continuation_snapshot(seed),
+        )
+    )
+
+    horizons = advanced.output_snapshot()["factor_evaluation"]["horizons"]
+    for horizon in ("1", "5", "20"):
+        assert [item["session"] for item in horizons[horizon]["daily"]] == calendar[-504:]
+        assert len(horizons[horizon]["daily"]) == 504
 
 
 def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
@@ -534,7 +576,13 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
     assert advanced_strategy["daily"][-2]["rebalance"] is True
 
 
-def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
+def _run_input(
+    canonical: object,
+    definition: dict[str, object],
+    *,
+    research_start_session: str | None = None,
+    research_end_session: str | None = None,
+) -> RunInput:
     alpha = definition["alpha"]
     strategy = definition["strategy"]
     costs = definition["costs"]
@@ -555,6 +603,8 @@ def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
         commission_min_cny=str(costs["commission_min_cny"]),
         stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        research_start_session=research_start_session,
+        research_end_session=research_end_session,
     )
 
 

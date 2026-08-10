@@ -752,6 +752,9 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         before_state = _stored_tracking_activation(settings, track_id)
         before_history = _tracking_checkpoint_history(settings, track_id)
         before_payload = _checkpoint_payload(runtime.publication, before_state)
+        before_checkpoint_text = json.dumps(before_payload, sort_keys=True)
+        assert '"orders"' not in before_checkpoint_text
+        assert '"fills"' not in before_checkpoint_text
         before_detail = client.get(f"/api/daily-tracks/{track_id}").json()
         assert _position_ids(before_state["terminal_strategy_state"]) == {
             "equity:000001.SZ"
@@ -760,35 +763,12 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         corrected = _two_instrument_canonical(seed_sessions, corrected=True)
         replay_root = tmp_path / "operator-replays"
         replay_root.mkdir()
-        correction_replay = replay_root / "correction.json"
-        _write_refresh_replay(
-            correction_replay,
-            corrected,
+        correction_outcome = _refresh_via_private_operator(
+            settings,
+            replay_root=replay_root,
+            idempotency_key="forward-only-correction",
+            canonical=corrected,
             request_start=seed_sessions[0],
-        )
-        submitted = _run_data_operator(
-            settings,
-            [
-                "refresh",
-                "--idempotency-key",
-                "forward-only-correction",
-                "--as-of",
-                "2026-08-05T09:00:00+00:00",
-            ],
-        )
-        assert submitted["status"] == "accepted"
-        processed = _run_data_operator(
-            settings,
-            ["work-refresh", "--replay", os.fspath(correction_replay)],
-        )
-        assert processed == {"status": "processed"}
-        correction_outcome = _run_data_operator(
-            settings,
-            [
-                "inspect-refresh",
-                "--idempotency-key",
-                "forward-only-correction",
-            ],
         )
         assert correction_outcome["status"] == "succeeded"
         assert correction_outcome["outcome"] == "published"
@@ -824,28 +804,15 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
             *_weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=3),
         )
         corrected_impact = _two_instrument_canonical(impact_sessions, corrected=True)
-        impact_replay = replay_root / "impact.json"
-        _write_refresh_replay(
-            impact_replay,
-            corrected_impact,
+        impact_outcome = _refresh_via_private_operator(
+            settings,
+            replay_root=replay_root,
+            idempotency_key="forward-only-impact-sessions",
+            canonical=corrected_impact,
             request_start=seed_sessions[0],
         )
-        submitted = _run_data_operator(
-            settings,
-            [
-                "refresh",
-                "--idempotency-key",
-                "forward-only-impact-sessions",
-                "--as-of",
-                f"{impact_sessions[-1]}T09:00:00+00:00",
-            ],
-        )
-        assert submitted["status"] == "accepted"
-        processed = _run_data_operator(
-            settings,
-            ["work-refresh", "--replay", os.fspath(impact_replay)],
-        )
-        assert processed == {"status": "processed"}
+        assert impact_outcome["status"] == "succeeded"
+        assert impact_outcome["outcome"] == "published"
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
@@ -857,6 +824,10 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert impact_state["checkpoint_count"] == 2
         impact_history = _tracking_checkpoint_history(settings, track_id)
         assert impact_history[0] == before_history[0]
+        impact_payload = _checkpoint_payload(runtime.publication, impact_state)
+        impact_checkpoint_text = json.dumps(impact_payload, sort_keys=True)
+        assert '"orders"' not in impact_checkpoint_text
+        assert '"fills"' not in impact_checkpoint_text
         assert _position_ids(impact_state["terminal_strategy_state"]) == {
             "equity:000002.SZ"
         }
@@ -888,83 +859,6 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert _position_ids(terminal_strategy_state(counterfactual)) == {
             "equity:000001.SZ"
         }
-
-        future_sessions = (
-            *impact_sessions,
-            *_weekday_sessions_after(date.fromisoformat(impact_sessions[-1]), count=506),
-        )
-        corrected_future = _two_instrument_canonical(future_sessions, corrected=True)
-        future_replay = replay_root / "future.json"
-        _write_refresh_replay(
-            future_replay,
-            corrected_future,
-            request_start=seed_sessions[0],
-        )
-        submitted = _run_data_operator(
-            settings,
-            [
-                "refresh",
-                "--idempotency-key",
-                "forward-only-window-sessions",
-                "--as-of",
-                f"{future_sessions[-1]}T09:00:00+00:00",
-            ],
-        )
-        assert submitted["status"] == "accepted"
-        processed = _run_data_operator(
-            settings,
-            ["work-refresh", "--replay", os.fspath(future_replay)],
-        )
-        assert processed == {"status": "processed"}
-        completed = _run_worker_once(settings, timeout=180)
-        assert completed.returncode == 0, completed.stdout + completed.stderr
-
-        final_detail = client.get(f"/api/daily-tracks/{track_id}")
-        assert final_detail.status_code == 200
-        assert final_detail.json()["strategy_session"] == future_sessions[-1]
-        assert "correction" not in final_detail.text.lower()
-        final_state = _stored_tracking_activation(settings, track_id)
-        assert final_state["checkpoint_count"] == 3
-        assert _tracking_checkpoint_history(settings, track_id)[:2] == impact_history
-        final_payload = _checkpoint_payload(runtime.publication, final_state)
-        checkpoint_text = json.dumps(final_payload, sort_keys=True)
-        assert '"orders"' not in checkpoint_text
-        assert '"fills"' not in checkpoint_text
-
-        reference_prior = restore_tracking_origin(
-            TrackingOrigin.model_validate(before_state["origin"]),
-            before_state["terminal_strategy_state"],
-            seed_canonical,
-        )
-        reference = advance(
-            AdvanceInput(
-                prior_state=reference_prior,
-                target_canonical_release=corrected_future,
-                appended_sessions=list(future_sessions[len(seed_sessions) :]),
-                continuation=advance_continuation(
-                    run_input=reference_prior.run_input_with_canonical(seed_canonical),
-                    prior_continuation=empty_continuation(),
-                    target_canonical=seed_canonical,
-                    appended_sessions=list(seed_sessions),
-                ),
-            )
-        )
-        reference_horizons = reference.output_snapshot()["factor_evaluation"][
-            "horizons"
-        ]
-        horizons = final_payload["factor_summary"]["horizons"]
-        assert isinstance(horizons, dict)
-        for horizon_id, horizon in horizons.items():
-            assert isinstance(horizon, dict)
-            reference_horizon = reference_horizons[horizon_id]
-            reference_daily = reference_horizon["daily"]
-            assert [item["session"] for item in reference_daily] == list(
-                future_sessions[-504:]
-            )
-            assert horizon["summary"] == reference_horizon["summary"]
-            coverage = horizon["coverage"]
-            assert isinstance(coverage, dict)
-            assert coverage["signal_session_count"] == 504
 
 
 @pytest.mark.skipif(
@@ -1656,6 +1550,40 @@ def _write_refresh_replay(
     )
 
 
+def _refresh_via_private_operator(
+    settings: CoreSettings,
+    *,
+    replay_root: Path,
+    idempotency_key: str,
+    canonical: dict[str, object],
+    request_start: str,
+) -> dict[str, object]:
+    calendar = canonical["research_calendar"]
+    assert isinstance(calendar, list) and calendar
+    replay = replay_root / f"{idempotency_key}.json"
+    _write_refresh_replay(replay, canonical, request_start=request_start)
+    submitted = _run_data_operator(
+        settings,
+        [
+            "refresh",
+            "--idempotency-key",
+            idempotency_key,
+            "--as-of",
+            f"{calendar[-1]}T09:00:00+00:00",
+        ],
+    )
+    assert submitted["status"] == "accepted"
+    processed = _run_data_operator(
+        settings,
+        ["work-refresh", "--replay", os.fspath(replay)],
+    )
+    assert processed == {"status": "processed"}
+    return _run_data_operator(
+        settings,
+        ["inspect-refresh", "--idempotency-key", idempotency_key],
+    )
+
+
 def _ts_code(canonical: dict[str, object], instrument_id: str) -> str:
     instruments = canonical["instruments"]
     assert isinstance(instruments, list)
@@ -2053,11 +1981,7 @@ def _remove_publication_rejection(
         database.close()
 
 
-def _run_worker_once(
-    settings: CoreSettings,
-    *,
-    timeout: int = 30,
-) -> subprocess.CompletedProcess[str]:
+def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
     environment = {
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
@@ -2073,7 +1997,7 @@ def _run_worker_once(
         check=False,
         capture_output=True,
         text=True,
-        timeout=timeout,
+        timeout=30,
         env=environment,
     )
 
