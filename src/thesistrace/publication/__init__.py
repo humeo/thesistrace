@@ -13,10 +13,12 @@ if TYPE_CHECKING:
         PublishedRef,
         VerifiedBundle,
         VerifiedPayload,
+        lock_publication_mutation,
     )
 
 __all__ = [
     "JsonPayload",
+    "lock_publication_mutation",
     "ParquetRowsPayload",
     "PreparedPublication",
     "Publication",

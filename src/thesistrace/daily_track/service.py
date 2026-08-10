@@ -41,6 +41,7 @@ from thesistrace.publication import (
     PublicationVerificationError,
     PublishedRef,
     VerifiedBundle,
+    lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
@@ -197,6 +198,8 @@ class DailyTrackService:
         transaction: PostgresTransaction,
         origin: TrackingOrigin,
     ) -> DailyTrackSummary:
+        if origin.seed_data_generation_id is not None:
+            lock_publication_mutation(transaction)
         transaction.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
             ("daily_tracks.activation.capacity",),
@@ -1634,6 +1637,7 @@ class DailyTrackService:
         assert self._dataset_lifecycle is not None
         published_state = terminal_strategy_state(state)
         with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
             track = transaction.execute(
                 """
                 SELECT status, head_manifest_sha256, execution_fence
@@ -2275,6 +2279,7 @@ class DailyTrackService:
     ) -> PublishedRef:
         assert self._publication is not None
         with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
             current = transaction.execute(
                 """
                 SELECT status, current_release_id, head_manifest_sha256,

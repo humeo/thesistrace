@@ -15,6 +15,7 @@ from thesistrace.data.lifecycle import (
     DataLifecycleError,
     DatasetLifecycle,
     lock_data_lifecycle,
+    try_exclusive_mounted_data_mutation_lock,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 
@@ -45,6 +46,12 @@ class DataGarbageCollector:
 
     def collect(self, *, idempotency_key: str) -> CollectionOutcome:
         key = _identity(idempotency_key)
+        with try_exclusive_mounted_data_mutation_lock(self._database) as acquired:
+            if not acquired:
+                raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
+            return self._collect(key)
+
+    def _collect(self, key: str) -> CollectionOutcome:
         with self._database.session_advisory_lock(_COLLECTION_LOCK):
             self._reconcile_abandoned()
             try:

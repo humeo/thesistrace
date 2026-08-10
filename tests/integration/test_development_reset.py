@@ -5,6 +5,8 @@ import os
 import subprocess
 import sys
 import threading
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import LiteralString
 
@@ -13,11 +15,19 @@ from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.data import DevelopmentReset, DevelopmentResetError
+from thesistrace.data import DatasetLifecycle, DevelopmentReset, DevelopmentResetError
 from thesistrace.data import development_reset as reset_module
+from thesistrace.data.operator import BootstrapOutcome, DataOperator
+from thesistrace.data.source import BootstrapCollectionPlan, CanonicalSourceBatch
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
-from thesistrace.publication import JsonPayload, Publication, PublicationVerificationError
+from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.publication import (
+    JsonPayload,
+    Publication,
+    PublishedRef,
+    lock_publication_mutation,
+)
 
 
 def test_private_development_reset_is_guarded_scoped_and_reference_aware(
@@ -109,6 +119,8 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
             confirmation="reset:development",
             key="accepted-development-reset",
         )
+        repopulated = mount / "new-bootstrap-generation.parquet"
+        repopulated.write_bytes(b"new data outside the completed reset plan")
         replayed = _run_reset(
             environment={**environment, "THESISTRACE_DEPLOYMENT_ENV": "development"},
             environment_name="development",
@@ -160,7 +172,8 @@ def test_private_development_reset_is_guarded_scoped_and_reference_aware(
         assert not _object_exists(rustfs_admin, core_settings.s3_bucket, owned)
         assert not _object_exists(rustfs_admin, core_settings.s3_bucket, release_owned)
         assert mount.is_dir()
-        assert list(mount.iterdir()) == []
+        assert list(mount.iterdir()) == [repopulated]
+        assert repopulated.read_bytes() == b"new data outside the completed reset plan"
         assert outside.read_text() == "preserve me"
     finally:
         database.close()
@@ -404,22 +417,23 @@ def test_development_reset_fences_a_concurrent_publication_record(
         payloads={"owned": JsonPayload({"same": "bytes"})},
         provenance={"owner": "concurrent"},
     )
-    delete_entered = threading.Event()
-    allow_delete = threading.Event()
+    publisher_locked = threading.Event()
+    allow_publish = threading.Event()
     reset_result: list[object] = []
     record_result: list[object] = []
+    observer = PostgresDatabase(core_settings.database_url)
+    observer.open()
     try:
         with database.transaction() as transaction:
             publication.record(transaction, target)
             _insert_legacy_state(transaction, target.manifest_sha256)
-        blocking_s3 = _BlockingDeleteS3(rustfs_admin, delete_entered, allow_delete)
 
         def execute_reset() -> None:
             try:
                 reset_result.append(
                     DevelopmentReset(
                         database,
-                        blocking_s3,  # type: ignore[arg-type]
+                        rustfs_admin,
                         bucket=core_settings.s3_bucket,
                         mount_root=mount,
                     ).execute(
@@ -434,18 +448,33 @@ def test_development_reset_fences_a_concurrent_publication_record(
         def record_pending() -> None:
             try:
                 with database.transaction() as transaction:
-                    record_result.append(publication.record(transaction, pending))
+                    lock_publication_mutation(transaction)
+                    transaction.execute(
+                        "SELECT id FROM research_runs.runs WHERE id = 'run_legacy' FOR UPDATE"
+                    ).fetchone()
+                    publisher_locked.set()
+                    if not allow_publish.wait(timeout=10):
+                        raise RuntimeError("test did not release the publisher")
+                    published = publication.record(transaction, pending)
+                    transaction.execute(
+                        """
+                        UPDATE research_runs.runs
+                        SET result_manifest_sha256 = %s
+                        WHERE id = 'run_legacy'
+                        """,
+                        (published.manifest_sha256,),
+                    )
+                    record_result.append(published)
             except Exception as error:
                 record_result.append(error)
 
-        reset_thread = threading.Thread(target=execute_reset)
-        reset_thread.start()
-        assert delete_entered.wait(timeout=10)
         record_thread = threading.Thread(target=record_pending)
         record_thread.start()
-        record_thread.join(timeout=0.2)
-        assert record_thread.is_alive()
-        allow_delete.set()
+        assert publisher_locked.wait(timeout=10)
+        reset_thread = threading.Thread(target=execute_reset)
+        reset_thread.start()
+        _wait_for_advisory_wait(observer)
+        allow_publish.set()
         reset_thread.join(timeout=10)
         record_thread.join(timeout=10)
 
@@ -454,14 +483,107 @@ def test_development_reset_fences_a_concurrent_publication_record(
         assert len(reset_result) == 1
         assert isinstance(reset_result[0], reset_module.DevelopmentResetOutcome)
         assert len(record_result) == 1
-        assert isinstance(record_result[0], PublicationVerificationError)
+        assert isinstance(record_result[0], PublishedRef)
         with database.transaction() as transaction:
             assert transaction.execute(
                 "SELECT count(*) AS count FROM publication.manifests WHERE sha256 = %s",
                 (pending.manifest_sha256,),
             ).fetchone() == {"count": 0}
     finally:
+        allow_publish.set()
+        observer.close()
+        database.close()
+
+
+def test_development_reset_serializes_a_concurrent_bootstrap_mount_write(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+    tmp_path: Path,
+) -> None:
+    _drop_product_schemas(core_settings)
+    migrate_core(core_settings.database_url)
+    mount = tmp_path / "canonical-data"
+    mount.mkdir()
+    (mount / "legacy.bin").write_bytes(b"legacy")
+    database = PostgresDatabase(core_settings.database_url)
+    observer = PostgresDatabase(core_settings.database_url)
+    database.open()
+    observer.open()
+    publication = Publication(database, rustfs_admin, bucket=core_settings.s3_bucket)
+    target = publication.prepare(
+        kind="development-reset-bootstrap-race",
+        payloads={"owned": JsonPayload({"owned": "legacy"})},
+        provenance={"owner": "legacy"},
+    )
+    delete_entered = threading.Event()
+    allow_delete = threading.Event()
+    source = _RecordingBootstrapSource()
+    reset_result: list[object] = []
+    bootstrap_result: list[object] = []
+    try:
+        with database.transaction() as transaction:
+            publication.record(transaction, target)
+            _insert_legacy_state(transaction, target.manifest_sha256)
+
+        def execute_reset() -> None:
+            try:
+                reset_result.append(
+                    DevelopmentReset(
+                        database,
+                        _BlockingDeleteS3(rustfs_admin, delete_entered, allow_delete),  # type: ignore[arg-type]
+                        bucket=core_settings.s3_bucket,
+                        mount_root=mount,
+                    ).execute(
+                        idempotency_key="bootstrap-race-reset",
+                        environment_name="development",
+                        confirmation="reset:development",
+                    )
+                )
+            except Exception as error:  # pragma: no cover - asserted below
+                reset_result.append(error)
+
+        def execute_bootstrap() -> None:
+            try:
+                times = iter(
+                    (
+                        datetime(2026, 8, 10, 12, tzinfo=UTC),
+                        datetime(2026, 8, 10, 12, 1, tzinfo=UTC),
+                    )
+                )
+                bootstrap_result.append(
+                    DataOperator(database, mount, source, clock=times.__next__).bootstrap(
+                        idempotency_key="bootstrap-after-reset",
+                        as_of=datetime(2026, 8, 3, 10, tzinfo=UTC),
+                    )
+                )
+            except Exception as error:  # pragma: no cover - asserted below
+                bootstrap_result.append(error)
+
+        reset_thread = threading.Thread(target=execute_reset)
+        reset_thread.start()
+        assert delete_entered.wait(timeout=10)
+        bootstrap_thread = threading.Thread(target=execute_bootstrap)
+        bootstrap_thread.start()
+        _wait_for_advisory_wait(observer)
+        assert not source.entered.is_set()
         allow_delete.set()
+        reset_thread.join(timeout=10)
+        bootstrap_thread.join(timeout=10)
+
+        assert not reset_thread.is_alive()
+        assert not bootstrap_thread.is_alive()
+        assert len(reset_result) == 1
+        assert isinstance(reset_result[0], reset_module.DevelopmentResetOutcome)
+        assert len(bootstrap_result) == 1
+        bootstrap_outcome = bootstrap_result[0]
+        assert isinstance(bootstrap_outcome, BootstrapOutcome)
+        assert source.entered.is_set()
+        head = DatasetLifecycle(database, mount).current_head()
+        assert head is not None
+        assert head.generation_manifest_sha256 == bootstrap_outcome.generation_manifest_sha256
+    finally:
+        allow_delete.set()
+        observer.close()
         database.close()
 
 
@@ -732,6 +854,21 @@ class _BlockingDeleteS3:
         return self._delegate.delete_object(**kwargs)  # type: ignore[arg-type]
 
 
+class _RecordingBootstrapSource:
+    def __init__(self) -> None:
+        self.entered = threading.Event()
+
+    def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+        self.entered.set()
+        return CanonicalSourceBatch(
+            source_name="tushare-replay",
+            collection_kind="bootstrap",
+            source_lineage={"replay": "development-reset-race"},
+            canonical=build_minimal_canonical_fixture(),
+            covered_session_range=("2026-08-07", "2026-08-07"),
+        )
+
+
 def _object_exists(s3: BaseClient, bucket: str, digest: str) -> bool:
     try:
         s3.head_object(
@@ -743,3 +880,23 @@ def _object_exists(s3: BaseClient, bucket: str, digest: str) -> bool:
         if str(error.response.get("Error", {}).get("Code")) in {"404", "NoSuchKey", "NotFound"}:
             return False
         raise
+
+
+def _wait_for_advisory_wait(database: PostgresDatabase) -> None:
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        with database.transaction() as transaction:
+            waiting = transaction.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM pg_stat_activity
+                    WHERE datname = current_database()
+                      AND wait_event_type = 'Lock'
+                      AND wait_event = 'advisory'
+                ) AS waiting
+                """
+            ).fetchone()
+        if waiting is not None and waiting["waiting"]:
+            return
+        threading.Event().wait(0.01)
+    raise AssertionError("no PostgreSQL advisory-lock waiter became observable")

@@ -125,6 +125,14 @@ class PublishedRef:
     provenance: object
 
 
+def lock_publication_mutation(transaction: PostgresTransaction) -> None:
+    """Take the publication fence before any product-row locks in a write transaction."""
+    transaction.execute(
+        "SELECT pg_advisory_xact_lock(hashtext(%s))",
+        (PUBLICATION_MUTATION_LOCK,),
+    )
+
+
 class Publication:
     def __init__(
         self,
@@ -217,10 +225,7 @@ class Publication:
         # removes legacy publication records and bytes. Taking the transaction-level
         # form here prevents a manifest from being committed against an object that
         # Reset is concurrently deleting.
-        transaction.execute(
-            "SELECT pg_advisory_xact_lock(hashtext(%s))",
-            (PUBLICATION_MUTATION_LOCK,),
-        )
+        lock_publication_mutation(transaction)
         self.verify_prepared(prepared)
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)
         objects = _manifest_objects(manifest)

@@ -19,6 +19,7 @@ from thesistrace.data.lifecycle import (
     DatasetLifecycle,
     collection_is_active,
     lock_data_lifecycle,
+    mounted_data_mutation_lock,
     release_generation_candidate,
 )
 from thesistrace.data.source import (
@@ -90,6 +91,10 @@ class DataOperator:
         self._heartbeat_seconds = heartbeat_seconds
 
     def bootstrap(self, *, idempotency_key: str, as_of: datetime) -> BootstrapOutcome:
+        with mounted_data_mutation_lock(self._database):
+            return self._bootstrap(idempotency_key=idempotency_key, as_of=as_of)
+
+    def _bootstrap(self, *, idempotency_key: str, as_of: datetime) -> BootstrapOutcome:
         key = _identity(idempotency_key, "Bootstrap idempotency key")
         plan = bootstrap_collection_plan(as_of)
         fingerprint = hashlib.sha256(

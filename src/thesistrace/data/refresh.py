@@ -20,6 +20,7 @@ from thesistrace.data.lifecycle import (
     DatasetLifecycle,
     collection_is_active,
     lock_data_lifecycle,
+    mounted_data_mutation_lock,
     release_generation_candidate,
 )
 from thesistrace.data.source import DataSource, DataSourceError, refresh_collection_plan
@@ -159,6 +160,10 @@ class DataRefreshService:
         return _outcome(row)
 
     def process_next(self, source: DataSource) -> bool:
+        with mounted_data_mutation_lock(self._database):
+            return self._process_next(source)
+
+    def _process_next(self, source: DataSource) -> bool:
         reconciled = self._reconcile_pending_completion()
         recovered = self._recover_expired_claims()
         claim = self._claim()

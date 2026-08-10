@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -11,6 +13,7 @@ from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.head_store import DatasetHead, MountedDatasetHeadStore
 
 _LIFECYCLE_LOCK = "thesistrace-mounted-data-lifecycle"
+MOUNTED_DATA_MUTATION_LOCK = "thesistrace-mounted-data-mutation"
 _OWNER_KINDS = {"research_run_attempt", "tracking_advance_attempt"}
 
 
@@ -20,6 +23,24 @@ class DataLifecycleError(RuntimeError):
 
 class DataNotReady(DataLifecycleError):
     pass
+
+
+@contextmanager
+def mounted_data_mutation_lock(
+    database: PostgresDatabase,
+) -> Iterator[None]:
+    """Let operators coexist while excluding Reset and collection."""
+    with database.session_advisory_lock_shared(MOUNTED_DATA_MUTATION_LOCK):
+        yield
+
+
+@contextmanager
+def try_exclusive_mounted_data_mutation_lock(
+    database: PostgresDatabase,
+) -> Iterator[bool]:
+    """Try to exclude active mounted writers without waiting behind their work."""
+    with database.try_session_advisory_lock(MOUNTED_DATA_MUTATION_LOCK) as acquired:
+        yield acquired
 
 
 @dataclass(frozen=True)

@@ -25,6 +25,7 @@ from thesistrace.publication import (
     PublicationUnavailableError,
     PublicationVerificationError,
     PublishedRef,
+    lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel.kernel_run import (
@@ -410,6 +411,7 @@ class ResearchRunService:
         fingerprint = _start_tracking_fingerprint(run_id)
         try:
             with self._database.transaction() as transaction:
+                lock_publication_mutation(transaction)
                 transaction.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
                     (f"research_runs.start_tracking:{request_id}",),
@@ -887,6 +889,7 @@ class ResearchRunService:
         assert self._publication is not None
         assert self._dataset_lifecycle is not None
         with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
             current = transaction.execute(
                 """
                 SELECT status, execution_fence

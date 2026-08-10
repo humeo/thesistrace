@@ -14,6 +14,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from psycopg import Error as PsycopgError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.data.lifecycle import MOUNTED_DATA_MUTATION_LOCK
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.publication.service import PUBLICATION_MUTATION_LOCK
 
@@ -90,11 +91,12 @@ class DevelopmentReset:
                     }
                 )
             ).hexdigest()
-            with (
-                self._database.session_advisory_lock(_RESET_LOCK),
-                self._database.session_advisory_lock(PUBLICATION_MUTATION_LOCK),
+            with self._database.session_advisory_locks(
+                _RESET_LOCK,
+                MOUNTED_DATA_MUTATION_LOCK,
+                PUBLICATION_MUTATION_LOCK,
             ):
-                self._ensure_plan(
+                already_succeeded = self._ensure_plan(
                     key,
                     fingerprint,
                     environment_name,
@@ -102,6 +104,8 @@ class DevelopmentReset:
                     mount_device=mount_metadata.st_dev,
                     mount_inode=mount_metadata.st_ino,
                 )
+                if already_succeeded:
+                    return self._outcome(key)
                 try:
                     self._reset_postgres(key)
                     self._delete_objects(key)
@@ -124,7 +128,7 @@ class DevelopmentReset:
         mount_descriptor: int,
         mount_device: int,
         mount_inode: int,
-    ) -> None:
+    ) -> bool:
         with self._database.transaction() as transaction:
             existing = transaction.execute(
                 """
@@ -148,7 +152,7 @@ class DevelopmentReset:
             if {name: existing[name] for name in expected} != expected:
                 raise DevelopmentResetError("RESET_IDEMPOTENCY_CONFLICT")
             if existing["status"] == "succeeded":
-                return
+                return True
             self._validate_fixed_paths(key, mount_descriptor)
             with self._database.transaction() as transaction:
                 transaction.execute(
@@ -160,7 +164,7 @@ class DevelopmentReset:
                     """,
                     (key,),
                 )
-            return
+            return False
 
         paths = _inventory_mount(mount_descriptor)
         with self._database.transaction() as transaction:
@@ -221,6 +225,7 @@ class DevelopmentReset:
                         for entry in paths
                     ],
                 )
+        return False
 
     def _reset_postgres(self, key: str) -> None:
         with self._database.transaction() as transaction:
@@ -476,7 +481,7 @@ class DevelopmentReset:
                 UPDATE data.development_reset_operations
                 SET status = 'failed', failure_code = %s,
                     finished_at = now(), updated_at = now()
-                WHERE idempotency_key = %s
+                WHERE idempotency_key = %s AND status = 'running'
                 """,
                 (code, key),
             )
