@@ -395,5 +395,62 @@ MIGRATIONS = MigrationPlan(
                 );
             """,
         ),
+        Migration(
+            name="0008_guarded_development_reset",
+            statement="""
+                CREATE TABLE data.development_reset_operations (
+                    idempotency_key text PRIMARY KEY CHECK (
+                        idempotency_key <> '' AND idempotency_key = btrim(idempotency_key)
+                    ),
+                    fingerprint text NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{64}$'),
+                    environment_name text NOT NULL,
+                    mount_root text NOT NULL,
+                    status text NOT NULL CHECK (status IN ('running', 'succeeded', 'failed')),
+                    postgres_done boolean NOT NULL DEFAULT false,
+                    failure_code text NULL,
+                    created_at timestamptz NOT NULL DEFAULT now(),
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    finished_at timestamptz NULL,
+                    CHECK (
+                        (status = 'running' AND failure_code IS NULL AND finished_at IS NULL)
+                        OR (status = 'succeeded' AND postgres_done AND failure_code IS NULL
+                            AND finished_at IS NOT NULL)
+                        OR (status = 'failed' AND failure_code IS NOT NULL
+                            AND finished_at IS NOT NULL)
+                    )
+                );
+
+                CREATE TABLE data.development_reset_manifests (
+                    idempotency_key text NOT NULL REFERENCES data.development_reset_operations(
+                        idempotency_key
+                    ) ON DELETE CASCADE,
+                    manifest_sha256 text NOT NULL CHECK (manifest_sha256 ~ '^[0-9a-f]{64}$'),
+                    PRIMARY KEY (idempotency_key, manifest_sha256)
+                );
+
+                CREATE TABLE data.development_reset_objects (
+                    idempotency_key text NOT NULL REFERENCES data.development_reset_operations(
+                        idempotency_key
+                    ) ON DELETE CASCADE,
+                    object_sha256 text NOT NULL CHECK (object_sha256 ~ '^[0-9a-f]{64}$'),
+                    status text NOT NULL CHECK (status IN ('pending', 'deleted', 'preserved')),
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    PRIMARY KEY (idempotency_key, object_sha256)
+                );
+
+                CREATE TABLE data.development_reset_paths (
+                    idempotency_key text NOT NULL REFERENCES data.development_reset_operations(
+                        idempotency_key
+                    ) ON DELETE CASCADE,
+                    relative_path text NOT NULL CHECK (
+                        relative_path <> '' AND relative_path !~ '(^|/)\\.\\.?(/|$)'
+                    ),
+                    entry_kind text NOT NULL CHECK (entry_kind IN ('file', 'directory')),
+                    status text NOT NULL CHECK (status IN ('pending', 'deleted')),
+                    updated_at timestamptz NOT NULL DEFAULT now(),
+                    PRIMARY KEY (idempotency_key, relative_path)
+                );
+            """,
+        ),
     ),
 )

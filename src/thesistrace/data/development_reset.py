@@ -1,0 +1,603 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import stat
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+
+from botocore.client import BaseClient
+from botocore.exceptions import BotoCoreError, ClientError
+from psycopg import Error as PsycopgError
+
+from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.publication.serialization import canonical_json_bytes
+
+_RESET_LOCK = "thesistrace-development-reset"
+_DEVELOPMENT_ENVIRONMENT = "development"
+
+
+class DevelopmentResetError(RuntimeError):
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+@dataclass(frozen=True)
+class DevelopmentResetOutcome:
+    status: str
+    deleted_object_count: int
+    preserved_object_count: int
+    deleted_path_count: int
+
+
+class DevelopmentReset:
+    """Explicit pre-production cutover reset with a fixed destructive plan."""
+
+    def __init__(
+        self,
+        database: PostgresDatabase,
+        s3: BaseClient,
+        *,
+        bucket: str,
+        mount_root: Path | str,
+    ) -> None:
+        self._database = database
+        self._s3 = s3
+        self._bucket = bucket
+        self._mount_root = _safe_mount(Path(mount_root))
+
+    def execute(
+        self,
+        *,
+        idempotency_key: str,
+        environment_name: str,
+        confirmation: str,
+    ) -> DevelopmentResetOutcome:
+        key = _identity(idempotency_key)
+        _guard_environment(environment_name, confirmation)
+        fingerprint = hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "command": "development-reset/v1",
+                    "environment": environment_name,
+                    "mount_root": str(self._mount_root),
+                }
+            )
+        ).hexdigest()
+        with self._database.session_advisory_lock(_RESET_LOCK):
+            self._ensure_plan(key, fingerprint, environment_name)
+            try:
+                self._reset_postgres(key)
+                self._delete_objects(key)
+                self._delete_mount(key)
+                self._succeed(key)
+            except DevelopmentResetError as error:
+                self._fail(key, error.code)
+                raise
+            except PsycopgError as error:
+                self._fail(key, "RESET_POSTGRES_FAILED")
+                raise DevelopmentResetError("RESET_POSTGRES_FAILED") from error
+            return self._outcome(key)
+
+    def _ensure_plan(self, key: str, fingerprint: str, environment_name: str) -> None:
+        with self._database.transaction() as transaction:
+            existing = transaction.execute(
+                """
+                SELECT fingerprint, environment_name, mount_root, status
+                FROM data.development_reset_operations
+                WHERE idempotency_key = %s
+                FOR UPDATE
+                """,
+                (key,),
+            ).fetchone()
+        if existing is not None:
+            expected = {
+                "fingerprint": fingerprint,
+                "environment_name": environment_name,
+                "mount_root": str(self._mount_root),
+            }
+            if {name: existing[name] for name in expected} != expected:
+                raise DevelopmentResetError("RESET_IDEMPOTENCY_CONFLICT")
+            if existing["status"] == "succeeded":
+                return
+            self._validate_fixed_paths(key)
+            with self._database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    UPDATE data.development_reset_operations
+                    SET status = 'running', failure_code = NULL,
+                        finished_at = NULL, updated_at = now()
+                    WHERE idempotency_key = %s
+                    """,
+                    (key,),
+                )
+            return
+
+        paths = _inventory_mount(self._mount_root)
+        with self._database.transaction() as transaction:
+            manifests = _target_manifests(transaction)
+            _validate_manifest_records(transaction, manifests)
+            objects = _manifest_objects(transaction, manifests)
+        self._validate_objects(objects)
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                """
+                INSERT INTO data.development_reset_operations (
+                    idempotency_key, fingerprint, environment_name,
+                    mount_root, status
+                ) VALUES (%s, %s, %s, %s, 'running')
+                """,
+                (key, fingerprint, environment_name, str(self._mount_root)),
+            )
+            with transaction.cursor() as cursor:
+                cursor.executemany(
+                    """
+                    INSERT INTO data.development_reset_manifests (
+                        idempotency_key, manifest_sha256
+                    ) VALUES (%s, %s)
+                    """,
+                    [(key, manifest) for manifest in manifests],
+                )
+                cursor.executemany(
+                    """
+                    INSERT INTO data.development_reset_objects (
+                        idempotency_key, object_sha256, status
+                    ) VALUES (%s, %s, 'pending')
+                    """,
+                    [(key, object_sha256) for object_sha256 in objects],
+                )
+                cursor.executemany(
+                    """
+                    INSERT INTO data.development_reset_paths (
+                        idempotency_key, relative_path, entry_kind, status
+                    ) VALUES (%s, %s, %s, 'pending')
+                    """,
+                    [(key, path, kind) for path, kind in paths],
+                )
+
+    def _reset_postgres(self, key: str) -> None:
+        with self._database.transaction() as transaction:
+            operation = transaction.execute(
+                """
+                SELECT postgres_done FROM data.development_reset_operations
+                WHERE idempotency_key = %s FOR UPDATE
+                """,
+                (key,),
+            ).fetchone()
+            if operation is None:
+                raise RuntimeError("Development Reset operation disappeared")
+            if operation["postgres_done"]:
+                return
+            transaction.execute("DELETE FROM definitions.run_receipts")
+            transaction.execute(
+                """
+                TRUNCATE
+                    daily_tracks.session_progression_attempts,
+                    daily_tracks.session_tracking_states,
+                    daily_tracks.session_progressions,
+                    daily_tracks.session_checkpoints,
+                    daily_tracks.progression_attempts,
+                    daily_tracks.retry_receipts,
+                    daily_tracks.stop_receipts,
+                    daily_tracks.checkpoints,
+                    daily_tracks.progressions,
+                    daily_tracks.tracks,
+                    research_runs.start_tracking_receipts,
+                    research_runs.rerun_receipts,
+                    research_runs.cancel_receipts,
+                    research_runs.attempts,
+                    research_runs.runs
+                """
+            )
+            transaction.execute(
+                """
+                UPDATE data.state
+                SET status = 'idle', latest_update_outcome = NULL,
+                    latest_release_id = NULL, updated_at = now()
+                WHERE singleton = 1
+                """
+            )
+            for table in (
+                "release_fields",
+                "update_attempts",
+                "update_receipts",
+                "releases",
+                "generation_pins",
+                "generation_candidates",
+                "bootstrap_operations",
+                "refresh_operations",
+                "collection_roots",
+                "collection_targets",
+                "collection_operations",
+            ):
+                transaction.execute(f"DELETE FROM data.{table}")
+            transaction.execute(
+                "UPDATE data.current_dataset_state SET last_refresh_at = NULL WHERE singleton = 1"
+            )
+            transaction.execute(
+                """
+                DELETE FROM publication.manifest_objects
+                WHERE manifest_sha256 IN (
+                    SELECT manifest_sha256
+                    FROM data.development_reset_manifests
+                    WHERE idempotency_key = %s
+                )
+                """,
+                (key,),
+            )
+            transaction.execute(
+                """
+                DELETE FROM publication.manifests
+                WHERE sha256 IN (
+                    SELECT manifest_sha256
+                    FROM data.development_reset_manifests
+                    WHERE idempotency_key = %s
+                )
+                """,
+                (key,),
+            )
+            transaction.execute(
+                """
+                UPDATE data.development_reset_objects AS target
+                SET status = 'preserved', updated_at = now()
+                WHERE target.idempotency_key = %s
+                  AND EXISTS (
+                      SELECT 1 FROM publication.manifest_objects AS link
+                      WHERE link.object_sha256 = target.object_sha256
+                  )
+                """,
+                (key,),
+            )
+            transaction.execute(
+                """
+                DELETE FROM publication.objects AS object
+                WHERE object.sha256 IN (
+                    SELECT target.object_sha256
+                    FROM data.development_reset_objects AS target
+                    WHERE target.idempotency_key = %s AND target.status = 'pending'
+                )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM publication.manifest_objects AS link
+                      WHERE link.object_sha256 = object.sha256
+                  )
+                """,
+                (key,),
+            )
+            transaction.execute(
+                """
+                UPDATE data.development_reset_operations
+                SET postgres_done = true, updated_at = now()
+                WHERE idempotency_key = %s
+                """,
+                (key,),
+            )
+
+    def _delete_objects(self, key: str) -> None:
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT object_sha256 FROM data.development_reset_objects
+                WHERE idempotency_key = %s AND status = 'pending'
+                ORDER BY object_sha256
+                """,
+                (key,),
+            ).fetchall()
+        for row in rows:
+            digest = str(row["object_sha256"])
+            try:
+                self._s3.delete_object(Bucket=self._bucket, Key=_object_key(digest))
+            except (BotoCoreError, ClientError) as error:
+                raise DevelopmentResetError("RESET_OBJECT_DELETE_FAILED") from error
+            with self._database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    UPDATE data.development_reset_objects
+                    SET status = 'deleted', updated_at = now()
+                    WHERE idempotency_key = %s AND object_sha256 = %s
+                      AND status = 'pending'
+                    """,
+                    (key, digest),
+                )
+
+    def _delete_mount(self, key: str) -> None:
+        self._validate_fixed_paths(key)
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT relative_path, entry_kind
+                FROM data.development_reset_paths
+                WHERE idempotency_key = %s AND status = 'pending'
+                ORDER BY CASE entry_kind WHEN 'file' THEN 0 ELSE 1 END,
+                         length(relative_path) DESC, relative_path DESC
+                """,
+                (key,),
+            ).fetchall()
+        for row in rows:
+            relative = str(row["relative_path"])
+            try:
+                _delete_relative(self._mount_root, relative, str(row["entry_kind"]))
+            except OSError as error:
+                raise DevelopmentResetError("RESET_MOUNT_DELETE_FAILED") from error
+            with self._database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    UPDATE data.development_reset_paths
+                    SET status = 'deleted', updated_at = now()
+                    WHERE idempotency_key = %s AND relative_path = %s
+                      AND status = 'pending'
+                    """,
+                    (key, relative),
+                )
+
+    def _validate_fixed_paths(self, key: str) -> None:
+        current = set(_inventory_mount(self._mount_root))
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT relative_path, entry_kind, status
+                FROM data.development_reset_paths
+                WHERE idempotency_key = %s
+                """,
+                (key,),
+            ).fetchall()
+        planned = {(str(row["relative_path"]), str(row["entry_kind"])) for row in rows}
+        if not current.issubset(planned):
+            raise DevelopmentResetError("RESET_MOUNT_TARGET_CHANGED")
+        for row in rows:
+            entry = (str(row["relative_path"]), str(row["entry_kind"]))
+            if row["status"] == "pending" and entry not in current:
+                continue
+
+    def _validate_objects(self, objects: tuple[str, ...]) -> None:
+        for digest in objects:
+            try:
+                response = self._s3.head_object(Bucket=self._bucket, Key=_object_key(digest))
+            except (BotoCoreError, ClientError) as error:
+                raise DevelopmentResetError("RESET_OBJECT_TARGET_INVALID") from error
+            metadata = response.get("Metadata", {})
+            if not isinstance(metadata, dict) or metadata.get("sha256") != digest:
+                raise DevelopmentResetError("RESET_OBJECT_TARGET_INVALID")
+
+    def _succeed(self, key: str) -> None:
+        with self._database.transaction() as transaction:
+            remaining = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM data.development_reset_objects
+                     WHERE idempotency_key = %s AND status = 'pending')
+                  + (SELECT count(*) FROM data.development_reset_paths
+                     WHERE idempotency_key = %s AND status = 'pending') AS count
+                """,
+                (key, key),
+            ).fetchone()
+            if remaining is None or int(remaining["count"]) != 0:
+                raise RuntimeError("Development Reset completed with pending targets")
+            transaction.execute(
+                """
+                UPDATE data.development_reset_operations
+                SET status = 'succeeded', failure_code = NULL,
+                    finished_at = now(), updated_at = now()
+                WHERE idempotency_key = %s
+                """,
+                (key,),
+            )
+
+    def _fail(self, key: str, code: str) -> None:
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.development_reset_operations
+                SET status = 'failed', failure_code = %s,
+                    finished_at = now(), updated_at = now()
+                WHERE idempotency_key = %s
+                """,
+                (code, key),
+            )
+
+    def _outcome(self, key: str) -> DevelopmentResetOutcome:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT status,
+                    (SELECT count(*) FROM data.development_reset_objects
+                     WHERE idempotency_key = %s AND status = 'deleted') AS deleted_objects,
+                    (SELECT count(*) FROM data.development_reset_objects
+                     WHERE idempotency_key = %s AND status = 'preserved') AS preserved_objects,
+                    (SELECT count(*) FROM data.development_reset_paths
+                     WHERE idempotency_key = %s AND status = 'deleted') AS deleted_paths
+                FROM data.development_reset_operations
+                WHERE idempotency_key = %s
+                """,
+                (key, key, key, key),
+            ).fetchone()
+        if row is None:
+            raise RuntimeError("Development Reset operation disappeared")
+        return DevelopmentResetOutcome(
+            status=str(row["status"]),
+            deleted_object_count=int(row["deleted_objects"]),
+            preserved_object_count=int(row["preserved_objects"]),
+            deleted_path_count=int(row["deleted_paths"]),
+        )
+
+
+def _guard_environment(environment_name: str, confirmation: str) -> None:
+    if environment_name != _DEVELOPMENT_ENVIRONMENT:
+        raise DevelopmentResetError("RESET_ENVIRONMENT_REFUSED")
+    if confirmation != f"reset:{environment_name}":
+        raise DevelopmentResetError("RESET_CONFIRMATION_MISMATCH")
+
+
+def _safe_mount(path: Path) -> Path:
+    if not path.is_absolute() or not str(path).strip():
+        raise DevelopmentResetError("RESET_MOUNT_UNSAFE")
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError as error:
+        raise DevelopmentResetError("RESET_MOUNT_UNSAFE") from error
+    workspace = Path(__file__).resolve().parents[3]
+    broad_roots = {
+        Path(resolved.anchor),
+        Path("/tmp"),
+        Path("/private/tmp"),
+        Path.home(),
+        workspace,
+        *workspace.parents,
+    }
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or resolved in broad_roots
+    ):
+        raise DevelopmentResetError("RESET_MOUNT_UNSAFE")
+    return resolved
+
+
+def _inventory_mount(root: Path) -> tuple[tuple[str, str], ...]:
+    entries: list[tuple[str, str]] = []
+
+    def visit(directory: Path, relative: PurePosixPath) -> None:
+        try:
+            with os.scandir(directory) as directory_entries:
+                children = sorted(directory_entries, key=lambda entry: entry.name)
+        except OSError as error:
+            raise DevelopmentResetError("RESET_MOUNT_UNSAFE") from error
+        for child in children:
+            child_relative = relative / child.name
+            if child.is_symlink():
+                raise DevelopmentResetError("RESET_MOUNT_UNSAFE")
+            if child.is_dir(follow_symlinks=False):
+                visit(Path(child.path), child_relative)
+                entries.append((child_relative.as_posix(), "directory"))
+            elif child.is_file(follow_symlinks=False):
+                entries.append((child_relative.as_posix(), "file"))
+            else:
+                raise DevelopmentResetError("RESET_MOUNT_UNSAFE")
+
+    visit(root, PurePosixPath())
+    return tuple(entries)
+
+
+def _delete_relative(root: Path, relative: str, kind: str) -> None:
+    path = PurePosixPath(relative)
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(root, flags)
+    try:
+        for component in path.parts[:-1]:
+            child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        try:
+            metadata = os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return
+        if kind == "file" and stat.S_ISREG(metadata.st_mode):
+            os.unlink(path.name, dir_fd=descriptor)
+        elif kind == "directory" and stat.S_ISDIR(metadata.st_mode):
+            os.rmdir(path.name, dir_fd=descriptor)
+        else:
+            raise DevelopmentResetError("RESET_MOUNT_TARGET_CHANGED")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _target_manifests(transaction: PostgresTransaction) -> tuple[str, ...]:
+    rows = transaction.execute(
+        """
+        SELECT DISTINCT manifest_sha256
+        FROM (
+            SELECT result_manifest_sha256 AS manifest_sha256
+            FROM research_runs.runs
+            WHERE result_manifest_sha256 IS NOT NULL
+            UNION ALL
+            SELECT head_manifest_sha256 FROM daily_tracks.tracks
+            WHERE head_manifest_sha256 IS NOT NULL
+            UNION ALL
+            SELECT manifest_sha256 FROM daily_tracks.checkpoints
+            UNION ALL
+            SELECT manifest_sha256 FROM daily_tracks.session_checkpoints
+        ) AS target
+        ORDER BY manifest_sha256
+        """
+    ).fetchall()
+    return tuple(str(row["manifest_sha256"]) for row in rows)
+
+
+def _manifest_objects(
+    transaction: PostgresTransaction,
+    manifests: tuple[str, ...],
+) -> tuple[str, ...]:
+    if not manifests:
+        return ()
+    rows = transaction.execute(
+        """
+        SELECT DISTINCT object_sha256
+        FROM publication.manifest_objects
+        WHERE manifest_sha256 = ANY(%s)
+        ORDER BY object_sha256
+        """,
+        (list(manifests),),
+    ).fetchall()
+    return tuple(str(row["object_sha256"]) for row in rows)
+
+
+def _validate_manifest_records(
+    transaction: PostgresTransaction,
+    manifests: tuple[str, ...],
+) -> None:
+    if not manifests:
+        return
+    rows = transaction.execute(
+        """
+        SELECT sha256, manifest_bytes
+        FROM publication.manifests
+        WHERE sha256 = ANY(%s)
+        ORDER BY sha256
+        """,
+        (list(manifests),),
+    ).fetchall()
+    if tuple(str(row["sha256"]) for row in rows) != manifests:
+        raise DevelopmentResetError("RESET_PUBLICATION_TARGET_INVALID")
+    for row in rows:
+        manifest_bytes = bytes(row["manifest_bytes"])
+        if hashlib.sha256(manifest_bytes).hexdigest() != row["sha256"]:
+            raise DevelopmentResetError("RESET_PUBLICATION_TARGET_INVALID")
+        try:
+            manifest = json.loads(manifest_bytes)
+            described = {
+                str(item["sha256"]) for item in manifest["objects"] if isinstance(item, dict)
+            }
+        except (KeyError, TypeError, ValueError) as error:
+            raise DevelopmentResetError("RESET_PUBLICATION_TARGET_INVALID") from error
+        linked = {
+            str(link["object_sha256"])
+            for link in transaction.execute(
+                """
+                SELECT object_sha256 FROM publication.manifest_objects
+                WHERE manifest_sha256 = %s
+                """,
+                (row["sha256"],),
+            ).fetchall()
+        }
+        if described != linked:
+            raise DevelopmentResetError("RESET_PUBLICATION_TARGET_INVALID")
+
+
+def _object_key(digest: str) -> str:
+    return f"publication/v1/sha256/{digest[:2]}/{digest}"
+
+
+def _identity(value: str) -> str:
+    if not value.strip() or value != value.strip():
+        raise DevelopmentResetError("RESET_IDEMPOTENCY_KEY_INVALID")
+    return value
+
+
+__all__ = (
+    "DevelopmentReset",
+    "DevelopmentResetError",
+    "DevelopmentResetOutcome",
+)

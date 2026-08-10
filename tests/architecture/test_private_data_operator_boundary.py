@@ -31,3 +31,23 @@ def test_generation_collection_is_only_wired_to_the_private_operator() -> None:
     assert 'add_parser("collect")' in operator
     for path in ordinary_paths:
         assert "DataGarbageCollector" not in (root / path).read_text()
+
+
+def test_development_reset_is_only_wired_to_the_private_operator() -> None:
+    root = Path(__file__).resolve().parents[2]
+    operator = (root / "src/thesistrace/entrypoints/data_operator.py").read_text()
+    ordinary = "\n".join(
+        (root / path).read_text()
+        for path in (
+            "src/thesistrace/entrypoints/http.py",
+            "src/thesistrace/entrypoints/runtime.py",
+            "src/thesistrace/entrypoints/worker.py",
+        )
+    )
+    web = "\n".join(path.read_text() for path in sorted((root / "web/src").rglob("*.tsx")))
+
+    assert 'add_parser("development-reset")' in operator
+    assert 'add_argument("--environment", required=True)' in operator
+    assert 'add_argument("--confirm", required=True)' in operator
+    assert "DevelopmentReset" not in ordinary
+    assert "development reset" not in web.lower()
