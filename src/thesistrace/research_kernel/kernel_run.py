@@ -17,8 +17,6 @@ from thesistrace.research_kernel.factor import build_forward_labels, evaluate_fa
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import transition_strategy
 
-INPUT_SESSION_COUNT = 756
-
 
 class KernelRunError(ValueError):
     pass
@@ -228,22 +226,9 @@ def run(run_input: RunInput) -> RunOutput:
     calendar = canonical.get("research_calendar")
     if not isinstance(calendar, list) or not calendar:
         raise KernelRunError("Kernel Run requires canonical Research Sessions")
-    if run_input.research_start_session is None and run_input.research_end_session is None:
-        return _run_legacy_window(run_input, canonical, calendar)
     if run_input.research_start_session is None or run_input.research_end_session is None:
         raise KernelRunError("Research Period requires both first and last Research Sessions")
     return _run_explicit_period(run_input, canonical, [str(session) for session in calendar])
-
-
-def _run_legacy_window(
-    run_input: RunInput,
-    canonical: dict[str, object],
-    calendar: list[object],
-) -> RunOutput:
-    if len(calendar) != INPUT_SESSION_COUNT:
-        raise KernelRunError("Kernel Run requires exactly 756 canonical sessions")
-    origin_session = str(calendar[-504])
-    return _calculate(run_input, canonical, origin_session=origin_session)
 
 
 def _run_explicit_period(
@@ -291,7 +276,7 @@ def _calculate(
     canonical: dict[str, object],
     *,
     origin_session: str,
-    period_sessions: list[str] | None = None,
+    period_sessions: list[str],
 ) -> RunOutput:
     alpha_expression = run_input.alpha_expression_snapshot()
     definition = calculation_definition(run_input, alpha_expression)
@@ -302,12 +287,11 @@ def _calculate(
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
     )
-    if period_sessions is not None:
-        selected = set(period_sessions)
-        matrix["sessions"] = [
-            session for session in matrix["sessions"] if str(session["session"]) in selected
-        ]
-        matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
+    selected = set(period_sessions)
+    matrix["sessions"] = [
+        session for session in matrix["sessions"] if str(session["session"]) in selected
+    ]
+    matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
     labels = build_forward_labels(canonical, matrix, signal_sessions=period_sessions)
     factor = evaluate_factor(labels)
     strategy = transition_strategy(

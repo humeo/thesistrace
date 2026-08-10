@@ -112,11 +112,22 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
         },
     }
 
-    result = run_strategy(canonical, matrix, definition)
-    repeated = run_strategy(canonical, matrix, definition)
+    origin_session = str(canonical["research_calendar"][0])
+    result = run_strategy(
+        canonical,
+        matrix,
+        definition,
+        origin_session=origin_session,
+    )
+    repeated = run_strategy(
+        canonical,
+        matrix,
+        definition,
+        origin_session=origin_session,
+    )
 
     assert result["checksum"] == repeated["checksum"]
-    assert len(result["daily"]) == 504
+    assert len(result["daily"]) == len(canonical["research_calendar"])
     assert result["daily"][0]["net_nav"] == "1e+7"
     assert result["daily"][0]["holdings_count"] == 0
     assert result["daily"][1]["holdings_count"] > 0
@@ -172,7 +183,8 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     assert result["rebalance_events"][0]["actual_weights"]
 
     metric_state = None
-    for chunk in (result["daily"][:211], result["daily"][211:]):
+    midpoint = len(result["daily"]) // 2
+    for chunk in (result["daily"][:midpoint], result["daily"][midpoint:]):
         sessions = {str(row["session"]) for row in chunk}
         metric_state = advance_strategy_metric_state(
             metric_state,
@@ -230,7 +242,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
             "transfer_fee_rate": "0.00001",
         },
     }
-    report_start = len(canonical["research_calendar"]) - 504
+    report_start = 0
     missing_session = canonical["research_calendar"][report_start + 2]
     held_candidate = matrix["sessions"][report_start]["values"][-1]["instrument_id"]
     canonical["prices"] = [
@@ -245,7 +257,12 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
     ]
 
     with pytest.raises(StrategyCalculationError, match="unexplained missing Open"):
-        run_strategy(canonical, matrix, definition)
+        run_strategy(
+            canonical,
+            matrix,
+            definition,
+            origin_session=str(canonical["research_calendar"][report_start]),
+        )
 
 
 def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
@@ -258,7 +275,7 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
         neutralization="none",
     )
     definition = strategy_definition(rebalance_interval=20)
-    report_start = len(canonical["research_calendar"]) - 504
+    report_start = 0
     suspended_session = canonical["research_calendar"][report_start + 2]
     held_candidate = matrix["sessions"][report_start]["values"][-1]["instrument_id"]
     canonical["prices"] = [
@@ -270,7 +287,12 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
         if row["session"] == suspended_session and row["instrument_id"] == held_candidate:
             row["state"] = "full_session_suspension"
 
-    result = run_strategy(canonical, matrix, definition)
+    result = run_strategy(
+        canonical,
+        matrix,
+        definition,
+        origin_session=str(canonical["research_calendar"][report_start]),
+    )
 
     assert {
         "session": suspended_session,
@@ -319,7 +341,7 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
         universe_name="top300",
         neutralization="none",
     )
-    report_start = len(canonical["research_calendar"]) - 504
+    report_start = 0
     execution_session = canonical["research_calendar"][report_start + 1]
     target = matrix["sessions"][report_start]["values"][-1]["instrument_id"]
     canonical["prices"] = [
@@ -335,6 +357,7 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
         canonical,
         matrix,
         strategy_definition(rebalance_interval=20),
+        origin_session=str(canonical["research_calendar"][report_start]),
     )
 
     rejection = next(
@@ -357,7 +380,7 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
         neutralization="none",
     )
     definition = strategy_definition(rebalance_interval=20)
-    report_start = len(canonical["research_calendar"]) - 504
+    report_start = 0
     delist_session = canonical["research_calendar"][report_start + 2]
     held_candidate = matrix["sessions"][report_start]["values"][-1]["instrument_id"]
     canonical["prices"] = [
@@ -377,7 +400,12 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
                     if instrument_id != held_candidate
                 ]
 
-    result = run_strategy(canonical, matrix, definition)
+    result = run_strategy(
+        canonical,
+        matrix,
+        definition,
+        origin_session=str(canonical["research_calendar"][report_start]),
+    )
 
     event = {
         "session": delist_session,

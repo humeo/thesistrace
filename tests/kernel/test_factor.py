@@ -13,7 +13,7 @@ from thesistrace.research_kernel.factor import (
 )
 
 
-def test_forward_labels_use_next_open_timing_and_fixed_report_limits() -> None:
+def test_forward_labels_use_next_open_timing_and_explicit_period_limits() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         canonical,
@@ -22,13 +22,19 @@ def test_forward_labels_use_next_open_timing_and_fixed_report_limits() -> None:
         universe_name="top300",
         neutralization="none",
     )
-    labels = build_forward_labels(canonical, matrix)
+    signal_sessions = [str(session) for session in canonical["research_calendar"]]
+    labels = build_forward_labels(
+        canonical,
+        matrix,
+        signal_sessions=signal_sessions,
+    )
 
     assert labels["alpha_checksum"] == matrix["checksum"]
     assert set(labels["horizons"]) == {"1", "5", "20"}
-    assert sum(bool(day["samples"]) for day in labels["horizons"]["1"]["sessions"]) == 502
-    assert sum(bool(day["samples"]) for day in labels["horizons"]["5"]["sessions"]) == 498
-    assert sum(bool(day["samples"]) for day in labels["horizons"]["20"]["sessions"]) == 483
+    assert len(labels["horizons"]["1"]["sessions"]) == len(signal_sessions)
+    assert sum(bool(day["samples"]) for day in labels["horizons"]["1"]["sessions"]) == 62
+    assert sum(bool(day["samples"]) for day in labels["horizons"]["5"]["sessions"]) == 58
+    assert sum(bool(day["samples"]) for day in labels["horizons"]["20"]["sessions"]) == 43
 
     first = labels["horizons"]["5"]["sessions"][0]
     sample = first["samples"][0]
@@ -120,7 +126,7 @@ def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
         ],
     }
 
-    labels = build_forward_labels(canonical, matrix, report_sessions=5)
+    labels = build_forward_labels(canonical, matrix, signal_sessions=sessions)
     first = labels["horizons"]["1"]["sessions"][0]
 
     assert first["samples"] == [{"instrument_id": "equity:X.SH", "alpha": 1.0, "label": -1.0}]
@@ -146,7 +152,11 @@ def test_unexplained_label_open_is_a_hard_data_failure() -> None:
     }
 
     with pytest.raises(FactorDataError, match="unexplained Label entry Open"):
-        build_forward_labels(canonical, matrix, report_sessions=3)
+        build_forward_labels(
+            canonical,
+            matrix,
+            signal_sessions=canonical["research_calendar"],
+        )
 
 
 def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:
@@ -158,7 +168,12 @@ def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:
         universe_name="top300",
         neutralization="none",
     )
-    labels = build_forward_labels(canonical, matrix)
+    signal_sessions = [str(item["session"]) for item in matrix["sessions"]]
+    labels = build_forward_labels(
+        canonical,
+        matrix,
+        signal_sessions=signal_sessions,
+    )
     evaluation = evaluate_factor(labels)
     repeated = evaluate_factor(labels)
 
@@ -166,7 +181,7 @@ def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:
     assert set(evaluation["horizons"]) == {"1", "5", "20"}
     for horizon in ("1", "5", "20"):
         result = evaluation["horizons"][horizon]
-        assert len(result["daily"]) == 504
+        assert len(result["daily"]) == len(signal_sessions)
         assert len(result["checksum"]) == 64
         assert result["summary"]["rank_ic"]["valid_session_count"] > 0
         assert result["summary"]["ic"]["valid_session_count"] > 0

@@ -859,6 +859,7 @@ class DailyTrackService:
                     )
             factor = _public_factor(factor_value)
             universe = _origin_universe(origin)
+            recent_strategy_sessions = sorted(observations_by_session)[-504:]
             return DailyTrackDetail.model_validate(
                 {
                     "id": str(row["id"]),
@@ -885,7 +886,7 @@ class DailyTrackService:
                         },
                         "observations": [
                             observations_by_session[session]
-                            for session in sorted(observations_by_session)
+                            for session in recent_strategy_sessions
                         ],
                     },
                 }
@@ -1090,15 +1091,7 @@ class DailyTrackService:
         )
 
         seed = self._load_canonical(origin.seed_release_id)
-        seed_sessions = canonical_sessions(seed, "Seed Dataset Release")
-        if len(seed_sessions) < 756:
-            raise RuntimeError("Seed Dataset Release has fewer than 756 sessions")
-        state = run(
-            _kernel_input(
-                origin,
-                slice_canonical_sessions(seed, seed_sessions[-756:]),
-            )
-        ).track_state
+        state = run(_kernel_input(origin, seed)).track_state
         _assert_equivalent(
             state.boundary_session,
             origin.initial_strategy_state.session,
@@ -2119,10 +2112,7 @@ class DailyTrackService:
         assert self._load_canonical is not None
         if claim.head_manifest_sha256 is None:
             seed = self._load_canonical(claim.origin.seed_release_id)
-            sessions = canonical_sessions(seed, "Seed Dataset Release")
-            if len(sessions) < 756:
-                raise RuntimeError("Seed Dataset Release has fewer than 756 sessions")
-            canonical = slice_canonical_sessions(seed, sessions[-756:])
+            canonical = seed
             state = run(_kernel_input(claim.origin, canonical)).track_state
             if state.boundary_session != claim.origin.initial_strategy_state.session:
                 raise RuntimeError("Tracking Origin Strategy boundary is inconsistent")
@@ -2207,18 +2197,7 @@ class DailyTrackService:
         )
         if use_seed_continuation:
             seed = self._load_canonical(claim.origin.seed_release_id)
-            seed_sessions = canonical_sessions(seed, "Seed Dataset Release")
-            if len(seed_sessions) < 756:
-                raise RuntimeError("Seed Dataset Release has fewer than 756 sessions")
-            seed_state = run(
-                _kernel_input(
-                    claim.origin,
-                    slice_canonical_sessions(
-                        seed,
-                        seed_sessions[-756:],
-                    ),
-                )
-            ).track_state
+            seed_state = run(_kernel_input(claim.origin, seed)).track_state
             continuation = continuation_snapshot(seed_state)
         else:
             continuation = empty_continuation()
@@ -2801,6 +2780,16 @@ def _kernel_input(origin: TrackingOrigin, canonical: dict[str, object]) -> RunIn
     field_bindings = immutable_input.get("field_bindings")
     if not all(isinstance(value, Mapping) for value in (alpha, strategy, costs, field_bindings)):
         raise RuntimeError("Tracking Origin calculation input is invalid")
+    calendar = canonical_sessions(canonical, "Tracking Origin Dataset")
+    requested_start = immutable_input.get("requested_start_date")
+    requested_end = immutable_input.get("requested_end_date")
+    if not isinstance(requested_start, str) or not isinstance(requested_end, str):
+        raise RuntimeError("Tracking Origin Research Period is invalid")
+    selected = [
+        session for session in calendar if requested_start <= session <= requested_end
+    ]
+    if not selected:
+        raise RuntimeError("Tracking Origin Research Period has no Research Session")
     return RunInput(
         canonical_data=canonical,
         alpha_expression=dict(alpha),
@@ -2814,6 +2803,8 @@ def _kernel_input(origin: TrackingOrigin, canonical: dict[str, object]) -> RunIn
         commission_min_cny=str(costs["commission_min_cny"]),
         stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        research_start_session=selected[0],
+        research_end_session=selected[-1],
     )
 
 

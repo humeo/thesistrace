@@ -5,18 +5,18 @@ from thesistrace.research_kernel.numeric import canonical_binary64_bytes, canoni
 from thesistrace.research_kernel.strategy import equal_weight_benchmark_return
 
 EXPECTED_CHECKSUMS = {
-    "alpha": "c002b936f6e730c3a3e4a98161a4ec1f805beb9d509f96d053cf131c5927be6f",
+    "alpha": "f01531eccc3d83f1965aaabf807515fc4905288b678be90e16e96c571533bcd9",
     "labels": {
-        "1": "e88df02d1dde19e1747b24c5e64cfe1b86840b655ed3455cbc9250356be84dd2",
-        "5": "cf7fb440780cc7cba49cba09f186f991a7629a2cfdd22cf0110e32408def9003",
-        "20": "7e3cc055cee9b504a884f8d451ac8dc73ed3442cff49bb66315ede48c907a6a7",
+        "1": "e1dc8426e781721a6edf2c51183efecc9e2fa58442aca6d5365b871f2a7f3a76",
+        "5": "b6d1365bd73eca934d14d1e522c9010a2a9113aa51de78c9d038bc578c358f2f",
+        "20": "181b9c2f9846ac4f5c4f6c07dea4381203992b596f56c3e8a443f7dad802b5ab",
     },
     "factor": {
-        "1": "83f8d777d8c4f89bf5d0169be3cae4062c2d1719a923591001f3604b1159c362",
-        "5": "028ac4864245fc1bf372e262be8d27543b6bd260837cea832eec936de44beef7",
-        "20": "2058d8355d9c8b02e93c31470e5f69ef92ba7a98de631d79d612b4ed957a16b5",
+        "1": "df83b228089bff71f4ca11ff17ed8c3bcef1bc5aac62f6b9bc79924328fac460",
+        "5": "454d36118c0e2043ccc9fedaa583a31baeb44f7efe67f32649698352c63ed60a",
+        "20": "e39a9104975254cabbfc1836a6e2bd4803add54a0ad07a83528ccfe396ede443",
     },
-    "strategy": "11ef9091b14903b3cebb91b888b03a9c8f9aaccf235b76e44c05112b96717433",
+    "strategy": "086d662a6db387761ee55a361a164edfc6e13321c8ac806d2c2b63dc80e6cc0d",
 }
 
 
@@ -30,11 +30,11 @@ def test_accepted_quantitative_boundaries_are_frozen(
 
     assert matrix["checksum"] == EXPECTED_CHECKSUMS["alpha"]
     assert matrix["effective_lookback"] == 20
-    assert matrix["sessions"][-504]["session"] == "2024-08-23"
-    assert matrix["sessions"][-504]["values"][:3] == [
-        {"instrument_id": "equity:000001.SZ", "value": -0.013173652694610904},
-        {"instrument_id": "equity:000003.SZ", "value": -0.012571428571428678},
-        {"instrument_id": "equity:000005.SZ", "value": -0.012021857923497192},
+    assert matrix["sessions"][0]["session"] == "2026-05-29"
+    assert matrix["sessions"][0]["values"][:3] == [
+        {"instrument_id": "equity:000001.SZ", "value": 0.02444987775061147},
+        {"instrument_id": "equity:000003.SZ", "value": 0.023310023310023187},
+        {"instrument_id": "equity:000005.SZ", "value": 0.022271714922048824},
     ]
     assert all(
         [row["instrument_id"] for row in session["values"]]
@@ -42,7 +42,7 @@ def test_accepted_quantitative_boundaries_are_frozen(
         for session in matrix["sessions"]
     )
 
-    assert labels["report_session_count"] == 504
+    assert labels["report_session_count"] == 44
     assert {
         horizon: labels["horizons"][horizon]["checksum"] for horizon in ("1", "5", "20")
     } == EXPECTED_CHECKSUMS["labels"]
@@ -61,12 +61,12 @@ def test_accepted_quantitative_boundaries_are_frozen(
     assert {
         horizon: factor["horizons"][horizon]["summary"]["ic"]["valid_session_count"]
         for horizon in ("1", "5", "20")
-    } == {"1": 502, "5": 498, "20": 483}
+    } == {"1": 42, "5": 38, "20": 23}
 
     assert strategy["checksum"] == EXPECTED_CHECKSUMS["strategy"]
-    assert len(strategy["daily"]) == 504
+    assert len(strategy["daily"]) == 44
     assert _daily_boundary(strategy["daily"][0]) == {
-        "session": "2024-08-23",
+        "session": "2026-05-29",
         "gross_nav": "1e+7",
         "net_nav": "1e+7",
         "benchmark_nav": "1e+0",
@@ -77,10 +77,10 @@ def test_accepted_quantitative_boundaries_are_frozen(
     }
     assert _daily_boundary(strategy["daily"][-1]) == {
         "session": "2026-07-29",
-        "gross_nav": "96879440930735930735930736e-19",
-        "net_nav": "9336960784113593073593073596e-21",
-        "benchmark_nav": "1101382289594383888352628991e-27",
-        "net_cash": "695784113593073593073596e-21",
+        "gross_nav": "9702899e+0",
+        "net_nav": "967759052382e-5",
+        "benchmark_nav": "9822402584754961170254219637e-28",
+        "net_cash": "92552382e-5",
         "holdings_count": 10,
         "rebalance": False,
         "cycle_type": "terminal_valuation",
@@ -91,21 +91,21 @@ def test_accepted_quantitative_boundaries_are_frozen(
     ] == [
         {
             "order_id": 0,
-            "instrument_id": "equity:600034.SH",
+            "instrument_id": "equity:600000.SH",
             "side": "buy",
-            "legal_quantity": 67300,
+            "legal_quantity": 121800,
         },
         {
             "order_id": 1,
-            "instrument_id": "equity:000033.SZ",
+            "instrument_id": "equity:000001.SZ",
             "side": "buy",
-            "legal_quantity": 68200,
+            "legal_quantity": 118900,
         },
         {
             "order_id": 2,
-            "instrument_id": "equity:600032.SH",
+            "instrument_id": "equity:600002.SH",
             "side": "buy",
-            "legal_quantity": 69200,
+            "legal_quantity": 116100,
         },
     ]
     assert {
@@ -119,13 +119,14 @@ def test_accepted_quantitative_boundaries_are_frozen(
             "sharpe",
         )
     } == {
-        "gross_cumulative_return": -0.031205590692640693,
-        "net_cumulative_return": -0.0663039215886407,
-        "benchmark_cumulative_return": 0.10138228959438389,
-        "annualized_excess_return": -0.07941812853681218,
-        "annualized_volatility": 0.10505935281412912,
-        "sharpe": -0.27412571961790205,
+        "gross_cumulative_return": -0.0297101,
+        "net_cumulative_return": -0.032240947618,
+        "benchmark_cumulative_return": -0.017759741524503884,
+        "annualized_excess_return": -0.0833635130245971,
+        "annualized_volatility": 0.11365945883188307,
+        "sharpe": -1.6324393725923343,
     }
+
 
 def test_independent_edge_fixture_freezes_numeric_missing_order_and_benchmark() -> None:
     assert canonical_decimal(Decimal("123.4500")) == "12345e-2"

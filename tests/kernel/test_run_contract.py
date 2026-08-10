@@ -43,7 +43,8 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
 ) -> None:
     artifacts = accepted_kernel_run.artifacts_snapshot()
     ledger = accepted_kernel_run.strategy_ledger_snapshot()
-    assert isinstance(ledger, list) and len(ledger) == 504
+    assert isinstance(ledger, list)
+    assert len(ledger) == len(artifacts["strategy_backtest"]["daily"])
     assert "strategy_ledger" not in artifacts
     assert "strategy_ledger" not in accepted_kernel_run.track_state.output_snapshot()
 
@@ -147,7 +148,31 @@ def test_kernel_run_input_rejects_string_alpha_expression(
         )
 
 
-def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
+def test_kernel_run_requires_an_explicit_research_period(
+    accepted_calculation_case: dict[str, object],
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    assert isinstance(definition, dict)
+
+    with pytest.raises(
+        KernelRunError,
+        match="Research Period requires both first and last Research Sessions",
+    ):
+        run(
+            _run_input(
+                accepted_calculation_case["canonical"],
+                definition,
+                include_period=False,
+            )
+        )
+
+
+def _run_input(
+    canonical: object,
+    definition: dict[str, object],
+    *,
+    include_period: bool = True,
+) -> RunInput:
     alpha = definition["alpha"]
     strategy = definition["strategy"]
     costs = definition["costs"]
@@ -155,6 +180,8 @@ def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
     assert isinstance(alpha, dict)
     assert isinstance(strategy, dict)
     assert isinstance(costs, dict)
+    calendar = canonical["research_calendar"]
+    assert isinstance(calendar, list)
     return RunInput(
         canonical_data=canonical,
         alpha_expression=alpha["expression"],
@@ -168,4 +195,6 @@ def _run_input(canonical: object, definition: dict[str, object]) -> RunInput:
         commission_min_cny=str(costs["commission_min_cny"]),
         stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        research_start_session=str(calendar[20]) if include_period else None,
+        research_end_session=str(calendar[-1]) if include_period else None,
     )

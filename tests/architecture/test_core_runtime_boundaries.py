@@ -149,7 +149,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
         active_strings = "\n".join(
             _string_literals(path)
             for path in (ROOT / "src" / "thesistrace" / module).rglob("*.py")
-            if path.name != "migrations.py"
+            if path.name not in {"migrations.py", "development_reset.py"}
         )
         for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
             assert f"{foreign_schema}." not in active_strings, (
@@ -881,6 +881,38 @@ def test_kernel_run_and_advance_share_the_same_calculation_path() -> None:
         "thesistrace." + "research_runs",
     ):
         assert forbidden not in advance_source
+
+
+def test_fixed_research_period_compatibility_is_absent() -> None:
+    package = ROOT / "src" / "thesistrace"
+    run_source = (package / "research_kernel" / "kernel_run.py").read_text()
+    factor_source = (package / "research_kernel" / "factor.py").read_text()
+    strategy_source = (package / "research_kernel" / "strategy.py").read_text()
+    track_source = (package / "daily_track" / "service.py").read_text()
+    fixture_source = (package / "fixture.py").read_text()
+
+    for forbidden in (
+        "INPUT_SESSION_COUNT",
+        "_run_legacy_window",
+        "requires exactly 756",
+    ):
+        assert forbidden not in run_source
+    assert "report_sessions: int = 504" not in factor_source
+    assert "len(calendar) - 504 if origin_session is None" not in strategy_source
+    assert "[-756:]" not in track_source
+    assert "fewer than 756 sessions" not in track_source
+    assert "while len(sessions) < 756" not in fixture_source
+
+    # These are independent accepted bounds, not fixed Research Period forms.
+    assert "MAX_ALPHA_LOOKBACK_SESSIONS = 252" in (
+        package / "research_kernel" / "kernel_advance.py"
+    ).read_text()
+    assert "MAX_ROLLING_FACTOR_SESSIONS = 504" in (
+        package / "research_kernel" / "kernel_advance.py"
+    ).read_text()
+    assert "RESULT_BUDGET_SESSION_BLOCK = 504" in (
+        package / "research_run" / "result.py"
+    ).read_text()
 
 
 def _string_literals(path: Path) -> str:

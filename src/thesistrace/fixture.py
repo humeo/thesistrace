@@ -88,8 +88,14 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
     }
 
 
-def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
-    sessions = research_sessions()
+DEFAULT_FIXTURE_SESSION_COUNT = 64
+
+
+def build_fixture(
+    *,
+    session_count: int = DEFAULT_FIXTURE_SESSION_COUNT,
+) -> tuple[dict[str, object], dict[str, object]]:
+    sessions = research_sessions(session_count=session_count)
     instruments = instrument_reference(sessions[0])
     anchor_factors = {
         instrument["instrument_id"]: adjustment_factor(0) for instrument in instruments
@@ -188,10 +194,12 @@ def build_fixture() -> tuple[dict[str, object], dict[str, object]]:
     return source, canonical
 
 
-def research_sessions() -> list[str]:
+def research_sessions(*, session_count: int = DEFAULT_FIXTURE_SESSION_COUNT) -> list[str]:
+    if session_count < 1:
+        raise ValueError("Fixture session count must be positive")
     current = date(2026, 7, 29)
     sessions: list[str] = []
-    while len(sessions) < 756:
+    while len(sessions) < session_count:
         if current.weekday() < 5:
             sessions.append(current.isoformat())
         current -= timedelta(days=1)

@@ -13,7 +13,7 @@ def test_fixture_implements_only_the_canonical_collection_contract(
 
     assert batch.collection_kind == "bootstrap"
     assert batch.source_name == "fixture"
-    assert len(batch.canonical["research_calendar"]) == 756
+    assert len(batch.canonical["research_calendar"]) == 64
     assert batch.canonical["schema_version"] == "canonical-eod-v1"
     assert batch.covered_session_range == (
         batch.canonical["research_calendar"][0],
@@ -40,15 +40,15 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps(
     wider_source = FixtureDataSource(sessions_after_bootstrap=3)
     catch_up = wider_source.collect(CollectionPlan.incremental(frontier))
 
-    assert len(direct.canonical["research_calendar"]) == 757
-    assert len(catch_up.canonical["research_calendar"]) == 759
+    assert len(direct.canonical["research_calendar"]) == 65
+    assert len(catch_up.canonical["research_calendar"]) == 67
     assert direct.collection_kind == catch_up.collection_kind == "incremental"
     assert catch_up.source_lineage["source_horizon_sessions_after_bootstrap"] == 3
 
     intermediate_catch_up = wider_source.collect(
         CollectionPlan.incremental(direct.covered_session_range[1])
     )
-    assert len(intermediate_catch_up.canonical["research_calendar"]) == 759
+    assert len(intermediate_catch_up.canonical["research_calendar"]) == 67
     assert (
         len(intermediate_catch_up.canonical["research_calendar"])
         - len(direct.canonical["research_calendar"])
@@ -58,7 +58,7 @@ def test_fixture_collects_direct_and_wider_incremental_source_gaps(
     no_change = FixtureDataSource().collect(
         CollectionPlan.incremental(direct.covered_session_range[1])
     )
-    assert len(no_change.canonical["research_calendar"]) == 757
+    assert len(no_change.canonical["research_calendar"]) == 65
     assert no_change.covered_session_range == direct.covered_session_range
 
 
@@ -73,7 +73,7 @@ def test_fixture_availability_sequence_advances_deterministically_by_frontier() 
         observed_counts.append(len(batch.canonical["research_calendar"]))
         frontier = batch.covered_session_range[1]
 
-    assert observed_counts == [757, 758, 759, 759]
+    assert observed_counts == [65, 66, 67, 67]
 
 
 def test_fixture_uses_the_provider_independent_error_contract() -> None:

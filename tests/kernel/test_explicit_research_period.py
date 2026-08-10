@@ -262,6 +262,7 @@ def test_explicit_period_advance_matches_batch_across_irregular_chunks(
                     list(SESSIONS[: SESSIONS.index(boundary) + 1]),
                 ),
                 appended_sessions=[SESSIONS[index] for index in chunk],
+                continuation=continuation_snapshot(actual),
             )
         )
 

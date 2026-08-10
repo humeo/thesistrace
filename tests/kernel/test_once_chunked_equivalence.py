@@ -2,7 +2,12 @@ import copy
 
 from fixture_sessions import extend_fixture_sessions
 
-from thesistrace.research_kernel import AdvanceInput, KernelState, advance
+from thesistrace.research_kernel import (
+    AdvanceInput,
+    KernelState,
+    advance,
+    continuation_snapshot,
+)
 from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 
@@ -21,6 +26,7 @@ def test_one_batch_and_multi_advance_reach_exactly_the_same_kernel_state(
             prior_state=seed,
             target_canonical_release=complete,
             appended_sessions=new_sessions,
+            continuation=continuation_snapshot(seed),
         )
     )
     chunked = seed
@@ -30,6 +36,7 @@ def test_one_batch_and_multi_advance_reach_exactly_the_same_kernel_state(
                 prior_state=chunked,
                 target_canonical_release=_target_through(complete, chunk[-1]),
                 appended_sessions=chunk,
+                continuation=continuation_snapshot(chunked),
             )
         )
 
@@ -44,8 +51,15 @@ def test_one_batch_and_multi_advance_reach_exactly_the_same_kernel_state(
     labels = output["forward_labels"]
     factor = output["factor_evaluation"]
     strategy = output["strategy_backtest"]
-    assert all(len(labels["horizons"][horizon]["sessions"]) == 504 for horizon in ("1", "5", "20"))
-    assert all(len(factor["horizons"][horizon]["daily"]) == 504 for horizon in ("1", "5", "20"))
+    period_count = len(strategy["daily"])
+    assert all(
+        len(labels["horizons"][horizon]["sessions"]) == period_count
+        for horizon in ("1", "5", "20")
+    )
+    assert all(
+        len(factor["horizons"][horizon]["daily"]) == period_count
+        for horizon in ("1", "5", "20")
+    )
     assert (
         strategy["daily"][-1]["benchmark_nav"]
         == one_batch.output_snapshot()["strategy_backtest"]["daily"][-1]["benchmark_nav"]

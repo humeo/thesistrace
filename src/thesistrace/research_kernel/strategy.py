@@ -175,11 +175,9 @@ def run_strategy(
 ) -> dict[str, object]:
     calendar = [str(value) for value in canonical["research_calendar"]]
     if continuation is None:
-        origin_index = (
-            len(calendar) - 504 if origin_session is None else calendar.index(origin_session)
-        )
-        if origin_index < 0 or len(calendar) - origin_index < 1:
-            raise StrategyCalculationError("Strategy requires at least one report session")
+        if origin_session is None:
+            raise StrategyCalculationError("Strategy requires an explicit origin session")
+        origin_index = calendar.index(origin_session)
         processing_start = origin_index
     else:
         prior_daily = continuation.get("daily")
