@@ -80,7 +80,7 @@ services:
     healthcheck:
       test: ["CMD", "thesistrace-core-worker", "--healthcheck"]
       interval: 5s
-      timeout: 5s
+      timeout: 30s
       retries: 60
 
   web:
