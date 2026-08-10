@@ -374,12 +374,12 @@ MIGRATIONS = MigrationPlan(
                     ordinal integer NOT NULL CHECK (ordinal >= 0),
                     file_kind text NOT NULL CHECK (file_kind IN ('manifest', 'object')),
                     sha256 text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
-                    status text NOT NULL CHECK (status IN ('pending', 'deleted')),
+                    status text NOT NULL CHECK (status IN ('pending', 'deleting', 'deleted')),
                     deleted_at timestamptz NULL,
                     PRIMARY KEY (idempotency_key, ordinal),
                     UNIQUE (idempotency_key, file_kind, sha256),
                     CHECK (
-                        (status = 'pending' AND deleted_at IS NULL)
+                        (status IN ('pending', 'deleting') AND deleted_at IS NULL)
                         OR (status = 'deleted' AND deleted_at IS NOT NULL)
                     )
                 );

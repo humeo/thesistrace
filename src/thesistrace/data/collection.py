@@ -18,6 +18,8 @@ from thesistrace.data.lifecycle import (
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 
+_COLLECTION_LOCK = "thesistrace-generation-collection"
+
 
 class DataCollectionError(RuntimeError):
     def __init__(self, code: str) -> None:
@@ -43,14 +45,15 @@ class DataGarbageCollector:
 
     def collect(self, *, idempotency_key: str) -> CollectionOutcome:
         key = _identity(idempotency_key)
-        try:
-            self._ensure_plan(key)
-            failure_code = self._execute_plan(key)
-        except (DataLifecycleError, DatasetHeadError, GenerationStoreError) as error:
-            raise DataCollectionError("COLLECTION_ROOTS_INVALID") from error
-        if failure_code is not None:
-            raise DataCollectionError(failure_code)
-        return self._outcome(key)
+        with self._database.session_advisory_lock(_COLLECTION_LOCK):
+            try:
+                self._ensure_plan(key)
+                failure_code = self._execute_plan(key)
+            except (DataLifecycleError, DatasetHeadError, GenerationStoreError) as error:
+                raise DataCollectionError("COLLECTION_ROOTS_INVALID") from error
+            if failure_code is not None:
+                raise DataCollectionError(failure_code)
+            return self._outcome(key)
 
     def _ensure_plan(self, key: str) -> None:
         with self._database.transaction() as transaction:
@@ -65,7 +68,26 @@ class DataGarbageCollector:
                 (key,),
             ).fetchone()
             if existing is not None:
+                if existing["status"] == "succeeded":
+                    return
+                if _data_work_is_active(transaction):
+                    raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
+                retained = self._retained_files(transaction)
+                targets = _targets(transaction, key)
+                if retained & targets:
+                    raise DataCollectionError("COLLECTION_ROOT_SET_CHANGED")
+                transaction.execute(
+                    """
+                    UPDATE data.collection_operations
+                    SET status = 'running', failure_code = NULL,
+                        finished_at = NULL, updated_at = now()
+                    WHERE idempotency_key = %s
+                    """,
+                    (key,),
+                )
                 return
+            if _data_work_is_active(transaction):
+                raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
             retained = self._retained_files(transaction)
             targets = tuple(sorted(self._generations.inventory() - retained))
             plan_sha256 = hashlib.sha256(
@@ -95,7 +117,21 @@ class DataGarbageCollector:
                 )
 
     def _execute_plan(self, key: str) -> str | None:
+        while True:
+            reference = self._claim_target(key)
+            if reference is None:
+                self._succeed(key)
+                return None
+            try:
+                self._generations.delete_file(reference)
+            except GenerationStoreError:
+                self._fail(key, "COLLECTION_FILESYSTEM_FAILURE")
+                return "COLLECTION_FILESYSTEM_FAILURE"
+            self._complete_target(key, reference)
+
+    def _claim_target(self, key: str) -> GenerationFileRef | None:
         failure_code: str | None = None
+        reference: GenerationFileRef | None = None
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
             operation = transaction.execute(
@@ -111,72 +147,85 @@ class DataGarbageCollector:
                 raise RuntimeError("Collection operation disappeared")
             if operation["status"] == "succeeded":
                 return None
-            retained = self._retained_files(transaction)
-            rows = transaction.execute(
+            if operation["status"] != "running":
+                raise RuntimeError("Collection operation is not running")
+            row = transaction.execute(
                 """
-                SELECT ordinal, file_kind, sha256, status
+                SELECT ordinal, file_kind, sha256
                 FROM data.collection_targets
-                WHERE idempotency_key = %s
+                WHERE idempotency_key = %s AND status IN ('pending', 'deleting')
                 ORDER BY ordinal
+                LIMIT 1
                 FOR UPDATE
                 """,
                 (key,),
-            ).fetchall()
-            targets = {GenerationFileRef(str(row["file_kind"]), str(row["sha256"])) for row in rows}
-            if retained & targets:
+            ).fetchone()
+            if row is None:
+                return None
+            reference = GenerationFileRef(str(row["file_kind"]), str(row["sha256"]))
+            if reference in self._retained_files(transaction):
                 failure_code = "COLLECTION_ROOT_SET_CHANGED"
                 _fail_operation(transaction, key, failure_code)
             else:
                 transaction.execute(
                     """
-                    UPDATE data.collection_operations
-                    SET status = 'running', failure_code = NULL,
-                        finished_at = NULL, updated_at = now()
-                    WHERE idempotency_key = %s
+                    UPDATE data.collection_targets
+                    SET status = 'deleting'
+                    WHERE idempotency_key = %s AND ordinal = %s
                     """,
-                    (key,),
+                    (key, row["ordinal"]),
                 )
-                for row in rows:
-                    if row["status"] == "deleted":
-                        continue
-                    reference = GenerationFileRef(
-                        str(row["file_kind"]),
-                        str(row["sha256"]),
-                    )
-                    try:
-                        self._generations.delete_file(reference)
-                    except (OSError, RuntimeError):
-                        failure_code = "COLLECTION_FILESYSTEM_FAILURE"
-                        _fail_operation(transaction, key, failure_code)
-                        break
-                    transaction.execute(
-                        """
-                        UPDATE data.collection_targets
-                        SET status = 'deleted', deleted_at = now()
-                        WHERE idempotency_key = %s AND ordinal = %s
-                          AND status = 'pending'
-                        """,
-                        (key, row["ordinal"]),
-                    )
-                    transaction.execute(
-                        """
-                        UPDATE data.collection_operations
-                        SET deleted_count = deleted_count + 1, updated_at = now()
-                        WHERE idempotency_key = %s
-                        """,
-                        (key,),
-                    )
-                if failure_code is None:
-                    transaction.execute(
-                        """
-                        UPDATE data.collection_operations
-                        SET status = 'succeeded', failure_code = NULL,
-                            finished_at = now(), updated_at = now()
-                        WHERE idempotency_key = %s
-                        """,
-                        (key,),
-                    )
-        return failure_code
+        if failure_code is not None:
+            raise DataCollectionError(failure_code)
+        return reference
+
+    def _complete_target(self, key: str, reference: GenerationFileRef) -> None:
+        with self._database.transaction() as transaction:
+            updated = transaction.execute(
+                """
+                UPDATE data.collection_targets
+                SET status = 'deleted', deleted_at = now()
+                WHERE idempotency_key = %s AND file_kind = %s AND sha256 = %s
+                  AND status = 'deleting'
+                """,
+                (key, reference.kind, reference.sha256),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("Collection target progress is inconsistent")
+            transaction.execute(
+                """
+                UPDATE data.collection_operations
+                SET deleted_count = deleted_count + 1, updated_at = now()
+                WHERE idempotency_key = %s AND status = 'running'
+                """,
+                (key,),
+            )
+
+    def _succeed(self, key: str) -> None:
+        with self._database.transaction() as transaction:
+            pending = transaction.execute(
+                """
+                SELECT count(*) AS count
+                FROM data.collection_targets
+                WHERE idempotency_key = %s AND status <> 'deleted'
+                """,
+                (key,),
+            ).fetchone()
+            if pending is None or int(pending["count"]) != 0:
+                raise RuntimeError("Collection completed with pending targets")
+            transaction.execute(
+                """
+                UPDATE data.collection_operations
+                SET status = 'succeeded', failure_code = NULL,
+                    finished_at = now(), updated_at = now()
+                WHERE idempotency_key = %s AND status = 'running'
+                """,
+                (key,),
+            )
+
+    def _fail(self, key: str, failure_code: str) -> None:
+        with self._database.transaction() as transaction:
+            _fail_operation(transaction, key, failure_code)
 
     def _retained_files(
         self,
@@ -223,6 +272,34 @@ def _fail_operation(
         """,
         (failure_code, key),
     )
+
+
+def _data_work_is_active(transaction: PostgresTransaction) -> bool:
+    row = transaction.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM data.bootstrap_operations WHERE status = 'running'
+            UNION ALL
+            SELECT 1 FROM data.refresh_operations WHERE status = 'running'
+        ) AS active
+        """
+    ).fetchone()
+    return bool(row and row["active"])
+
+
+def _targets(
+    transaction: PostgresTransaction,
+    key: str,
+) -> frozenset[GenerationFileRef]:
+    rows = transaction.execute(
+        """
+        SELECT file_kind, sha256
+        FROM data.collection_targets
+        WHERE idempotency_key = %s
+        """,
+        (key,),
+    ).fetchall()
+    return frozenset(GenerationFileRef(str(row["file_kind"]), str(row["sha256"])) for row in rows)
 
 
 def _identity(value: str) -> str:

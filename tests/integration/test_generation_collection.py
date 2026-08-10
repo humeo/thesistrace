@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+import copy
 import threading
-import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -10,13 +10,16 @@ import pytest
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import (
+    CanonicalSourceBatch,
     DataCollectionError,
     DataGarbageCollector,
+    DataRefreshService,
     DatasetLifecycle,
     GenerationStoreError,
     MountedGenerationStore,
 )
-from thesistrace.data.generation_files import AddressedFileStore
+from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
+from thesistrace.data.source import CollectionPlan
 from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -169,7 +172,7 @@ def test_failed_deletion_records_progress_and_retry_does_not_widen_plan(
         def fail_after_one(self: AddressedFileStore, path: Path) -> bool:
             nonlocal deleted_once
             if deleted_once:
-                raise OSError("injected collection deletion failure")
+                raise AddressedFileError("injected collection deletion failure")
             deleted_once = True
             return original_delete(self, path)
 
@@ -262,12 +265,12 @@ def test_collection_uses_the_same_fence_as_pin_release_and_head_move(
                 candidate_generation_manifest_sha256=next_head,
                 operation_id="race-next-head",
             )
-            _await_advisory_waiters(core_settings.database_url, expected=3)
+            selected = pin.result(timeout=2).generation_manifest_sha256
+            release.result(timeout=2)
+            assert move.result(timeout=2).generation_manifest_sha256 == next_head
+            assert not collection.done()
             continue_deletion.set()
             assert collection.result(timeout=20).status == "succeeded"
-            selected = pin.result(timeout=20).generation_manifest_sha256
-            release.result(timeout=20)
-            assert move.result(timeout=20).generation_manifest_sha256 == next_head
         finally:
             continue_deletion.set()
             executor.shutdown(wait=True)
@@ -277,6 +280,80 @@ def test_collection_uses_the_same_fence_as_pin_release_and_head_move(
         assert lifecycle.current_head().generation_manifest_sha256 == next_head
     finally:
         _clear_collection_state(database)
+        database.close()
+
+
+def test_materialized_refresh_candidate_is_never_planned_before_registration(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    migrate_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    candidate_materialized = threading.Event()
+    continue_refresh = threading.Event()
+    try:
+        _clear_collection_state(database)
+        store = MountedGenerationStore(tmp_path)
+        lifecycle = DatasetLifecycle(database, tmp_path)
+        current = build_minimal_canonical_fixture(price_offset=1)
+        candidate = build_minimal_canonical_fixture(price_offset=2)
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                ("candidate-gap-refresh",),
+            )
+        head = store.materialize(
+            current,
+            prepared_at=datetime(2026, 8, 10, tzinfo=UTC),
+            source_name="generation-collection-test",
+            source_lineage={"ordinal": 1},
+        ).manifest_sha256
+        _install_head(lifecycle, head, operation_id="candidate-gap-head")
+        refresh = DataRefreshService(database, tmp_path)
+        refresh.submit(
+            idempotency_key="candidate-gap-refresh",
+            as_of=datetime(2026, 8, 10, 2, tzinfo=UTC),
+        )
+        original_materialize = MountedGenerationStore.materialize
+        materialized: list[str] = []
+
+        def pause_after_materialize(
+            self: MountedGenerationStore,
+            canonical: dict[str, object],
+            **kwargs: object,
+        ) -> object:
+            generation = original_materialize(self, canonical, **kwargs)
+            materialized.append(generation.manifest_sha256)
+            candidate_materialized.set()
+            if not continue_refresh.wait(timeout=20):
+                raise AssertionError("refresh candidate barrier was not released")
+            return generation
+
+        monkeypatch.setattr(MountedGenerationStore, "materialize", pause_after_materialize)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            processing = executor.submit(refresh.process_next, _StaticRefreshSource(candidate))
+            assert candidate_materialized.wait(timeout=20)
+            with pytest.raises(DataCollectionError) as rejected:
+                DataGarbageCollector(database, tmp_path).collect(
+                    idempotency_key="candidate-gap-collection"
+                )
+            assert rejected.value.code == "COLLECTION_DATA_WORK_ACTIVE"
+            assert materialized
+            assert store.open_generation(materialized[0]).manifest_sha256 == materialized[0]
+            with database.transaction() as transaction:
+                assert transaction.execute(
+                    """
+                    SELECT count(*) AS count FROM data.collection_targets
+                    WHERE idempotency_key = 'candidate-gap-collection'
+                    """
+                ).fetchone() == {"count": 0}
+            continue_refresh.set()
+            assert processing.result(timeout=20) is True
+        assert lifecycle.current_head().generation_manifest_sha256 == materialized[0]
+    finally:
+        continue_refresh.set()
         database.close()
 
 
@@ -342,7 +419,7 @@ def _pending_count(database: PostgresDatabase, key: str) -> int:
             """
             SELECT count(*) AS count
             FROM data.collection_targets
-            WHERE idempotency_key = %s AND status = 'pending'
+            WHERE idempotency_key = %s AND status <> 'deleted'
             """,
             (key,),
         ).fetchone()
@@ -356,7 +433,7 @@ def _collection_progress(database: PostgresDatabase, key: str) -> dict[str, obje
             """
             SELECT operation.status,
                    count(*) FILTER (WHERE target.status = 'deleted') AS deleted_count,
-                   count(*) FILTER (WHERE target.status = 'pending') AS pending_count
+                   count(*) FILTER (WHERE target.status <> 'deleted') AS pending_count
             FROM data.collection_operations AS operation
             LEFT JOIN data.collection_targets AS target
               ON target.idempotency_key = operation.idempotency_key
@@ -373,25 +450,18 @@ def _collection_progress(database: PostgresDatabase, key: str) -> dict[str, obje
     }
 
 
-def _await_advisory_waiters(database_url: str, *, expected: int) -> None:
-    observer = PostgresDatabase(database_url)
-    observer.open()
-    try:
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            with observer.transaction() as transaction:
-                row = transaction.execute(
-                    """
-                    SELECT count(*) AS count
-                    FROM pg_stat_activity
-                    WHERE wait_event_type = 'Lock'
-                      AND wait_event = 'advisory'
-                    """
-                ).fetchone()
-            assert row is not None
-            if int(row["count"]) >= expected:
-                return
-            time.sleep(0.01)
-        raise AssertionError("Data Lifecycle operations did not wait on one advisory fence")
-    finally:
-        observer.close()
+class _StaticRefreshSource:
+    def __init__(self, candidate: dict[str, object]) -> None:
+        self._candidate = candidate
+
+    def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
+        del plan
+        calendar = self._candidate["research_calendar"]
+        assert isinstance(calendar, list)
+        return CanonicalSourceBatch(
+            source_name="generation-collection-test",
+            collection_kind="refresh",
+            source_lineage={"candidate_gap": True},
+            canonical=copy.deepcopy(self._candidate),
+            covered_session_range=(str(calendar[0]), str(calendar[-1])),
+        )

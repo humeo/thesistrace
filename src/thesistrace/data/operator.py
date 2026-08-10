@@ -17,6 +17,7 @@ from thesistrace.data.generation_store import GenerationStoreError, MountedGener
 from thesistrace.data.head_store import DatasetHead, DatasetHeadConflict
 from thesistrace.data.lifecycle import (
     DatasetLifecycle,
+    collection_is_active,
     lock_data_lifecycle,
     release_generation_candidate,
 )
@@ -113,8 +114,8 @@ class DataOperator:
         try:
             with self._maintain_claim(key, owner_token) as heartbeat:
                 current_head = self._lifecycle.current_head()
-                prior_manifest = None if claim.row is None else claim.row.get(
-                    "generation_manifest_sha256"
+                prior_manifest = (
+                    None if claim.row is None else claim.row.get("generation_manifest_sha256")
                 )
                 if (
                     current_head is not None
@@ -258,6 +259,8 @@ class DataOperator:
         owner_token = secrets.token_hex(16)
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
+            if collection_is_active(transaction):
+                raise DataOperatorError("COLLECTION_ACTIVE")
             inserted = transaction.execute(
                 """
                 INSERT INTO data.bootstrap_operations (

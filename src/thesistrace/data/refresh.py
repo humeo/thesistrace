@@ -18,6 +18,7 @@ from thesistrace.data.head_store import DatasetHead, DatasetHeadConflict, Mounte
 from thesistrace.data.lifecycle import (
     DataLifecycleError,
     DatasetLifecycle,
+    collection_is_active,
     lock_data_lifecycle,
     release_generation_candidate,
 )
@@ -255,6 +256,8 @@ class DataRefreshService:
         owner_token = secrets.token_hex(16)
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
+            if collection_is_active(transaction):
+                return None
             row = transaction.execute(
                 """
                 SELECT * FROM data.refresh_operations
@@ -445,8 +448,7 @@ class DataRefreshService:
             )
             return None
         return (
-            pointer is not None
-            and pointer.generation_manifest_sha256 == generation_manifest_sha256
+            pointer is not None and pointer.generation_manifest_sha256 == generation_manifest_sha256
         )
 
     def _complete_published(

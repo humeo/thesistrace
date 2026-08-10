@@ -72,6 +72,8 @@ class DatasetLifecycle:
         _require_lease(lease_seconds)
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
+            if collection_is_active(transaction):
+                raise DataLifecycleError("Data collection is active")
             row = transaction.execute(
                 """
                 SELECT generation_manifest_sha256, status
@@ -338,6 +340,17 @@ def lock_data_lifecycle(transaction: PostgresTransaction) -> None:
     )
 
 
+def collection_is_active(transaction: PostgresTransaction) -> bool:
+    row = transaction.execute(
+        """
+        SELECT EXISTS (
+            SELECT 1 FROM data.collection_operations WHERE status = 'running'
+        ) AS active
+        """
+    ).fetchone()
+    return bool(row and row["active"])
+
+
 def release_generation_candidate(
     transaction: PostgresTransaction,
     *,
@@ -381,6 +394,7 @@ __all__ = (
     "DataNotReady",
     "DatasetLifecycle",
     "GenerationPin",
+    "collection_is_active",
     "lock_data_lifecycle",
     "release_generation_candidate",
 )

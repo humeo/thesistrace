@@ -28,6 +28,17 @@ class PostgresDatabase:
         self._pool.close()
 
     @contextmanager
+    def session_advisory_lock(self, name: str) -> Iterator[None]:
+        with self._pool.connection() as connection:
+            connection.execute("SELECT pg_advisory_lock(hashtext(%s))", (name,))
+            connection.commit()
+            try:
+                yield
+            finally:
+                connection.execute("SELECT pg_advisory_unlock(hashtext(%s))", (name,))
+                connection.commit()
+
+    @contextmanager
     def transaction(self) -> Iterator[PostgresTransaction]:
         with self._pool.connection() as connection:
             with connection.transaction():
