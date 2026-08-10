@@ -54,11 +54,13 @@ class TushareSourceError(RuntimeError):
         *,
         source_code: int | None,
         contract: str | None = None,
+        api_name: str | None = None,
     ) -> None:
         super().__init__(reason_code)
         self.reason_code = reason_code
         self.source_code = source_code
         self.contract = contract
+        self.api_name = api_name
 
     def diagnostic(self) -> dict[str, object]:
         diagnostic: dict[str, object] = {
@@ -67,6 +69,8 @@ class TushareSourceError(RuntimeError):
         }
         if self.contract is not None:
             diagnostic["contract"] = self.contract
+        if self.api_name is not None:
+            diagnostic["api_name"] = self.api_name
         return diagnostic
 
 
@@ -132,12 +136,6 @@ def permission_probes(reference_date: date | None = None) -> tuple[PermissionPro
             ("ts_code", "trade_date", "suspend_type"),
         ),
         PermissionProbe(
-            "st",
-            "stock_st",
-            {"trade_date": current_text},
-            ("ts_code", "name", "trade_date", "type", "type_name"),
-        ),
-        PermissionProbe(
             "price_limit",
             "stk_limit",
             {"trade_date": current_text},
@@ -184,10 +182,16 @@ class TushareAdapter:
             try:
                 self.query(probe.api_name, params=probe.params, fields=probe.fields)
             except TushareSourceError as error:
-                if error.reason_code == "MISSING_PERMISSION":
-                    error.contract = probe.contract
+                error.contract = probe.contract
+                error.api_name = probe.api_name
                 raise
-            permissions.append({"contract": probe.contract, "status": "available"})
+            permissions.append(
+                {
+                    "contract": probe.contract,
+                    "api_name": probe.api_name,
+                    "status": "available",
+                }
+            )
         return {
             "status": "available",
             "source": "tushare",
@@ -283,12 +287,6 @@ class TushareAdapter:
                 params={"start_date": calendar_start, "end_date": end_date},
                 fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
                 primary_key=("trade_date", "ts_code", "suspend_type"),
-            ),
-            "st": self.query_paginated(
-                "stock_st",
-                params={"start_date": calendar_start, "end_date": end_date},
-                fields=("ts_code", "name", "trade_date", "type", "type_name"),
-                primary_key=("trade_date", "ts_code"),
             ),
             "price_limits": self.query_paginated(
                 "stk_limit",
@@ -391,12 +389,6 @@ class TushareAdapter:
                 params=ranged,
                 fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
                 primary_key=("trade_date", "ts_code", "suspend_type"),
-            ),
-            "st": self.query_paginated(
-                "stock_st",
-                params=ranged,
-                fields=("ts_code", "name", "trade_date", "type", "type_name"),
-                primary_key=("trade_date", "ts_code"),
             ),
             "price_limits": self.query_paginated(
                 "stk_limit",
@@ -531,20 +523,24 @@ class TushareAdapter:
             "params": dict(params),
             "fields": ",".join(fields),
         }
-        result = self._request_with_retry(payload)
+        try:
+            result = self._request_with_retry(payload)
+        except TushareSourceError as error:
+            error.api_name = api_name
+            raise
         data = result.get("data")
         if not isinstance(data, dict):
-            raise TushareSourceError("INVALID_RESPONSE", source_code=0)
+            raise TushareSourceError("INVALID_RESPONSE", source_code=0, api_name=api_name)
         response_fields = data.get("fields")
         items = data.get("items")
         if not isinstance(response_fields, list) or not isinstance(items, list):
-            raise TushareSourceError("INVALID_RESPONSE", source_code=0)
+            raise TushareSourceError("INVALID_RESPONSE", source_code=0, api_name=api_name)
         if any(not isinstance(field, str) for field in response_fields):
-            raise TushareSourceError("INVALID_RESPONSE", source_code=0)
+            raise TushareSourceError("INVALID_RESPONSE", source_code=0, api_name=api_name)
         if not set(fields) <= set(response_fields):
-            raise TushareSourceError("INVALID_RESPONSE", source_code=0)
+            raise TushareSourceError("INVALID_RESPONSE", source_code=0, api_name=api_name)
         if any(not isinstance(row, list) or len(row) != len(response_fields) for row in items):
-            raise TushareSourceError("INVALID_RESPONSE", source_code=0)
+            raise TushareSourceError("INVALID_RESPONSE", source_code=0, api_name=api_name)
         return [dict(zip(response_fields, row, strict=True)) for row in items]
 
     def query_paginated(
@@ -595,8 +591,8 @@ class TushareAdapter:
             code = result.get("code")
             if code == 0:
                 return result
-            if code == 2002:
-                raise TushareSourceError("MISSING_PERMISSION", source_code=2002)
+            if code in {2002, 40203}:
+                raise TushareSourceError("MISSING_PERMISSION", source_code=int(code))
             if code in {429, 500, -2001} and attempt < self._max_attempts:
                 self._sleeper(self._throttle_seconds * attempt)
                 continue
@@ -778,15 +774,6 @@ def normalize_tushare_snapshot(
             sessions, base_pool, canonical_prices, trading_states
         ),
         "industry_membership": industries,
-        "st_designations": [
-            {
-                **row,
-                "trade_date": iso_date(str(row["trade_date"])),
-                "instrument_id": f"equity:{row['ts_code']}",
-            }
-            for row in snapshot["st"]
-            if str(row["trade_date"]) in session_set
-        ],
         "field_catalog": field_catalog(sessions[-1]),
     }
     source = {
@@ -1021,15 +1008,6 @@ def normalize_tushare_increment(
         "price_limits_append": price_limits,
         "base_pool_append": base_pool,
         "adjustment_anchors_append": new_anchor_records,
-        "st_designations_append": [
-            {
-                **row,
-                "trade_date": iso_date(str(row["trade_date"])),
-                "instrument_id": f"equity:{row['ts_code']}",
-            }
-            for row in snapshot["st"]
-            if str(row["trade_date"]) in session_set
-        ],
         "liquidity_universes_append": {
             name: rows[-len(sessions) :] for name, rows in universes.items()
         },

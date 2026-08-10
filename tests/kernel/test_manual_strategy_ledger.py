@@ -612,7 +612,6 @@ def _canonical(
             ]
         },
         "industry_membership": [],
-        "st_designations": [],
     }
 
 

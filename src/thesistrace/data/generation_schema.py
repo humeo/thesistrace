@@ -176,25 +176,6 @@ TABLE_SPECS = (
         ),
     ),
     TableSpec(
-        "st_designations",
-        _contract(
-            "st-designations",
-            tuple(
-                (name, _STRING)
-                for name in (
-                    "trade_date",
-                    "instrument_id",
-                    "ts_code",
-                    "name",
-                    "type",
-                    "type_name",
-                )
-            ),
-            ("trade_date", "instrument_id"),
-        ),
-        "trade_date",
-    ),
-    TableSpec(
         "field_catalog",
         _contract(
             "field-catalog",

@@ -181,19 +181,12 @@ def evaluate_alpha_matrix(
         str(item["session"]): [str(value) for value in item["instrument_ids"]]
         for item in universes[universe_name]
     }
-    st_positions = {
-        (str(item.get("trade_date") or item.get("session")), str(item["instrument_id"]))
-        for item in canonical.get("st_designations", [])
-    }
     industries = canonical["industry_membership"]
     session_results: list[dict[str, object]] = []
     for session_index, session in enumerate(calendar):
         coverage = Counter()
         raw_values: dict[str, float] = {}
         for instrument_id in universe_snapshots.get(session, []):
-            if (session, instrument_id) in st_positions:
-                coverage["st_excluded"] += 1
-                continue
             value = evaluated[instrument_id][session_index]
             if value is None:
                 coverage["missing_expression"] += 1

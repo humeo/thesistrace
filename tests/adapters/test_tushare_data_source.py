@@ -20,15 +20,16 @@ from thesistrace.fixture import build_fixture
 
 
 class RecordingTransport:
-    def __init__(self, denied_api: str | None = None) -> None:
+    def __init__(self, denied_api: str | None = None, denied_code: int = 2002) -> None:
         self.denied_api = denied_api
+        self.denied_code = denied_code
         self.payloads: list[dict[str, object]] = []
 
     def post(self, payload: Mapping[str, object]) -> dict[str, object]:
         copied = dict(payload)
         self.payloads.append(copied)
         if payload["api_name"] == self.denied_api:
-            return {"code": 2002, "msg": "permission denied", "data": None}
+            return {"code": self.denied_code, "msg": "permission denied", "data": None}
         fields = str(payload["fields"]).split(",")
         return {
             "code": 0,
@@ -91,7 +92,6 @@ def normalizer_snapshot(session_keys: list[str]) -> dict[str, list[dict[str, obj
             for session in session_keys
         ],
         "suspensions": [],
-        "st": [],
         "price_limits": [
             {
                 "ts_code": "600000.SH",
@@ -195,7 +195,6 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
                 "price_limits_append": [],
                 "base_pool_append": [],
                 "adjustment_anchors_append": [],
-                "st_designations_append": [],
                 "liquidity_universes_append": {},
                 "liquidity_universes_replace": {},
                 "industry_membership_replace": previous["industry_membership"],
@@ -231,16 +230,6 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
             sessions.append(cursor.strftime("%Y%m%d"))
         cursor += timedelta(days=1)
     bootstrap_snapshot = normalizer_snapshot(sessions[:21])
-    preserved_st_session = sessions[6]
-    bootstrap_snapshot["st"] = [
-        {
-            "ts_code": "600000.SH",
-            "trade_date": preserved_st_session,
-            "name": "ST浦发",
-            "type": "S",
-            "type_name": "特别处理",
-        }
-    ]
     _source, previous = normalize_tushare_snapshot(bootstrap_snapshot)
 
     refresh_snapshot = normalizer_snapshot(sessions[1:])
@@ -274,7 +263,6 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
     next(row for row in refresh_snapshot["daily"] if row["trade_date"] == turnover_session)[
         "amount"
     ] = "9000"
-    refresh_snapshot["st"] = []
 
     class RefreshProvider(RecordedProvider):
         def collect_incremental_snapshot(
@@ -333,11 +321,6 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
         instrument_id,
     )
     assert prices[turnover_position]["turnover_cny"] == "9000000.00"
-    assert any(
-        row["trade_date"]
-        == f"{preserved_st_session[:4]}-{preserved_st_session[4:6]}-{preserved_st_session[6:]}"
-        for row in batch.canonical["st_designations"]
-    )
     for rows in batch.canonical["liquidity_universes"].values():
         assert rows[-1]["session"] == batch.canonical["research_calendar"][-1]
         assert len(rows) == len(sessions)
@@ -599,6 +582,7 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
     assert len(canonical["prices"]) == len(sessions)
     assert canonical["prices"][0]["volume_shares"] == "10000"
     assert canonical["prices"][0]["turnover_cny"] == "1000000.00"
+    assert "st_designations" not in canonical
 
     next_session = (
         date.fromisoformat(canonical["research_calendar"][-1]) + timedelta(days=1)
@@ -613,6 +597,7 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
         f"{next_session[:4]}-{next_session[4:6]}-{next_session[6:]}"
     ]
     assert len(canonical_delta["prices_append"]) == 1
+    assert "st_designations_append" not in canonical_delta
     assert canonical_delta["price_corrections"] == []
 
 
@@ -725,27 +710,27 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
     assert result["status"] == "available"
     assert result["source"] == "tushare"
     assert result["source_contract_version"] == "tushare-v1"
-    assert {item["contract"] for item in result["permissions"]} == {
-        "reference",
-        "calendar_sse",
-        "calendar_szse",
-        "daily",
-        "adjustment",
-        "suspension",
-        "st",
-        "price_limit",
-        "sw2021_classification",
-        "sw2021_membership",
+    assert {(item["contract"], item["api_name"]) for item in result["permissions"]} == {
+        ("reference", "stock_basic"),
+        ("calendar_sse", "trade_cal"),
+        ("calendar_szse", "trade_cal"),
+        ("daily", "daily"),
+        ("adjustment", "adj_factor"),
+        ("suspension", "suspend_d"),
+        ("price_limit", "stk_limit"),
+        ("sw2021_classification", "index_classify"),
+        ("sw2021_membership", "index_member_all"),
     }
     assert all(item["status"] == "available" for item in result["permissions"])
     assert "deployment-secret-token" not in repr(result)
     assert all(payload["token"] == "deployment-secret-token" for payload in transport.payloads)
 
 
-def test_tushare_provider_names_the_denied_contract() -> None:
+@pytest.mark.parametrize("denied_code", [2002, 40203])
+def test_tushare_provider_names_the_denied_contract_and_api(denied_code: int) -> None:
     provider = TushareAdapter(
         token="secret",
-        transport=RecordingTransport(denied_api="stock_st"),
+        transport=RecordingTransport(denied_api="index_member_all", denied_code=denied_code),
         throttle_seconds=0,
     )
 
@@ -754,8 +739,26 @@ def test_tushare_provider_names_the_denied_contract() -> None:
 
     assert failure.value.diagnostic() == {
         "reason_code": "MISSING_PERMISSION",
-        "source_code": 2002,
-        "contract": "st",
+        "source_code": denied_code,
+        "contract": "sw2021_membership",
+        "api_name": "index_member_all",
+    }
+
+
+def test_tushare_provider_names_a_denied_api_outside_preflight() -> None:
+    provider = TushareAdapter(
+        token="secret",
+        transport=RecordingTransport(denied_api="adj_factor", denied_code=40203),
+        throttle_seconds=0,
+    )
+
+    with pytest.raises(TushareSourceError) as failure:
+        provider.query("adj_factor", params={"trade_date": "20260803"}, fields=("ts_code",))
+
+    assert failure.value.diagnostic() == {
+        "reason_code": "MISSING_PERMISSION",
+        "source_code": 40203,
+        "api_name": "adj_factor",
     }
 
 
@@ -863,6 +866,8 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
     ]
     assert ranged_daily == {"start_date": "20250804", "end_date": "20260803"}
     assert snapshot["daily"][0]["trade_date"] == "20260803"
+    assert "st" not in snapshot
+    assert all(api_name != "stock_st" for api_name, _params in provider.calls)
 
 
 def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
@@ -999,6 +1004,7 @@ def test_tushare_provider_retries_transient_http_statuses() -> None:
     assert failure.value.diagnostic() == {
         "reason_code": "UPSTREAM_UNAVAILABLE",
         "source_code": 503,
+        "api_name": "daily",
     }
     assert transport.calls == 3
 
@@ -1022,7 +1028,6 @@ def test_tushare_materializes_price_corrections_by_field(
                 "price_limits_append": [],
                 "base_pool_append": [],
                 "adjustment_anchors_append": [],
-                "st_designations_append": [],
                 "liquidity_universes_append": {},
                 "liquidity_universes_replace": {},
                 "industry_membership_replace": previous["industry_membership"],
@@ -1063,7 +1068,6 @@ def test_tushare_rejects_non_source_price_correction_fields(field: str) -> None:
         "price_limits_append": [],
         "base_pool_append": [],
         "adjustment_anchors_append": [],
-        "st_designations_append": [],
         "liquidity_universes_append": {},
         "liquidity_universes_replace": {},
         "industry_membership_replace": previous["industry_membership"],

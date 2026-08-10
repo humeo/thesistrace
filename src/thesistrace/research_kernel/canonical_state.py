@@ -10,7 +10,6 @@ SESSION_TABLES = (
     ("trading_states", "session"),
     ("price_limits", "session"),
     ("base_pool", "session"),
-    ("st_designations", "trade_date"),
 )
 
 

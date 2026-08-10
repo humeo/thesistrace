@@ -492,7 +492,6 @@ def _canonical_for_sessions(sessions: list[str]) -> dict[str, object]:
             ]
         },
         "industry_membership": [],
-        "st_designations": [],
     }
 
 

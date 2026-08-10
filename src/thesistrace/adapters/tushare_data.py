@@ -209,14 +209,10 @@ def _materialize_increment(
         "price_limits_append": "price_limits",
         "base_pool_append": "base_pool",
         "adjustment_anchors_append": "adjustment_anchors",
-        "st_designations_append": "st_designations",
     }
     for delta_name, canonical_name in append_fields.items():
         appended = delta.get(delta_name, [])
         current = canonical.get(canonical_name)
-        if current is None and canonical_name == "st_designations":
-            canonical[canonical_name] = []
-            current = canonical[canonical_name]
         if not isinstance(appended, list) or not isinstance(current, list):
             raise DataSourceError(
                 "invalid_source_data",
@@ -347,15 +343,6 @@ def _canonical_before_overlap(
                 detail_code="INVALID_PREVIOUS_CANONICAL",
             )
         prefix[table] = [row for row in rows if str(row.get("session", "")) < overlap_start_session]
-    designations = prefix.get("st_designations", [])
-    if not isinstance(designations, list):
-        raise DataSourceError(
-            "invalid_source_data",
-            detail_code="INVALID_PREVIOUS_CANONICAL",
-        )
-    prefix["st_designations"] = [
-        row for row in designations if str(row.get("trade_date", "")) < overlap_start_session
-    ]
     universes = prefix.get("liquidity_universes")
     if not isinstance(universes, dict):
         raise DataSourceError(
@@ -433,7 +420,6 @@ def _preserve_ordinary_overlap_absence(
     adjustments = supplemented.get("adjustments", [])
     suspensions = supplemented.get("suspensions", [])
     limits = supplemented.get("price_limits", [])
-    st_rows = supplemented.get("st", [])
     if not all(
         isinstance(rows, list)
         for rows in (
@@ -444,7 +430,6 @@ def _preserve_ordinary_overlap_absence(
             adjustments,
             suspensions,
             limits,
-            st_rows,
         )
     ):
         raise DataSourceError(
@@ -489,15 +474,13 @@ def _preserve_ordinary_overlap_absence(
     suspension_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in suspensions}
     adjustment_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in adjustments}
     limit_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in limits}
-    st_positions = {(str(row["trade_date"]), str(row["ts_code"])) for row in st_rows}
     instruments = previous.get("instruments")
     prices = previous.get("prices")
     states = previous.get("trading_states")
     previous_limits = previous.get("price_limits")
-    previous_st = previous.get("st_designations", [])
     if not all(
         isinstance(rows, list)
-        for rows in (instruments, prices, states, previous_limits, previous_st)
+        for rows in (instruments, prices, states, previous_limits)
     ):
         raise DataSourceError(
             "invalid_source_data",
@@ -507,7 +490,6 @@ def _preserve_ordinary_overlap_absence(
     assert isinstance(prices, list)
     assert isinstance(states, list)
     assert isinstance(previous_limits, list)
-    assert isinstance(previous_st, list)
     code_by_instrument = {
         str(row["instrument_id"]): str(row["ts_code"])
         for row in instruments
@@ -523,29 +505,6 @@ def _preserve_ordinary_overlap_absence(
         for row in previous_limits
         if isinstance(row, dict)
     }
-    for designation in previous_st:
-        if not isinstance(designation, dict):
-            continue
-        trade_date = str(designation.get("trade_date", ""))
-        if trade_date < overlap_start_session:
-            continue
-        instrument_id = str(designation.get("instrument_id", ""))
-        code = code_by_instrument.get(instrument_id)
-        if code is None:
-            continue
-        source_position = (trade_date.replace("-", ""), code)
-        if source_position in st_positions:
-            continue
-        st_rows.append(
-            {
-                "ts_code": code,
-                "trade_date": source_position[0],
-                "name": designation.get("name", "ST"),
-                "type": designation.get("type", "preserved"),
-                "type_name": designation.get("type_name", "preserved"),
-            }
-        )
-        st_positions.add(source_position)
     for state in states:
         if not isinstance(state, dict):
             continue

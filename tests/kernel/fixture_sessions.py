@@ -39,7 +39,6 @@ def _append_fixture_session_in_place(complete: dict[str, object]) -> dict[str, o
         ]
         rows.extend(new_rows)
         appended[table] = copy.deepcopy(new_rows)
-    appended["st_designations"] = []
 
     universes = complete["liquidity_universes"]
     assert isinstance(universes, dict)

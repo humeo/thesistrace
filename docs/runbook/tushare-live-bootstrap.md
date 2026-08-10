@@ -13,10 +13,21 @@ mise exec -- pnpm check:live-tushare
 ```
 
 The command performs provider preflight, deterministic collection, and
-canonical normalization. It prints only the canonical schema, covered session
-range, and Research Session count. The token is sent only in Tushare request
-bodies and is not written to product state, Publication objects, logs, or test
-evidence.
+canonical normalization. A successful report has top-level `status: passed`,
+lists every required provider contract with its Tushare `api_name` and status,
+and includes the canonical schema, covered session range, and Research Session
+count under `bootstrap_collection`.
+
+If either phase fails, the command exits non-zero and prints a structured
+report with the completed preflight evidence, failed Tushare API name, and
+source error code when available.
+
+The first-release source contract deliberately does not request Tushare's
+`stock_st` API and does not exclude historical ST instruments from Research.
+This limitation is explicit: a successful check does not prove ST coverage.
+
+The token is sent only in Tushare request bodies and is not written to product
+state, Publication objects, logs, or test evidence.
 
 This credential-dependent command is deliberately outside `pnpm check`. A
 successful run proves adapter access and source coverage; it does not publish

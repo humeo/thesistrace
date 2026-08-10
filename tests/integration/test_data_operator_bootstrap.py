@@ -601,7 +601,6 @@ def _replay_payload() -> dict[str, object]:
         "daily": [daily],
         "adjustments": [{"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}],
         "suspensions": [],
-        "st": [],
         "price_limits": [
             {
                 "ts_code": "600000.SH",

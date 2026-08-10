@@ -248,12 +248,6 @@ def _validate_classification(
         ):
             raise GenerationValidationError("Canonical Industry Membership is invalid")
         prior_end_by_instrument[instrument_id] = active_to
-    if any(
-        str(row["instrument_id"]) not in instrument_set
-        or str(row["trade_date"]) not in calendar_set
-        for row in _rows(canonical, "st_designations")
-    ):
-        raise GenerationValidationError("Canonical ST Designation is invalid")
     field_ids = [str(row["field_id"]) for row in _rows(canonical, "field_catalog")]
     if not field_ids or len(field_ids) != len(set(field_ids)):
         raise GenerationValidationError("Canonical Field Catalog is invalid")

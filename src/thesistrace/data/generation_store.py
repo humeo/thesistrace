@@ -475,10 +475,9 @@ def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
         "industry_membership",
         "field_catalog",
     }
-    if not required <= set(canonical) or not set(canonical) <= required | {"st_designations"}:
+    if set(canonical) != required:
         raise GenerationStoreError("Canonical Generation table set is incompatible")
     normalized = json.loads(canonical_json_bytes(canonical))
-    normalized.setdefault("st_designations", [])
     base_pool = normalized.get("base_pool")
     if isinstance(base_pool, list):
         for row in base_pool:
@@ -535,7 +534,6 @@ def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[
         "base_pool": tables["base_pool"],
         "liquidity_universes": universes,
         "industry_membership": tables["industry_membership"],
-        "st_designations": tables["st_designations"],
         "field_catalog": tables["field_catalog"],
     }
 

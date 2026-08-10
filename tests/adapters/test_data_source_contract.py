@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from thesistrace.adapters.tushare_provider import TushareSourceError
 from thesistrace.adapters.tushare_replay import ReplayTushareProvider
 from thesistrace.data import (
     DATA_SOURCE_ERROR_CATEGORIES,
@@ -92,8 +93,16 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
             self.preflight_count = 0
             self.windows: list[tuple[date, date]] = []
 
-        def preflight(self) -> None:
+        def preflight(self) -> dict[str, object]:
             self.preflight_count += 1
+            return {
+                "status": "available",
+                "source": "tushare",
+                "source_contract_version": "tushare-v1",
+                "permissions": [
+                    {"contract": "price_limit", "api_name": "stk_limit", "status": "available"}
+                ],
+            }
 
         def collect_bootstrap_snapshot(
             self,
@@ -116,7 +125,106 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
     assert provider.preflight_count == 1
     assert provider.windows == [(date(2025, 8, 3), date(2026, 8, 3))]
     assert json.loads(capsys.readouterr().out) == {
-        "canonical_schema": "canonical-eod-v1",
-        "covered_session_range": ["2026-08-03", "2026-08-03"],
-        "research_session_count": 1,
+        "status": "passed",
+        "provider_preflight": {
+            "status": "available",
+            "source": "tushare",
+            "source_contract_version": "tushare-v1",
+            "permissions": [
+                {"contract": "price_limit", "api_name": "stk_limit", "status": "available"}
+            ],
+        },
+        "bootstrap_collection": {
+            "status": "passed",
+            "canonical_schema": "canonical-eod-v1",
+            "covered_session_range": ["2026-08-03", "2026-08-03"],
+            "research_session_count": 1,
+        },
+    }
+
+
+def test_live_tushare_gate_reports_the_exact_failed_permission(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class DeniedProvider:
+        def preflight(self) -> dict[str, object]:
+            raise TushareSourceError(
+                "MISSING_PERMISSION",
+                source_code=40203,
+                contract="sw2021_membership",
+                api_name="index_member_all",
+            )
+
+        def collect_bootstrap_snapshot(
+            self,
+            *,
+            start_date: date,
+            completed_through_date: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            raise AssertionError("collection must not run after a failed preflight")
+
+    with pytest.raises(SystemExit) as failure:
+        live_tushare.main(
+            provider=DeniedProvider(),
+            as_of=datetime(2026, 8, 3, 10, tzinfo=UTC),
+        )
+
+    assert failure.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed",
+        "failed_check": "provider_preflight",
+        "error": {
+            "reason_code": "MISSING_PERMISSION",
+            "source_code": 40203,
+            "contract": "sw2021_membership",
+            "api_name": "index_member_all",
+        },
+    }
+
+
+def test_live_tushare_gate_preserves_preflight_evidence_when_bootstrap_fails(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    preflight = {
+        "status": "available",
+        "source": "tushare",
+        "source_contract_version": "tushare-v1",
+        "permissions": [
+            {"contract": "adjustment", "api_name": "adj_factor", "status": "available"}
+        ],
+    }
+
+    class BootstrapDeniedProvider:
+        def preflight(self) -> dict[str, object]:
+            return preflight
+
+        def collect_bootstrap_snapshot(
+            self,
+            *,
+            start_date: date,
+            completed_through_date: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            raise TushareSourceError(
+                "MISSING_PERMISSION",
+                source_code=40203,
+                api_name="adj_factor",
+            )
+
+    with pytest.raises(SystemExit) as failure:
+        live_tushare.main(
+            provider=BootstrapDeniedProvider(),
+            as_of=datetime(2026, 8, 3, 10, tzinfo=UTC),
+        )
+
+    assert failure.value.code == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed",
+        "failed_check": "bootstrap_collection",
+        "provider_preflight": preflight,
+        "error": {
+            "category": "authorization",
+            "reason_code": "MISSING_PERMISSION",
+            "source_code": 40203,
+            "api_name": "adj_factor",
+        },
     }

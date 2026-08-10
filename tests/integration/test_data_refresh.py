@@ -818,7 +818,6 @@ def _tushare_snapshot(sessions: list[str]) -> dict[str, object]:
             for session in sessions
         ],
         "suspensions": [],
-        "st": [],
         "price_limits": [
             {
                 "ts_code": "600000.SH",

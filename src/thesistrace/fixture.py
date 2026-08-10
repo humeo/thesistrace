@@ -81,7 +81,6 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
                 "sw2021_l3": "Bank",
             }
         ],
-        "st_designations": [],
         "field_catalog": [
             next(row for row in field_catalog(session) if row["name"] == "close_adj")
         ],
@@ -160,7 +159,6 @@ def build_fixture(
         "daily": source_daily,
         "adjustments": source_adjustments,
         "industry_membership": industry_membership(instruments, sessions),
-        "st_designations": [],
     }
     base_pool = [
         {"session": session, "instrument_ids": [item["instrument_id"] for item in instruments]}

@@ -64,6 +64,7 @@ def test_materialized_generation_reopens_every_canonical_table_after_restart(
     root = _manifest(tmp_path, materialized.manifest_sha256)
     assert len(canonical_json_bytes(root)) <= GENERATION_MANIFEST_MAX_BYTES
     assert root["schema_contract"] == "canonical-eod-v1"
+    assert "st_designations" not in {table["name"] for table in root["tables"]}
     price_table = next(table for table in root["tables"] if table["name"] == "prices")
     price_manifest = _manifest(tmp_path, price_table["manifest_sha256"])
     assert len(canonical_json_bytes(price_manifest)) <= GENERATION_MANIFEST_MAX_BYTES
@@ -86,7 +87,6 @@ def test_reordered_source_rows_reuse_identical_physical_data_objects(tmp_path: P
         "adjustment_anchors",
         "base_pool",
         "industry_membership",
-        "st_designations",
         "field_catalog",
     ):
         reordered[table] = list(reversed(reordered[table]))
@@ -651,16 +651,6 @@ def _canonical() -> dict[str, object]:
                 "sw2021_l3": "L3",
             }
             for instrument in instruments
-        ],
-        "st_designations": [
-            {
-                "ts_code": "B.SZ",
-                "name": "B ST",
-                "trade_date": sessions[-1],
-                "type": "S",
-                "type_name": "ST",
-                "instrument_id": "equity:B.SZ",
-            }
         ],
         "field_catalog": [
             {

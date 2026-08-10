@@ -1726,7 +1726,6 @@ def _write_refresh_replay(
             if isinstance(price, dict)
         ],
         "suspensions": [],
-        "st": [],
         "price_limits": [
             {
                 "ts_code": _ts_code(canonical, str(limit["instrument_id"])),
