@@ -190,7 +190,10 @@ def test_container_builds_exclude_host_dependency_directories() -> None:
     assert "node_modules" not in backend
     assert "node_modules" not in web
     assert "node:24.14.0-bookworm-slim" in web
+    assert "nginx:1.27.5-alpine" in web
     assert "pnpm@11.9.0" in web
+    assert "pnpm --dir web build" in web
+    assert "COPY --from=build /app/web/dist" in web
 
 
 def test_development_watch_assigns_service_appropriate_actions() -> None:
@@ -512,7 +515,24 @@ def test_complete_gate_delegates_to_canonical_constituents_in_cost_order() -> No
     ]
     assert scripts["test:integration"] == "./scripts/test-runtime integration"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
+    assert scripts["test:image-smoke"] == "./scripts/test-runtime image-smoke"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
+
+
+def test_production_image_smoke_runs_entirely_inside_an_internal_network() -> None:
+    test_runtime = (ROOT / "scripts" / "test-runtime").read_text()
+    image_overlay = (ROOT / "deploy" / "core" / "compose.image-smoke.yaml").read_text()
+    smoke = (ROOT / "tests" / "production_image_smoke.py").read_text()
+
+    assert "internal: true" in image_overlay
+    assert "tests:/smoke:ro" in image_overlay
+    assert "python /smoke/browser/prepare_current_data.py" in test_runtime
+    assert test_runtime.count("python /smoke/production_image_smoke.py") == 2
+    assert "compose restart api worker" in test_runtime
+    assert "compose images --format json" in test_runtime
+    assert 'test "$network_internal" = true' in test_runtime
+    assert 'expected["attempt_count"] == 1' in smoke
+    assert "read_result_bundle" in smoke
 
 
 def test_active_lifecycle_rejects_legacy_and_hybrid_entrypoints() -> None:

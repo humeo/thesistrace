@@ -1,4 +1,4 @@
-FROM node:24.14.0-bookworm-slim
+FROM node:24.14.0-bookworm-slim AS build
 
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@11.9.0 --activate
@@ -8,5 +8,11 @@ COPY web/package.json ./web/package.json
 RUN pnpm install --frozen-lockfile
 
 COPY web ./web
+RUN pnpm --dir web build
 
-CMD ["pnpm", "--dir", "web", "exec", "vite", "--host", "0.0.0.0", "--port", "5173"]
+FROM nginx:1.27.5-alpine
+
+ENV NGINX_ENVSUBST_FILTER=THESISTRACE_API_ORIGIN
+
+COPY deploy/core/nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY --from=build /app/web/dist /usr/share/nginx/html

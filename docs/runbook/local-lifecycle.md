@@ -89,6 +89,19 @@ topology:
 mise exec -- pnpm test:e2e
 ```
 
+Qualify the built Backend and Nginx Web images against a prepared Canonical
+Data mount on an internal-only Compose network:
+
+```sh
+mise exec -- pnpm test:image-smoke
+```
+
+The image smoke migrates a fresh database, prepares deterministic mounted data,
+executes one short dated ResearchRun through the real Worker, restarts API and
+Worker, and verifies the same Head, Result manifest, readiness, and single
+Attempt remain authoritative. It records image identities, health/exit state,
+network isolation, and before/after results under the run evidence directory.
+
 Before merge, run the complete fail-fast gate:
 
 ```sh

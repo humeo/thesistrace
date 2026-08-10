@@ -17,6 +17,7 @@
     "test:host-parallel": "uv run pytest -q -n auto tests/kernel tests/architecture tests/adapters",
     "test:cleanup": "./scripts/test-runtime cleanup",
     "test:e2e": "./scripts/test-runtime e2e",
+    "test:image-smoke": "./scripts/test-runtime image-smoke",
     "test:integration": "./scripts/test-runtime integration",
     "check": "pnpm test && pnpm test:integration && pnpm test:e2e",
     "check:live-tushare": "uv run python scripts/check_live_tushare.py"

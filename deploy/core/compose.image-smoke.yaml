@@ -1,0 +1,10 @@
+networks:
+  default:
+    internal: true
+
+services:
+  migrate:
+    volumes:
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
+      - ${THESISTRACE_TEST_EVIDENCE_DIR}:/smoke-evidence
+      - ../../tests:/smoke:ro
