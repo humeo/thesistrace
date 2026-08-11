@@ -51,7 +51,11 @@ def test_bootstrap_cli_passes_the_explicit_start_date_to_the_operator(
     monkeypatch.setattr(data_operator, "PostgresDatabase", FakeDatabase)
     monkeypatch.setattr(data_operator, "verify_core_migrations", lambda _database: None)
     monkeypatch.setattr(data_operator, "ReplayTushareProvider", lambda _path: object())
-    monkeypatch.setattr(data_operator, "TushareDataSource", lambda *, provider: provider)
+    monkeypatch.setattr(
+        data_operator,
+        "TushareDataSource",
+        lambda *, provider, progress: provider,
+    )
     monkeypatch.setattr(data_operator, "DataOperator", FakeOperator)
 
     data_operator.main(

@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import logging
 import time
+from typing import TYPE_CHECKING
 
-from thesistrace.daily_track import DailyTrackProgressionFailed
-from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
+if TYPE_CHECKING:
+    from thesistrace.entrypoints.runtime import CoreRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +16,13 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--healthcheck", action="store_true")
     arguments = parser.parse_args()
+    if arguments.healthcheck:
+        return
+    from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+
     settings = CoreSettings.from_environment()
 
     with open_core_runtime(settings) as runtime:
-        if arguments.healthcheck:
-            return
         _process_once(runtime)
         if arguments.once:
             return
@@ -29,6 +32,8 @@ def main() -> None:
 
 
 def _process_once(runtime: CoreRuntime) -> None:
+    from thesistrace.daily_track import DailyTrackProgressionFailed
+
     if runtime.research_runs.process_next():
         logger.info("Core worker processed ResearchRun")
     removed_caches = runtime.daily_tracks.reconcile_stopped_working_cache()

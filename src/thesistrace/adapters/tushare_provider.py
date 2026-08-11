@@ -25,6 +25,12 @@ from thesistrace.data.canonical_mapping import (
 SOURCE_CONTRACT_VERSION = "tushare-v2"
 _BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-foundation"
 _BOOTSTRAP_CHECKPOINT_MAX_BYTES = 128 * 1024 * 1024
+_DEFAULT_PAGE_SIZE = 5_000
+_ENDPOINT_PAGE_SIZES = {
+    "daily": 6_000,
+    "stk_limit": 5_800,
+    "index_member_all": 2_000,
+}
 
 
 class TushareTransport(Protocol):
@@ -167,24 +173,26 @@ class TushareAdapter:
         *,
         token: str,
         transport: TushareTransport,
-        page_size: int = 5_000,
+        page_size: int | None = None,
         throttle_seconds: float = 0.5,
         rate_limit_backoff_seconds: float = 2.0,
         max_attempts: int = 6,
         sleeper: Callable[[float], None] = time.sleep,
         progress: Callable[[dict[str, object]], None] | None = None,
+        monotonic: Callable[[], float] = time.perf_counter,
         bootstrap_checkpoint: Path | None = None,
     ) -> None:
         if not token:
             raise TushareSourceError("TOKEN_MISSING", source_code=None)
         self._token = token
         self._transport = transport
-        self._page_size = page_size
+        self._page_size_override = page_size
         self._throttle_seconds = throttle_seconds
         self._rate_limit_backoff_seconds = rate_limit_backoff_seconds
         self._max_attempts = max_attempts
         self._sleeper = sleeper
         self._progress = progress or (lambda _event: None)
+        self._monotonic = monotonic
         self._bootstrap_checkpoint = bootstrap_checkpoint
 
     def clear_bootstrap_checkpoint(self) -> None:
@@ -578,22 +586,38 @@ class TushareAdapter:
         fields: Sequence[str],
         primary_key: Sequence[str],
     ) -> list[dict[str, object]]:
+        page_size = self._page_size_override or _ENDPOINT_PAGE_SIZES.get(
+            api_name,
+            _DEFAULT_PAGE_SIZE,
+        )
+        started_at = self._monotonic()
         offset = 0
+        page_count = 0
         rows_by_key: dict[tuple[object, ...], dict[str, object]] = {}
         while True:
-            page_params = {**params, "limit": self._page_size, "offset": offset}
+            page_params = {**params, "limit": page_size, "offset": offset}
             page = self.query(api_name, params=page_params, fields=fields)
+            page_count += 1
             for row in page:
                 key = tuple(row.get(field) for field in primary_key)
                 if any(value is None for value in key):
                     raise TushareSourceError("INVALID_PRIMARY_KEY", source_code=0)
                 rows_by_key[key] = row
-            if len(page) < self._page_size:
+            if len(page) < page_size:
                 break
-            offset += self._page_size
-            if self._throttle_seconds:
-                self._sleeper(self._throttle_seconds)
-        return [rows_by_key[key] for key in sorted(rows_by_key)]
+            offset += page_size
+        rows = [rows_by_key[key] for key in sorted(rows_by_key)]
+        event: dict[str, object] = {
+            "event": "upstream_query",
+            "api_name": api_name,
+            "elapsed_seconds": round(self._monotonic() - started_at, 3),
+            "page_count": page_count,
+            "row_count": len(rows),
+        }
+        if "trade_date" in params:
+            event["trade_date"] = str(params["trade_date"])
+        self._progress(event)
+        return rows
 
     def _request_with_retry(self, payload: dict[str, object]) -> dict[str, object]:
         for attempt in range(1, self._max_attempts + 1):
@@ -1113,31 +1137,6 @@ def resolve_trading_state(
     return resolved.pop()
 
 
-def industry_history_projection(
-    rows: list[object],
-    through_session: str,
-) -> tuple[tuple[str, ...], ...]:
-    projected: list[tuple[str, ...]] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            raise TushareSourceError("INVALID_INDUSTRY_MEMBERSHIP", source_code=0)
-        active_from = str(row.get("active_from", ""))
-        if not active_from or active_from > through_session:
-            continue
-        active_to = str(row.get("active_to", ""))
-        projected.append(
-            (
-                str(row.get("instrument_id", "")),
-                active_from,
-                active_to if active_to and active_to <= through_session else "",
-                str(row.get("sw2021_l1", "")),
-                str(row.get("sw2021_l2", "")),
-                str(row.get("sw2021_l3", "")),
-            )
-        )
-    return tuple(sorted(projected))
-
-
 def merge_incremental_industries(
     prior: list[object],
     current: list[dict[str, str]],
@@ -1154,8 +1153,8 @@ def merge_incremental_industries(
     for interval in current:
         key = (interval["instrument_id"], interval["active_from"])
         existing = by_start.get(key)
-        if interval["active_from"] <= last_session:
-            if existing is None or any(
+        if interval["active_from"] <= last_session and existing is not None:
+            if any(
                 existing[field] != interval[field]
                 for field in ("sw2021_l1", "sw2021_l2", "sw2021_l3")
             ):
@@ -1189,14 +1188,6 @@ def merge_incremental_industries(
         merged.append(copied)
         by_start[key] = copied
     merged.sort(key=lambda row: (row["instrument_id"], row["active_from"]))
-    if industry_history_projection(prior, last_session) != industry_history_projection(
-        merged,
-        last_session,
-    ):
-        raise TushareSourceError(
-            "HISTORICAL_INDUSTRY_CORRECTION_REQUIRES_REVIEW",
-            source_code=0,
-        )
     previous_end: dict[str, str] = {}
     for interval in merged:
         prior_end = previous_end.get(interval["instrument_id"])

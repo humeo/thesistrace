@@ -221,6 +221,11 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
     assert ":latest" not in compose
     assert "service_completed_successfully" in compose
     assert "thesistrace-core-worker\", \"--healthcheck" in compose
+    api_service = compose.split("  api:\n", maxsplit=1)[1].split(
+        "  worker:\n", maxsplit=1
+    )[0]
+    assert "/health/live" in api_service
+    assert "/api/data" not in api_service
 
 
 def test_container_builds_exclude_host_dependency_directories() -> None:

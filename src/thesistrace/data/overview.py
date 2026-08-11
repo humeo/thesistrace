@@ -31,7 +31,7 @@ class DatasetOverviewService:
                     readiness=False,
                 )
             if pointer != self._validated_pointer:
-                self._heads.resolve(pointer)
+                self._heads.resolve_descriptor(pointer)
                 self._validated_pointer = pointer
             state = transaction.execute(
                 """

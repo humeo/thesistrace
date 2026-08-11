@@ -5,7 +5,7 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pyarrow as pa
@@ -55,6 +55,22 @@ class MountedGeneration:
     data_through_session: str
     field_availability: tuple[str, ...]
     preparation: dict[str, str]
+    canonical: dict[str, object]
+
+
+@dataclass(frozen=True)
+class MountedGenerationDescriptor:
+    manifest_sha256: str
+    data_identity: str
+    dataset_coverage: dict[str, object]
+    data_through_session: str
+    field_availability: tuple[str, ...]
+    preparation: dict[str, str]
+
+
+@dataclass(frozen=True)
+class MountedRefreshBase:
+    generation: MountedGenerationDescriptor
     canonical: dict[str, object]
 
 
@@ -124,26 +140,9 @@ class MountedGenerationStore:
         )
 
     def open_generation(self, manifest_sha256: str) -> MountedGeneration:
-        root = self._read_manifest(manifest_sha256)
-        if root.get("format") != _GENERATION_FORMAT or root.get("version") != _MANIFEST_VERSION:
-            raise GenerationStoreError("Generation manifest is incompatible")
-        if set(root) != {
-            "format",
-            "version",
-            "data_identity",
-            "schema_contract",
-            "dataset_coverage",
-            "data_through_session",
-            "field_availability",
-            "tables",
-            "preparation",
-        }:
-            raise GenerationStoreError("Generation manifest schema is incompatible")
+        root = self._read_generation_manifest(manifest_sha256)
         tables = root["tables"]
-        if not isinstance(tables, list) or [
-            entry.get("name") for entry in tables if isinstance(entry, Mapping)
-        ] != [spec.name for spec in _TABLE_SPECS]:
-            raise GenerationStoreError("Generation table manifest set is incompatible")
+        assert isinstance(tables, list)
         table_rows: dict[str, list[dict[str, object]]] = {}
         calendar: list[str] | None = None
         for entry, spec in zip(tables, _TABLE_SPECS, strict=True):
@@ -178,8 +177,163 @@ class MountedGenerationStore:
             canonical=canonical,
         )
 
+    def inspect_root(self, manifest_sha256: str) -> MountedGenerationDescriptor:
+        root = self._read_generation_manifest(manifest_sha256)
+        return _descriptor_from_root(manifest_sha256, root)
+
+    def inspect_generation(self, manifest_sha256: str) -> MountedGenerationDescriptor:
+        root = self._read_generation_manifest(manifest_sha256)
+        tables = root["tables"]
+        assert isinstance(tables, list)
+        for reference, spec in zip(tables, _TABLE_SPECS, strict=True):
+            if not isinstance(reference, Mapping):
+                raise GenerationStoreError("Generation table reference is incompatible")
+            manifest = self._read_table_manifest(spec, reference)
+            objects = manifest["objects"]
+            assert isinstance(objects, list)
+            for ordinal, object_ref in enumerate(objects):
+                _validate_object_reference(object_ref, ordinal)
+        return _descriptor_from_root(manifest_sha256, root)
+
+    def open_refresh_base(
+        self,
+        manifest_sha256: str,
+        *,
+        overlap_session_count: int = 20,
+        universe_lookback_session_count: int = 19,
+    ) -> MountedRefreshBase:
+        if overlap_session_count <= 0 or universe_lookback_session_count < 0:
+            raise ValueError("Refresh window policy is invalid")
+        descriptor = self.inspect_generation(manifest_sha256)
+        root = self._read_generation_manifest(manifest_sha256)
+        references = root["tables"]
+        assert isinstance(references, list)
+        calendar_spec = _TABLE_SPECS[0]
+        calendar_reference = references[0]
+        assert isinstance(calendar_reference, Mapping)
+        calendar_rows = self._open_table(calendar_spec, calendar_reference, None)
+        full_calendar = [str(row["session"]) for row in calendar_rows]
+        window_count = overlap_session_count + universe_lookback_session_count
+        window_start = full_calendar[max(0, len(full_calendar) - window_count)]
+        table_rows: dict[str, list[dict[str, object]]] = {
+            "research_calendar": [
+                row for row in calendar_rows if str(row["session"]) >= window_start
+            ]
+        }
+        window_calendar = [str(row["session"]) for row in table_rows["research_calendar"]]
+        for reference, spec in zip(references[1:], _TABLE_SPECS[1:], strict=True):
+            if not isinstance(reference, Mapping):
+                raise GenerationStoreError("Generation table reference is incompatible")
+            if spec.session_field is None:
+                table_rows[spec.name] = self._open_table(spec, reference, full_calendar)
+            else:
+                table_rows[spec.name] = self._open_table_window(
+                    spec,
+                    reference,
+                    start_session=window_start,
+                )
+        canonical = _canonical_from_rows(table_rows)
+        _validate_generation(canonical)
+        if canonical["research_calendar"] != window_calendar:
+            raise GenerationStoreError("Generation refresh window is invalid")
+        return MountedRefreshBase(generation=descriptor, canonical=canonical)
+
+    def materialize_refresh(
+        self,
+        *,
+        predecessor_manifest_sha256: str,
+        replacement_canonical: Mapping[str, object],
+        replace_from_session: str,
+        prepared_at: datetime,
+        source_name: str,
+        source_lineage: Mapping[str, object],
+    ) -> MountedGenerationDescriptor:
+        normalized = _normalize_canonical(replacement_canonical)
+        _validate_generation(normalized)
+        replacement_calendar = [str(value) for value in normalized["research_calendar"]]
+        if replace_from_session not in replacement_calendar:
+            raise GenerationStoreError("Refresh replacement boundary is outside Coverage")
+        predecessor_root = self._read_generation_manifest(predecessor_manifest_sha256)
+        predecessor_tables = predecessor_root["tables"]
+        assert isinstance(predecessor_tables, list)
+        calendar_reference = predecessor_tables[0]
+        assert isinstance(calendar_reference, Mapping)
+        predecessor_calendar_rows = self._open_table(
+            _TABLE_SPECS[0],
+            calendar_reference,
+            None,
+        )
+        predecessor_calendar = [str(row["session"]) for row in predecessor_calendar_rows]
+        if replace_from_session not in predecessor_calendar:
+            raise GenerationStoreError("Refresh boundary is outside predecessor Coverage")
+        boundary_index = predecessor_calendar.index(replace_from_session)
+        rewrite_start_index = (
+            boundary_index // GENERATION_SESSION_PARTITION_COUNT
+        ) * GENERATION_SESSION_PARTITION_COUNT
+        rewrite_start_session = predecessor_calendar[rewrite_start_index]
+        new_calendar = [
+            session for session in predecessor_calendar if session < replace_from_session
+        ] + [session for session in replacement_calendar if session >= replace_from_session]
+        if not new_calendar or new_calendar != sorted(set(new_calendar)):
+            raise GenerationStoreError("Refresh Research Calendar is invalid")
+
+        table_entries: list[dict[str, object]] = []
+        for reference, spec in zip(predecessor_tables, _TABLE_SPECS, strict=True):
+            if not isinstance(reference, Mapping):
+                raise GenerationStoreError("Generation table reference is incompatible")
+            rows = _table_rows(normalized, spec.name)
+            if spec.session_field is None:
+                table_entries.append(self._materialize_table(spec, rows, new_calendar))
+                continue
+            table_entries.append(
+                self._materialize_refresh_table(
+                    spec,
+                    reference,
+                    replacement_rows=rows,
+                    replace_from_session=replace_from_session,
+                    rewrite_start_session=rewrite_start_session,
+                    new_calendar=new_calendar,
+                )
+            )
+
+        field_availability = tuple(
+            sorted(str(row["field_id"]) for row in normalized["field_catalog"])
+        )
+        coverage = {
+            "start": new_calendar[0],
+            "end": new_calendar[-1],
+            "session_count": len(new_calendar),
+        }
+        identity = {
+            "schema_contract": "canonical-eod",
+            "dataset_coverage": coverage,
+            "data_through_session": new_calendar[-1],
+            "field_availability": list(field_availability),
+            "tables": table_entries,
+        }
+        data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+        preparation = _preparation(prepared_at, source_name, source_lineage)
+        root_manifest = {
+            "format": _GENERATION_FORMAT,
+            "version": _MANIFEST_VERSION,
+            "data_identity": data_identity,
+            **identity,
+            "preparation": preparation,
+        }
+        root_bytes = _bounded_manifest_bytes(root_manifest)
+        root_sha256 = hashlib.sha256(root_bytes).hexdigest()
+        self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
+        return MountedGenerationDescriptor(
+            manifest_sha256=root_sha256,
+            data_identity=data_identity,
+            dataset_coverage=coverage,
+            data_through_session=new_calendar[-1],
+            field_availability=field_availability,
+            preparation=preparation,
+        )
+
     def referenced_files(self, manifest_sha256: str) -> frozenset[GenerationFileRef]:
-        self.open_generation(manifest_sha256)
+        self.inspect_generation(manifest_sha256)
         root = self._read_manifest(manifest_sha256)
         references = {GenerationFileRef("manifest", manifest_sha256)}
         tables = root["tables"]
@@ -221,58 +375,46 @@ class MountedGenerationStore:
         except AddressedFileError as error:
             raise GenerationStoreError("Generation file deletion failed or is unsafe") from error
 
-    def _materialize_table(
-        self,
-        spec: _TableSpec,
-        rows: list[dict[str, object]],
-        calendar: list[object],
-    ) -> dict[str, object]:
-        canonical_rows = canonicalize_parquet_rows(rows, spec.contract)
-        partitions = _partition_rows(spec, canonical_rows, [str(value) for value in calendar])
-        objects: list[dict[str, object]] = []
-        for ordinal, partition in enumerate(partitions):
-            content = parquet_bytes(partition, spec.contract)
-            if len(content) > GENERATION_OBJECT_MAX_BYTES:
-                raise GenerationStoreError("Generation object exceeds its byte bound")
-            sha256 = hashlib.sha256(content).hexdigest()
-            self._store_addressed(self._object_path(sha256), sha256, content)
-            first_key, last_key = _partition_boundaries(partition, spec.contract.sort_keys)
-            objects.append(
-                {
-                    "ordinal": ordinal,
-                    "sha256": sha256,
-                    "byte_count": len(content),
-                    "row_count": len(partition),
-                    "first_sort_key": first_key,
-                    "last_sort_key": last_key,
-                }
-            )
-        table_manifest = {
-            "format": _TABLE_MANIFEST_FORMAT,
-            "version": _MANIFEST_VERSION,
-            "table": spec.name,
-            "writer_contract": spec.contract.descriptor(),
-            "partitioning": spec.partitioning,
-            "row_count": len(canonical_rows),
-            "objects": objects,
+    def _read_generation_manifest(self, manifest_sha256: str) -> dict[str, object]:
+        root = self._read_manifest(manifest_sha256)
+        if root.get("format") != _GENERATION_FORMAT or root.get("version") != _MANIFEST_VERSION:
+            raise GenerationStoreError("Generation manifest is incompatible")
+        if set(root) != {
+            "format",
+            "version",
+            "data_identity",
+            "schema_contract",
+            "dataset_coverage",
+            "data_through_session",
+            "field_availability",
+            "tables",
+            "preparation",
+        }:
+            raise GenerationStoreError("Generation manifest schema is incompatible")
+        tables = root["tables"]
+        if not isinstance(tables, list) or [
+            entry.get("name") for entry in tables if isinstance(entry, Mapping)
+        ] != [spec.name for spec in _TABLE_SPECS]:
+            raise GenerationStoreError("Generation table manifest set is incompatible")
+        identity = {
+            "schema_contract": root["schema_contract"],
+            "dataset_coverage": root["dataset_coverage"],
+            "data_through_session": root["data_through_session"],
+            "field_availability": root["field_availability"],
+            "tables": tables,
         }
-        manifest_bytes = _bounded_manifest_bytes(table_manifest)
-        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
-        self._store_addressed(self._manifest_path(manifest_sha256), manifest_sha256, manifest_bytes)
-        return {
-            "name": spec.name,
-            "manifest_sha256": manifest_sha256,
-            "manifest_byte_count": len(manifest_bytes),
-            "row_count": len(canonical_rows),
-            "object_count": len(objects),
-        }
+        if root["data_identity"] != hashlib.sha256(
+            canonical_json_bytes(identity)
+        ).hexdigest():
+            raise GenerationStoreError("Generation data identity is invalid")
+        _descriptor_from_root(manifest_sha256, root)
+        return root
 
-    def _open_table(
+    def _read_table_manifest(
         self,
         spec: _TableSpec,
         reference: Mapping[str, object],
-        calendar: list[str] | None,
-    ) -> list[dict[str, object]]:
+    ) -> dict[str, object]:
         if (
             set(reference)
             != {
@@ -316,6 +458,176 @@ class MountedGenerationStore:
         objects = manifest["objects"]
         if not isinstance(objects, list) or reference["object_count"] != len(objects):
             raise GenerationStoreError("Generation table object set is invalid")
+        if manifest["row_count"] != reference["row_count"]:
+            raise GenerationStoreError("Generation table row count is invalid")
+        return manifest
+
+    def _open_table_window(
+        self,
+        spec: _TableSpec,
+        reference: Mapping[str, object],
+        *,
+        start_session: str,
+    ) -> list[dict[str, object]]:
+        if spec.session_field is None:
+            raise ValueError("Refresh window requires a session-partitioned table")
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
+        rows: list[dict[str, object]] = []
+        for ordinal, object_ref in enumerate(objects):
+            _validate_object_reference(object_ref, ordinal)
+            assert isinstance(object_ref, Mapping)
+            last_key = object_ref["last_sort_key"]
+            if last_key is None:
+                continue
+            if not isinstance(last_key, list) or not last_key:
+                raise GenerationStoreError("Generation table object boundary is invalid")
+            if str(last_key[0]) < start_session:
+                continue
+            rows.extend(
+                row
+                for row in self._open_partition(spec, object_ref, ordinal)
+                if str(row[spec.session_field]) >= start_session
+            )
+        try:
+            return canonicalize_parquet_rows(rows, spec.contract)
+        except ParquetContractError as error:
+            raise GenerationStoreError("Generation refresh window is incompatible") from error
+
+    def _materialize_refresh_table(
+        self,
+        spec: _TableSpec,
+        predecessor_reference: Mapping[str, object],
+        *,
+        replacement_rows: list[dict[str, object]],
+        replace_from_session: str,
+        rewrite_start_session: str,
+        new_calendar: list[str],
+    ) -> dict[str, object]:
+        assert spec.session_field is not None
+        predecessor_manifest = self._read_table_manifest(spec, predecessor_reference)
+        predecessor_objects = predecessor_manifest["objects"]
+        assert isinstance(predecessor_objects, list)
+        preserved_objects: list[dict[str, object]] = []
+        prefix_rows: list[dict[str, object]] = []
+        for ordinal, object_ref in enumerate(predecessor_objects):
+            _validate_object_reference(object_ref, ordinal)
+            assert isinstance(object_ref, Mapping)
+            last_key = object_ref["last_sort_key"]
+            first_key = object_ref["first_sort_key"]
+            if last_key is None or first_key is None:
+                continue
+            if not isinstance(last_key, list) or not isinstance(first_key, list):
+                raise GenerationStoreError("Generation table object boundary is invalid")
+            if str(last_key[0]) < rewrite_start_session:
+                preserved_objects.append(dict(object_ref))
+                continue
+            if str(first_key[0]) >= replace_from_session:
+                continue
+            prefix_rows.extend(
+                row
+                for row in self._open_partition(spec, object_ref, ordinal)
+                if rewrite_start_session
+                <= str(row[spec.session_field])
+                < replace_from_session
+            )
+        affected_rows = [
+            *prefix_rows,
+            *(
+                row
+                for row in replacement_rows
+                if str(row[spec.session_field]) >= replace_from_session
+            ),
+        ]
+        canonical_rows = canonicalize_parquet_rows(affected_rows, spec.contract)
+        session_index = {session: index for index, session in enumerate(new_calendar)}
+        by_partition: dict[int, list[dict[str, object]]] = {}
+        for row in canonical_rows:
+            session = str(row[spec.session_field])
+            if session not in session_index:
+                raise GenerationStoreError(f"Canonical {spec.name} session is outside Coverage")
+            partition = session_index[session] // GENERATION_SESSION_PARTITION_COUNT
+            by_partition.setdefault(partition, []).append(row)
+        objects = preserved_objects
+        for partition in sorted(by_partition):
+            rows = canonicalize_parquet_rows(by_partition[partition], spec.contract)
+            objects.append(self._materialize_partition(spec, rows, len(objects)))
+        for ordinal, object_ref in enumerate(objects):
+            object_ref["ordinal"] = ordinal
+        row_count = sum(int(object_ref["row_count"]) for object_ref in objects)
+        return self._materialize_table_manifest(spec, objects, row_count)
+
+    def _materialize_table(
+        self,
+        spec: _TableSpec,
+        rows: list[dict[str, object]],
+        calendar: list[object],
+    ) -> dict[str, object]:
+        canonical_rows = canonicalize_parquet_rows(rows, spec.contract)
+        partitions = _partition_rows(spec, canonical_rows, [str(value) for value in calendar])
+        objects = [
+            self._materialize_partition(spec, partition, ordinal)
+            for ordinal, partition in enumerate(partitions)
+        ]
+        return self._materialize_table_manifest(spec, objects, len(canonical_rows))
+
+    def _materialize_partition(
+        self,
+        spec: _TableSpec,
+        partition: list[dict[str, object]],
+        ordinal: int,
+    ) -> dict[str, object]:
+        content = parquet_bytes(partition, spec.contract)
+        if len(content) > GENERATION_OBJECT_MAX_BYTES:
+            raise GenerationStoreError("Generation object exceeds its byte bound")
+        sha256 = hashlib.sha256(content).hexdigest()
+        self._store_addressed(self._object_path(sha256), sha256, content)
+        first_key, last_key = _partition_boundaries(partition, spec.contract.sort_keys)
+        return {
+            "ordinal": ordinal,
+            "sha256": sha256,
+            "byte_count": len(content),
+            "row_count": len(partition),
+            "first_sort_key": first_key,
+            "last_sort_key": last_key,
+        }
+
+    def _materialize_table_manifest(
+        self,
+        spec: _TableSpec,
+        objects: list[dict[str, object]],
+        row_count: int,
+    ) -> dict[str, object]:
+        table_manifest = {
+            "format": _TABLE_MANIFEST_FORMAT,
+            "version": _MANIFEST_VERSION,
+            "table": spec.name,
+            "writer_contract": spec.contract.descriptor(),
+            "partitioning": spec.partitioning,
+            "row_count": row_count,
+            "objects": objects,
+        }
+        manifest_bytes = _bounded_manifest_bytes(table_manifest)
+        manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+        self._store_addressed(self._manifest_path(manifest_sha256), manifest_sha256, manifest_bytes)
+        return {
+            "name": spec.name,
+            "manifest_sha256": manifest_sha256,
+            "manifest_byte_count": len(manifest_bytes),
+            "row_count": row_count,
+            "object_count": len(objects),
+        }
+
+    def _open_table(
+        self,
+        spec: _TableSpec,
+        reference: Mapping[str, object],
+        calendar: list[str] | None,
+    ) -> list[dict[str, object]]:
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
         rows: list[dict[str, object]] = []
         partitions: list[list[dict[str, object]]] = []
         for ordinal, object_ref in enumerate(objects):
@@ -344,20 +656,8 @@ class MountedGenerationStore:
         object_ref: object,
         ordinal: int,
     ) -> list[dict[str, object]]:
-        if (
-            not isinstance(object_ref, Mapping)
-            or set(object_ref)
-            != {
-                "ordinal",
-                "sha256",
-                "byte_count",
-                "row_count",
-                "first_sort_key",
-                "last_sort_key",
-            }
-            or object_ref["ordinal"] != ordinal
-        ):
-            raise GenerationStoreError("Generation table object reference is invalid")
+        _validate_object_reference(object_ref, ordinal)
+        assert isinstance(object_ref, Mapping)
         sha256 = str(object_ref["sha256"])
         content = self._read_addressed(
             self._object_path(sha256),
@@ -461,6 +761,71 @@ def _inventory_sha256(root: Path, directory: str, suffix: str) -> tuple[str, ...
     return tuple(sha256s)
 
 
+def _descriptor_from_root(
+    manifest_sha256: str,
+    root: Mapping[str, object],
+) -> MountedGenerationDescriptor:
+    _require_sha256(manifest_sha256)
+    data_identity = str(root["data_identity"])
+    _require_sha256(data_identity)
+    coverage = root["dataset_coverage"]
+    fields = root["field_availability"]
+    preparation = root["preparation"]
+    if (
+        not isinstance(coverage, Mapping)
+        or set(coverage) != {"start", "end", "session_count"}
+        or not isinstance(coverage["session_count"], int)
+        or isinstance(coverage["session_count"], bool)
+        or int(coverage["session_count"]) <= 0
+        or not isinstance(fields, list)
+        or any(not isinstance(value, str) for value in fields)
+        or not isinstance(preparation, Mapping)
+    ):
+        raise GenerationStoreError("Generation root projection is incompatible")
+    try:
+        start = date.fromisoformat(str(coverage["start"]))
+        end = date.fromisoformat(str(coverage["end"]))
+        prepared_at = datetime.fromisoformat(str(preparation["prepared_at"]))
+    except (KeyError, ValueError) as error:
+        raise GenerationStoreError("Generation root projection is incompatible") from error
+    if (
+        start > end
+        or str(root["data_through_session"]) != end.isoformat()
+        or prepared_at.tzinfo is None
+    ):
+        raise GenerationStoreError("Generation root projection is incompatible")
+    return MountedGenerationDescriptor(
+        manifest_sha256=manifest_sha256,
+        data_identity=data_identity,
+        dataset_coverage=dict(coverage),
+        data_through_session=end.isoformat(),
+        field_availability=tuple(str(value) for value in fields),
+        preparation={str(key): str(value) for key, value in preparation.items()},
+    )
+
+
+def _validate_object_reference(object_ref: object, ordinal: int) -> None:
+    if (
+        not isinstance(object_ref, Mapping)
+        or set(object_ref)
+        != {
+            "ordinal",
+            "sha256",
+            "byte_count",
+            "row_count",
+            "first_sort_key",
+            "last_sort_key",
+        }
+        or object_ref["ordinal"] != ordinal
+    ):
+        raise GenerationStoreError("Generation table object reference is invalid")
+    _require_sha256(str(object_ref["sha256"]))
+    _required_byte_count(object_ref["byte_count"], "Generation object")
+    row_count = object_ref["row_count"]
+    if not isinstance(row_count, int) or isinstance(row_count, bool) or row_count < 0:
+        raise GenerationStoreError("Generation object row count is invalid")
+
+
 def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
     required = {
         "schema_version",
@@ -476,17 +841,11 @@ def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
     }
     if set(canonical) != required:
         raise GenerationStoreError("Canonical Generation table set is incompatible")
-    normalized = json.loads(canonical_json_bytes(canonical))
-    base_pool = normalized.get("base_pool")
-    if isinstance(base_pool, list):
-        for row in base_pool:
-            if isinstance(row, dict) and isinstance(row.get("instrument_ids"), list):
-                row["instrument_ids"] = sorted(str(value) for value in row["instrument_ids"])
     normalized_rows: dict[str, list[dict[str, object]]] = {}
     for spec in _TABLE_SPECS:
         try:
             normalized_rows[spec.name] = canonicalize_parquet_rows(
-                _table_rows(normalized, spec.name),
+                _table_rows(canonical, spec.name),
                 spec.contract,
             )
         except ParquetContractError as error:
@@ -501,17 +860,26 @@ def _table_rows(canonical: Mapping[str, object], table: str) -> list[dict[str, o
         universes = canonical[table]
         if not isinstance(universes, Mapping):
             raise GenerationStoreError("Canonical Liquidity Universes are incompatible")
-        return [
-            {"universe": universe, **dict(row)}
-            for universe, rows in universes.items()
-            if isinstance(rows, list)
-            for row in rows
-            if isinstance(row, Mapping)
-        ]
+        result: list[dict[str, object]] = []
+        for universe, rows in universes.items():
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    continue
+                value = {"universe": universe, **dict(row)}
+                result.append(value)
+        return result
     rows = canonical[table]
     if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
         raise GenerationStoreError(f"Canonical table is incompatible: {table}")
-    return [dict(row) for row in rows]
+    result = [dict(row) for row in rows]
+    if table == "base_pool":
+        for row in result:
+            instrument_ids = row.get("instrument_ids")
+            if isinstance(instrument_ids, list):
+                row["instrument_ids"] = sorted(str(item) for item in instrument_ids)
+    return result
 
 
 def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[str, object]:

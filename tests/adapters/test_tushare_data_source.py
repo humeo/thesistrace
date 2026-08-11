@@ -11,6 +11,7 @@ from thesistrace.adapters.tushare_data import TushareDataSource, _materialize_in
 from thesistrace.adapters.tushare_provider import (
     TushareAdapter,
     TushareSourceError,
+    merge_incremental_industries,
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
@@ -210,6 +211,59 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
     )
 
 
+def test_tushare_refresh_reports_source_collection_and_merge_timings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = RecordedProvider()
+    _source, previous = build_fixture()
+    frontier = str(previous["research_calendar"][-1])
+    appended = "2028-11-27"
+    monkeypatch.setattr(
+        "thesistrace.adapters.tushare_data.normalize_tushare_increment",
+        lambda _snapshot, _previous: (
+            {"source": "tushare", "source_contract_version": "tushare-v2"},
+            {
+                "research_calendar_append": [appended],
+                "instruments_replace": previous["instruments"],
+                "prices_replace": previous["prices"],
+                "trading_states_append": [],
+                "price_limits_append": [],
+                "base_pool_append": [],
+                "liquidity_universes_append": {},
+                "liquidity_universes_replace": {},
+                "industry_membership_replace": previous["industry_membership"],
+                "price_corrections": [],
+            },
+        ),
+    )
+    progress: list[dict[str, object]] = []
+    timestamps = iter((10.0, 11.25, 20.0, 23.5))
+
+    TushareDataSource(
+        provider=provider,
+        clock=lambda: date(2026, 8, 4),
+        progress=progress.append,
+        monotonic=lambda: next(timestamps),
+    ).collect(CollectionPlan.incremental(frontier, previous))
+
+    assert progress == [
+        {"event": "refresh_timing", "phase": "source_collection", "status": "started"},
+        {
+            "event": "refresh_timing",
+            "phase": "source_collection",
+            "status": "completed",
+            "elapsed_seconds": 1.25,
+        },
+        {"event": "refresh_timing", "phase": "merge", "status": "started"},
+        {
+            "event": "refresh_timing",
+            "phase": "merge",
+            "status": "completed",
+            "elapsed_seconds": 3.5,
+        },
+    ]
+
+
 def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> None:
     sessions: list[str] = []
     cursor = date(2026, 7, 1)
@@ -219,6 +273,7 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
         cursor += timedelta(days=1)
     bootstrap_snapshot = normalizer_snapshot(sessions[:21])
     _source, previous = normalize_tushare_snapshot(bootstrap_snapshot)
+    previous_before_refresh = copy.deepcopy(previous)
 
     refresh_snapshot = normalizer_snapshot(sessions[1:])
     refresh_snapshot["stock_basic"] = []
@@ -266,6 +321,11 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
     plan = refresh_collection_plan(datetime(2026, 7, 31, 18, tzinfo=UTC), previous)
     batch = TushareDataSource(provider=provider).collect(plan)
 
+    assert previous == previous_before_refresh
+    assert "responses" not in batch.source_lineage
+    response_row_counts = batch.source_lineage["response_row_counts"]
+    assert isinstance(response_row_counts, dict)
+    assert response_row_counts["daily"] > 0
     assert provider.incremental_calls == [
         (
             f"{sessions[1][:4]}-{sessions[1][4:6]}-{sessions[1][6:]}",
@@ -406,13 +466,20 @@ def test_tushare_refresh_rejects_a_new_date_missing_from_both_calendars() -> Non
     assert failure.value.detail_code == "INCOMPLETE_NEW_SESSION_CALENDAR"
 
 
-def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument() -> None:
+@pytest.mark.parametrize("market_fact", ("daily", "adjustments", "suspensions"))
+def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument(
+    market_fact: str,
+) -> None:
     sessions = ["20260803", "20260804", "20260805", "20260806"]
     _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
     snapshot = normalizer_snapshot(sessions)
-    unknown_daily = copy.deepcopy(snapshot["daily"][-1])
-    unknown_daily["ts_code"] = "000001.SZ"
-    snapshot["daily"].append(unknown_daily)
+    source_row = snapshot[market_fact][-1] if snapshot[market_fact] else {
+        "trade_date": sessions[-1],
+        "suspend_type": "S",
+    }
+    unknown_fact = copy.deepcopy(source_row)
+    unknown_fact["ts_code"] = "000001.SZ"
+    snapshot[market_fact].append(unknown_fact)
 
     class MissingInstrumentProvider(RecordedProvider):
         def collect_incremental_snapshot(
@@ -429,6 +496,33 @@ def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument() ->
         )
 
     assert failure.value.detail_code == "INCOMPLETE_NEW_SESSION_INSTRUMENT"
+
+
+def test_tushare_refresh_filters_price_limits_outside_the_stock_universe() -> None:
+    sessions = ["20260803", "20260804", "20260805", "20260806"]
+    _source, previous = normalize_tushare_snapshot(normalizer_snapshot(sessions[:3]))
+    snapshot = normalizer_snapshot(sessions)
+    for out_of_scope_code in ("510300.SH", "159919.SZ", "900901.SH"):
+        unknown_limit = copy.deepcopy(snapshot["price_limits"][-1])
+        unknown_limit["ts_code"] = out_of_scope_code
+        snapshot["price_limits"].append(unknown_limit)
+
+    class BroadPriceLimitProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            return copy.deepcopy(snapshot)
+
+    batch = TushareDataSource(provider=BroadPriceLimitProvider()).collect(
+        refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+    )
+
+    assert {
+        row["instrument_id"] for row in batch.canonical["price_limits"]
+    } == {"equity:600000.SH"}
 
 
 def test_tushare_refresh_rejects_a_session_after_the_completed_boundary() -> None:
@@ -747,6 +841,34 @@ def test_tushare_increment_rejects_historical_reference_changes() -> None:
     assert industry_failure.value.reason_code == "HISTORICAL_INDUSTRY_CORRECTION_REQUIRES_REVIEW"
 
 
+def test_tushare_refresh_backfills_newly_discovered_historical_industries() -> None:
+    prior = [
+        {
+            "instrument_id": "equity:600000.SH",
+            "active_from": "2022-01-03",
+            "active_to": "",
+            "sw2021_l1": "801010",
+            "sw2021_l2": "801011",
+            "sw2021_l3": "850111",
+        }
+    ]
+    current = [
+        *copy.deepcopy(prior),
+        {
+            "instrument_id": "equity:000001.SZ",
+            "active_from": "2020-01-02",
+            "active_to": "",
+            "sw2021_l1": "801780",
+            "sw2021_l2": "801781",
+            "sw2021_l3": "851911",
+        },
+    ]
+
+    merged = merge_incremental_industries(prior, current, "2026-08-03")
+
+    assert merged == sorted(current, key=lambda row: (row["instrument_id"], row["active_from"]))
+
+
 def test_tushare_rejects_responses_missing_requested_fields() -> None:
     class MissingFieldTransport:
         def post(self, payload: dict[str, object]) -> dict[str, object]:
@@ -885,6 +1007,40 @@ def test_tushare_provider_paces_each_upstream_request() -> None:
     provider.query("adj_factor", params={"trade_date": "20260803"}, fields=("ts_code",))
 
     assert sleeps == [0.5, 0.5]
+
+
+@pytest.mark.parametrize(
+    ("api_name", "expected_limit"),
+    (
+        ("daily", 6_000),
+        ("stk_limit", 5_800),
+        ("index_member_all", 2_000),
+        ("adj_factor", 5_000),
+    ),
+)
+def test_tushare_provider_uses_documented_endpoint_page_sizes(
+    api_name: str,
+    expected_limit: int,
+) -> None:
+    transport = RecordingTransport()
+    provider = TushareAdapter(
+        token="secret",
+        transport=transport,
+        throttle_seconds=0,
+    )
+
+    provider.query_paginated(
+        api_name,
+        params={"trade_date": "20260803"},
+        fields=("ts_code",),
+        primary_key=("ts_code",),
+    )
+
+    assert transport.payloads[0]["params"] == {
+        "trade_date": "20260803",
+        "limit": expected_limit,
+        "offset": 0,
+    }
 
 
 def test_tushare_provider_reports_exhausted_rate_limit_as_unavailable() -> None:
@@ -1337,11 +1493,17 @@ def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
             }
 
     transport = PagingTransport()
+    sleeps: list[float] = []
+    progress: list[dict[str, object]] = []
+    timestamps = iter((10.0, 12.5))
     provider = TushareAdapter(
         token="secret",
         transport=transport,
         page_size=2,
-        throttle_seconds=0,
+        throttle_seconds=0.5,
+        sleeper=sleeps.append,
+        progress=progress.append,
+        monotonic=lambda: next(timestamps),
     )
 
     rows = provider.query_paginated(
@@ -1352,11 +1514,63 @@ def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
     )
 
     assert transport.offsets == [0, 2, 4]
+    assert sleeps == [0.5, 0.5, 0.5]
+    assert progress == [
+        {
+            "event": "upstream_query",
+            "api_name": "daily",
+            "trade_date": "20260729",
+            "elapsed_seconds": 2.5,
+            "page_count": 3,
+            "row_count": 3,
+        }
+    ]
     assert rows == [
         {"ts_code": "600001.SH", "trade_date": "20260729"},
         {"ts_code": "600002.SH", "trade_date": "20260729"},
         {"ts_code": "600003.SH", "trade_date": "20260729"},
     ]
+
+
+def test_tushare_provider_collects_every_index_membership_page() -> None:
+    class MembershipPagingTransport:
+        def __init__(self) -> None:
+            self.offsets: list[int] = []
+
+        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+            params = dict(payload["params"])
+            offset = int(params["offset"])
+            self.offsets.append(offset)
+            items = (
+                [[f"{index:06d}.SZ", "20200101"] for index in range(2_000)]
+                if offset == 0
+                else [["999999.SZ", "20200101"]]
+            )
+            return {
+                "code": 0,
+                "msg": "",
+                "data": {
+                    "fields": ["ts_code", "in_date"],
+                    "items": items,
+                },
+            }
+
+    transport = MembershipPagingTransport()
+    provider = TushareAdapter(
+        token="secret",
+        transport=transport,
+        throttle_seconds=0,
+    )
+
+    rows = provider.query_paginated(
+        "index_member_all",
+        params={"is_new": "Y"},
+        fields=("ts_code", "in_date"),
+        primary_key=("ts_code", "in_date"),
+    )
+
+    assert transport.offsets == [0, 2_000]
+    assert len(rows) == 2_001
 
 
 def test_tushare_provider_retries_transient_http_statuses() -> None:

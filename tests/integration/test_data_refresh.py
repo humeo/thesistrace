@@ -15,6 +15,7 @@ from time import monotonic
 
 import pytest
 
+import thesistrace.data.refresh as refresh_module
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.fixture_data import _append_session
 from thesistrace.adapters.tushare_data import TushareDataSource
@@ -133,6 +134,123 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         database.close()
 
 
+def test_refresh_reports_private_phase_timings(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        progress: list[dict[str, object]] = []
+        timestamps = iter(float(value) for value in range(10))
+        operator_times = iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT))
+        refresh = DataRefreshService(
+            database,
+            tmp_path,
+            clock=lambda: next(operator_times),
+            progress=progress.append,
+            monotonic=lambda: next(timestamps),
+        )
+        refresh.submit(idempotency_key="timed-refresh", as_of=AS_OF)
+
+        assert refresh.process_next(RecordingRefreshSource(candidate)) is True
+
+        phase_events = [event for event in progress if event["event"] == "refresh_timing"]
+        assert [(event["phase"], event["status"]) for event in phase_events] == [
+            ("current_head", "started"),
+            ("current_head", "completed"),
+            ("validation", "started"),
+            ("validation", "completed"),
+            ("materialization", "started"),
+            ("materialization", "completed"),
+            ("candidate_validation", "started"),
+            ("candidate_validation", "completed"),
+            ("publication", "started"),
+            ("publication", "completed"),
+        ]
+        assert [
+            event["elapsed_seconds"]
+            for event in phase_events
+            if event["status"] == "completed"
+        ] == [1.0] * 5
+    finally:
+        database.close()
+
+
+def test_refresh_submission_reads_only_head_and_root_manifest(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        _establish_head(database, tmp_path, _twenty_session_canonical())
+
+        def reject_table_manifest_read(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("refresh submission must not inspect table manifests")
+
+        monkeypatch.setattr(
+            MountedGenerationStore,
+            "_read_table_manifest",
+            reject_table_manifest_read,
+        )
+
+        accepted = DataRefreshService(database, tmp_path).submit(
+            idempotency_key="lightweight-submit",
+            as_of=AS_OF,
+        )
+
+        assert accepted.status == "accepted"
+    finally:
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DELETE FROM data.refresh_operations WHERE idempotency_key = %s",
+                ("lightweight-submit",),
+            )
+        database.close()
+
+
+def test_refresh_candidate_manifest_graph_is_validated_once(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        current_manifest = _establish_head(database, tmp_path, current)
+        candidate = copy.deepcopy(current)
+        _append_session(candidate)
+        inspected: list[str] = []
+        original_inspect = MountedGenerationStore.inspect_generation
+
+        def recording_inspect(
+            self: MountedGenerationStore,
+            manifest_sha256: str,
+        ) -> object:
+            inspected.append(manifest_sha256)
+            return original_inspect(self, manifest_sha256)
+
+        monkeypatch.setattr(
+            MountedGenerationStore,
+            "inspect_generation",
+            recording_inspect,
+        )
+        refresh = DataRefreshService(database, tmp_path)
+        refresh.submit(idempotency_key="single-candidate-validation", as_of=AS_OF)
+
+        assert refresh.process_next(RecordingRefreshSource(candidate)) is True
+
+        candidate_manifests = [value for value in inspected if value != current_manifest]
+        assert len(candidate_manifests) == 1
+        assert inspected.count(candidate_manifests[0]) == 1
+    finally:
+        database.close()
+
+
 def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -163,6 +281,33 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
             SECOND_REFRESH_AT
         )
+    finally:
+        database.close()
+
+
+def test_refresh_no_change_detection_does_not_serialize_the_canonical_dataset(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        _establish_head(database, tmp_path, current)
+        refresh = DataRefreshService(database, tmp_path, clock=lambda: SECOND_REFRESH_AT)
+        refresh.submit(idempotency_key="no-canonical-json", as_of=AS_OF)
+
+        def reject_canonical_serialization(*_args: object, **_kwargs: object) -> bytes:
+            raise AssertionError("refresh processing must not serialize the Canonical dataset")
+
+        monkeypatch.setattr(
+            refresh_module,
+            "canonical_json_bytes",
+            reject_canonical_serialization,
+        )
+
+        assert refresh.process_next(RecordingRefreshSource(current)) is True
+        assert refresh.inspect("no-canonical-json").outcome == "no_change"
     finally:
         database.close()
 

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import copy
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Protocol
@@ -46,9 +47,40 @@ class TushareDataSource:
         *,
         provider: TushareProvider,
         clock: Callable[[], date] = date.today,
+        progress: Callable[[dict[str, object]], None] | None = None,
+        monotonic: Callable[[], float] = time.perf_counter,
     ) -> None:
         self._provider = provider
         self._clock = clock
+        self._progress = progress or (lambda _event: None)
+        self._monotonic = monotonic
+
+    @contextmanager
+    def _timed_phase(self, phase: str) -> Iterator[None]:
+        self._progress(
+            {"event": "refresh_timing", "phase": phase, "status": "started"}
+        )
+        started_at = self._monotonic()
+        try:
+            yield
+        except Exception:
+            self._progress(
+                {
+                    "event": "refresh_timing",
+                    "phase": phase,
+                    "status": "failed",
+                    "elapsed_seconds": round(self._monotonic() - started_at, 3),
+                }
+            )
+            raise
+        self._progress(
+            {
+                "event": "refresh_timing",
+                "phase": phase,
+                "status": "completed",
+                "elapsed_seconds": round(self._monotonic() - started_at, 3),
+            }
+        )
 
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
         try:
@@ -68,41 +100,45 @@ class TushareDataSource:
             )
             assert request_start is not None
             request_end = plan.completed_through_date or self._clock()
-            snapshot = self._provider.collect_incremental_snapshot(
-                last_session=request_start,
-                as_of=request_end,
-            )
-            normalization_previous = previous
-            if plan.kind == "refresh":
-                normalization_previous = _canonical_before_overlap(previous, request_start)
-                snapshot = _preserve_ordinary_overlap_absence(
-                    snapshot,
-                    previous,
-                    overlap_start_session=request_start,
+            with self._timed_phase("source_collection"):
+                snapshot = self._provider.collect_incremental_snapshot(
+                    last_session=request_start,
+                    as_of=request_end,
                 )
-                assert plan.completed_through_date is not None
-                _validate_new_session_evidence(
-                    snapshot,
-                    plan.after_session,
-                    completed_through_date=plan.completed_through_date,
-                )
-            try:
-                lineage, delta = normalize_tushare_increment(snapshot, normalization_previous)
-            except TushareSourceError as error:
-                if error.reason_code != "NO_NEW_RESEARCH_SESSION":
-                    raise
-                lineage = {
-                    "source": "tushare",
-                    "source_contract_version": SOURCE_CONTRACT_VERSION,
-                    "responses": {key: value for key, value in sorted(snapshot.items())},
-                    "no_change": True,
-                }
-                canonical = copy.deepcopy(dict(previous))
-            else:
-                canonical = _materialize_increment(normalization_previous, delta)
+            with self._timed_phase("merge"):
+                normalization_previous = previous
                 if plan.kind == "refresh":
-                    _remove_synthetic_predecessor(canonical, request_start)
-                    _recompute_liquidity_universes(canonical)
+                    normalization_previous = _canonical_before_overlap(previous, request_start)
+                    snapshot = _preserve_ordinary_overlap_absence(
+                        snapshot,
+                        previous,
+                        overlap_start_session=request_start,
+                    )
+                    snapshot = _project_price_limits_to_stock_scope(snapshot)
+                    assert plan.completed_through_date is not None
+                    _validate_new_session_evidence(
+                        snapshot,
+                        plan.after_session,
+                        completed_through_date=plan.completed_through_date,
+                    )
+                try:
+                    lineage, delta = normalize_tushare_increment(snapshot, normalization_previous)
+                except TushareSourceError as error:
+                    if error.reason_code != "NO_NEW_RESEARCH_SESSION":
+                        raise
+                    lineage = {
+                        "source": "tushare",
+                        "source_contract_version": SOURCE_CONTRACT_VERSION,
+                        "responses": {key: value for key, value in sorted(snapshot.items())},
+                        "no_change": True,
+                    }
+                    canonical = dict(previous)
+                else:
+                    canonical = _materialize_increment(normalization_previous, delta)
+                    if plan.kind == "refresh":
+                        _remove_synthetic_predecessor(canonical, request_start)
+                        _recompute_liquidity_universes(canonical)
+                lineage = _compact_source_lineage(lineage)
         except TushareSourceError as error:
             raise DataSourceError(
                 _error_category(error.reason_code),
@@ -188,7 +224,7 @@ def _materialize_increment(
     previous: Mapping[str, object],
     delta: Mapping[str, object],
 ) -> dict[str, object]:
-    canonical = copy.deepcopy(dict(previous))
+    canonical = dict(previous)
     append_fields = {
         "research_calendar_append": "research_calendar",
         "trading_states_append": "trading_states",
@@ -203,7 +239,7 @@ def _materialize_increment(
                 "invalid_source_data",
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
-        current.extend(copy.deepcopy(appended))
+        canonical[canonical_name] = [*current, *appended]
 
     replacement_fields = {
         "instruments_replace": "instruments",
@@ -217,7 +253,7 @@ def _materialize_increment(
                 "invalid_source_data",
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
-        canonical[canonical_name] = copy.deepcopy(replacement)
+        canonical[canonical_name] = list(replacement)
 
     universes = canonical.get("liquidity_universes")
     appended_universes = delta.get("liquidity_universes_append", {})
@@ -232,6 +268,8 @@ def _materialize_increment(
     assert isinstance(universes, dict)
     assert isinstance(appended_universes, dict)
     assert isinstance(replacement_universes, dict)
+    universes = dict(universes)
+    canonical["liquidity_universes"] = universes
     for name, rows in appended_universes.items():
         current = universes.get(name)
         if not isinstance(current, list) or not isinstance(rows, list):
@@ -239,7 +277,7 @@ def _materialize_increment(
                 "invalid_source_data",
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
-        current.extend(copy.deepcopy(rows))
+        universes[name] = [*current, *rows]
     for name, rows in replacement_universes.items():
         current = universes.get(name)
         if not isinstance(current, list) or not isinstance(rows, list):
@@ -248,11 +286,11 @@ def _materialize_increment(
                 detail_code="INVALID_CANONICAL_INCREMENT",
             )
         replacement_by_session = {
-            str(row["session"]): copy.deepcopy(row)
+            str(row["session"]): dict(row)
             for row in rows
             if isinstance(row, dict) and "session" in row
         }
-        current[:] = [
+        universes[name] = [
             replacement_by_session.get(str(row.get("session")), row)
             if isinstance(row, dict)
             else row
@@ -266,6 +304,9 @@ def _materialize_increment(
             "invalid_source_data",
             detail_code="INVALID_CANONICAL_INCREMENT",
         )
+    if corrections:
+        prices = [dict(row) if isinstance(row, dict) else row for row in prices]
+        canonical["prices"] = prices
     price_by_position = {
         (str(row["session"]), str(row["instrument_id"])): row
         for row in prices
@@ -319,7 +360,7 @@ def _canonical_before_overlap(
         while cursor.weekday() >= 5:
             cursor -= timedelta(days=1)
         prefix_sessions = [cursor.isoformat()]
-    prefix = copy.deepcopy(dict(previous))
+    prefix = dict(previous)
     prefix["research_calendar"] = prefix_sessions
     for table in ("prices", "trading_states", "price_limits", "base_pool"):
         rows = prefix.get(table)
@@ -398,7 +439,7 @@ def _preserve_ordinary_overlap_absence(
     *,
     overlap_start_session: str,
 ) -> dict[str, list[dict[str, object]]]:
-    supplemented = {name: copy.deepcopy(rows) for name, rows in snapshot.items()}
+    supplemented = dict(snapshot)
     calendar_sse = supplemented.get("calendar_sse", [])
     calendar_szse = supplemented.get("calendar_szse", [])
     stock_basic = supplemented.get("stock_basic", [])
@@ -609,6 +650,41 @@ def _validate_new_session_evidence(
                 "invalid_source_data",
                 detail_code="INCOMPLETE_NEW_SESSION_INSTRUMENT",
             )
+
+
+def _project_price_limits_to_stock_scope(
+    snapshot: Mapping[str, list[dict[str, object]]],
+) -> dict[str, list[dict[str, object]]]:
+    stock_basic = snapshot.get("stock_basic")
+    price_limits = snapshot.get("price_limits")
+    if not isinstance(stock_basic, list) or not isinstance(price_limits, list):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="MALFORMED_PROVIDER_PAYLOAD",
+        )
+    known_codes = {str(row["ts_code"]) for row in stock_basic}
+    projected = dict(snapshot)
+    projected["price_limits"] = [
+        row for row in price_limits if str(row["ts_code"]) in known_codes
+    ]
+    return projected
+
+
+def _compact_source_lineage(lineage: Mapping[str, object]) -> dict[str, object]:
+    responses = lineage.get("responses")
+    if not isinstance(responses, Mapping):
+        return dict(lineage)
+    row_counts: dict[str, int] = {}
+    for name, rows in sorted(responses.items(), key=lambda item: str(item[0])):
+        if not isinstance(rows, list):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="MALFORMED_PROVIDER_PAYLOAD",
+            )
+        row_counts[str(name)] = len(rows)
+    compact = {str(key): value for key, value in lineage.items() if key != "responses"}
+    compact["response_row_counts"] = row_counts
+    return compact
 
 
 def _source_instrument(instrument: Mapping[str, object]) -> dict[str, object]:

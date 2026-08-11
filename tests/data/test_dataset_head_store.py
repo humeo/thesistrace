@@ -66,9 +66,13 @@ def test_head_owns_the_atomic_publication_time_independently_of_generation(
         prepared_at=completed_at,
     )
     reopened = MountedDatasetHeadStore(tmp_path).current()
+    pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
 
     assert established.prepared_at == completed_at.isoformat()
     assert reopened == established
+    assert pointer is not None
+    descriptor = MountedDatasetHeadStore(tmp_path).resolve_descriptor(pointer)
+    assert descriptor.manifest_sha256 == manifest
     assert reopened is not None
     assert reopened.generation.preparation["prepared_at"] == "2026-08-09T00:01:00+00:00"
 

@@ -58,6 +58,10 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
 
+    @app.get("/health/live", include_in_schema=False)
+    def liveness() -> dict[str, str]:
+        return {"status": "ok"}
+
     @app.get("/api/data", response_model=DataOverview)
     def data_overview(request: Request) -> DataOverview:
         return _runtime(request).data_overview.overview()

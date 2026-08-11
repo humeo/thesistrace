@@ -156,7 +156,7 @@ def _run(
                 ),
             )
             provider = live_provider
-        source = TushareDataSource(provider=provider)
+        source = TushareDataSource(provider=provider, progress=_progress)
         if parsed.command == "bootstrap":
             outcome = DataOperator(
                 database,
@@ -185,7 +185,11 @@ def _run(
                         }
                     )
             return outcome
-        processed = DataRefreshService(database, mount_root).process_next(source)
+        processed = DataRefreshService(
+            database,
+            mount_root,
+            progress=_progress,
+        ).process_next(source)
         return {"status": "processed" if processed else "idle"}
     finally:
         if database is not None:

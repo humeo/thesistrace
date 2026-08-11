@@ -10,7 +10,11 @@ from uuid import uuid4
 from psycopg.errors import UniqueViolation
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
-from thesistrace.data.head_store import DatasetHead, MountedDatasetHeadStore
+from thesistrace.data.head_store import (
+    DatasetHead,
+    DatasetHeadPointer,
+    MountedDatasetHeadStore,
+)
 
 _LIFECYCLE_LOCK = "thesistrace-mounted-data-lifecycle"
 CURRENT_DATA_CUTOVER_LOCK = "thesistrace-current-data-cutover"
@@ -55,6 +59,13 @@ class GenerationPin:
     heartbeat_at: datetime
 
 
+@dataclass(frozen=True)
+class ProtectedRefreshCandidate:
+    operation_id: str
+    generation_manifest_sha256: str
+    resolved_candidate: object
+
+
 class DatasetLifecycle:
     """The shared PostgreSQL fence for mounted Head and Generation retention state."""
 
@@ -83,7 +94,46 @@ class DatasetLifecycle:
                     return resolved
         raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
 
+    def current_pointer(self) -> DatasetHeadPointer | None:
+        for _ in range(4):
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
+                pointer = self._heads.current_pointer()
+            if pointer is None:
+                return None
+            try:
+                self._heads.resolve_descriptor(pointer)
+            except RuntimeError:
+                with self._database.transaction() as transaction:
+                    lock_data_lifecycle(transaction)
+                    if self._heads.current_pointer() == pointer:
+                        raise
+                continue
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
+                if self._heads.current_pointer() == pointer:
+                    return pointer
+        raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
+
     def protect_candidate(
+        self,
+        *,
+        operation_id: str,
+        generation_manifest_sha256: str,
+        lease_seconds: float,
+    ) -> None:
+        self._register_candidate(
+            operation_id=operation_id,
+            generation_manifest_sha256=generation_manifest_sha256,
+            lease_seconds=lease_seconds,
+        )
+        try:
+            self._heads.open_generation(generation_manifest_sha256)
+        except RuntimeError:
+            self.release_candidate(operation_id=operation_id)
+            raise
+
+    def _register_candidate(
         self,
         *,
         operation_id: str,
@@ -128,11 +178,70 @@ class DatasetLifecycle:
                     """,
                     (lease_seconds, operation_id),
                 )
-        try:
-            self._heads.open_generation(generation_manifest_sha256)
-        except RuntimeError:
-            self.release_candidate(operation_id=operation_id)
-            raise
+
+    @contextmanager
+    def protected_refresh_candidate(
+        self,
+        *,
+        operation_id: str,
+        generation_manifest_sha256: str,
+        lease_seconds: float,
+    ) -> Iterator[ProtectedRefreshCandidate]:
+        self._register_candidate(
+            operation_id=operation_id,
+            generation_manifest_sha256=generation_manifest_sha256,
+            lease_seconds=lease_seconds,
+        )
+        with self._heads.resolved_pointer_candidate(
+            generation_manifest_sha256
+        ) as resolved:
+            yield ProtectedRefreshCandidate(
+                operation_id=operation_id,
+                generation_manifest_sha256=generation_manifest_sha256,
+                resolved_candidate=resolved,
+            )
+
+    def compare_and_swap_refresh_head(
+        self,
+        *,
+        expected_generation_manifest_sha256: str | None,
+        candidate: ProtectedRefreshCandidate,
+        prepared_at: datetime | None = None,
+    ) -> DatasetHeadPointer:
+        with self._database.transaction() as transaction:
+            lock_data_lifecycle(transaction)
+            protected = transaction.execute(
+                """
+                SELECT generation_manifest_sha256, status
+                FROM data.generation_candidates
+                WHERE operation_id = %s
+                  AND status = 'live'
+                  AND lease_expires_at > now()
+                FOR UPDATE
+                """,
+                (candidate.operation_id,),
+            ).fetchone()
+            if protected != {
+                "generation_manifest_sha256": candidate.generation_manifest_sha256,
+                "status": "live",
+            }:
+                raise DataLifecycleError("Head candidate is not protected by live work")
+            head = self._heads.compare_and_swap_pointer_resolved(
+                expected_generation_manifest_sha256=(
+                    expected_generation_manifest_sha256
+                ),
+                candidate=candidate.resolved_candidate,  # type: ignore[arg-type]
+                prepared_at=prepared_at,
+            )
+            transaction.execute(
+                """
+                UPDATE data.generation_candidates
+                SET status = 'released', released_at = now(), updated_at = now()
+                WHERE operation_id = %s AND status = 'live'
+                """,
+                (candidate.operation_id,),
+            )
+            return head
 
     def compare_and_swap_head(
         self,

@@ -447,22 +447,25 @@ def test_materialized_refresh_candidate_is_never_planned_before_registration(
             idempotency_key="candidate-gap-refresh",
             as_of=datetime(2026, 8, 10, 2, tzinfo=UTC),
         )
-        original_materialize = MountedGenerationStore.materialize
+        original_materialize = MountedGenerationStore.materialize_refresh
         materialized: list[str] = []
 
         def pause_after_materialize(
             self: MountedGenerationStore,
-            canonical: dict[str, object],
             **kwargs: object,
         ) -> object:
-            generation = original_materialize(self, canonical, **kwargs)
+            generation = original_materialize(self, **kwargs)
             materialized.append(generation.manifest_sha256)
             candidate_materialized.set()
             if not continue_refresh.wait(timeout=20):
                 raise AssertionError("refresh candidate barrier was not released")
             return generation
 
-        monkeypatch.setattr(MountedGenerationStore, "materialize", pause_after_materialize)
+        monkeypatch.setattr(
+            MountedGenerationStore,
+            "materialize_refresh",
+            pause_after_materialize,
+        )
         with ThreadPoolExecutor(max_workers=1) as executor:
             processing = executor.submit(refresh.process_next, _StaticRefreshSource(candidate))
             assert candidate_materialized.wait(timeout=20)

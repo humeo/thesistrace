@@ -3,8 +3,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import secrets
+import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,11 @@ from psycopg.errors import UniqueViolation
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
-from thesistrace.data.head_store import DatasetHead, DatasetHeadConflict, MountedDatasetHeadStore
+from thesistrace.data.head_store import (
+    DatasetHeadConflict,
+    DatasetHeadPointer,
+    MountedDatasetHeadStore,
+)
 from thesistrace.data.lifecycle import (
     DataLifecycleError,
     DatasetLifecycle,
@@ -83,6 +88,8 @@ class DataRefreshService:
         lease_seconds: float = _REFRESH_LEASE_SECONDS,
         heartbeat_seconds: float = _REFRESH_HEARTBEAT_SECONDS,
         max_attempts: int = _REFRESH_MAX_ATTEMPTS,
+        progress: Callable[[dict[str, object]], None] | None = None,
+        monotonic: Callable[[], float] = time.perf_counter,
     ) -> None:
         if (
             lease_seconds <= 0
@@ -96,9 +103,38 @@ class DataRefreshService:
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._max_attempts = max_attempts
+        self._progress = progress or (lambda _event: None)
+        self._monotonic = monotonic
         self._lifecycle = DatasetLifecycle(database, mount_root)
         self._heads = MountedDatasetHeadStore(mount_root)
         self._generations = MountedGenerationStore(mount_root)
+
+    @contextmanager
+    def _timed_phase(self, phase: str) -> Iterator[None]:
+        self._progress(
+            {"event": "refresh_timing", "phase": phase, "status": "started"}
+        )
+        started_at = self._monotonic()
+        try:
+            yield
+        except Exception:
+            self._progress(
+                {
+                    "event": "refresh_timing",
+                    "phase": phase,
+                    "status": "failed",
+                    "elapsed_seconds": round(self._monotonic() - started_at, 3),
+                }
+            )
+            raise
+        self._progress(
+            {
+                "event": "refresh_timing",
+                "phase": phase,
+                "status": "completed",
+                "elapsed_seconds": round(self._monotonic() - started_at, 3),
+            }
+        )
 
     def submit(self, *, idempotency_key: str, as_of: datetime) -> RefreshOutcome:
         key = _identity(idempotency_key)
@@ -122,7 +158,7 @@ class DataRefreshService:
             if existing["fingerprint"] != fingerprint:
                 raise DataRefreshError("IDEMPOTENCY_KEY_CONFLICT")
             return _outcome(existing)
-        if self._lifecycle.current_head() is None:
+        if self._lifecycle.current_pointer() is None:
             raise DataRefreshError("DATA_NOT_READY")
         try:
             with self._database.transaction() as transaction:
@@ -169,24 +205,33 @@ class DataRefreshService:
         claim = self._claim()
         if claim is None:
             return reconciled or recovered
-        candidate_live = False
         head_moved = False
         operation_id = _operation_id(claim.key, claim.owner_token)
+        candidate_scope = ExitStack()
         try:
             with self._maintain_claim(claim) as heartbeat:
-                head = self._lifecycle.current_head()
-                if head is None:
+                with self._timed_phase("current_head"):
+                    head = self._lifecycle.current_pointer()
+                    refresh_base = (
+                        None
+                        if head is None
+                        else self._generations.open_refresh_base(
+                            head.generation_manifest_sha256
+                        )
+                    )
+                if head is None or refresh_base is None:
                     raise DataRefreshError("DATA_NOT_READY")
                 expected_manifest = head.generation_manifest_sha256
                 self._record_expected_head(claim, expected_manifest)
-                plan = refresh_collection_plan(self._as_of(claim), head.generation.canonical)
+                plan = refresh_collection_plan(self._as_of(claim), refresh_base.canonical)
+                assert plan.overlap_start_session is not None
                 batch = source.collect(plan)
                 heartbeat.assert_owned()
-                validate_release_batch(batch, predecessor_session=head.data_through_session)
-                candidate_canonical = batch.canonical
-                if canonical_json_bytes(candidate_canonical) == canonical_json_bytes(
-                    head.generation.canonical
-                ):
+                with self._timed_phase("validation"):
+                    validate_release_batch(batch, predecessor_session=head.data_through_session)
+                    candidate_canonical = batch.canonical
+                    unchanged = candidate_canonical == refresh_base.canonical
+                if unchanged:
                     completed_at = self._operator_time()
                     self._complete_no_change(
                         claim,
@@ -196,19 +241,24 @@ class DataRefreshService:
                     )
                     return True
                 prepared_at = self._operator_time()
-                generation = self._generations.materialize(
-                    candidate_canonical,
-                    prepared_at=prepared_at,
-                    source_name=batch.source_name,
-                    source_lineage=batch.source_lineage,
-                )
+                with self._timed_phase("materialization"):
+                    generation = self._generations.materialize_refresh(
+                        predecessor_manifest_sha256=expected_manifest,
+                        replacement_canonical=candidate_canonical,
+                        replace_from_session=plan.overlap_start_session,
+                        prepared_at=prepared_at,
+                        source_name=batch.source_name,
+                        source_lineage=batch.source_lineage,
+                    )
                 heartbeat.assert_owned()
-                self._lifecycle.protect_candidate(
-                    operation_id=operation_id,
-                    generation_manifest_sha256=generation.manifest_sha256,
-                    lease_seconds=self._lease_seconds,
-                )
-                candidate_live = True
+                with self._timed_phase("candidate_validation"):
+                    protected_candidate = candidate_scope.enter_context(
+                        self._lifecycle.protected_refresh_candidate(
+                            operation_id=operation_id,
+                            generation_manifest_sha256=generation.manifest_sha256,
+                            lease_seconds=self._lease_seconds,
+                        )
+                    )
                 self._record_candidate(
                     claim,
                     expected_manifest=expected_manifest,
@@ -217,18 +267,16 @@ class DataRefreshService:
                 )
                 heartbeat.assert_owned()
                 try:
-                    moved = self._lifecycle.compare_and_swap_head(
-                        expected_generation_manifest_sha256=expected_manifest,
-                        candidate_generation_manifest_sha256=generation.manifest_sha256,
-                        operation_id=operation_id,
-                        prepared_at=prepared_at,
-                    )
+                    with self._timed_phase("publication"):
+                        moved = self._lifecycle.compare_and_swap_refresh_head(
+                            expected_generation_manifest_sha256=expected_manifest,
+                            candidate=protected_candidate,
+                            prepared_at=prepared_at,
+                        )
                 except Exception:
                     if self._post_cas_head_state(generation.manifest_sha256) is not False:
                         head_moved = True
-                        candidate_live = False
                     raise
-                candidate_live = False
                 head_moved = True
                 completed_at = self._operator_time()
                 self._complete_published(claim, moved, completed_at)
@@ -253,8 +301,7 @@ class DataRefreshService:
             )
             raise DataRefreshError(code) from error
         finally:
-            if candidate_live:
-                self._lifecycle.release_candidate(operation_id=operation_id)
+            candidate_scope.close()
         return True
 
     def _claim(self) -> _RefreshClaim | None:
@@ -459,7 +506,7 @@ class DataRefreshService:
     def _complete_published(
         self,
         claim: _RefreshClaim,
-        head: DatasetHead,
+        head: DatasetHeadPointer,
         completed_at: datetime,
     ) -> None:
         with self._database.transaction() as transaction:

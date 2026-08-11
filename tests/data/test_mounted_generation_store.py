@@ -16,6 +16,7 @@ from thesistrace.data.generation_files import AddressedFileError, AddressedFileS
 from thesistrace.data.generation_store import (
     GENERATION_MANIFEST_MAX_BYTES,
     GENERATION_SESSION_PARTITION_COUNT,
+    GenerationFileRef,
     GenerationStoreError,
     MountedGenerationStore,
 )
@@ -111,6 +112,71 @@ def test_reordered_source_rows_reuse_identical_physical_data_objects(tmp_path: P
         MountedGenerationStore(tmp_path).open_generation(second.manifest_sha256).canonical
         == canonical
     )
+
+
+@pytest.mark.parametrize("session_count", (22, 4_000))
+def test_refresh_window_and_rewritten_partition_count_do_not_grow_with_history(
+    tmp_path: Path,
+    session_count: int,
+) -> None:
+    canonical = _canonical(session_count)
+    store = MountedGenerationStore(tmp_path)
+    current = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "current"},
+    )
+
+    refresh_base = store.open_refresh_base(current.manifest_sha256)
+    replacement = copy.deepcopy(refresh_base.canonical)
+    prices = replacement["prices"]
+    assert isinstance(prices, list)
+    prices[-1]["turnover_cny"] = "999999.00"
+    replace_from_session = str(replacement["research_calendar"][-20])
+    candidate = store.materialize_refresh(
+        predecessor_manifest_sha256=current.manifest_sha256,
+        replacement_canonical=replacement,
+        replace_from_session=replace_from_session,
+        prepared_at=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "refresh"},
+    )
+
+    assert len(refresh_base.canonical["research_calendar"]) <= 39
+    current_root = _manifest(tmp_path, current.manifest_sha256)
+    candidate_root = _manifest(tmp_path, candidate.manifest_sha256)
+    current_prices = _table_object_sha256s(tmp_path, current_root, "prices")
+    candidate_prices = _table_object_sha256s(tmp_path, candidate_root, "prices")
+    assert len(set(candidate_prices) - set(current_prices)) == 1
+    assert candidate_prices[:-1] == current_prices[:-1]
+
+    reopened = store.open_generation(candidate.manifest_sha256)
+    expected = copy.deepcopy(canonical)
+    expected["prices"][-1]["turnover_cny"] = "999999.00"
+    assert reopened.canonical == expected
+
+
+def test_reference_inventory_does_not_reopen_parquet_objects(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(22),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "current"},
+    )
+
+    def reject_parquet_open(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("reference inventory must not open Parquet")
+
+    monkeypatch.setattr(store, "_open_partition", reject_parquet_open)
+
+    references = store.referenced_files(generation.manifest_sha256)
+
+    assert GenerationFileRef("manifest", generation.manifest_sha256) in references
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
@@ -485,8 +551,10 @@ def test_addressed_file_deletion_is_idempotent_and_cannot_follow_a_symlink(
     assert external.read_bytes() == b"must remain"
 
 
-def _canonical() -> dict[str, object]:
-    sessions = _research_sessions(GENERATION_SESSION_PARTITION_COUNT + 1)
+def _canonical(
+    session_count: int = GENERATION_SESSION_PARTITION_COUNT + 1,
+) -> dict[str, object]:
+    sessions = _research_sessions(session_count)
     instruments = (
         {
             "instrument_id": "equity:A.SH",
@@ -514,10 +582,15 @@ def _canonical() -> dict[str, object]:
     universes = {name: [] for name in ("top300", "top1000", "top2000", "top3000")}
     for ordinal, session in enumerate(sessions):
         members = ["equity:A.SH", "equity:B.SZ"]
+        ranked_members = ["equity:B.SZ", "equity:A.SH"]
         base_pool.append({"session": session, "instrument_ids": members})
         for universe_rows in universes.values():
             universe_rows.append(
-                {"session": session, "instrument_ids": members, "status": "available"}
+                {
+                    "session": session,
+                    "instrument_ids": ranked_members,
+                    "status": "available",
+                }
             )
         for instrument_index, instrument_id in enumerate(members):
             raw = 10 + ordinal + instrument_index
@@ -608,6 +681,18 @@ def _research_sessions(count: int) -> list[str]:
 
 def _manifest(root: Path, sha256: str) -> dict[str, object]:
     return json.loads(_manifest_path(root, sha256).read_bytes())
+
+
+def _table_object_sha256s(
+    root: Path,
+    generation: dict[str, object],
+    table_name: str,
+) -> list[str]:
+    table_reference = next(
+        reference for reference in generation["tables"] if reference["name"] == table_name
+    )
+    table_manifest = _manifest(root, table_reference["manifest_sha256"])
+    return [str(reference["sha256"]) for reference in table_manifest["objects"]]
 
 
 def _manifest_path(root: Path, sha256: str) -> Path:

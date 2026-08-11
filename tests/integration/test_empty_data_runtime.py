@@ -15,6 +15,20 @@ from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 
+def test_api_exposes_a_dedicated_liveness_endpoint(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    migrate_core(core_settings.database_url)
+    settings = replace(core_settings, data_mount=tmp_path)
+
+    with TestClient(create_app(settings)) as client:
+        response = client.get("/health/live")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_empty_and_prepared_data_overview_survive_real_http_restart(
     core_settings: CoreSettings,
     tmp_path: Path,
@@ -76,6 +90,57 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
         assert client.get("/api/data").json() == {
             **expected,
             "last_refresh_at": "2026-08-09T01:02:03Z",
+        }
+
+
+def test_data_overview_does_not_open_generation_parquet(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    migrate_core(core_settings.database_url)
+    settings = replace(core_settings, data_mount=tmp_path)
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        build_minimal_canonical_fixture(),
+        prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="metadata-only-overview-test",
+        source_lineage={"fixture": "minimal"},
+    )
+    parquet = next(
+        reference
+        for reference in store.referenced_files(generation.manifest_sha256)
+        if reference.kind == "object"
+    )
+
+    with open_core_runtime(settings) as runtime:
+        lifecycle = DatasetLifecycle(runtime.database, tmp_path)
+        lifecycle.protect_candidate(
+            operation_id="metadata-only-overview",
+            generation_manifest_sha256=generation.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=None,
+            candidate_generation_manifest_sha256=generation.manifest_sha256,
+            operation_id="metadata-only-overview",
+        )
+        with runtime.database.transaction() as transaction:
+            transaction.execute(
+                """
+                UPDATE data.current_dataset_state
+                SET last_refresh_at = NULL
+                WHERE singleton = 1
+                """
+            )
+
+    assert store.delete_file(parquet) is True
+
+    with TestClient(create_app(settings)) as client:
+        assert client.get("/api/data").json() == {
+            "dataset_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+            "data_through_session": "2026-08-07",
+            "last_refresh_at": None,
+            "readiness": True,
         }
 
 
