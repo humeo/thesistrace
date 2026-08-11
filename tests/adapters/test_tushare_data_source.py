@@ -1,6 +1,7 @@
 import copy
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 
 import httpx
 import pytest
@@ -829,6 +830,56 @@ def test_tushare_provider_reports_exhausted_rate_limit_as_unavailable() -> None:
     assert sleeps == [2, 4]
 
 
+def test_tushare_provider_retries_transient_source_rejection() -> None:
+    class TransientlyRejectedTransport:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
+            self.calls += 1
+            if self.calls < 3:
+                return {"code": 50101, "msg": "transient rejection", "data": None}
+            fields = str(payload["fields"]).split(",")
+            return {"code": 0, "msg": "", "data": {"fields": fields, "items": []}}
+
+    transport = TransientlyRejectedTransport()
+    sleeps: list[float] = []
+    progress: list[dict[str, object]] = []
+    provider = TushareAdapter(
+        token="secret",
+        transport=transport,
+        throttle_seconds=0,
+        rate_limit_backoff_seconds=2,
+        max_attempts=3,
+        sleeper=sleeps.append,
+        progress=progress.append,
+    )
+
+    assert provider.query(
+        "daily",
+        params={"start_date": "20250803", "end_date": "20260803"},
+        fields=("ts_code",),
+    ) == []
+    assert transport.calls == 3
+    assert sleeps == [2, 4]
+    assert progress == [
+        {
+            "event": "upstream_retry",
+            "api_name": "daily",
+            "source_code": 50101,
+            "attempt": 1,
+            "retry_in_seconds": 2,
+        },
+        {
+            "event": "upstream_retry",
+            "api_name": "daily",
+            "source_code": 50101,
+            "attempt": 2,
+            "retry_in_seconds": 4,
+        },
+    ]
+
+
 def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_session() -> None:
     progress: list[dict[str, object]] = []
 
@@ -970,6 +1021,153 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
         "resolved_instruments": 1,
         "total_instruments": 1,
     }
+
+
+def test_tushare_bootstrap_resumes_after_anchor_checkpoint(
+    tmp_path: Path,
+) -> None:
+    class CheckpointAdapter(TushareAdapter):
+        def __init__(self, checkpoint: Path, *, fail_market_facts: bool) -> None:
+            self.calls: list[tuple[str, dict[str, object]]] = []
+            self.events: list[dict[str, object]] = []
+            self.fail_market_facts = fail_market_facts
+            super().__init__(
+                token="secret",
+                transport=RecordingTransport(),
+                throttle_seconds=0,
+                progress=self.events.append,
+                bootstrap_checkpoint=checkpoint,
+            )
+
+        def query_paginated(
+            self,
+            api_name: str,
+            *,
+            params: Mapping[str, object],
+            fields: tuple[str, ...],
+            primary_key: tuple[str, ...],
+        ) -> list[dict[str, object]]:
+            del fields, primary_key
+            self.calls.append((api_name, dict(params)))
+            if api_name == "trade_cal":
+                return [
+                    {
+                        "exchange": params["exchange"],
+                        "cal_date": "20260803",
+                        "is_open": "1",
+                        "pretrade_date": "20260731",
+                    }
+                ]
+            if api_name == "stock_basic":
+                if params["list_status"] != "L":
+                    return []
+                return [
+                    {
+                        "ts_code": "600000.SH",
+                        "exchange": "SSE",
+                        "market": "主板",
+                        "list_status": "L",
+                        "list_date": "20220103",
+                        "delist_date": "",
+                    }
+                ]
+            if api_name == "daily":
+                if "trade_date" in params:
+                    return [
+                        {
+                            "ts_code": "600000.SH",
+                            "trade_date": "20220103",
+                            "open": "10",
+                            "high": "11",
+                            "low": "9",
+                            "close": "10.5",
+                            "pre_close": "10",
+                            "change": "0.5",
+                            "pct_chg": "5",
+                            "vol": "100",
+                            "amount": "1000",
+                        }
+                    ]
+                if self.fail_market_facts:
+                    raise TushareSourceError("UPSTREAM_UNAVAILABLE", source_code=50101)
+                return [
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": "20260803",
+                        "open": "10",
+                        "high": "11",
+                        "low": "9",
+                        "close": "10.5",
+                        "pre_close": "10",
+                        "change": "0.5",
+                        "pct_chg": "5",
+                        "vol": "100",
+                        "amount": "1000",
+                    }
+                ]
+            if api_name == "adj_factor":
+                session = "20220103" if "trade_date" in params else "20260803"
+                return [{"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}]
+            if api_name == "stk_limit":
+                return [
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": "20260803",
+                        "pre_close": "10",
+                        "up_limit": "11",
+                        "down_limit": "9",
+                    }
+                ]
+            if api_name == "index_member_all":
+                return [
+                    {
+                        "l1_code": "801010",
+                        "l2_code": "801011",
+                        "l3_code": "850111",
+                        "ts_code": "600000.SH",
+                        "in_date": "20220103",
+                        "out_date": "",
+                    }
+                ]
+            return []
+
+    checkpoint = tmp_path / "bootstrap-anchor-checkpoint.json"
+    first = CheckpointAdapter(checkpoint, fail_market_facts=True)
+
+    with pytest.raises(TushareSourceError):
+        first.collect_bootstrap_snapshot(
+            start_date=date(2025, 8, 3),
+            completed_through_date=date(2026, 8, 3),
+        )
+
+    assert checkpoint.is_file()
+    assert "secret" not in checkpoint.read_text()
+    assert any(
+        event.get("phase") == "bootstrap_checkpoint" and event.get("status") == "saved"
+        for event in first.events
+    )
+
+    resumed = CheckpointAdapter(checkpoint, fail_market_facts=False)
+    snapshot = resumed.collect_bootstrap_snapshot(
+        start_date=date(2025, 8, 3),
+        completed_through_date=date(2026, 8, 3),
+    )
+
+    assert snapshot["anchor_adjustments"][0]["trade_date"] == "20220103"
+    assert all(
+        api_name not in {"trade_cal", "stock_basic"} and "trade_date" not in params
+        for api_name, params in resumed.calls
+    )
+    assert resumed.events[0] == {
+        "event": "collection_phase",
+        "phase": "bootstrap_checkpoint",
+        "status": "restored",
+        "request_start": "2025-08-03",
+        "request_end": "2026-08-03",
+        "anchor_count": 1,
+    }
+    resumed.clear_bootstrap_checkpoint()
+    assert not checkpoint.exists()
 
 
 def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:

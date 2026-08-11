@@ -1,10 +1,13 @@
 """Tushare transport, collection, and canonical normalization adapter."""
 
+import json
+import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Protocol
 
 import httpx
@@ -20,6 +23,9 @@ from thesistrace.data.canonical_mapping import (
 )
 
 SOURCE_CONTRACT_VERSION = "tushare-v1"
+_BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-anchors"
+_BOOTSTRAP_CHECKPOINT_VERSION = 1
+_BOOTSTRAP_CHECKPOINT_MAX_BYTES = 128 * 1024 * 1024
 
 
 class TushareTransport(Protocol):
@@ -168,6 +174,7 @@ class TushareAdapter:
         max_attempts: int = 6,
         sleeper: Callable[[float], None] = time.sleep,
         progress: Callable[[dict[str, object]], None] | None = None,
+        bootstrap_checkpoint: Path | None = None,
     ) -> None:
         if not token:
             raise TushareSourceError("TOKEN_MISSING", source_code=None)
@@ -179,6 +186,18 @@ class TushareAdapter:
         self._max_attempts = max_attempts
         self._sleeper = sleeper
         self._progress = progress or (lambda _event: None)
+        self._bootstrap_checkpoint = bootstrap_checkpoint
+
+    def clear_bootstrap_checkpoint(self) -> None:
+        if self._bootstrap_checkpoint is None:
+            return
+        try:
+            self._bootstrap_checkpoint.unlink(missing_ok=True)
+        except OSError as error:
+            raise TushareSourceError(
+                "BOOTSTRAP_CHECKPOINT_CLEANUP_FAILED",
+                source_code=0,
+            ) from error
 
     def preflight(self) -> dict[str, object]:
         permissions: list[dict[str, str]] = []
@@ -209,29 +228,51 @@ class TushareAdapter:
         start_date: date,
         completed_through_date: date,
     ) -> dict[str, list[dict[str, object]]]:
-        end_date = completed_through_date.strftime("%Y%m%d")
         calendar_start = start_date.strftime("%Y%m%d")
-        self._progress(
-            {
-                "event": "collection_phase",
-                "phase": "calendar",
-                "status": "started",
-                "request_start": start_date.isoformat(),
-                "request_end": completed_through_date.isoformat(),
-            }
+        foundation = _load_bootstrap_checkpoint(
+            self._bootstrap_checkpoint,
+            start_date=start_date,
+            completed_through_date=completed_through_date,
         )
-        sse_calendar = self.query_paginated(
-            "trade_cal",
-            params={"exchange": "SSE", "start_date": calendar_start, "end_date": end_date},
-            fields=("exchange", "cal_date", "is_open", "pretrade_date"),
-            primary_key=("exchange", "cal_date"),
-        )
-        szse_calendar = self.query_paginated(
-            "trade_cal",
-            params={"exchange": "SZSE", "start_date": calendar_start, "end_date": end_date},
-            fields=("exchange", "cal_date", "is_open", "pretrade_date"),
-            primary_key=("exchange", "cal_date"),
-        )
+        if foundation is None:
+            foundation = self._collect_bootstrap_foundation(
+                start_date=start_date,
+                completed_through_date=completed_through_date,
+            )
+            _save_bootstrap_checkpoint(
+                self._bootstrap_checkpoint,
+                start_date=start_date,
+                completed_through_date=completed_through_date,
+                foundation=foundation,
+            )
+            if self._bootstrap_checkpoint is not None:
+                self._progress(
+                    {
+                        "event": "collection_phase",
+                        "phase": "bootstrap_checkpoint",
+                        "status": "saved",
+                        "request_start": start_date.isoformat(),
+                        "request_end": completed_through_date.isoformat(),
+                        "anchor_count": len(foundation["anchor_adjustments"]),
+                    }
+                )
+        else:
+            self._progress(
+                {
+                    "event": "collection_phase",
+                    "phase": "bootstrap_checkpoint",
+                    "status": "restored",
+                    "request_start": start_date.isoformat(),
+                    "request_end": completed_through_date.isoformat(),
+                    "anchor_count": len(foundation["anchor_adjustments"]),
+                }
+            )
+
+        sse_calendar = foundation["calendar_sse"]
+        szse_calendar = foundation["calendar_szse"]
+        stock_basic = foundation["stock_basic"]
+        anchor_daily = foundation["anchor_daily"]
+        anchor_adjustments = foundation["anchor_adjustments"]
         shared_open = sorted(
             {str(row["cal_date"]) for row in sse_calendar if str(row["is_open"]) == "1"}
             & {str(row["cal_date"]) for row in szse_calendar if str(row["is_open"]) == "1"}
@@ -239,62 +280,6 @@ class TushareAdapter:
         if not shared_open:
             raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
         end_date = shared_open[-1]
-        self._progress(
-            {
-                "event": "collection_phase",
-                "phase": "calendar",
-                "status": "completed",
-                "research_session_count": len(shared_open),
-                "latest_open_session": end_date,
-            }
-        )
-
-        self._progress(
-            {"event": "collection_phase", "phase": "instrument_reference", "status": "started"}
-        )
-        stock_basic: list[dict[str, object]] = []
-        for list_status in ("L", "D", "P"):
-            stock_basic.extend(
-                self.query_paginated(
-                    "stock_basic",
-                    params={"list_status": list_status},
-                    fields=(
-                        "ts_code",
-                        "symbol",
-                        "name",
-                        "market",
-                        "exchange",
-                        "list_status",
-                        "list_date",
-                        "delist_date",
-                    ),
-                    primary_key=("ts_code", "list_status"),
-                )
-            )
-        stock_by_code = {str(row["ts_code"]): row for row in stock_basic}
-        stock_basic = [stock_by_code[key] for key in sorted(stock_by_code)]
-        self._progress(
-            {
-                "event": "collection_phase",
-                "phase": "instrument_reference",
-                "status": "completed",
-                "instrument_count": len(stock_basic),
-            }
-        )
-        self._progress(
-            {"event": "collection_phase", "phase": "adjustment_anchors", "status": "started"}
-        )
-        anchor_daily, anchor_adjustments = self._collect_adjustment_anchors(
-            stock_basic, date.fromisoformat(f"{end_date[:4]}-{end_date[4:6]}-{end_date[6:]}")
-        )
-        self._progress(
-            {
-                "event": "collection_phase",
-                "phase": "adjustment_anchors",
-                "status": "completed",
-                "anchor_count": len(anchor_adjustments),
-            }
-        )
 
         self._progress(
             {"event": "collection_phase", "phase": "market_facts", "status": "started"}
@@ -383,6 +368,109 @@ class TushareAdapter:
             "price_limits": price_limits,
             "industry_classification": industry_classification,
             "industry_membership": industry_membership,
+        }
+
+    def _collect_bootstrap_foundation(
+        self,
+        *,
+        start_date: date,
+        completed_through_date: date,
+    ) -> dict[str, list[dict[str, object]]]:
+        end_date = completed_through_date.strftime("%Y%m%d")
+        calendar_start = start_date.strftime("%Y%m%d")
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "calendar",
+                "status": "started",
+                "request_start": start_date.isoformat(),
+                "request_end": completed_through_date.isoformat(),
+            }
+        )
+        sse_calendar = self.query_paginated(
+            "trade_cal",
+            params={"exchange": "SSE", "start_date": calendar_start, "end_date": end_date},
+            fields=("exchange", "cal_date", "is_open", "pretrade_date"),
+            primary_key=("exchange", "cal_date"),
+        )
+        szse_calendar = self.query_paginated(
+            "trade_cal",
+            params={"exchange": "SZSE", "start_date": calendar_start, "end_date": end_date},
+            fields=("exchange", "cal_date", "is_open", "pretrade_date"),
+            primary_key=("exchange", "cal_date"),
+        )
+        shared_open = sorted(
+            {str(row["cal_date"]) for row in sse_calendar if str(row["is_open"]) == "1"}
+            & {str(row["cal_date"]) for row in szse_calendar if str(row["is_open"]) == "1"}
+        )
+        if not shared_open:
+            raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
+        latest_open_session = shared_open[-1]
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "calendar",
+                "status": "completed",
+                "research_session_count": len(shared_open),
+                "latest_open_session": latest_open_session,
+            }
+        )
+
+        self._progress(
+            {"event": "collection_phase", "phase": "instrument_reference", "status": "started"}
+        )
+        stock_basic: list[dict[str, object]] = []
+        for list_status in ("L", "D", "P"):
+            stock_basic.extend(
+                self.query_paginated(
+                    "stock_basic",
+                    params={"list_status": list_status},
+                    fields=(
+                        "ts_code",
+                        "symbol",
+                        "name",
+                        "market",
+                        "exchange",
+                        "list_status",
+                        "list_date",
+                        "delist_date",
+                    ),
+                    primary_key=("ts_code", "list_status"),
+                )
+            )
+        stock_by_code = {str(row["ts_code"]): row for row in stock_basic}
+        stock_basic = [stock_by_code[key] for key in sorted(stock_by_code)]
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "instrument_reference",
+                "status": "completed",
+                "instrument_count": len(stock_basic),
+            }
+        )
+        self._progress(
+            {"event": "collection_phase", "phase": "adjustment_anchors", "status": "started"}
+        )
+        anchor_daily, anchor_adjustments = self._collect_adjustment_anchors(
+            stock_basic,
+            date.fromisoformat(
+                f"{latest_open_session[:4]}-{latest_open_session[4:6]}-{latest_open_session[6:]}"
+            ),
+        )
+        self._progress(
+            {
+                "event": "collection_phase",
+                "phase": "adjustment_anchors",
+                "status": "completed",
+                "anchor_count": len(anchor_adjustments),
+            }
+        )
+        return {
+            "calendar_sse": sse_calendar,
+            "calendar_szse": szse_calendar,
+            "stock_basic": stock_basic,
+            "anchor_daily": anchor_daily,
+            "anchor_adjustments": anchor_adjustments,
         }
 
     def collect_incremental_snapshot(
@@ -708,6 +796,21 @@ class TushareAdapter:
                     self._sleeper(retry_in_seconds)
                     continue
                 raise TushareSourceError("UPSTREAM_RATE_LIMITED", source_code=code)
+            if code == 50101:
+                if attempt < self._max_attempts:
+                    retry_in_seconds = self._rate_limit_backoff_seconds * (2 ** (attempt - 1))
+                    self._progress(
+                        {
+                            "event": "upstream_retry",
+                            "api_name": str(payload["api_name"]),
+                            "source_code": code,
+                            "attempt": attempt,
+                            "retry_in_seconds": retry_in_seconds,
+                        }
+                    )
+                    self._sleeper(retry_in_seconds)
+                    continue
+                raise TushareSourceError("UPSTREAM_UNAVAILABLE", source_code=code)
             if code in {429, 500, -2001} and attempt < self._max_attempts:
                 self._sleeper(self._throttle_seconds * attempt)
                 continue
@@ -716,6 +819,82 @@ class TushareAdapter:
                 source_code=int(code) if isinstance(code, int) else None,
             )
         raise AssertionError("retry loop exhausted")
+
+
+def _load_bootstrap_checkpoint(
+    path: Path | None,
+    *,
+    start_date: date,
+    completed_through_date: date,
+) -> dict[str, list[dict[str, object]]] | None:
+    if path is None or not path.exists():
+        return None
+    try:
+        metadata = path.stat()
+        if not path.is_file() or metadata.st_size > _BOOTSTRAP_CHECKPOINT_MAX_BYTES:
+            raise ValueError("Bootstrap checkpoint is not a bounded regular file")
+        payload = json.loads(path.read_text())
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0) from error
+    if not isinstance(payload, dict):
+        raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
+    if (
+        payload.get("format") != _BOOTSTRAP_CHECKPOINT_FORMAT
+        or payload.get("version") != _BOOTSTRAP_CHECKPOINT_VERSION
+        or payload.get("request_start") != start_date.isoformat()
+        or payload.get("request_end") != completed_through_date.isoformat()
+    ):
+        return None
+    foundation = payload.get("foundation")
+    expected_tables = {
+        "calendar_sse",
+        "calendar_szse",
+        "stock_basic",
+        "anchor_daily",
+        "anchor_adjustments",
+    }
+    if (
+        not isinstance(foundation, dict)
+        or set(foundation) != expected_tables
+        or any(not isinstance(foundation[name], list) for name in expected_tables)
+        or any(
+            not isinstance(row, dict)
+            for name in expected_tables
+            for row in foundation[name]
+        )
+    ):
+        raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
+    return foundation
+
+
+def _save_bootstrap_checkpoint(
+    path: Path | None,
+    *,
+    start_date: date,
+    completed_through_date: date,
+    foundation: dict[str, list[dict[str, object]]],
+) -> None:
+    if path is None:
+        return
+    payload = {
+        "format": _BOOTSTRAP_CHECKPOINT_FORMAT,
+        "version": _BOOTSTRAP_CHECKPOINT_VERSION,
+        "request_start": start_date.isoformat(),
+        "request_end": completed_through_date.isoformat(),
+        "foundation": foundation,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    if len(serialized.encode()) > _BOOTSTRAP_CHECKPOINT_MAX_BYTES:
+        raise TushareSourceError("BOOTSTRAP_CHECKPOINT_TOO_LARGE", source_code=0)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.tmp")
+    try:
+        temporary.write_text(serialized)
+        os.replace(temporary, path)
+    except OSError as error:
+        raise TushareSourceError("BOOTSTRAP_CHECKPOINT_WRITE_FAILED", source_code=0) from error
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def normalize_tushare_snapshot(

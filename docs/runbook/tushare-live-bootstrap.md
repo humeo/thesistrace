@@ -37,11 +37,25 @@ instrument counts. Tushare rate limiting is reported with the affected API,
 attempt number, and next retry delay. Source tokens and response bodies are
 never included.
 
+For a bounded initial validation, pass `--start-date YYYY-MM-DD`; `--as-of`
+remains the frozen end instant and determines the completed market day.
+
 Tushare response code `40203` is treated as rate limiting and retried with
-exponential backoff. Response code `2002` remains a missing-permission failure.
+exponential backoff. The observed transient rejection `50101` is also retried
+with the same bounded backoff and becomes an upstream-unavailable failure only
+after attempts are exhausted. Response code `2002` remains a
+missing-permission failure.
 The live adapter also paces every upstream request so the documented 2000-point
 access tier does not use the high-frequency request profile intended for higher
 tiers.
+
+After the calendar, instrument reference, and adjustment anchors have been
+collected, the private operator atomically records a token-free checkpoint
+under the mounted Canonical Data root. A later bootstrap for the exact same
+request window restores that checkpoint and resumes at market facts instead of
+repeating the expensive anchor collection. The checkpoint is cleared only
+after a Dataset Head is successfully published; failed source collection keeps
+it available for recovery.
 
 This credential-dependent command is deliberately outside `pnpm check`. A
 successful run proves adapter access and source coverage; it does not publish

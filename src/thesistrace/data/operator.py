@@ -7,7 +7,7 @@ import secrets
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from threading import Event, Thread
 
@@ -92,13 +92,32 @@ class DataOperator:
         self._heartbeat_seconds = heartbeat_seconds
         self._progress = progress or (lambda _event: None)
 
-    def bootstrap(self, *, idempotency_key: str, as_of: datetime) -> BootstrapOutcome:
+    def bootstrap(
+        self,
+        *,
+        idempotency_key: str,
+        as_of: datetime,
+        start_date: date | None = None,
+    ) -> BootstrapOutcome:
         with mounted_data_mutation_lock(self._database):
-            return self._bootstrap(idempotency_key=idempotency_key, as_of=as_of)
+            return self._bootstrap(
+                idempotency_key=idempotency_key,
+                as_of=as_of,
+                start_date=start_date,
+            )
 
-    def _bootstrap(self, *, idempotency_key: str, as_of: datetime) -> BootstrapOutcome:
+    def _bootstrap(
+        self,
+        *,
+        idempotency_key: str,
+        as_of: datetime,
+        start_date: date | None,
+    ) -> BootstrapOutcome:
         key = _identity(idempotency_key, "Bootstrap idempotency key")
-        plan = bootstrap_collection_plan(as_of)
+        try:
+            plan = bootstrap_collection_plan(as_of, start_date=start_date)
+        except ValueError as error:
+            raise DataOperatorError("INVALID_BOOTSTRAP_WINDOW") from error
         fingerprint = hashlib.sha256(
             canonical_json_bytes(
                 {

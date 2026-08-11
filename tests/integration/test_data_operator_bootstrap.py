@@ -538,7 +538,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
     replay = tmp_path / "bootstrap-replay.json"
     mount = tmp_path / "mounted-data"
     mount.mkdir()
-    replay.write_text(json.dumps(_replay_payload()))
+    replay.write_text(json.dumps(_replay_payload(request_start="2026-07-03")))
     environment = {
         **os.environ,
         "THESISTRACE_DATABASE_URL": core_settings.database_url,
@@ -553,6 +553,8 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         "cli-replay",
         "--as-of",
         "2026-08-03T18:00:00+08:00",
+        "--start-date",
+        "2026-07-03",
         "--replay",
         str(replay),
     )
@@ -575,7 +577,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
         "idempotency_key": "cli-replay",
         "phase": "claimed",
         "request_end": "2026-08-03",
-        "request_start": "2025-08-03",
+        "request_start": "2026-07-03",
         "status": "completed",
     }
     assert progress[-1] == {
@@ -657,7 +659,7 @@ def _wait_for_database_row(
     pytest.fail(f"timed out waiting for {description}; last database row={last_row!r}")
 
 
-def _replay_payload() -> dict[str, object]:
+def _replay_payload(*, request_start: str = "2025-08-03") -> dict[str, object]:
     session = "20260803"
     daily = {
         "ts_code": "600000.SH",
@@ -714,7 +716,7 @@ def _replay_payload() -> dict[str, object]:
     return {
         "format": "thesistrace-tushare-bootstrap-replay",
         "version": 1,
-        "request_start": "2025-08-03",
+        "request_start": request_start,
         "request_end": "2026-08-03",
         "snapshot": snapshot,
     }

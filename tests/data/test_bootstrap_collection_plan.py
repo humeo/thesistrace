@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -25,3 +25,25 @@ def test_bootstrap_plan_handles_leap_day_and_requires_timezone() -> None:
 
     with pytest.raises(ValueError, match="timezone"):
         bootstrap_collection_plan(datetime(2026, 8, 3, 18))
+
+
+def test_bootstrap_plan_accepts_an_explicit_start_date() -> None:
+    shanghai = ZoneInfo("Asia/Shanghai")
+
+    plan = bootstrap_collection_plan(
+        datetime(2026, 8, 3, 18, tzinfo=shanghai),
+        start_date=date(2026, 7, 3),
+    )
+
+    assert plan.start_date.isoformat() == "2026-07-03"
+    assert plan.completed_through_date.isoformat() == "2026-08-03"
+
+
+def test_bootstrap_plan_rejects_a_start_date_after_the_completed_day() -> None:
+    shanghai = ZoneInfo("Asia/Shanghai")
+
+    with pytest.raises(ValueError, match="start date"):
+        bootstrap_collection_plan(
+            datetime(2026, 8, 3, 15, 59, tzinfo=shanghai),
+            start_date=date(2026, 8, 3),
+        )

@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import NoReturn
 
@@ -39,6 +39,8 @@ from thesistrace.entrypoints.migrations import (
     verify_development_reset_migrations,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def main(arguments: list[str] | None = None) -> None:
     logging.getLogger("psycopg.pool").disabled = True
@@ -67,6 +69,7 @@ def _run(
     bootstrap = subcommands.add_parser("bootstrap")
     bootstrap.add_argument("--idempotency-key", required=True)
     bootstrap.add_argument("--as-of", required=True)
+    bootstrap.add_argument("--start-date", type=date.fromisoformat)
     bootstrap.add_argument("--replay", type=Path)
     refresh = subcommands.add_parser("refresh")
     refresh.add_argument("--idempotency-key", required=True)
@@ -135,20 +138,27 @@ def _run(
                 s3.close()
 
         replay = parsed.replay
+        live_provider: TushareAdapter | None = None
         if replay is not None:
             provider = ReplayTushareProvider(replay)
         else:
             transport = HttpTushareTransport(
                 endpoint=os.environ.get("THESISTRACE_TUSHARE_ENDPOINT", "https://api.tushare.pro")
             )
-            provider = TushareAdapter(
+            live_provider = TushareAdapter(
                 token=_environment("THESISTRACE_TUSHARE_TOKEN"),
                 transport=transport,
                 progress=_progress,
+                bootstrap_checkpoint=(
+                    mount_root / ".operator" / "tushare-bootstrap-anchors-v1.json"
+                    if parsed.command == "bootstrap"
+                    else None
+                ),
             )
+            provider = live_provider
         source = TushareDataSource(provider=provider)
         if parsed.command == "bootstrap":
-            return DataOperator(
+            outcome = DataOperator(
                 database,
                 mount_root,
                 source,
@@ -156,7 +166,25 @@ def _run(
             ).bootstrap(
                 idempotency_key=parsed.idempotency_key,
                 as_of=datetime.fromisoformat(parsed.as_of),
+                start_date=parsed.start_date,
             )
+            if live_provider is not None:
+                try:
+                    live_provider.clear_bootstrap_checkpoint()
+                except TushareSourceError as error:
+                    logger.warning(
+                        "Published bootstrap checkpoint cleanup failed",
+                        extra={"reason_code": error.reason_code},
+                    )
+                else:
+                    _progress(
+                        {
+                            "event": "collection_phase",
+                            "phase": "bootstrap_checkpoint",
+                            "status": "cleared",
+                        }
+                    )
+            return outcome
         processed = DataRefreshService(database, mount_root).process_next(source)
         return {"status": "processed" if processed else "idle"}
     finally:

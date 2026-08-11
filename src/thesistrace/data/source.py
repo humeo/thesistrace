@@ -100,16 +100,23 @@ class BootstrapCollectionPlan:
     completed_through_date: date
 
 
-def bootstrap_collection_plan(as_of: datetime) -> BootstrapCollectionPlan:
+def bootstrap_collection_plan(
+    as_of: datetime,
+    *,
+    start_date: date | None = None,
+) -> BootstrapCollectionPlan:
     if as_of.tzinfo is None:
         raise ValueError("Bootstrap as-of instant must include a timezone")
     shanghai = as_of.astimezone(ZoneInfo("Asia/Shanghai"))
     local_date = shanghai.date()
-    try:
-        start_date = local_date.replace(year=local_date.year - 1)
-    except ValueError:
-        start_date = local_date.replace(year=local_date.year - 1, day=28)
     completed_through = _completed_through_date(shanghai)
+    if start_date is None:
+        try:
+            start_date = local_date.replace(year=local_date.year - 1)
+        except ValueError:
+            start_date = local_date.replace(year=local_date.year - 1, day=28)
+    if start_date > completed_through:
+        raise ValueError("Bootstrap start date must not be after the completed market day")
     return BootstrapCollectionPlan(
         as_of=as_of,
         start_date=start_date,
