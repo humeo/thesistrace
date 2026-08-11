@@ -51,14 +51,14 @@ Publication derives the following `equity.eod_price` fields under ADR-0023:
 | Canonical field | Canonical type and unit | Constraint |
 | --- | --- | --- |
 | `adjustment_scale` | decimal, dimensionless | finite and greater than zero |
-| `open_adj` | decimal anchor-coordinate CNY per share | valid raw field and scale |
-| `high_adj` | decimal anchor-coordinate CNY per share | valid raw field and scale |
-| `low_adj` | decimal anchor-coordinate CNY per share | valid raw field and scale |
-| `close_adj` | decimal anchor-coordinate CNY per share | valid raw field and scale |
+| `open_adj` | decimal dynamically front-adjusted CNY per share | valid raw field and scale |
+| `high_adj` | decimal dynamically front-adjusted CNY per share | valid raw field and scale |
+| `low_adj` | decimal dynamically front-adjusted CNY per share | valid raw field and scale |
+| `close_adj` | decimal dynamically front-adjusted CNY per share | valid raw field and scale |
 
-ADR-0073 makes the corresponding per-instrument Adjustment Anchor an immutable
-input bound by Dataset Release rather than a row selected from the Research
-Window.
+ADR-0023 selects each instrument's latest available factor in the Data
+Generation as the denominator. Publication therefore recomputes retained
+adjusted OHLC when a later factor becomes the reference.
 
 A present raw daily bar without a valid same-session
 `source_adjustment_factor` fails Dataset Publication; V1 does not forward-fill

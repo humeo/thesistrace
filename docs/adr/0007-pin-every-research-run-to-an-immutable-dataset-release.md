@@ -11,8 +11,8 @@ records a concrete release before execution; later data publication never
 changes an existing run's inputs or meaning.
 
 The pinned release binds its Research Calendar, Universe snapshots, Canonical
-Dataset Schemas and data objects, Adjustment Anchors, Adjustment Factors, and
-other required dated families as one logical snapshot under ADR-0073. A
+Dataset Schemas and data objects, Adjustment Factors, and other required dated
+families as one logical snapshot. A
 ResearchRun cannot combine components from different releases.
 
 This single-release rule remains unchanged for ResearchRun. ADR-0103 gives a

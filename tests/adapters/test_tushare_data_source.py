@@ -74,14 +74,6 @@ def normalizer_snapshot(session_keys: list[str]) -> dict[str, list[dict[str, obj
                 "delist_date": "",
             }
         ],
-        "anchor_daily": [dict(daily[0])],
-        "anchor_adjustments": [
-            {
-                "ts_code": "600000.SH",
-                "trade_date": session_keys[0],
-                "adj_factor": "1",
-            }
-        ],
         "daily": daily,
         "adjustments": [
             {
@@ -121,7 +113,7 @@ def normalizer_bootstrap_sessions() -> list[str]:
 class RecordedProvider:
     def __init__(self) -> None:
         self.bootstrap_windows: list[tuple[date, date]] = []
-        self.incremental_calls: list[tuple[str, set[str], date]] = []
+        self.incremental_calls: list[tuple[str, date]] = []
 
     def collect_bootstrap_snapshot(
         self,
@@ -136,10 +128,9 @@ class RecordedProvider:
         self,
         *,
         last_session: str,
-        known_ts_codes: set[str],
         as_of: date,
     ) -> dict[str, list[dict[str, object]]]:
-        self.incremental_calls.append((last_session, known_ts_codes, as_of))
+        self.incremental_calls.append((last_session, as_of))
         return {"recorded": []}
 
 
@@ -151,7 +142,7 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
     monkeypatch.setattr(
         "thesistrace.adapters.tushare_data.normalize_tushare_snapshot",
         lambda _snapshot: (
-            {"source": "tushare", "source_contract_version": "tushare-v1"},
+            {"source": "tushare", "source_contract_version": "tushare-v2"},
             canonical,
         ),
     )
@@ -169,7 +160,7 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
     assert provider.bootstrap_windows == [(start, end)]
     assert batch.source_name == "tushare"
     assert batch.collection_kind == "bootstrap"
-    assert batch.canonical["schema_version"] == "canonical-eod-v1"
+    assert batch.canonical["schema_version"] == "canonical-eod-v2"
     assert batch.covered_session_range == (
         canonical["research_calendar"][0],
         canonical["research_calendar"][-1],
@@ -186,15 +177,14 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
     monkeypatch.setattr(
         "thesistrace.adapters.tushare_data.normalize_tushare_increment",
         lambda _snapshot, _previous: (
-            {"source": "tushare", "source_contract_version": "tushare-v1"},
+            {"source": "tushare", "source_contract_version": "tushare-v2"},
             {
                 "research_calendar_append": [appended],
                 "instruments_replace": previous["instruments"],
-                "prices_append": [],
+                "prices_replace": previous["prices"],
                 "trading_states_append": [],
                 "price_limits_append": [],
                 "base_pool_append": [],
-                "adjustment_anchors_append": [],
                 "liquidity_universes_append": {},
                 "liquidity_universes_replace": {},
                 "industry_membership_replace": previous["industry_membership"],
@@ -208,10 +198,7 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
         clock=lambda: date(2026, 8, 4),
     ).collect(CollectionPlan.incremental(frontier, previous))
 
-    known_codes = {
-        str(item["ts_code"]) for item in previous["instruments"] if isinstance(item, dict)
-    }
-    assert provider.incremental_calls == [(frontier, known_codes, date(2026, 8, 4))]
+    assert provider.incremental_calls == [(frontier, date(2026, 8, 4))]
     assert batch.canonical["research_calendar"] == [
         *previous["research_calendar"],
         appended,
@@ -269,10 +256,9 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
             self,
             *,
             last_session: str,
-            known_ts_codes: set[str],
             as_of: date,
         ) -> dict[str, list[dict[str, object]]]:
-            self.incremental_calls.append((last_session, known_ts_codes, as_of))
+            self.incremental_calls.append((last_session, as_of))
             return copy.deepcopy(refresh_snapshot)
 
     provider = RefreshProvider()
@@ -282,7 +268,6 @@ def test_tushare_refresh_merges_exact_overlap_and_recomputes_derived_data() -> N
     assert provider.incremental_calls == [
         (
             f"{sessions[1][:4]}-{sessions[1][4:6]}-{sessions[1][6:]}",
-            {"600000.SH"},
             date(2026, 7, 31),
         )
     ]
@@ -339,7 +324,6 @@ def test_tushare_refresh_applies_an_overlap_only_correction_and_delisting() -> N
             self,
             *,
             last_session: str,
-            known_ts_codes: set[str],
             as_of: date,
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
@@ -385,7 +369,6 @@ def test_tushare_refresh_rejects_an_incomplete_new_session(
             self,
             *,
             last_session: str,
-            known_ts_codes: set[str],
             as_of: date,
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
@@ -410,7 +393,6 @@ def test_tushare_refresh_rejects_a_new_date_missing_from_both_calendars() -> Non
             self,
             *,
             last_session: str,
-            known_ts_codes: set[str],
             as_of: date,
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
@@ -436,7 +418,6 @@ def test_tushare_refresh_rejects_market_facts_for_an_unknown_new_instrument() ->
             self,
             *,
             last_session: str,
-            known_ts_codes: set[str],
             as_of: date,
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
@@ -459,7 +440,6 @@ def test_tushare_refresh_rejects_a_session_after_the_completed_boundary() -> Non
             self,
             *,
             last_session: str,
-            known_ts_codes: set[str],
             as_of: date,
         ) -> dict[str, list[dict[str, object]]]:
             return copy.deepcopy(snapshot)
@@ -481,10 +461,9 @@ def test_tushare_refresh_supports_coverage_shorter_than_the_overlap_window() -> 
             self,
             *,
             last_session: str,
-            known_ts_codes: set[str],
             as_of: date,
         ) -> dict[str, list[dict[str, object]]]:
-            self.incremental_calls.append((last_session, known_ts_codes, as_of))
+            self.incremental_calls.append((last_session, as_of))
             return copy.deepcopy(snapshot)
 
     plan = refresh_collection_plan(datetime(2026, 7, 2, 18, tzinfo=UTC), previous)
@@ -564,7 +543,7 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
     sessions = normalizer_bootstrap_sessions()
     source, canonical = normalize_tushare_snapshot(normalizer_snapshot(sessions))
 
-    assert source["source_contract_version"] == "tushare-v1"
+    assert source["source_contract_version"] == "tushare-v2"
     assert canonical["research_calendar"] == [
         f"{session[:4]}-{session[4:6]}-{session[6:]}" for session in sessions
     ]
@@ -596,9 +575,38 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
     assert canonical_delta["research_calendar_append"] == [
         f"{next_session[:4]}-{next_session[4:6]}-{next_session[6:]}"
     ]
-    assert len(canonical_delta["prices_append"]) == 1
+    assert len(canonical_delta["prices_replace"]) == len(sessions) + 1
     assert "st_designations_append" not in canonical_delta
     assert canonical_delta["price_corrections"] == []
+
+
+def test_tushare_normalizer_uses_latest_factor_for_dynamic_qfq() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    for row, factor in zip(snapshot["adjustments"], ("1", "2", "4"), strict=True):
+        row["adj_factor"] = factor
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert "adjustment_anchors" not in canonical
+    assert [row["open_adj"] for row in canonical["prices"]] == [
+        "2.50000000",
+        "5.00000000",
+        "10.00000000",
+    ]
+    assert all("adjustment_anchor_factor" not in row for row in canonical["prices"])
+
+    next_session = "20260806"
+    increment = normalizer_snapshot([next_session])
+    increment["adjustments"][0]["adj_factor"] = "8"
+    _lineage, delta = normalize_tushare_increment(increment, canonical)
+
+    assert [row["open_adj"] for row in delta["prices_replace"]] == [
+        "1.25000000",
+        "2.50000000",
+        "5.00000000",
+        "10.00000000",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -709,7 +717,7 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
 
     assert result["status"] == "available"
     assert result["source"] == "tushare"
-    assert result["source_contract_version"] == "tushare-v1"
+    assert result["source_contract_version"] == "tushare-v2"
     assert {(item["contract"], item["api_name"]) for item in result["permissions"]} == {
         ("reference", "stock_basic"),
         ("calendar_sse", "trade_cal"),
@@ -999,31 +1007,15 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
         ("calendar", "completed"),
         ("instrument_reference", "started"),
         ("instrument_reference", "completed"),
-        ("adjustment_anchors", "started"),
-        ("adjustment_anchors", "completed"),
         ("market_facts", "started"),
         ("market_facts", "completed"),
         ("industry", "started"),
         ("industry", "completed"),
     ]
     assert phase_events[-1]["membership_rows"] == 1
-    anchor_progress = [
-        event
-        for event in progress
-        if event["event"] == "collection_progress"
-        and event["phase"] == "adjustment_anchors"
-    ]
-    assert anchor_progress[-1] == {
-        "event": "collection_progress",
-        "phase": "adjustment_anchors",
-        "completed_listing_dates": 1,
-        "total_listing_dates": 1,
-        "resolved_instruments": 1,
-        "total_instruments": 1,
-    }
 
 
-def test_tushare_bootstrap_resumes_after_anchor_checkpoint(
+def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
     tmp_path: Path,
 ) -> None:
     class CheckpointAdapter(TushareAdapter):
@@ -1131,7 +1123,7 @@ def test_tushare_bootstrap_resumes_after_anchor_checkpoint(
                 ]
             return []
 
-    checkpoint = tmp_path / "bootstrap-anchor-checkpoint.json"
+    checkpoint = tmp_path / "bootstrap-foundation-checkpoint.json"
     first = CheckpointAdapter(checkpoint, fail_market_facts=True)
 
     with pytest.raises(TushareSourceError):
@@ -1153,7 +1145,7 @@ def test_tushare_bootstrap_resumes_after_anchor_checkpoint(
         completed_through_date=date(2026, 8, 3),
     )
 
-    assert snapshot["anchor_adjustments"][0]["trade_date"] == "20220103"
+    assert snapshot["adjustments"][0]["trade_date"] == "20260803"
     assert all(
         api_name not in {"trade_cal", "stock_basic"} and "trade_date" not in params
         for api_name, params in resumed.calls
@@ -1164,7 +1156,6 @@ def test_tushare_bootstrap_resumes_after_anchor_checkpoint(
         "status": "restored",
         "request_start": "2025-08-03",
         "request_end": "2026-08-03",
-        "anchor_count": 1,
     }
     resumed.clear_bootstrap_checkpoint()
     assert not checkpoint.exists()
@@ -1216,64 +1207,6 @@ def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
     ]
 
 
-def test_tushare_provider_searches_later_windows_for_adjustment_anchor() -> None:
-    class DelayedAnchorTransport:
-        def post(self, payload: Mapping[str, object]) -> dict[str, object]:
-            params = dict(payload["params"])
-            fields = str(payload["fields"]).split(",")
-            second_window = str(params.get("start_date", "")) > "20260101"
-            item: list[object] | None = None
-            if second_window and payload["api_name"] == "daily":
-                values = {
-                    "ts_code": "600000.SH",
-                    "trade_date": "20260220",
-                    "open": "10",
-                    "high": "11",
-                    "low": "9",
-                    "close": "10.5",
-                    "pre_close": "10",
-                    "change": "0.5",
-                    "pct_chg": "5",
-                    "vol": "100",
-                    "amount": "1000",
-                }
-                item = [values[field] for field in fields]
-            if second_window and payload["api_name"] == "adj_factor":
-                values = {
-                    "ts_code": "600000.SH",
-                    "trade_date": "20260220",
-                    "adj_factor": "1",
-                }
-                item = [values[field] for field in fields]
-            return {
-                "code": 0,
-                "msg": "",
-                "data": {"fields": fields, "items": [] if item is None else [item]},
-            }
-
-    provider = TushareAdapter(
-        token="secret",
-        transport=DelayedAnchorTransport(),
-        throttle_seconds=0,
-    )
-
-    daily, adjustments = provider._collect_adjustment_anchors(
-        [
-            {
-                "ts_code": "600000.SH",
-                "exchange": "SSE",
-                "market": "主板",
-                "list_date": "20260101",
-                "delist_date": "",
-            }
-        ],
-        date(2026, 3, 31),
-    )
-
-    assert daily[0]["trade_date"] == "20260220"
-    assert adjustments[0]["trade_date"] == "20260220"
-
-
 def test_tushare_provider_retries_transient_http_statuses() -> None:
     class UnavailableTransport:
         def __init__(self) -> None:
@@ -1323,11 +1256,10 @@ def test_tushare_materializes_price_corrections_by_field(
             {
                 "research_calendar_append": [],
                 "instruments_replace": previous["instruments"],
-                "prices_append": [],
+                "prices_replace": previous["prices"],
                 "trading_states_append": [],
                 "price_limits_append": [],
                 "base_pool_append": [],
-                "adjustment_anchors_append": [],
                 "liquidity_universes_append": {},
                 "liquidity_universes_replace": {},
                 "industry_membership_replace": previous["industry_membership"],
@@ -1363,11 +1295,10 @@ def test_tushare_rejects_non_source_price_correction_fields(field: str) -> None:
     delta = {
         "research_calendar_append": [],
         "instruments_replace": previous["instruments"],
-        "prices_append": [],
+        "prices_replace": previous["prices"],
         "trading_states_append": [],
         "price_limits_append": [],
         "base_pool_append": [],
-        "adjustment_anchors_append": [],
         "liquidity_universes_append": {},
         "liquidity_universes_replace": {},
         "industry_membership_replace": previous["industry_membership"],

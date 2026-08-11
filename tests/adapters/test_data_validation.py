@@ -23,11 +23,10 @@ def test_data_rejects_provider_output_that_breaks_canonical_coverage(
     "damage",
     [
         "empty_prices",
-        "missing_anchors",
         "missing_price_field",
         "null_price",
         "missing_limit",
-        "null_anchor",
+        "null_adjustment_factor",
         "invalid_date",
         "unknown_industry_instrument",
     ],
@@ -40,8 +39,6 @@ def test_data_rejects_incomplete_required_canonical_tables(
     canonical = dict(batch.canonical)
     if damage == "empty_prices":
         canonical["prices"] = []
-    elif damage == "missing_anchors":
-        canonical.pop("adjustment_anchors")
     elif damage == "missing_price_field":
         prices = _copied_rows(canonical, "prices")
         prices[0].pop("pre_close_raw")
@@ -49,8 +46,8 @@ def test_data_rejects_incomplete_required_canonical_tables(
         _copied_rows(canonical, "prices")[0]["close_adj"] = None
     elif damage == "missing_limit":
         _copied_rows(canonical, "price_limits")[0].pop("upper")
-    elif damage == "null_anchor":
-        _copied_rows(canonical, "adjustment_anchors")[0]["anchor_factor"] = None
+    elif damage == "null_adjustment_factor":
+        _copied_rows(canonical, "prices")[0]["adjustment_factor"] = None
     elif damage == "invalid_date":
         _copied_rows(canonical, "instruments")[0]["listed_from"] = "not-a-date"
     else:

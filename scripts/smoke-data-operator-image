@@ -4,7 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 base_file="$repo_root/deploy/core/compose.yaml"
 test_file="$repo_root/deploy/core/compose.test-run.yaml"
-replay="$repo_root/tests/fixtures/tushare-bootstrap-replay-v1.json"
+replay="$repo_root/tests/fixtures/tushare-bootstrap-replay-v2.json"
 project_name="thesistrace-test-operator-image-$$"
 bucket_name="$project_name"
 

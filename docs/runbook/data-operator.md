@@ -25,7 +25,7 @@ and SZSE. This window is an operator convenience, not a Research Period,
 Warm-up, or minimum-session rule.
 
 For deterministic development or incident reproduction, pass a bounded
-version-1 Tushare replay instead of a token:
+version-2 Tushare replay instead of a token:
 
 ```sh
 thesistrace-data-operator-v1 bootstrap \
@@ -38,12 +38,12 @@ Bootstrap records internal preparation time in the Head but does not set a
 successful Refresh timestamp. Repeating the same key and request returns the
 same outcome. A different key cannot overwrite an existing Head.
 
-Live bootstrap persists a bounded, token-free adjustment-anchor checkpoint in
-the Canonical Data mount before starting market-fact collection. If a later
-provider call fails, rerun the same `--as-of` window with a new idempotency key;
-the operator reports `bootstrap_checkpoint/restored` and resumes after anchors.
-Changing the request window does not reuse the checkpoint. Successful
-publication clears it.
+Live bootstrap persists a bounded, token-free foundation checkpoint containing
+the calendars and instrument reference before starting market-fact collection.
+If a later provider call fails, rerun the same request window with a new
+idempotency key; the operator reports `bootstrap_checkpoint/restored` and
+resumes at market facts. Changing the request window does not reuse the
+checkpoint. Successful publication clears it.
 
 The narrow Production Image smoke builds the backend image, runs the versioned
 operator twice through the shared named mount, and then starts and restarts the

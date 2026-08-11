@@ -73,7 +73,6 @@ class ReplayRefreshProvider:
         self,
         *,
         last_session: str,
-        known_ts_codes: set[str],
         as_of: date,
     ) -> dict[str, list[dict[str, object]]]:
         return copy.deepcopy(self.snapshot)  # type: ignore[return-value]
@@ -206,7 +205,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
     database = _database(core_settings)
     try:
         fixture_path = (
-            Path(__file__).resolve().parents[1] / "fixtures" / "tushare-bootstrap-replay-v1.json"
+            Path(__file__).resolve().parents[1] / "fixtures" / "tushare-bootstrap-replay-v2.json"
         )
         replay = json.loads(fixture_path.read_text())
         _source, current = normalize_tushare_snapshot(replay["snapshot"])
@@ -214,9 +213,9 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         replay.update(
             {
                 "format": "thesistrace-tushare-refresh-replay",
+                "version": 2,
                 "request_start": current["research_calendar"][0],
                 "request_end": "2026-08-03",
-                "known_ts_codes": ["600000.SH"],
             }
         )
         refresh_replay = tmp_path / "refresh-replay.json"
@@ -802,14 +801,6 @@ def _tushare_snapshot(sessions: list[str]) -> dict[str, object]:
                 "market": "主板",
                 "list_date": "20220101",
                 "delist_date": "",
-            }
-        ],
-        "anchor_daily": [dict(daily[0])],
-        "anchor_adjustments": [
-            {
-                "ts_code": "600000.SH",
-                "trade_date": sessions[0],
-                "adj_factor": "1",
             }
         ],
         "daily": daily,

@@ -36,7 +36,6 @@ class TushareProvider(Protocol):
         self,
         *,
         last_session: str,
-        known_ts_codes: set[str],
         as_of: date,
     ) -> dict[str, list[dict[str, object]]]: ...
 
@@ -64,17 +63,6 @@ class TushareDataSource:
                     "invalid_source_data",
                     detail_code="PREVIOUS_CANONICAL_REQUIRED",
                 )
-            instruments = previous.get("instruments")
-            if not isinstance(instruments, list):
-                raise DataSourceError(
-                    "invalid_source_data",
-                    detail_code="INVALID_PREVIOUS_CANONICAL",
-                )
-            known_codes = {
-                str(item["ts_code"])
-                for item in instruments
-                if isinstance(item, dict) and "ts_code" in item
-            }
             request_start = (
                 plan.overlap_start_session if plan.kind == "refresh" else plan.after_session
             )
@@ -82,7 +70,6 @@ class TushareDataSource:
             request_end = plan.completed_through_date or self._clock()
             snapshot = self._provider.collect_incremental_snapshot(
                 last_session=request_start,
-                known_ts_codes=known_codes,
                 as_of=request_end,
             )
             normalization_previous = previous
@@ -204,11 +191,9 @@ def _materialize_increment(
     canonical = copy.deepcopy(dict(previous))
     append_fields = {
         "research_calendar_append": "research_calendar",
-        "prices_append": "prices",
         "trading_states_append": "trading_states",
         "price_limits_append": "price_limits",
         "base_pool_append": "base_pool",
-        "adjustment_anchors_append": "adjustment_anchors",
     }
     for delta_name, canonical_name in append_fields.items():
         appended = delta.get(delta_name, [])
@@ -222,6 +207,7 @@ def _materialize_increment(
 
     replacement_fields = {
         "instruments_replace": "instruments",
+        "prices_replace": "prices",
         "industry_membership_replace": "industry_membership",
     }
     for delta_name, canonical_name in replacement_fields.items():

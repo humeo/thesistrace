@@ -1035,7 +1035,7 @@ def _selected_research_period(
     canonical: dict[str, object],
     available_field_ids: frozenset[str],
 ) -> tuple[str, str]:
-    if canonical.get("schema_version") != "canonical-eod-v1":
+    if canonical.get("schema_version") != "canonical-eod-v2":
         raise ResearchRunInputInvalid("selected Dataset Schema is incompatible")
     calendar = canonical.get("research_calendar")
     if not isinstance(calendar, list) or not calendar:

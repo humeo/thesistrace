@@ -16,7 +16,7 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
     low = pre_close - Decimal(1)
     universe = {"session": session, "instrument_ids": [instrument_id], "status": "available"}
     return {
-        "schema_version": "canonical-eod-v1",
+        "schema_version": "canonical-eod-v2",
         "research_calendar": [session],
         "instruments": [
             {
@@ -43,7 +43,6 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
                 "volume_shares": "10000",
                 "turnover_cny": decimal_string(pre_close * Decimal(10000), 2),
                 "adjustment_factor": "1.000000",
-                "adjustment_anchor_factor": "1.000000",
                 "open_adj": decimal_string(pre_close, 8),
                 "high_adj": decimal_string(high, 8),
                 "low_adj": decimal_string(low, 8),
@@ -58,13 +57,6 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
                 "instrument_id": instrument_id,
                 "upper": decimal_string(high, 4),
                 "lower": decimal_string(low, 4),
-            }
-        ],
-        "adjustment_anchors": [
-            {
-                "instrument_id": instrument_id,
-                "anchor_session": "1991-04-03",
-                "anchor_factor": "1.000000",
             }
         ],
         "base_pool": [{"session": session, "instrument_ids": [instrument_id]}],
@@ -96,9 +88,7 @@ def build_fixture(
 ) -> tuple[dict[str, object], dict[str, object]]:
     sessions = research_sessions(session_count=session_count)
     instruments = instrument_reference(sessions[0])
-    anchor_factors = {
-        instrument["instrument_id"]: adjustment_factor(0) for instrument in instruments
-    }
+    reference_factor = adjustment_factor(session_count - 1)
     source_daily: list[dict[str, str]] = []
     source_adjustments: list[dict[str, str]] = []
     canonical_prices: list[dict[str, str]] = []
@@ -132,7 +122,7 @@ def build_fixture(
                 instrument=instrument,
                 instrument_index=instrument_index,
                 factor=factor,
-                anchor_factor=anchor_factors[instrument_id],
+                reference_factor=reference_factor,
                 state=state,
             )
             source_daily.append(source_row)
@@ -165,20 +155,12 @@ def build_fixture(
         for session in sessions
     ]
     canonical = {
-        "schema_version": "canonical-eod-v1",
+        "schema_version": "canonical-eod-v2",
         "research_calendar": sessions,
         "instruments": instruments,
         "prices": canonical_prices,
         "trading_states": trading_states,
         "price_limits": price_limits,
-        "adjustment_anchors": [
-            {
-                "instrument_id": instrument_id,
-                "anchor_session": sessions[0],
-                "anchor_factor": decimal_string(anchor_factor, 6),
-            }
-            for instrument_id, anchor_factor in anchor_factors.items()
-        ],
         "base_pool": base_pool,
         "liquidity_universes": liquidity_universes(
             sessions,
@@ -236,7 +218,7 @@ def price_rows(
     instrument: dict[str, str],
     instrument_index: int,
     factor: Decimal,
-    anchor_factor: Decimal,
+    reference_factor: Decimal,
     state: str,
 ) -> tuple[dict[str, str], dict[str, str]]:
     base = Decimal("8") + Decimal(instrument_index) / 5 + Decimal(session_index % 31) / 100
@@ -262,7 +244,7 @@ def price_rows(
         "vol": decimal_string(volume_lots, 0),
         "amount": decimal_string(source_amount, 4),
     }
-    scale = factor / anchor_factor
+    scale = factor / reference_factor
     canonical_row = {
         "session": session,
         "instrument_id": instrument["instrument_id"],
@@ -276,7 +258,6 @@ def price_rows(
         "volume_shares": decimal_string(volume_lots * 100, 0),
         "turnover_cny": decimal_string(source_amount * 1000, 2),
         "adjustment_factor": decimal_string(factor, 6),
-        "adjustment_anchor_factor": decimal_string(anchor_factor, 6),
         "open_adj": decimal_string(open_price * scale, 8),
         "high_adj": decimal_string(high * scale, 8),
         "low_adj": decimal_string(low * scale, 8),

@@ -5,7 +5,7 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
@@ -22,9 +22,9 @@ from thesistrace.data.canonical_mapping import (
     research_sessions_after,
 )
 
-SOURCE_CONTRACT_VERSION = "tushare-v1"
-_BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-anchors"
-_BOOTSTRAP_CHECKPOINT_VERSION = 1
+SOURCE_CONTRACT_VERSION = "tushare-v2"
+_BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-foundation"
+_BOOTSTRAP_CHECKPOINT_VERSION = 2
 _BOOTSTRAP_CHECKPOINT_MAX_BYTES = 128 * 1024 * 1024
 
 
@@ -253,7 +253,6 @@ class TushareAdapter:
                         "status": "saved",
                         "request_start": start_date.isoformat(),
                         "request_end": completed_through_date.isoformat(),
-                        "anchor_count": len(foundation["anchor_adjustments"]),
                     }
                 )
         else:
@@ -264,15 +263,12 @@ class TushareAdapter:
                     "status": "restored",
                     "request_start": start_date.isoformat(),
                     "request_end": completed_through_date.isoformat(),
-                    "anchor_count": len(foundation["anchor_adjustments"]),
                 }
             )
 
         sse_calendar = foundation["calendar_sse"]
         szse_calendar = foundation["calendar_szse"]
         stock_basic = foundation["stock_basic"]
-        anchor_daily = foundation["anchor_daily"]
-        anchor_adjustments = foundation["anchor_adjustments"]
         shared_open = sorted(
             {str(row["cal_date"]) for row in sse_calendar if str(row["is_open"]) == "1"}
             & {str(row["cal_date"]) for row in szse_calendar if str(row["is_open"]) == "1"}
@@ -360,8 +356,6 @@ class TushareAdapter:
             "calendar_sse": sse_calendar,
             "calendar_szse": szse_calendar,
             "stock_basic": stock_basic,
-            "anchor_daily": anchor_daily,
-            "anchor_adjustments": anchor_adjustments,
             "daily": daily,
             "adjustments": adjustments,
             "suspensions": suspensions,
@@ -448,36 +442,16 @@ class TushareAdapter:
                 "instrument_count": len(stock_basic),
             }
         )
-        self._progress(
-            {"event": "collection_phase", "phase": "adjustment_anchors", "status": "started"}
-        )
-        anchor_daily, anchor_adjustments = self._collect_adjustment_anchors(
-            stock_basic,
-            date.fromisoformat(
-                f"{latest_open_session[:4]}-{latest_open_session[4:6]}-{latest_open_session[6:]}"
-            ),
-        )
-        self._progress(
-            {
-                "event": "collection_phase",
-                "phase": "adjustment_anchors",
-                "status": "completed",
-                "anchor_count": len(anchor_adjustments),
-            }
-        )
         return {
             "calendar_sse": sse_calendar,
             "calendar_szse": szse_calendar,
             "stock_basic": stock_basic,
-            "anchor_daily": anchor_daily,
-            "anchor_adjustments": anchor_adjustments,
         }
 
     def collect_incremental_snapshot(
         self,
         *,
         last_session: str,
-        known_ts_codes: set[str],
         as_of: date,
     ) -> dict[str, list[dict[str, object]]]:
         start_date = last_session.replace("-", "")
@@ -503,11 +477,6 @@ class TushareAdapter:
             )
         stock_by_code = {str(row["ts_code"]): row for row in stock_basic}
         stock_basic = [stock_by_code[key] for key in sorted(stock_by_code)]
-        new_stock_basic = [row for row in stock_basic if str(row["ts_code"]) not in known_ts_codes]
-        anchor_daily, anchor_adjustments = self._collect_adjustment_anchors(
-            new_stock_basic,
-            as_of,
-        )
         ranged = {"start_date": start_date, "end_date": end_date}
         return {
             "calendar_sse": self.query_paginated(
@@ -523,8 +492,6 @@ class TushareAdapter:
                 primary_key=("exchange", "cal_date"),
             ),
             "stock_basic": stock_basic,
-            "anchor_daily": anchor_daily,
-            "anchor_adjustments": anchor_adjustments,
             "daily": self.query_paginated(
                 "daily",
                 params=ranged,
@@ -568,134 +535,6 @@ class TushareAdapter:
                 primary_key=("ts_code", "in_date", "l3_code"),
             ),
         }
-
-    def _collect_adjustment_anchors(
-        self,
-        stock_basic: list[dict[str, object]],
-        as_of: date,
-    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-        anchor_daily: list[dict[str, object]] = []
-        anchor_adjustments: list[dict[str, object]] = []
-        by_listing_date: dict[str, list[dict[str, str]]] = {}
-        for instrument in normalize_instruments(stock_basic):
-            if date.fromisoformat(instrument["listed_from"]) <= as_of:
-                by_listing_date.setdefault(
-                    instrument["listed_from"].replace("-", ""),
-                    [],
-                ).append(instrument)
-        daily_fields = (
-            "ts_code",
-            "trade_date",
-            "open",
-            "high",
-            "low",
-            "close",
-            "pre_close",
-            "change",
-            "pct_chg",
-            "vol",
-            "amount",
-        )
-        unresolved: list[dict[str, str]] = []
-        listing_groups = sorted(by_listing_date.items())
-        total_instruments = sum(len(instruments) for _date, instruments in listing_groups)
-        for listing_index, (listing_date, instruments) in enumerate(listing_groups, start=1):
-            daily = self.query_paginated(
-                "daily",
-                params={"trade_date": listing_date},
-                fields=daily_fields,
-                primary_key=("trade_date", "ts_code"),
-            )
-            adjustments = self.query_paginated(
-                "adj_factor",
-                params={"trade_date": listing_date},
-                fields=("ts_code", "trade_date", "adj_factor"),
-                primary_key=("trade_date", "ts_code"),
-            )
-            daily_by_code = {str(row["ts_code"]): row for row in daily}
-            adjustment_by_code = {str(row["ts_code"]): row for row in adjustments}
-            for instrument in instruments:
-                code = instrument["ts_code"]
-                if code in daily_by_code and code in adjustment_by_code:
-                    anchor_daily.append(daily_by_code[code])
-                    anchor_adjustments.append(adjustment_by_code[code])
-                else:
-                    unresolved.append(instrument)
-            if listing_index % 25 == 0 or listing_index == len(listing_groups):
-                self._progress(
-                    {
-                        "event": "collection_progress",
-                        "phase": "adjustment_anchors",
-                        "completed_listing_dates": listing_index,
-                        "total_listing_dates": len(listing_groups),
-                        "resolved_instruments": len(anchor_adjustments),
-                        "total_instruments": total_instruments,
-                    }
-                )
-            if self._throttle_seconds:
-                self._sleeper(self._throttle_seconds)
-
-        for unresolved_index, instrument in enumerate(unresolved, start=1):
-            daily, adjustment = self._search_adjustment_anchor(
-                instrument,
-                as_of,
-                daily_fields,
-            )
-            anchor_daily.append(daily)
-            anchor_adjustments.append(adjustment)
-            if unresolved_index % 50 == 0 or unresolved_index == len(unresolved):
-                self._progress(
-                    {
-                        "event": "collection_progress",
-                        "phase": "adjustment_anchor_search",
-                        "completed_instruments": unresolved_index,
-                        "total_instruments": len(unresolved),
-                    }
-                )
-        return anchor_daily, anchor_adjustments
-
-    def _search_adjustment_anchor(
-        self,
-        instrument: dict[str, str],
-        as_of: date,
-        daily_fields: tuple[str, ...],
-    ) -> tuple[dict[str, object], dict[str, object]]:
-        window_start = date.fromisoformat(instrument["listed_from"])
-        while window_start <= as_of:
-            end = min(window_start + timedelta(days=45), as_of)
-            params = {
-                "ts_code": instrument["ts_code"],
-                "start_date": window_start.strftime("%Y%m%d"),
-                "end_date": end.strftime("%Y%m%d"),
-            }
-            daily = self.query_paginated(
-                "daily",
-                params=params,
-                fields=daily_fields,
-                primary_key=("trade_date", "ts_code"),
-            )
-            adjustments = self.query_paginated(
-                "adj_factor",
-                params=params,
-                fields=("ts_code", "trade_date", "adj_factor"),
-                primary_key=("trade_date", "ts_code"),
-            )
-            daily_by_session = {str(row["trade_date"]): row for row in daily}
-            adjustment_by_session = {str(row["trade_date"]): row for row in adjustments}
-            qualifying = sorted(daily_by_session.keys() & adjustment_by_session.keys())
-            if qualifying:
-                anchor_session = qualifying[0]
-                return (
-                    daily_by_session[anchor_session],
-                    adjustment_by_session[anchor_session],
-                )
-            window_start = end + timedelta(days=1)
-            if self._throttle_seconds:
-                self._sleeper(self._throttle_seconds)
-        raise TushareSourceError(
-            "INCOMPLETE_ADJUSTMENT_ANCHOR",
-            source_code=0,
-        )
 
     def query(
         self,
@@ -850,8 +689,6 @@ def _load_bootstrap_checkpoint(
         "calendar_sse",
         "calendar_szse",
         "stock_basic",
-        "anchor_daily",
-        "anchor_adjustments",
     }
     if (
         not isinstance(foundation, dict)
@@ -897,6 +734,37 @@ def _save_bootstrap_checkpoint(
         temporary.unlink(missing_ok=True)
 
 
+def dynamic_qfq_prices(
+    prices: Sequence[Mapping[str, str]],
+) -> list[dict[str, str]]:
+    """Normalize each instrument to its latest available adjustment factor."""
+    reference_by_instrument: dict[str, tuple[str, Decimal]] = {}
+    for row in prices:
+        instrument_id = str(row["instrument_id"])
+        session = str(row["session"])
+        factor = decimal(row["adjustment_factor"])
+        if factor <= 0:
+            raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
+        current = reference_by_instrument.get(instrument_id)
+        if current is None or session > current[0]:
+            reference_by_instrument[instrument_id] = (session, factor)
+
+    normalized: list[dict[str, str]] = []
+    for row in prices:
+        instrument_id = str(row["instrument_id"])
+        factor = decimal(row["adjustment_factor"])
+        reference = reference_by_instrument[instrument_id][1]
+        normalized_row = dict(row)
+        for field in ("open", "high", "low", "close"):
+            normalized_row[f"{field}_adj"] = adjusted_price_string(
+                decimal(row[f"{field}_raw"]),
+                factor,
+                reference,
+            )
+        normalized.append(normalized_row)
+    return normalized
+
+
 def normalize_tushare_snapshot(
     snapshot: Mapping[str, list[dict[str, object]]],
 ) -> tuple[dict[str, object], dict[str, object]]:
@@ -936,39 +804,6 @@ def normalize_tushare_snapshot(
         for row in snapshot["price_limits"]
         if str(row["trade_date"]) in session_set and str(row["ts_code"]) in instrument_by_code
     }
-    anchor_daily_by_position = {
-        (str(row["trade_date"]), str(row["ts_code"])): row
-        for row in snapshot.get("anchor_daily", [])
-        if str(row["ts_code"]) in instrument_by_code
-    }
-    anchor_factor_by_position = {
-        (str(row["trade_date"]), str(row["ts_code"])): decimal(row["adj_factor"])
-        for row in snapshot.get("anchor_adjustments", [])
-        if str(row["ts_code"]) in instrument_by_code
-    }
-    anchor_by_code: dict[str, tuple[str, Decimal]] = {}
-    for code, instrument in instrument_by_code.items():
-        listed_from = str(instrument["listed_from"]).replace("-", "")
-        qualifying = sorted(
-            trade_date
-            for trade_date, ts_code in anchor_daily_by_position
-            if ts_code == code
-            and trade_date >= listed_from
-            and (trade_date, code) in anchor_factor_by_position
-        )
-        if not qualifying:
-            raise TushareSourceError("INCOMPLETE_ADJUSTMENT_ANCHOR", source_code=0)
-        anchor_session = qualifying[0]
-        anchor_daily = anchor_daily_by_position[(anchor_session, code)]
-        validate_source_bar(anchor_daily)
-        anchor_factor = anchor_factor_by_position[(anchor_session, code)]
-        if anchor_factor <= 0:
-            raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
-        anchor_by_code[code] = (
-            anchor_session,
-            anchor_factor,
-        )
-
     canonical_prices: list[dict[str, str]] = []
     trading_states: list[dict[str, str]] = []
     price_limits: list[dict[str, str]] = []
@@ -998,13 +833,11 @@ def normalize_tushare_snapshot(
             if source_row is None:
                 continue
             factor = factor_by_position.get((session_key, code))
-            anchor_record = anchor_by_code.get(code)
             limit = limit_by_position.get((session_key, code))
-            if factor is None or anchor_record is None or limit is None:
+            if factor is None or limit is None:
                 raise TushareSourceError("INCOMPLETE_REQUIRED_MARKET_FACTS", source_code=0)
             if factor <= 0:
                 raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
-            _, anchor = anchor_record
             bar = validate_source_bar(source_row)
             open_price = bar["open"]
             high = bar["high"]
@@ -1026,11 +859,6 @@ def normalize_tushare_snapshot(
                     "volume_shares": decimal_string(volume_lots * 100, 0),
                     "turnover_cny": decimal_string(source_amount * 1000, 2),
                     "adjustment_factor": decimal_string(factor, 6),
-                    "adjustment_anchor_factor": decimal_string(anchor, 6),
-                    "open_adj": adjusted_price_string(open_price, factor, anchor),
-                    "high_adj": adjusted_price_string(high, factor, anchor),
-                    "low_adj": adjusted_price_string(low, factor, anchor),
-                    "close_adj": adjusted_price_string(close, factor, anchor),
                     "trading_state": state,
                 }
             )
@@ -1043,26 +871,15 @@ def normalize_tushare_snapshot(
                 }
             )
 
+    canonical_prices = dynamic_qfq_prices(canonical_prices)
     industries = normalize_industries(snapshot["industry_membership"])
     canonical = {
-        "schema_version": "canonical-eod-v1",
+        "schema_version": "canonical-eod-v2",
         "research_calendar": sessions,
         "instruments": instruments,
         "prices": canonical_prices,
         "trading_states": trading_states,
         "price_limits": price_limits,
-        "adjustment_anchors": [
-            {
-                "instrument_id": instrument["instrument_id"],
-                "anchor_session": iso_date(anchor_by_code[str(instrument["ts_code"])][0]),
-                "anchor_factor": decimal_string(
-                    anchor_by_code[str(instrument["ts_code"])][1],
-                    6,
-                ),
-            }
-            for instrument in instruments
-            if str(instrument["ts_code"]) in anchor_by_code
-        ],
         "base_pool": base_pool,
         "liquidity_universes": liquidity_universes(
             sessions, base_pool, canonical_prices, trading_states
@@ -1086,16 +903,14 @@ def normalize_tushare_increment(
     prior_instruments = prior.get("instruments")
     prior_prices = prior.get("prices")
     prior_states = prior.get("trading_states")
-    prior_anchors = prior.get("adjustment_anchors")
     prior_base_pool = prior.get("base_pool")
-    if not all(
+    if prior.get("schema_version") != "canonical-eod-v2" or not all(
         isinstance(value, list)
         for value in (
             prior_calendar,
             prior_instruments,
             prior_prices,
             prior_states,
-            prior_anchors,
             prior_base_pool,
         )
     ):
@@ -1150,51 +965,6 @@ def normalize_tushare_increment(
         for row in snapshot["price_limits"]
         if str(row["trade_date"]) in session_set and str(row["ts_code"]) in instrument_by_code
     }
-    anchor_by_code = {
-        str(item["instrument_id"]).removeprefix("equity:"): (
-            str(item["anchor_session"]),
-            decimal(item["anchor_factor"]),
-        )
-        for item in prior_anchors
-        if isinstance(item, dict)
-    }
-    anchor_daily = {
-        (str(row["trade_date"]), str(row["ts_code"])): row
-        for row in snapshot.get("anchor_daily", [])
-    }
-    anchor_factors = {
-        (str(row["trade_date"]), str(row["ts_code"])): decimal(row["adj_factor"])
-        for row in snapshot.get("anchor_adjustments", [])
-    }
-    new_anchor_records: list[dict[str, str]] = []
-    for code, instrument in instrument_by_code.items():
-        if code in anchor_by_code:
-            continue
-        listed_from = str(instrument["listed_from"]).replace("-", "")
-        qualifying = sorted(
-            session
-            for session, candidate_code in anchor_daily
-            if candidate_code == code
-            and session >= listed_from
-            and (session, code) in anchor_factors
-        )
-        if not qualifying:
-            raise TushareSourceError("INCOMPLETE_ADJUSTMENT_ANCHOR", source_code=0)
-        anchor_session = qualifying[0]
-        anchor_daily_row = anchor_daily[(anchor_session, code)]
-        validate_source_bar(anchor_daily_row)
-        anchor = anchor_factors[(anchor_session, code)]
-        if anchor <= 0:
-            raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
-        anchor_by_code[code] = (iso_date(anchor_session), anchor)
-        new_anchor_records.append(
-            {
-                "instrument_id": str(instrument["instrument_id"]),
-                "anchor_session": iso_date(anchor_session),
-                "anchor_factor": decimal_string(anchor, 6),
-            }
-        )
-
     canonical_prices: list[dict[str, str]] = []
     trading_states: list[dict[str, str]] = []
     price_limits: list[dict[str, str]] = []
@@ -1224,13 +994,11 @@ def normalize_tushare_increment(
             if source_row is None:
                 continue
             factor = factor_by_position.get((session_key, code))
-            anchor_record = anchor_by_code.get(code)
             limit = limit_by_position.get((session_key, code))
-            if factor is None or anchor_record is None or limit is None:
+            if factor is None or limit is None:
                 raise TushareSourceError("INCOMPLETE_REQUIRED_MARKET_FACTS", source_code=0)
             if factor <= 0:
                 raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
-            anchor = anchor_record[1]
             bar = validate_source_bar(source_row)
             open_price = bar["open"]
             high = bar["high"]
@@ -1252,11 +1020,6 @@ def normalize_tushare_increment(
                     "volume_shares": decimal_string(volume_lots * 100, 0),
                     "turnover_cny": decimal_string(source_amount * 1000, 2),
                     "adjustment_factor": decimal_string(factor, 6),
-                    "adjustment_anchor_factor": decimal_string(anchor, 6),
-                    "open_adj": adjusted_price_string(open_price, factor, anchor),
-                    "high_adj": adjusted_price_string(high, factor, anchor),
-                    "low_adj": adjusted_price_string(low, factor, anchor),
-                    "close_adj": adjusted_price_string(close, factor, anchor),
                     "trading_state": state,
                 }
             )
@@ -1270,7 +1033,7 @@ def normalize_tushare_increment(
             )
 
     all_sessions = [*prior_calendar, *sessions]
-    all_prices = [*prior_prices, *canonical_prices]
+    all_prices = dynamic_qfq_prices([*prior_prices, *canonical_prices])
     all_states = [*prior_states, *trading_states]
     all_base_pool = [*prior_base_pool, *base_pool]
     universes = liquidity_universes(
@@ -1297,11 +1060,10 @@ def normalize_tushare_increment(
     canonical_delta = {
         "research_calendar_append": sessions,
         "instruments_replace": instruments,
-        "prices_append": canonical_prices,
+        "prices_replace": all_prices,
         "trading_states_append": trading_states,
         "price_limits_append": price_limits,
         "base_pool_append": base_pool,
-        "adjustment_anchors_append": new_anchor_records,
         "liquidity_universes_append": {
             name: rows[-len(sessions) :] for name, rows in universes.items()
         },

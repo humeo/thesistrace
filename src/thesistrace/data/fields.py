@@ -13,25 +13,25 @@ AUTHORABLE_FIELDS = (
     AuthorableField(
         "price.open.adjusted",
         "open_adj",
-        "fixed-anchor adjusted open",
+        "dynamic front-adjusted open",
         "CNY/share",
     ),
     AuthorableField(
         "price.high.adjusted",
         "high_adj",
-        "fixed-anchor adjusted high",
+        "dynamic front-adjusted high",
         "CNY/share",
     ),
     AuthorableField(
         "price.low.adjusted",
         "low_adj",
-        "fixed-anchor adjusted low",
+        "dynamic front-adjusted low",
         "CNY/share",
     ),
     AuthorableField(
         "price.close.adjusted",
         "close_adj",
-        "fixed-anchor adjusted close",
+        "dynamic front-adjusted close",
         "CNY/share",
     ),
     AuthorableField(

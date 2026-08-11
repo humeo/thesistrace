@@ -39,10 +39,9 @@ def test_refresh_replay_is_bound_to_the_recorded_window(tmp_path: Path) -> None:
         json.dumps(
             {
                 "format": "thesistrace-tushare-refresh-replay",
-                "version": 1,
+                "version": 2,
                 "request_start": "2026-08-03",
                 "request_end": "2026-08-31",
-                "known_ts_codes": ["600000.SH"],
                 "snapshot": {"calendar_sse": []},
             }
         )
@@ -51,13 +50,11 @@ def test_refresh_replay_is_bound_to_the_recorded_window(tmp_path: Path) -> None:
 
     assert provider.collect_incremental_snapshot(
         last_session="2026-08-03",
-        known_ts_codes={"600000.SH"},
         as_of=date(2026, 8, 31),
     ) == {"calendar_sse": []}
     with pytest.raises(TushareSourceError) as failure:
         provider.collect_incremental_snapshot(
-            last_session="2026-08-03",
-            known_ts_codes={"000001.SZ"},
+            last_session="2026-08-04",
             as_of=date(2026, 8, 31),
         )
-    assert failure.value.reason_code == "REPLAY_INSTRUMENT_SET_MISMATCH"
+    assert failure.value.reason_code == "REPLAY_WINDOW_MISMATCH"

@@ -11,8 +11,8 @@ ThesisTrace separates three concerns:
   availability by Dataset Release.
 - Dataset Release is an immutable manifest that identifies one validated
   logical snapshot and binds the exact Research Calendar, Universe snapshots,
-  Dataset Schema versions, Adjustment Anchors, Adjustment Factors, and physical
-  objects used by a ResearchRun or DailyTrack.
+  Dataset Schema versions, Adjustment Factors, adjusted-price derivation rule,
+  and physical objects used by a ResearchRun or DailyTrack.
 - Physical Data Objects are immutable data partitions or content-addressed
   objects that may be referenced by many Dataset Releases.
 
@@ -35,8 +35,8 @@ delta referencing its predecessor. A historical correction adds corrected
 objects to the next new-session release while older releases continue to
 reference the previous objects; V1 does not publish a correction-only release.
 Objects referenced by an immutable Release or Tracking Generation remain
-retained. ADR-0073 defines Adjustment Anchors as release-owned manifest inputs
-rather than Research Window data.
+retained. ADR-0023 defines dynamic front-adjusted prices as deterministic
+derivatives of the release's raw prices and Adjustment Factors.
 
 Research authors discover and reference stable fields through the Field
 Catalog; they do not select a Dataset Release. Run admission resolves the

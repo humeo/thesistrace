@@ -674,7 +674,6 @@ def _replay_payload(*, request_start: str = "2025-08-03") -> dict[str, object]:
         "vol": "100",
         "amount": "1000",
     }
-    anchor = {**daily, "trade_date": "20220103"}
     snapshot = {
         "calendar_sse": [{"exchange": "SSE", "cal_date": session, "is_open": "1"}],
         "calendar_szse": [{"exchange": "SZSE", "cal_date": session, "is_open": "1"}],
@@ -686,10 +685,6 @@ def _replay_payload(*, request_start: str = "2025-08-03") -> dict[str, object]:
                 "list_date": "20220103",
                 "delist_date": "",
             }
-        ],
-        "anchor_daily": [anchor],
-        "anchor_adjustments": [
-            {"ts_code": "600000.SH", "trade_date": "20220103", "adj_factor": "1"}
         ],
         "daily": [daily],
         "adjustments": [{"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}],
@@ -715,7 +710,7 @@ def _replay_payload(*, request_start: str = "2025-08-03") -> dict[str, object]:
     }
     return {
         "format": "thesistrace-tushare-bootstrap-replay",
-        "version": 1,
+        "version": 2,
         "request_start": request_start,
         "request_end": "2026-08-03",
         "snapshot": snapshot,

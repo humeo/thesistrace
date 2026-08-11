@@ -32,10 +32,12 @@ def _contract(
     name: str,
     fields: tuple[tuple[str, pa.DataType], ...],
     sort_keys: tuple[str, ...],
+    *,
+    version: int = 1,
 ) -> ParquetWriterContract:
     return ParquetWriterContract(
         name=f"canonical-generation-{name}",
-        version=1,
+        version=version,
         schema=pa.schema([pa.field(field, kind, nullable=False) for field, kind in fields]),
         sort_keys=sort_keys,
     )
@@ -87,7 +89,6 @@ TABLE_SPECS = (
                     "volume_shares",
                     "turnover_cny",
                     "adjustment_factor",
-                    "adjustment_anchor_factor",
                     "open_adj",
                     "high_adj",
                     "low_adj",
@@ -96,6 +97,7 @@ TABLE_SPECS = (
                 )
             ),
             ("session", "instrument_id"),
+            version=2,
         ),
         "session",
     ),
@@ -121,18 +123,6 @@ TABLE_SPECS = (
             ("session", "instrument_id"),
         ),
         "session",
-    ),
-    TableSpec(
-        "adjustment_anchors",
-        _contract(
-            "adjustment-anchors",
-            (
-                ("instrument_id", _STRING),
-                ("anchor_session", _STRING),
-                ("anchor_factor", _STRING),
-            ),
-            ("instrument_id",),
-        ),
     ),
     TableSpec(
         "base_pool",

@@ -17,7 +17,7 @@ class GenerationValidationError(ValueError):
 
 
 def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
-    if canonical.get("schema_version") != "canonical-eod-v1":
+    if canonical.get("schema_version") != "canonical-eod-v2":
         raise GenerationValidationError("Canonical Generation schema is incompatible")
     calendar = canonical.get("research_calendar")
     if not isinstance(calendar, list) or not calendar or calendar != sorted(set(calendar)):
@@ -89,31 +89,6 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     ):
         raise GenerationValidationError("Canonical Trading State coverage is invalid")
 
-    anchors = _rows(canonical, "adjustment_anchors")
-    if {str(row["instrument_id"]) for row in anchors} != instrument_set or len(anchors) != len(
-        instrument_set
-    ):
-        raise GenerationValidationError("Canonical Adjustment Anchor coverage is invalid")
-    anchor_by_instrument: dict[str, Decimal] = {}
-    anchor_session_by_instrument: dict[str, date] = {}
-    for row in anchors:
-        anchor_factor = _finite_decimal(row["anchor_factor"], "Canonical Adjustment Anchor.factor")
-        instrument_id = str(row["instrument_id"])
-        anchor_session = _iso_date(row["anchor_session"], "Canonical Adjustment Anchor.session")
-        if (
-            anchor_session.weekday() >= 5
-            or anchor_session < listed_from_by_instrument[instrument_id]
-            or (
-                listed_to_by_instrument[instrument_id] is not None
-                and anchor_session >= listed_to_by_instrument[instrument_id]
-            )
-            or anchor_session > parsed_calendar[-1]
-            or anchor_factor <= 0
-        ):
-            raise GenerationValidationError("Canonical Adjustment Anchor is invalid")
-        anchor_by_instrument[instrument_id] = anchor_factor
-        anchor_session_by_instrument[instrument_id] = anchor_session
-
     prices = _rows(canonical, "prices")
     price_by_position = _unique_positions(prices, "session", "Canonical Price")
     expected_trade_positions = {
@@ -123,19 +98,14 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     }
     if set(price_by_position) != expected_trade_positions:
         raise GenerationValidationError("Canonical Price coverage is invalid")
-    earliest_price_session: dict[str, date] = {}
-    for session, instrument_id in price_by_position:
-        candidate = date.fromisoformat(session)
-        earliest_price_session[instrument_id] = min(
-            candidate,
-            earliest_price_session.get(instrument_id, date.max),
-        )
-    for instrument_id, anchor_session in anchor_session_by_instrument.items():
-        if anchor_session >= parsed_calendar[0] and (
-            anchor_session.isoformat() not in calendar_set
-            or earliest_price_session.get(instrument_id) != anchor_session
-        ):
-            raise GenerationValidationError("Canonical Adjustment Anchor is invalid")
+    reference_by_instrument: dict[str, tuple[str, Decimal]] = {}
+    for (session, instrument_id), row in price_by_position.items():
+        factor = _finite_decimal(row["adjustment_factor"], "Canonical Price.adjustment_factor")
+        if factor <= 0:
+            raise GenerationValidationError("Canonical Price adjustment factor is invalid")
+        current = reference_by_instrument.get(instrument_id)
+        if current is None or session > current[0]:
+            reference_by_instrument[instrument_id] = (session, factor)
     for position, row in price_by_position.items():
         if row["trading_state"] != state_by_position[position]["state"]:
             raise GenerationValidationError("Canonical Price trading state is invalid")
@@ -152,20 +122,17 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
                 "volume_shares",
                 "turnover_cny",
                 "adjustment_factor",
-                "adjustment_anchor_factor",
                 "open_adj",
                 "high_adj",
                 "low_adj",
                 "close_adj",
             )
         }
-        anchor = anchor_by_instrument[position[1]]
-        if values["adjustment_anchor_factor"] != anchor:
-            raise GenerationValidationError("Canonical Price adjustment anchor is inconsistent")
+        reference = reference_by_instrument[position[1]][1]
         try:
             expected_adjusted = {
                 field: adjusted_price_string(
-                    values[f"{field}_raw"], values["adjustment_factor"], anchor
+                    values[f"{field}_raw"], values["adjustment_factor"], reference
                 )
                 for field in ("open", "high", "low", "close")
             }

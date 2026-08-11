@@ -150,7 +150,7 @@ def _run(
                 transport=transport,
                 progress=_progress,
                 bootstrap_checkpoint=(
-                    mount_root / ".operator" / "tushare-bootstrap-anchors-v1.json"
+                    mount_root / ".operator" / "tushare-bootstrap-foundation-v2.json"
                     if parsed.command == "bootstrap"
                     else None
                 ),

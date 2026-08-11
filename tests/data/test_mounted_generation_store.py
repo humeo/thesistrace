@@ -63,7 +63,7 @@ def test_materialized_generation_reopens_every_canonical_table_after_restart(
 
     root = _manifest(tmp_path, materialized.manifest_sha256)
     assert len(canonical_json_bytes(root)) <= GENERATION_MANIFEST_MAX_BYTES
-    assert root["schema_contract"] == "canonical-eod-v1"
+    assert root["schema_contract"] == "canonical-eod-v2"
     assert "st_designations" not in {table["name"] for table in root["tables"]}
     price_table = next(table for table in root["tables"] if table["name"] == "prices")
     price_manifest = _manifest(tmp_path, price_table["manifest_sha256"])
@@ -84,7 +84,6 @@ def test_reordered_source_rows_reuse_identical_physical_data_objects(tmp_path: P
         "prices",
         "trading_states",
         "price_limits",
-        "adjustment_anchors",
         "base_pool",
         "industry_membership",
         "field_catalog",
@@ -224,88 +223,17 @@ def test_incompatible_parquet_schema_is_rejected_even_with_consistent_hashes(
         store.open_generation(root_sha256)
 
 
-@pytest.mark.parametrize("damage", ["anchor", "derived_price"])
-def test_inconsistent_adjusted_price_derivation_is_rejected(
-    tmp_path: Path,
-    damage: str,
-) -> None:
+def test_inconsistent_adjusted_price_derivation_is_rejected(tmp_path: Path) -> None:
     canonical = _canonical()
-    if damage == "anchor":
-        canonical["adjustment_anchors"][0]["anchor_factor"] = "99.000000"
-    else:
-        canonical["prices"][0]["close_adj"] = "999.00000000"
+    canonical["prices"][0]["close_adj"] = "999.00000000"
 
-    with pytest.raises(GenerationStoreError, match="anchor|derivation"):
+    with pytest.raises(GenerationStoreError, match="derivation"):
         MountedGenerationStore(tmp_path).materialize(
             canonical,
             prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
             source_name="deterministic-test",
             source_lineage={"snapshot": "fixed"},
         )
-
-
-def test_adjustment_anchor_may_predate_dataset_coverage(tmp_path: Path) -> None:
-    canonical = _canonical()
-    canonical["instruments"][0]["listed_from"] = "2020-01-02"
-    canonical["adjustment_anchors"][0]["anchor_session"] = "2020-01-02"
-
-    generation = MountedGenerationStore(tmp_path).materialize(
-        canonical,
-        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
-        source_name="deterministic-test",
-        source_lineage={"snapshot": "fixed"},
-    )
-
-    reopened = MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
-    assert reopened.canonical["adjustment_anchors"][0]["anchor_session"] == "2020-01-02"
-
-
-@pytest.mark.parametrize("anchor_session", ["2024-01-03", "2024-01-06"])
-def test_in_coverage_anchor_must_be_the_first_valid_price_coordinate(
-    tmp_path: Path,
-    anchor_session: str,
-) -> None:
-    canonical = _canonical()
-    canonical["adjustment_anchors"][0]["anchor_session"] = anchor_session
-
-    with pytest.raises(GenerationStoreError, match="Adjustment Anchor is invalid"):
-        MountedGenerationStore(tmp_path).materialize(
-            canonical,
-            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
-            source_name="deterministic-test",
-            source_lineage={"snapshot": "fixed"},
-        )
-
-
-def test_precoverage_anchor_cannot_follow_terminal_delisting(tmp_path: Path) -> None:
-    canonical = _canonical()
-    canonical["instruments"].append(
-        {
-            "instrument_id": "equity:C.SH",
-            "ts_code": "C.SH",
-            "asset_type": "ordinary_a_share",
-            "exchange": "SSE",
-            "board": "main",
-            "listed_from": "2019-01-02",
-            "listed_to": "2020-01-03",
-        }
-    )
-    canonical["adjustment_anchors"].append(
-        {
-            "instrument_id": "equity:C.SH",
-            "anchor_session": "2020-01-06",
-            "anchor_factor": "1.000000",
-        }
-    )
-
-    with pytest.raises(GenerationStoreError, match="Adjustment Anchor is invalid"):
-        MountedGenerationStore(tmp_path).materialize(
-            canonical,
-            prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
-            source_name="deterministic-test",
-            source_lineage={"snapshot": "fixed"},
-        )
-
 
 def test_base_pool_cannot_include_an_instrument_after_terminal_delisting(
     tmp_path: Path,
@@ -608,7 +536,6 @@ def _canonical() -> dict[str, object]:
                     "volume_shares": "10000",
                     "turnover_cny": str(raw * 10000),
                     "adjustment_factor": "1.000000",
-                    "adjustment_anchor_factor": "1.000000",
                     "open_adj": f"{raw}.00000000",
                     "high_adj": f"{raw + 1}.00000000",
                     "low_adj": f"{raw - 1}.00000000",
@@ -625,20 +552,12 @@ def _canonical() -> dict[str, object]:
                 }
             )
     return {
-        "schema_version": "canonical-eod-v1",
+        "schema_version": "canonical-eod-v2",
         "research_calendar": sessions,
         "instruments": list(instruments),
         "prices": prices,
         "trading_states": states,
         "price_limits": limits,
-        "adjustment_anchors": [
-            {
-                "instrument_id": instrument["instrument_id"],
-                "anchor_session": sessions[0],
-                "anchor_factor": "1.000000",
-            }
-            for instrument in instruments
-        ],
         "base_pool": base_pool,
         "liquidity_universes": universes,
         "industry_membership": [

@@ -28,7 +28,7 @@ the public API and real browser.
   acceptance boundaries.
 - Final review corrected Dataset publication races, stale Attempt fencing,
   source-value validation, constant Alpha evaluation, Draft freeze ordering,
-  correction consistency and dependency replay, adjustment-anchor semantics,
+  correction consistency and dependency replay, dynamic front-adjustment semantics,
   calculation-kernel dispatch, child-order odd lots, and asynchronous UI
   polling.
 - Final `make check` passed: Ruff, 39 backend tests, TypeScript checking,

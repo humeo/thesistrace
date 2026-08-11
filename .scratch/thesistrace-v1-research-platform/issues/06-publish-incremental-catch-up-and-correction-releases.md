@@ -22,7 +22,8 @@ snapshot and an auditable linear Release chain.
   direct predecessor chain and content-addressed source/canonical deltas.
 - Added credential-gated live post-close publication that fetches only the
   current frontier-to-`as_of` Tushare slices, supports one catch-up Release,
-  retains source responses, and reuses predecessor objects and fixed anchors.
+  retains source responses, and reuses predecessor objects while recomputing
+  dynamic front-adjusted prices from retained factors.
 - Verified correction-only rejection, latest-pointer failure atomicity,
   idempotency, old Release reproducibility, object reuse, and cumulative
   materialization through public APIs.

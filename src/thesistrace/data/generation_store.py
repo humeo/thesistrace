@@ -95,7 +95,7 @@ class MountedGenerationStore:
             "session_count": len(calendar),
         }
         identity = {
-            "schema_contract": "canonical-eod-v1",
+            "schema_contract": "canonical-eod-v2",
             "dataset_coverage": coverage,
             "data_through_session": str(calendar[-1]),
             "field_availability": list(field_availability),
@@ -469,7 +469,6 @@ def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
         "prices",
         "trading_states",
         "price_limits",
-        "adjustment_anchors",
         "base_pool",
         "liquidity_universes",
         "industry_membership",
@@ -524,13 +523,12 @@ def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[
             raise GenerationStoreError("Canonical Liquidity Universe identity is incompatible")
         universes[universe].append(value)
     return {
-        "schema_version": "canonical-eod-v1",
+        "schema_version": "canonical-eod-v2",
         "research_calendar": [row["session"] for row in tables["research_calendar"]],
         "instruments": tables["instruments"],
         "prices": tables["prices"],
         "trading_states": tables["trading_states"],
         "price_limits": tables["price_limits"],
-        "adjustment_anchors": tables["adjustment_anchors"],
         "base_pool": tables["base_pool"],
         "liquidity_universes": universes,
         "industry_membership": tables["industry_membership"],
@@ -627,7 +625,7 @@ def _validate_root_projection(root: Mapping[str, object], canonical: Mapping[str
     expected_fields = sorted(str(row["field_id"]) for row in fields)
     preparation = root["preparation"]
     if (
-        root["schema_contract"] != "canonical-eod-v1"
+        root["schema_contract"] != "canonical-eod-v2"
         or root["dataset_coverage"] != expected_coverage
         or root["data_through_session"] != calendar[-1]
         or root["field_availability"] != expected_fields

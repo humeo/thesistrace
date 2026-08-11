@@ -45,7 +45,7 @@ class ReplayTushareProvider:
                 "thesistrace-tushare-bootstrap-replay",
                 "thesistrace-tushare-refresh-replay",
             }
-            or value["version"] != 1
+            or value["version"] != 2
         ):
             raise ValueError("Tushare replay contract is incompatible")
         expected_fields = {
@@ -55,8 +55,6 @@ class ReplayTushareProvider:
             "request_end",
             "snapshot",
         }
-        if replay_format == "thesistrace-tushare-refresh-replay":
-            expected_fields.add("known_ts_codes")
         if set(value) != expected_fields:
             raise ValueError("Tushare replay contract is invalid")
         snapshot = value["snapshot"]
@@ -70,14 +68,6 @@ class ReplayTushareProvider:
         self._kind = (
             "bootstrap" if replay_format == "thesistrace-tushare-bootstrap-replay" else "refresh"
         )
-        known_codes = value.get("known_ts_codes", [])
-        if (
-            not isinstance(known_codes, list)
-            or any(not isinstance(code, str) or not code for code in known_codes)
-            or known_codes != sorted(set(known_codes))
-        ):
-            raise ValueError("Tushare replay known instruments are invalid")
-        self._known_ts_codes = set(known_codes)
 
     def collect_bootstrap_snapshot(
         self,
@@ -98,7 +88,6 @@ class ReplayTushareProvider:
         self,
         *,
         last_session: str,
-        known_ts_codes: set[str],
         as_of: date,
     ) -> dict[str, list[dict[str, object]]]:
         if self._kind != "refresh":
@@ -109,8 +98,6 @@ class ReplayTushareProvider:
             raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0) from error
         if (request_start, as_of) != (self._request_start, self._request_end):
             raise TushareSourceError("REPLAY_WINDOW_MISMATCH", source_code=0)
-        if known_ts_codes != self._known_ts_codes:
-            raise TushareSourceError("REPLAY_INSTRUMENT_SET_MISMATCH", source_code=0)
         return self._snapshot
 
 

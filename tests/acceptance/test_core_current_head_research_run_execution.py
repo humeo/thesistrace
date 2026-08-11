@@ -1534,15 +1534,11 @@ def _two_instrument_canonical(
     instrument_ids = ("equity:000001.SZ", "equity:000002.SZ")
     ts_codes = ("000001.SZ", "000002.SZ")
     instruments: list[dict[str, object]] = []
-    anchors: list[dict[str, object]] = []
     industries: list[dict[str, object]] = []
     for instrument_id, ts_code in zip(instrument_ids, ts_codes, strict=True):
         instrument = copy.deepcopy(template["instruments"][0])
         instrument.update(instrument_id=instrument_id, ts_code=ts_code)
         instruments.append(instrument)
-        anchor = copy.deepcopy(template["adjustment_anchors"][0])
-        anchor["instrument_id"] = instrument_id
-        anchors.append(anchor)
         industry = copy.deepcopy(template["industry_membership"][0])
         industry.update(
             instrument_id=instrument_id,
@@ -1616,7 +1612,6 @@ def _two_instrument_canonical(
     return {
         **template,
         "instruments": instruments,
-        "adjustment_anchors": anchors,
         "industry_membership": industries,
         "research_calendar": list(sessions),
         "prices": prices,
@@ -1708,20 +1703,6 @@ def _write_refresh_replay(
             for instrument in instruments
             if isinstance(instrument, dict)
         ],
-        "anchor_daily": [
-            row
-            for row in daily
-            if row["trade_date"] == str(calendar[0]).replace("-", "")
-        ],
-        "anchor_adjustments": [
-            {
-                "ts_code": instrument["ts_code"],
-                "trade_date": str(calendar[0]).replace("-", ""),
-                "adj_factor": "1",
-            }
-            for instrument in instruments
-            if isinstance(instrument, dict)
-        ],
         "daily": daily,
         "adjustments": [
             {
@@ -1758,14 +1739,9 @@ def _write_refresh_replay(
     }
     replay = {
         "format": "thesistrace-tushare-refresh-replay",
-        "version": 1,
+        "version": 2,
         "request_start": request_start,
         "request_end": str(calendar[-1]),
-        "known_ts_codes": sorted(
-            str(instrument["ts_code"])
-            for instrument in instruments
-            if isinstance(instrument, dict)
-        ),
         "snapshot": snapshot,
     }
     path.write_text(

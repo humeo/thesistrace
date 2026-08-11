@@ -15,7 +15,6 @@ PRICE_VALUE_FIELDS = (
     "volume_shares",
     "turnover_cny",
     "adjustment_factor",
-    "adjustment_anchor_factor",
     "open_adj",
     "high_adj",
     "low_adj",
@@ -34,7 +33,7 @@ def validate_release_batch(
 ) -> None:
     canonical = batch.canonical
     calendar = canonical.get("research_calendar")
-    if canonical.get("schema_version") != "canonical-eod-v1":
+    if canonical.get("schema_version") != "canonical-eod-v2":
         raise ValueError("Bootstrap canonical schema is invalid")
     if not isinstance(calendar, list) or not calendar or calendar != sorted(set(calendar)):
         raise ValueError("Bootstrap calendar coverage is invalid")
@@ -110,16 +109,6 @@ def validate_release_batch(
         for row in base_pool
     ):
         raise ValueError("Bootstrap Base Pool coverage is incomplete")
-
-    anchors = _required_rows(canonical, "adjustment_anchors")
-    if [str(row.get("instrument_id", "")) for row in anchors] != instrument_order:
-        raise ValueError("Bootstrap Adjustment Anchor coverage is incomplete")
-    for row in anchors:
-        anchor_session = _date(row.get("anchor_session"), "Adjustment Anchor")
-        if anchor_session > parsed_calendar[-1]:
-            raise ValueError("Bootstrap Adjustment Anchor coverage is incomplete")
-        if _decimal(row.get("anchor_factor"), "Adjustment Anchor.factor") <= 0:
-            raise ValueError("Bootstrap Adjustment Anchor factor is invalid")
 
     universes = canonical.get("liquidity_universes")
     if not isinstance(universes, dict) or set(universes) != {

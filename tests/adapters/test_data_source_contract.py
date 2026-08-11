@@ -85,7 +85,7 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
     assert "uv run python scripts/check_live_tushare.py" in live_gate
 
     replay = ReplayTushareProvider(
-        Path(__file__).resolve().parents[1] / "fixtures" / "tushare-bootstrap-replay-v1.json"
+        Path(__file__).resolve().parents[1] / "fixtures" / "tushare-bootstrap-replay-v2.json"
     )
 
     class StubProvider:
@@ -98,7 +98,7 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
             return {
                 "status": "available",
                 "source": "tushare",
-                "source_contract_version": "tushare-v1",
+                "source_contract_version": "tushare-v2",
                 "permissions": [
                     {"contract": "price_limit", "api_name": "stk_limit", "status": "available"}
                 ],
@@ -129,14 +129,14 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
         "provider_preflight": {
             "status": "available",
             "source": "tushare",
-            "source_contract_version": "tushare-v1",
+            "source_contract_version": "tushare-v2",
             "permissions": [
                 {"contract": "price_limit", "api_name": "stk_limit", "status": "available"}
             ],
         },
         "bootstrap_collection": {
             "status": "passed",
-            "canonical_schema": "canonical-eod-v1",
+            "canonical_schema": "canonical-eod-v2",
             "covered_session_range": ["2026-08-03", "2026-08-03"],
             "research_session_count": 1,
         },
@@ -188,7 +188,7 @@ def test_live_tushare_gate_reports_rate_limit_after_successful_preflight(
     preflight = {
         "status": "available",
         "source": "tushare",
-        "source_contract_version": "tushare-v1",
+        "source_contract_version": "tushare-v2",
         "permissions": [
             {"contract": "adjustment", "api_name": "adj_factor", "status": "available"}
         ],
