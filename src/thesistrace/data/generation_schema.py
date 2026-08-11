@@ -97,7 +97,6 @@ TABLE_SPECS = (
                 )
             ),
             ("session", "instrument_id"),
-            version=2,
         ),
         "session",
     ),

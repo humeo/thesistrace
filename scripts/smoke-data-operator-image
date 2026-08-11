@@ -7,9 +7,12 @@ test_file="$repo_root/deploy/core/compose.test-run.yaml"
 replay="$repo_root/tests/fixtures/tushare-bootstrap-replay-v2.json"
 project_name="thesistrace-test-operator-image-$$"
 bucket_name="$project_name"
+data_mount=$(mktemp -d "${TMPDIR:-/tmp}/thesistrace-data-operator-smoke.XXXXXX")
 
 compose() {
-  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain THESISTRACE_TEST_BUCKET="$bucket_name" \
+  COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
+    THESISTRACE_TEST_BUCKET="$bucket_name" \
+    THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
     docker compose \
     --project-name "$project_name" \
     --file "$base_file" \
@@ -21,22 +24,26 @@ cleanup() {
   status=$?
   trap - EXIT INT TERM
   compose down --volumes --remove-orphans
+  rm -rf -- "$data_mount"
   exit "$status"
 }
 
 trap cleanup EXIT INT TERM
 compose config --quiet
-compose up --detach --build --wait --wait-timeout 300 postgres rustfs migrate
+compose build migrate
+docker image tag "$project_name-migrate" "$project_name-api"
+docker image tag "$project_name-migrate" "$project_name-worker"
+compose up --detach --wait --wait-timeout 300 postgres rustfs migrate
 compose run --rm --no-deps \
   --volume "$replay:/operator/bootstrap-replay.json:ro" \
-  api thesistrace-data-operator-v1 bootstrap \
-  --idempotency-key image-bootstrap-v1 \
+  api thesistrace-data-operator bootstrap \
+  --idempotency-key image-bootstrap \
   --as-of 2026-08-03T18:00:00+08:00 \
   --replay /operator/bootstrap-replay.json
 compose run --rm --no-deps \
   --volume "$replay:/operator/bootstrap-replay.json:ro" \
-  api thesistrace-data-operator-v1 bootstrap \
-  --idempotency-key image-bootstrap-v1 \
+  api thesistrace-data-operator bootstrap \
+  --idempotency-key image-bootstrap \
   --as-of 2026-08-03T18:00:00+08:00 \
   --replay /operator/bootstrap-replay.json
 compose up --detach --wait --wait-timeout 300 api worker

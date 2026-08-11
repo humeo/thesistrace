@@ -167,9 +167,8 @@ def decimal_string(value: Decimal, places: int) -> str:
 def adjusted_price_string(
     raw_price: Decimal,
     adjustment_factor: Decimal,
-    reference_factor: Decimal,
 ) -> str:
-    """Apply the canonical adjusted-price numeric contract."""
-    if adjustment_factor <= 0 or reference_factor <= 0:
+    """Apply the causal canonical adjusted-price numeric contract."""
+    if adjustment_factor <= 0:
         raise CanonicalMappingError("INVALID_ADJUSTMENT_FACTOR")
-    return decimal_string(raw_price * adjustment_factor / reference_factor, 8)
+    return decimal_string(raw_price * adjustment_factor, 8)

@@ -121,7 +121,7 @@ class DataOperator:
         fingerprint = hashlib.sha256(
             canonical_json_bytes(
                 {
-                    "command": "data-operator/bootstrap/v1",
+                    "command": "data-operator/bootstrap",
                     "as_of": as_of.astimezone(UTC).isoformat(),
                     "request_start": plan.start_date.isoformat(),
                     "request_end": plan.completed_through_date.isoformat(),

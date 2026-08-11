@@ -21,10 +21,12 @@ without that governing evidence preserves the current value. Newly completed
 sessions have no prior values to preserve and must pass complete calendar,
 instrument, price, adjustment, trading-state, and limit validation.
 
-The refresh recomputes every derived Adjusted Research Price and Liquidity
-Universe value affected by the merged window, validates the candidate Data
-Generation, and moves the Dataset Head atomically. It neither compares values
-to publish a correction log nor notifies users that an overlap value changed.
+A refresh recomputes each derived Adjusted Research Price whose same-session
+raw price or factor changed, plus every Liquidity Universe value affected by
+the merged window. Appending a later factor never rescales an earlier price.
+The operator validates the candidate Data Generation and moves the Dataset
+Head atomically. It neither compares values to publish a correction log nor
+notifies users that an overlap value changed.
 A failed or incomplete candidate leaves the current Head unchanged, and a
 later operator refresh may append several missed sessions in one Generation.
 

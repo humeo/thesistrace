@@ -190,7 +190,7 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
         "thesistrace-api": "thesistrace.entrypoints.http:main",
         "thesistrace-worker": "thesistrace.entrypoints.worker:main",
         "thesistrace-migrate": "thesistrace.entrypoints.migrate:main",
-        "thesistrace-data-operator-v1": "thesistrace.entrypoints.data_operator:main",
+        "thesistrace-data-operator": "thesistrace.entrypoints.data_operator:main",
     }
 
 

@@ -136,7 +136,7 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
         },
         "bootstrap_collection": {
             "status": "passed",
-            "canonical_schema": "canonical-eod-v2",
+            "canonical_schema": "canonical-eod",
             "covered_session_range": ["2026-08-03", "2026-08-03"],
             "research_session_count": 1,
         },

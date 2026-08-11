@@ -10,7 +10,7 @@ idempotency key:
 ```sh
 docker compose -f deploy/core/compose.yaml run --rm \
   -e THESISTRACE_TUSHARE_TOKEN \
-  api thesistrace-data-operator-v1 bootstrap \
+  api thesistrace-data-operator bootstrap \
   --idempotency-key bootstrap-2026-08-09 \
   --start-date 2026-07-09 \
   --as-of 2026-08-09T18:00:00+08:00
@@ -28,7 +28,7 @@ For deterministic development or incident reproduction, pass a bounded
 version-2 Tushare replay instead of a token:
 
 ```sh
-thesistrace-data-operator-v1 bootstrap \
+thesistrace-data-operator bootstrap \
   --idempotency-key bootstrap-replay-1 \
   --as-of 2026-08-09T18:00:00+08:00 \
   --replay /private/operator/tushare-bootstrap-replay.json

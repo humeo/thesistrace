@@ -1,5 +1,6 @@
 ## rulers
 - Do not preserve backward compatibility. Remove obsolete paths instead of adding compatibility layers, fallbacks, or migrations.
+- ** 在开发过程中永远不要fallback，迁移和兼容 **
 
 ## Browser Operations
 

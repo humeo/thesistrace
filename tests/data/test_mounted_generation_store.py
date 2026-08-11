@@ -63,7 +63,7 @@ def test_materialized_generation_reopens_every_canonical_table_after_restart(
 
     root = _manifest(tmp_path, materialized.manifest_sha256)
     assert len(canonical_json_bytes(root)) <= GENERATION_MANIFEST_MAX_BYTES
-    assert root["schema_contract"] == "canonical-eod-v2"
+    assert root["schema_contract"] == "canonical-eod"
     assert "st_designations" not in {table["name"] for table in root["tables"]}
     price_table = next(table for table in root["tables"] if table["name"] == "prices")
     price_manifest = _manifest(tmp_path, price_table["manifest_sha256"])
@@ -552,7 +552,7 @@ def _canonical() -> dict[str, object]:
                 }
             )
     return {
-        "schema_version": "canonical-eod-v2",
+        "schema_version": "canonical-eod",
         "research_calendar": sessions,
         "instruments": list(instruments),
         "prices": prices,

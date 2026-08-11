@@ -95,7 +95,7 @@ class MountedGenerationStore:
             "session_count": len(calendar),
         }
         identity = {
-            "schema_contract": "canonical-eod-v2",
+            "schema_contract": "canonical-eod",
             "dataset_coverage": coverage,
             "data_through_session": str(calendar[-1]),
             "field_availability": list(field_availability),
@@ -523,7 +523,7 @@ def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[
             raise GenerationStoreError("Canonical Liquidity Universe identity is incompatible")
         universes[universe].append(value)
     return {
-        "schema_version": "canonical-eod-v2",
+        "schema_version": "canonical-eod",
         "research_calendar": [row["session"] for row in tables["research_calendar"]],
         "instruments": tables["instruments"],
         "prices": tables["prices"],
@@ -625,7 +625,7 @@ def _validate_root_projection(root: Mapping[str, object], canonical: Mapping[str
     expected_fields = sorted(str(row["field_id"]) for row in fields)
     preparation = root["preparation"]
     if (
-        root["schema_contract"] != "canonical-eod-v2"
+        root["schema_contract"] != "canonical-eod"
         or root["dataset_coverage"] != expected_coverage
         or root["data_through_session"] != calendar[-1]
         or root["field_availability"] != expected_fields

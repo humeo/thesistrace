@@ -35,8 +35,8 @@ delta referencing its predecessor. A historical correction adds corrected
 objects to the next new-session release while older releases continue to
 reference the previous objects; V1 does not publish a correction-only release.
 Objects referenced by an immutable Release or Tracking Generation remain
-retained. ADR-0023 defines dynamic front-adjusted prices as deterministic
-derivatives of the release's raw prices and Adjustment Factors.
+retained. ADR-0023 defines causal cumulative-adjusted prices as deterministic
+same-session derivatives of the release's raw prices and Adjustment Factors.
 
 Research authors discover and reference stable fields through the Field
 Catalog; they do not select a Dataset Release. Run admission resolves the

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 
-def test_versioned_data_operator_is_not_registered_in_product_surfaces() -> None:
+def test_data_operator_is_unversioned_and_not_registered_in_product_surfaces() -> None:
     root = Path(__file__).resolve().parents[2]
     project = (root / "pyproject.toml").read_text()
     http = (root / "src/thesistrace/entrypoints/http.py").read_text()
@@ -9,12 +9,21 @@ def test_versioned_data_operator_is_not_registered_in_product_surfaces() -> None
     runtime = (root / "src/thesistrace/entrypoints/runtime.py").read_text()
     web = "\n".join(path.read_text() for path in sorted((root / "web/src").rglob("*.tsx")))
 
-    assert 'thesistrace-data-operator-v1 = "thesistrace.entrypoints.data_operator:main"' in project
+    assert 'thesistrace-data-operator = "thesistrace.entrypoints.data_operator:main"' in project
+    assert "thesistrace-data-operator-v" not in project
     assert "data_operator" not in http
     assert "data_operator" not in worker
     assert "TushareDataSource" not in runtime
     assert "TushareAdapter" not in runtime
     assert "data operator" not in web.lower()
+
+
+def test_live_bootstrap_uses_one_unversioned_checkpoint() -> None:
+    root = Path(__file__).resolve().parents[2]
+    operator = (root / "src/thesistrace/entrypoints/data_operator.py").read_text()
+
+    assert "tushare-bootstrap-foundation.json" in operator
+    assert "tushare-bootstrap-foundation-v" not in operator
 
 
 def test_generation_collection_is_only_wired_to_the_private_operator() -> None:

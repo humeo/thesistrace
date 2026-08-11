@@ -33,7 +33,7 @@ def validate_release_batch(
 ) -> None:
     canonical = batch.canonical
     calendar = canonical.get("research_calendar")
-    if canonical.get("schema_version") != "canonical-eod-v2":
+    if canonical.get("schema_version") != "canonical-eod":
         raise ValueError("Bootstrap canonical schema is invalid")
     if not isinstance(calendar, list) or not calendar or calendar != sorted(set(calendar)):
         raise ValueError("Bootstrap calendar coverage is invalid")

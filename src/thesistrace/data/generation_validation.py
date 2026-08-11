@@ -17,7 +17,7 @@ class GenerationValidationError(ValueError):
 
 
 def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
-    if canonical.get("schema_version") != "canonical-eod-v2":
+    if canonical.get("schema_version") != "canonical-eod":
         raise GenerationValidationError("Canonical Generation schema is incompatible")
     calendar = canonical.get("research_calendar")
     if not isinstance(calendar, list) or not calendar or calendar != sorted(set(calendar)):
@@ -98,14 +98,10 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     }
     if set(price_by_position) != expected_trade_positions:
         raise GenerationValidationError("Canonical Price coverage is invalid")
-    reference_by_instrument: dict[str, tuple[str, Decimal]] = {}
-    for (session, instrument_id), row in price_by_position.items():
+    for row in price_by_position.values():
         factor = _finite_decimal(row["adjustment_factor"], "Canonical Price.adjustment_factor")
         if factor <= 0:
             raise GenerationValidationError("Canonical Price adjustment factor is invalid")
-        current = reference_by_instrument.get(instrument_id)
-        if current is None or session > current[0]:
-            reference_by_instrument[instrument_id] = (session, factor)
     for position, row in price_by_position.items():
         if row["trading_state"] != state_by_position[position]["state"]:
             raise GenerationValidationError("Canonical Price trading state is invalid")
@@ -128,12 +124,9 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
                 "close_adj",
             )
         }
-        reference = reference_by_instrument[position[1]][1]
         try:
             expected_adjusted = {
-                field: adjusted_price_string(
-                    values[f"{field}_raw"], values["adjustment_factor"], reference
-                )
+                field: adjusted_price_string(values[f"{field}_raw"], values["adjustment_factor"])
                 for field in ("open", "high", "low", "close")
             }
         except CanonicalMappingError as error:

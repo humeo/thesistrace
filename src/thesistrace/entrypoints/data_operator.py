@@ -64,7 +64,7 @@ def _run(
 ) -> (
     BootstrapOutcome | CollectionOutcome | DevelopmentResetOutcome | RefreshOutcome | dict[str, str]
 ):
-    parser = argparse.ArgumentParser(description="ThesisTrace private Data Operator v1")
+    parser = argparse.ArgumentParser(description="ThesisTrace private Data Operator")
     subcommands = parser.add_subparsers(dest="command", required=True)
     bootstrap = subcommands.add_parser("bootstrap")
     bootstrap.add_argument("--idempotency-key", required=True)
@@ -150,7 +150,7 @@ def _run(
                 transport=transport,
                 progress=_progress,
                 bootstrap_checkpoint=(
-                    mount_root / ".operator" / "tushare-bootstrap-foundation-v2.json"
+                    mount_root / ".operator" / "tushare-bootstrap-foundation.json"
                     if parsed.command == "bootstrap"
                     else None
                 ),

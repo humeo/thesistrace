@@ -16,7 +16,7 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
     low = pre_close - Decimal(1)
     universe = {"session": session, "instrument_ids": [instrument_id], "status": "available"}
     return {
-        "schema_version": "canonical-eod-v2",
+        "schema_version": "canonical-eod",
         "research_calendar": [session],
         "instruments": [
             {
@@ -88,7 +88,6 @@ def build_fixture(
 ) -> tuple[dict[str, object], dict[str, object]]:
     sessions = research_sessions(session_count=session_count)
     instruments = instrument_reference(sessions[0])
-    reference_factor = adjustment_factor(session_count - 1)
     source_daily: list[dict[str, str]] = []
     source_adjustments: list[dict[str, str]] = []
     canonical_prices: list[dict[str, str]] = []
@@ -122,7 +121,6 @@ def build_fixture(
                 instrument=instrument,
                 instrument_index=instrument_index,
                 factor=factor,
-                reference_factor=reference_factor,
                 state=state,
             )
             source_daily.append(source_row)
@@ -155,7 +153,7 @@ def build_fixture(
         for session in sessions
     ]
     canonical = {
-        "schema_version": "canonical-eod-v2",
+        "schema_version": "canonical-eod",
         "research_calendar": sessions,
         "instruments": instruments,
         "prices": canonical_prices,
@@ -218,7 +216,6 @@ def price_rows(
     instrument: dict[str, str],
     instrument_index: int,
     factor: Decimal,
-    reference_factor: Decimal,
     state: str,
 ) -> tuple[dict[str, str], dict[str, str]]:
     base = Decimal("8") + Decimal(instrument_index) / 5 + Decimal(session_index % 31) / 100
@@ -244,7 +241,6 @@ def price_rows(
         "vol": decimal_string(volume_lots, 0),
         "amount": decimal_string(source_amount, 4),
     }
-    scale = factor / reference_factor
     canonical_row = {
         "session": session,
         "instrument_id": instrument["instrument_id"],
@@ -258,10 +254,10 @@ def price_rows(
         "volume_shares": decimal_string(volume_lots * 100, 0),
         "turnover_cny": decimal_string(source_amount * 1000, 2),
         "adjustment_factor": decimal_string(factor, 6),
-        "open_adj": decimal_string(open_price * scale, 8),
-        "high_adj": decimal_string(high * scale, 8),
-        "low_adj": decimal_string(low * scale, 8),
-        "close_adj": decimal_string(close * scale, 8),
+        "open_adj": decimal_string(open_price * factor, 8),
+        "high_adj": decimal_string(high * factor, 8),
+        "low_adj": decimal_string(low * factor, 8),
+        "close_adj": decimal_string(close * factor, 8),
         "trading_state": state,
     }
     return source_row, canonical_row

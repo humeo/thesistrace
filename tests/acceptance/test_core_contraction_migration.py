@@ -271,7 +271,7 @@ def _insert_legacy_state(
             appended_session_start, appended_session_end, provenance_version
         ) VALUES (
             'release_legacy', NULL, %s, 'fixture', 'bootstrap',
-            'canonical-eod-v2', '2026-08-07', '2026-08-07', 1,
+            'canonical-eod', '2026-08-07', '2026-08-07', 1,
             '2026-08-07', '2026-08-07', 2
         )
         """,

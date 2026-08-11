@@ -26,9 +26,9 @@ orders. ADR-0079 starts Strategy Backtest from all cash at the first Research
 Window open and uses the first Research Window close as its first signal.
 
 Release-owned metadata and lineage are not counted as Research Input History.
-The latest Source Adjustment Factor used as the dynamic front-adjustment
-reference is selected from the retained Data Generation and does not extend the
-Alpha calculation window or the reported Research Window.
+Each Adjusted Research Price uses only its same-session Source Adjustment
+Factor, so adjustment neither extends the Alpha calculation window nor reads a
+factor after the signal session.
 
 An instrument listed after the input window begins retains its shorter
 available history and resulting missing values; the runtime never extends the

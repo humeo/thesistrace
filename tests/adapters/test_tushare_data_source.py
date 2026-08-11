@@ -1,4 +1,5 @@
 import copy
+import json
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -160,7 +161,7 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
     assert provider.bootstrap_windows == [(start, end)]
     assert batch.source_name == "tushare"
     assert batch.collection_kind == "bootstrap"
-    assert batch.canonical["schema_version"] == "canonical-eod-v2"
+    assert batch.canonical["schema_version"] == "canonical-eod"
     assert batch.covered_session_range == (
         canonical["research_calendar"][0],
         canonical["research_calendar"][-1],
@@ -580,7 +581,53 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
     assert canonical_delta["price_corrections"] == []
 
 
-def test_tushare_normalizer_uses_latest_factor_for_dynamic_qfq() -> None:
+def test_tushare_normalizer_scopes_industries_to_canonical_instruments() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["stock_basic"].append(
+        {
+            "ts_code": "920007.BJ",
+            "exchange": "BSE",
+            "market": "北交所",
+            "list_date": "20220101",
+            "delist_date": "",
+        }
+    )
+    out_of_scope_industries = [
+        {
+            "ts_code": ts_code,
+            "in_date": "20220101",
+            "out_date": "",
+            "l1_code": "801010",
+            "l2_code": "801011",
+            "l3_code": "850111",
+        }
+        for ts_code in ("920007.BJ", "001235.SZ")
+    ]
+    snapshot["industry_membership"].extend(out_of_scope_industries)
+
+    source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert len(source["responses"]["industry_membership"]) == 3
+    assert [row["instrument_id"] for row in canonical["industry_membership"]] == [
+        "equity:600000.SH"
+    ]
+
+    next_session = "20260806"
+    increment = normalizer_snapshot([next_session])
+    increment["stock_basic"].append(copy.deepcopy(snapshot["stock_basic"][-1]))
+    increment["industry_membership"].extend(copy.deepcopy(out_of_scope_industries))
+
+    source_delta, canonical_delta = normalize_tushare_increment(increment, canonical)
+
+    assert len(source_delta["responses"]["industry_membership"]) == 3
+    assert [
+        row["instrument_id"] for row in canonical_delta["industry_membership_replace"]
+    ] == ["equity:600000.SH"]
+
+
+def test_tushare_normalizer_keeps_historical_adjusted_prices_stable_when_future_factors_arrive(
+) -> None:
     sessions = normalizer_bootstrap_sessions()
     snapshot = normalizer_snapshot(sessions)
     for row, factor in zip(snapshot["adjustments"], ("1", "2", "4"), strict=True):
@@ -590,9 +637,9 @@ def test_tushare_normalizer_uses_latest_factor_for_dynamic_qfq() -> None:
 
     assert "adjustment_anchors" not in canonical
     assert [row["open_adj"] for row in canonical["prices"]] == [
-        "2.50000000",
-        "5.00000000",
         "10.00000000",
+        "20.00000000",
+        "40.00000000",
     ]
     assert all("adjustment_anchor_factor" not in row for row in canonical["prices"])
 
@@ -602,10 +649,10 @@ def test_tushare_normalizer_uses_latest_factor_for_dynamic_qfq() -> None:
     _lineage, delta = normalize_tushare_increment(increment, canonical)
 
     assert [row["open_adj"] for row in delta["prices_replace"]] == [
-        "1.25000000",
-        "2.50000000",
-        "5.00000000",
         "10.00000000",
+        "20.00000000",
+        "40.00000000",
+        "80.00000000",
     ]
 
 
@@ -655,6 +702,26 @@ def test_tushare_normalizer_rejects_invalid_suspension_evidence(
         normalize_tushare_snapshot(snapshot)
 
     assert failure.value.reason_code == reason_code
+
+
+def test_tushare_normalizer_maps_null_timing_suspension_to_full_session() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["daily"] = [
+        row for row in snapshot["daily"] if row["trade_date"] != sessions[0]
+    ]
+    snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": sessions[0],
+            "suspend_timing": None,
+            "suspend_type": "S",
+        }
+    ]
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert canonical["trading_states"][0]["state"] == "full_session_suspension"
 
 
 def test_tushare_increment_rejects_historical_reference_changes() -> None:
@@ -732,6 +799,10 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
     assert all(item["status"] == "available" for item in result["permissions"])
     assert "deployment-secret-token" not in repr(result)
     assert all(payload["token"] == "deployment-secret-token" for payload in transport.payloads)
+    suspension_probe = next(
+        payload for payload in transport.payloads if payload["api_name"] == "suspend_d"
+    )
+    assert suspension_probe["params"]["suspend_type"] == "S"
 
 
 @pytest.mark.parametrize("denied_code", [2002])
@@ -888,7 +959,7 @@ def test_tushare_provider_retries_transient_source_rejection() -> None:
     ]
 
 
-def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_session() -> None:
+def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
     progress: list[dict[str, object]] = []
 
     class WindowRecordingAdapter(TushareAdapter):
@@ -923,8 +994,14 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
                     {
                         "exchange": exchange,
                         "cal_date": "20260804",
-                        "is_open": "0",
+                        "is_open": "1",
                         "pretrade_date": "20260803",
+                    },
+                    {
+                        "exchange": exchange,
+                        "cal_date": "20260805",
+                        "is_open": "0",
+                        "pretrade_date": "20260804",
                     },
                 ]
             if api_name == "stock_basic":
@@ -941,7 +1018,7 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
                     }
                 ]
             if api_name == "daily":
-                session = "20220103" if params.get("trade_date") else "20260803"
+                session = str(params.get("trade_date", "20260804"))
                 return [
                     {
                         "ts_code": "600000.SH",
@@ -958,13 +1035,14 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
                     }
                 ]
             if api_name == "adj_factor":
-                session = "20220103" if params.get("trade_date") else "20260803"
+                session = str(params.get("trade_date", "20260804"))
                 return [{"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}]
             if api_name == "stk_limit":
+                session = str(params.get("trade_date", "20260804"))
                 return [
                     {
                         "ts_code": "600000.SH",
-                        "trade_date": "20260803",
+                        "trade_date": session,
                         "pre_close": "10",
                         "up_limit": "11",
                         "down_limit": "9",
@@ -986,19 +1064,42 @@ def test_tushare_bootstrap_queries_one_year_and_stops_facts_at_latest_open_sessi
     provider = WindowRecordingAdapter()
     snapshot = provider.collect_bootstrap_snapshot(
         start_date=date(2025, 8, 4),
-        completed_through_date=date(2026, 8, 4),
+        completed_through_date=date(2026, 8, 5),
     )
 
     calendar_calls = [params for api, params in provider.calls if api == "trade_cal"]
-    ranged_daily = next(
-        params for api, params in provider.calls if api == "daily" and "start_date" in params
-    )
     assert calendar_calls == [
-        {"exchange": "SSE", "start_date": "20250804", "end_date": "20260804"},
-        {"exchange": "SZSE", "start_date": "20250804", "end_date": "20260804"},
+        {"exchange": "SSE", "start_date": "20250804", "end_date": "20260805"},
+        {"exchange": "SZSE", "start_date": "20250804", "end_date": "20260805"},
     ]
-    assert ranged_daily == {"start_date": "20250804", "end_date": "20260803"}
-    assert snapshot["daily"][0]["trade_date"] == "20260803"
+    expected_session_requests = [
+        {"trade_date": "20260803"},
+        {"trade_date": "20260804"},
+    ]
+    for api_name in ("daily", "adj_factor", "stk_limit"):
+        assert [params for api, params in provider.calls if api == api_name] == (
+            expected_session_requests
+        )
+    assert [params for api, params in provider.calls if api == "suspend_d"] == [
+        {**params, "suspend_type": "S"} for params in expected_session_requests
+    ]
+    assert [row["trade_date"] for row in snapshot["daily"]] == ["20260803", "20260804"]
+    assert [event for event in progress if event["event"] == "collection_progress"] == [
+        {
+            "event": "collection_progress",
+            "phase": "market_facts",
+            "session": "20260803",
+            "completed_sessions": 1,
+            "total_sessions": 2,
+        },
+        {
+            "event": "collection_progress",
+            "phase": "market_facts",
+            "session": "20260804",
+            "completed_sessions": 2,
+            "total_sessions": 2,
+        },
+    ]
     assert "st" not in snapshot
     assert all(api_name != "stock_st" for api_name, _params in provider.calls)
     phase_events = [event for event in progress if event["event"] == "collection_phase"]
@@ -1064,28 +1165,12 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
                     }
                 ]
             if api_name == "daily":
-                if "trade_date" in params:
-                    return [
-                        {
-                            "ts_code": "600000.SH",
-                            "trade_date": "20220103",
-                            "open": "10",
-                            "high": "11",
-                            "low": "9",
-                            "close": "10.5",
-                            "pre_close": "10",
-                            "change": "0.5",
-                            "pct_chg": "5",
-                            "vol": "100",
-                            "amount": "1000",
-                        }
-                    ]
                 if self.fail_market_facts:
                     raise TushareSourceError("UPSTREAM_UNAVAILABLE", source_code=50101)
                 return [
                     {
                         "ts_code": "600000.SH",
-                        "trade_date": "20260803",
+                        "trade_date": str(params["trade_date"]),
                         "open": "10",
                         "high": "11",
                         "low": "9",
@@ -1098,13 +1183,18 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
                     }
                 ]
             if api_name == "adj_factor":
-                session = "20220103" if "trade_date" in params else "20260803"
-                return [{"ts_code": "600000.SH", "trade_date": session, "adj_factor": "1"}]
+                return [
+                    {
+                        "ts_code": "600000.SH",
+                        "trade_date": str(params["trade_date"]),
+                        "adj_factor": "1",
+                    }
+                ]
             if api_name == "stk_limit":
                 return [
                     {
                         "ts_code": "600000.SH",
-                        "trade_date": "20260803",
+                        "trade_date": str(params["trade_date"]),
                         "pre_close": "10",
                         "up_limit": "11",
                         "down_limit": "9",
@@ -1133,6 +1223,8 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
         )
 
     assert checkpoint.is_file()
+    checkpoint_payload = json.loads(checkpoint.read_text())
+    assert "version" not in checkpoint_payload
     assert "secret" not in checkpoint.read_text()
     assert any(
         event.get("phase") == "bootstrap_checkpoint" and event.get("status") == "saved"
@@ -1146,10 +1238,14 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
     )
 
     assert snapshot["adjustments"][0]["trade_date"] == "20260803"
-    assert all(
-        api_name not in {"trade_cal", "stock_basic"} and "trade_date" not in params
-        for api_name, params in resumed.calls
-    )
+    assert all(api_name not in {"trade_cal", "stock_basic"} for api_name, _ in resumed.calls)
+    for api_name in ("daily", "adj_factor", "stk_limit"):
+        assert [params for api, params in resumed.calls if api == api_name] == [
+            {"trade_date": "20260803"}
+        ]
+    assert [params for api, params in resumed.calls if api == "suspend_d"] == [
+        {"trade_date": "20260803", "suspend_type": "S"}
+    ]
     assert resumed.events[0] == {
         "event": "collection_phase",
         "phase": "bootstrap_checkpoint",
@@ -1159,6 +1255,62 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
     }
     resumed.clear_bootstrap_checkpoint()
     assert not checkpoint.exists()
+
+
+def test_tushare_incremental_queries_market_facts_one_session_at_a_time() -> None:
+    class WindowRecordingAdapter(TushareAdapter):
+        def __init__(self) -> None:
+            super().__init__(
+                token="secret",
+                transport=RecordingTransport(),
+                throttle_seconds=0,
+            )
+            self.calls: list[tuple[str, dict[str, object]]] = []
+
+        def query_paginated(
+            self,
+            api_name: str,
+            *,
+            params: Mapping[str, object],
+            fields: tuple[str, ...],
+            primary_key: tuple[str, ...],
+        ) -> list[dict[str, object]]:
+            del fields, primary_key
+            self.calls.append((api_name, dict(params)))
+            if api_name == "trade_cal":
+                return [
+                    {
+                        "exchange": params["exchange"],
+                        "cal_date": session,
+                        "is_open": "1",
+                        "pretrade_date": "20260731",
+                    }
+                    for session in ("20260803", "20260804")
+                ]
+            return []
+
+    provider = WindowRecordingAdapter()
+
+    provider.collect_incremental_snapshot(
+        last_session="2026-08-03",
+        as_of=date(2026, 8, 4),
+    )
+
+    assert [params for api, params in provider.calls if api == "trade_cal"] == [
+        {"exchange": "SSE", "start_date": "20260803", "end_date": "20260804"},
+        {"exchange": "SZSE", "start_date": "20260803", "end_date": "20260804"},
+    ]
+    expected_session_requests = [
+        {"trade_date": "20260803"},
+        {"trade_date": "20260804"},
+    ]
+    for api_name in ("daily", "adj_factor", "stk_limit"):
+        assert [params for api, params in provider.calls if api == api_name] == (
+            expected_session_requests
+        )
+    assert [params for api, params in provider.calls if api == "suspend_d"] == [
+        {**params, "suspend_type": "S"} for params in expected_session_requests
+    ]
 
 
 def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:

@@ -19,7 +19,7 @@ thesistrace-core-worker = "thesistrace.entrypoints.worker:main"
 thesistrace-api = "thesistrace.entrypoints.http:main"
 thesistrace-worker = "thesistrace.entrypoints.worker:main"
 thesistrace-migrate = "thesistrace.entrypoints.migrate:main"
-thesistrace-data-operator-v1 = "thesistrace.entrypoints.data_operator:main"
+thesistrace-data-operator = "thesistrace.entrypoints.data_operator:main"
 
 [dependency-groups]
 dev = [

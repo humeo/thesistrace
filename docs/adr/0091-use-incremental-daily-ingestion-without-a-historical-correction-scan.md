@@ -11,10 +11,10 @@ completed Research Session and the other source slices required for that
 candidate release. It does not re-fetch the complete three-year history merely
 to search for changed Tushare rows.
 
-Dynamic front adjustment does recompute adjusted OHLC for retained canonical
-price rows when a new factor becomes the latest reference. This is a local
-deterministic transformation of already retained raw prices and factors, not a
-historical source download or correction scan.
+Causal cumulative adjustment derives adjusted OHLC from each row's raw price
+and same-session factor. Appending a new factor therefore computes only the new
+row and never rescales retained history. Recomputing an overlap row is needed
+only when one of that row's accepted source facts changes.
 
 V1 therefore does not promise to discover historical Tushare corrections
 automatically. If an overlapping fetch, recovery, or future repair workflow

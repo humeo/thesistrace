@@ -12,7 +12,7 @@ def test_fixture_implements_only_the_canonical_collection_contract(
     assert batch.collection_kind == "bootstrap"
     assert batch.source_name == "fixture"
     assert len(batch.canonical["research_calendar"]) == 64
-    assert batch.canonical["schema_version"] == "canonical-eod-v2"
+    assert batch.canonical["schema_version"] == "canonical-eod"
     assert batch.covered_session_range == (
         batch.canonical["research_calendar"][0],
         batch.canonical["research_calendar"][-1],

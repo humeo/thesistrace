@@ -24,7 +24,6 @@ from thesistrace.data.canonical_mapping import (
 
 SOURCE_CONTRACT_VERSION = "tushare-v2"
 _BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-foundation"
-_BOOTSTRAP_CHECKPOINT_VERSION = 2
 _BOOTSTRAP_CHECKPOINT_MAX_BYTES = 128 * 1024 * 1024
 
 
@@ -138,7 +137,7 @@ def permission_probes(reference_date: date | None = None) -> tuple[PermissionPro
         PermissionProbe(
             "suspension",
             "suspend_d",
-            {"trade_date": current_text},
+            {"trade_date": current_text, "suspend_type": "S"},
             ("ts_code", "trade_date", "suspend_type"),
         ),
         PermissionProbe(
@@ -228,7 +227,6 @@ class TushareAdapter:
         start_date: date,
         completed_through_date: date,
     ) -> dict[str, list[dict[str, object]]]:
-        calendar_start = start_date.strftime("%Y%m%d")
         foundation = _load_bootstrap_checkpoint(
             self._bootstrap_checkpoint,
             start_date=start_date,
@@ -275,56 +273,20 @@ class TushareAdapter:
         )
         if not shared_open:
             raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
-        end_date = shared_open[-1]
 
         self._progress(
             {"event": "collection_phase", "phase": "market_facts", "status": "started"}
         )
-        daily = self.query_paginated(
-            "daily",
-            params={"start_date": calendar_start, "end_date": end_date},
-            fields=(
-                "ts_code",
-                "trade_date",
-                "open",
-                "high",
-                "low",
-                "close",
-                "pre_close",
-                "change",
-                "pct_chg",
-                "vol",
-                "amount",
-            ),
-            primary_key=("trade_date", "ts_code"),
-        )
-        adjustments = self.query_paginated(
-            "adj_factor",
-            params={"start_date": calendar_start, "end_date": end_date},
-            fields=("ts_code", "trade_date", "adj_factor"),
-            primary_key=("trade_date", "ts_code"),
-        )
-        suspensions = self.query_paginated(
-            "suspend_d",
-            params={"start_date": calendar_start, "end_date": end_date},
-            fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
-            primary_key=("trade_date", "ts_code", "suspend_type"),
-        )
-        price_limits = self.query_paginated(
-            "stk_limit",
-            params={"start_date": calendar_start, "end_date": end_date},
-            fields=("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
-            primary_key=("trade_date", "ts_code"),
-        )
+        market_facts = self._collect_market_facts(shared_open)
         self._progress(
             {
                 "event": "collection_phase",
                 "phase": "market_facts",
                 "status": "completed",
-                "daily_rows": len(daily),
-                "adjustment_rows": len(adjustments),
-                "suspension_rows": len(suspensions),
-                "price_limit_rows": len(price_limits),
+                "daily_rows": len(market_facts["daily"]),
+                "adjustment_rows": len(market_facts["adjustments"]),
+                "suspension_rows": len(market_facts["suspensions"]),
+                "price_limit_rows": len(market_facts["price_limits"]),
             }
         )
 
@@ -356,10 +318,7 @@ class TushareAdapter:
             "calendar_sse": sse_calendar,
             "calendar_szse": szse_calendar,
             "stock_basic": stock_basic,
-            "daily": daily,
-            "adjustments": adjustments,
-            "suspensions": suspensions,
-            "price_limits": price_limits,
+            **market_facts,
             "industry_classification": industry_classification,
             "industry_membership": industry_membership,
         }
@@ -478,62 +437,104 @@ class TushareAdapter:
         stock_by_code = {str(row["ts_code"]): row for row in stock_basic}
         stock_basic = [stock_by_code[key] for key in sorted(stock_by_code)]
         ranged = {"start_date": start_date, "end_date": end_date}
+        calendar_sse = self.query_paginated(
+            "trade_cal",
+            params={"exchange": "SSE", **ranged},
+            fields=("exchange", "cal_date", "is_open", "pretrade_date"),
+            primary_key=("exchange", "cal_date"),
+        )
+        calendar_szse = self.query_paginated(
+            "trade_cal",
+            params={"exchange": "SZSE", **ranged},
+            fields=("exchange", "cal_date", "is_open", "pretrade_date"),
+            primary_key=("exchange", "cal_date"),
+        )
+        shared_open = sorted(
+            {str(row["cal_date"]) for row in calendar_sse if str(row["is_open"]) == "1"}
+            & {str(row["cal_date"]) for row in calendar_szse if str(row["is_open"]) == "1"}
+        )
+        market_facts = self._collect_market_facts(shared_open)
         return {
-            "calendar_sse": self.query_paginated(
-                "trade_cal",
-                params={"exchange": "SSE", **ranged},
-                fields=("exchange", "cal_date", "is_open", "pretrade_date"),
-                primary_key=("exchange", "cal_date"),
-            ),
-            "calendar_szse": self.query_paginated(
-                "trade_cal",
-                params={"exchange": "SZSE", **ranged},
-                fields=("exchange", "cal_date", "is_open", "pretrade_date"),
-                primary_key=("exchange", "cal_date"),
-            ),
+            "calendar_sse": calendar_sse,
+            "calendar_szse": calendar_szse,
             "stock_basic": stock_basic,
-            "daily": self.query_paginated(
-                "daily",
-                params=ranged,
-                fields=(
-                    "ts_code",
-                    "trade_date",
-                    "open",
-                    "high",
-                    "low",
-                    "close",
-                    "pre_close",
-                    "change",
-                    "pct_chg",
-                    "vol",
-                    "amount",
-                ),
-                primary_key=("trade_date", "ts_code"),
-            ),
-            "adjustments": self.query_paginated(
-                "adj_factor",
-                params=ranged,
-                fields=("ts_code", "trade_date", "adj_factor"),
-                primary_key=("trade_date", "ts_code"),
-            ),
-            "suspensions": self.query_paginated(
-                "suspend_d",
-                params=ranged,
-                fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
-                primary_key=("trade_date", "ts_code", "suspend_type"),
-            ),
-            "price_limits": self.query_paginated(
-                "stk_limit",
-                params=ranged,
-                fields=("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
-                primary_key=("trade_date", "ts_code"),
-            ),
+            **market_facts,
             "industry_membership": self.query_paginated(
                 "index_member_all",
                 params={"is_new": "Y"},
                 fields=("l1_code", "l2_code", "l3_code", "ts_code", "in_date", "out_date"),
                 primary_key=("ts_code", "in_date", "l3_code"),
             ),
+        }
+
+    def _collect_market_facts(
+        self,
+        sessions: Sequence[str],
+    ) -> dict[str, list[dict[str, object]]]:
+        daily: list[dict[str, object]] = []
+        adjustments: list[dict[str, object]] = []
+        suspensions: list[dict[str, object]] = []
+        price_limits: list[dict[str, object]] = []
+        for completed_sessions, session in enumerate(sessions, start=1):
+            session_params = {"trade_date": session}
+            daily.extend(
+                self.query_paginated(
+                    "daily",
+                    params=session_params,
+                    fields=(
+                        "ts_code",
+                        "trade_date",
+                        "open",
+                        "high",
+                        "low",
+                        "close",
+                        "pre_close",
+                        "change",
+                        "pct_chg",
+                        "vol",
+                        "amount",
+                    ),
+                    primary_key=("trade_date", "ts_code"),
+                )
+            )
+            adjustments.extend(
+                self.query_paginated(
+                    "adj_factor",
+                    params=session_params,
+                    fields=("ts_code", "trade_date", "adj_factor"),
+                    primary_key=("trade_date", "ts_code"),
+                )
+            )
+            suspensions.extend(
+                self.query_paginated(
+                    "suspend_d",
+                    params={**session_params, "suspend_type": "S"},
+                    fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
+                    primary_key=("trade_date", "ts_code", "suspend_type"),
+                )
+            )
+            price_limits.extend(
+                self.query_paginated(
+                    "stk_limit",
+                    params=session_params,
+                    fields=("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
+                    primary_key=("trade_date", "ts_code"),
+                )
+            )
+            self._progress(
+                {
+                    "event": "collection_progress",
+                    "phase": "market_facts",
+                    "session": session,
+                    "completed_sessions": completed_sessions,
+                    "total_sessions": len(sessions),
+                }
+            )
+        return {
+            "daily": daily,
+            "adjustments": adjustments,
+            "suspensions": suspensions,
+            "price_limits": price_limits,
         }
 
     def query(
@@ -678,8 +679,8 @@ def _load_bootstrap_checkpoint(
     if not isinstance(payload, dict):
         raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
     if (
-        payload.get("format") != _BOOTSTRAP_CHECKPOINT_FORMAT
-        or payload.get("version") != _BOOTSTRAP_CHECKPOINT_VERSION
+        set(payload) != {"format", "request_start", "request_end", "foundation"}
+        or payload.get("format") != _BOOTSTRAP_CHECKPOINT_FORMAT
         or payload.get("request_start") != start_date.isoformat()
         or payload.get("request_end") != completed_through_date.isoformat()
     ):
@@ -715,7 +716,6 @@ def _save_bootstrap_checkpoint(
         return
     payload = {
         "format": _BOOTSTRAP_CHECKPOINT_FORMAT,
-        "version": _BOOTSTRAP_CHECKPOINT_VERSION,
         "request_start": start_date.isoformat(),
         "request_end": completed_through_date.isoformat(),
         "foundation": foundation,
@@ -734,32 +734,20 @@ def _save_bootstrap_checkpoint(
         temporary.unlink(missing_ok=True)
 
 
-def dynamic_qfq_prices(
+def causal_adjusted_prices(
     prices: Sequence[Mapping[str, str]],
 ) -> list[dict[str, str]]:
-    """Normalize each instrument to its latest available adjustment factor."""
-    reference_by_instrument: dict[str, tuple[str, Decimal]] = {}
+    """Derive a future-invariant adjusted coordinate from same-session facts."""
+    normalized: list[dict[str, str]] = []
     for row in prices:
-        instrument_id = str(row["instrument_id"])
-        session = str(row["session"])
         factor = decimal(row["adjustment_factor"])
         if factor <= 0:
             raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
-        current = reference_by_instrument.get(instrument_id)
-        if current is None or session > current[0]:
-            reference_by_instrument[instrument_id] = (session, factor)
-
-    normalized: list[dict[str, str]] = []
-    for row in prices:
-        instrument_id = str(row["instrument_id"])
-        factor = decimal(row["adjustment_factor"])
-        reference = reference_by_instrument[instrument_id][1]
         normalized_row = dict(row)
         for field in ("open", "high", "low", "close"):
             normalized_row[f"{field}_adj"] = adjusted_price_string(
                 decimal(row[f"{field}_raw"]),
                 factor,
-                reference,
             )
         normalized.append(normalized_row)
     return normalized
@@ -871,10 +859,13 @@ def normalize_tushare_snapshot(
                 }
             )
 
-    canonical_prices = dynamic_qfq_prices(canonical_prices)
-    industries = normalize_industries(snapshot["industry_membership"])
+    canonical_prices = causal_adjusted_prices(canonical_prices)
+    industries = normalize_industries(
+        snapshot["industry_membership"],
+        allowed_codes=set(instrument_by_code),
+    )
     canonical = {
-        "schema_version": "canonical-eod-v2",
+        "schema_version": "canonical-eod",
         "research_calendar": sessions,
         "instruments": instruments,
         "prices": canonical_prices,
@@ -904,7 +895,7 @@ def normalize_tushare_increment(
     prior_prices = prior.get("prices")
     prior_states = prior.get("trading_states")
     prior_base_pool = prior.get("base_pool")
-    if prior.get("schema_version") != "canonical-eod-v2" or not all(
+    if prior.get("schema_version") != "canonical-eod" or not all(
         isinstance(value, list)
         for value in (
             prior_calendar,
@@ -1033,7 +1024,7 @@ def normalize_tushare_increment(
             )
 
     all_sessions = [*prior_calendar, *sessions]
-    all_prices = dynamic_qfq_prices([*prior_prices, *canonical_prices])
+    all_prices = causal_adjusted_prices([*prior_prices, *canonical_prices])
     all_states = [*prior_states, *trading_states]
     all_base_pool = [*prior_base_pool, *base_pool]
     universes = liquidity_universes(
@@ -1048,7 +1039,10 @@ def normalize_tushare_increment(
         "responses": {key: value for key, value in sorted(snapshot.items())},
         "corrections": [],
     }
-    current_industries = normalize_industries(snapshot["industry_membership"])
+    current_industries = normalize_industries(
+        snapshot["industry_membership"],
+        allowed_codes=set(instrument_by_code),
+    )
     prior_industries = prior.get("industry_membership")
     if not isinstance(prior_industries, list):
         raise TushareSourceError("INVALID_PREDECESSOR_CANONICAL", source_code=0)
@@ -1084,8 +1078,12 @@ def resolve_trading_state(
         return "normal"
     resolved: set[str] = set()
     for suspension in suspensions:
-        timing = str(suspension.get("suspend_timing", "")).strip()
-        full_session = timing in {"全天", "全日", "全天停牌", "全日停牌"}
+        timing_value = suspension.get("suspend_timing")
+        timing = "" if timing_value is None else str(timing_value).strip()
+        suspension_type = str(suspension.get("suspend_type", "")).strip().upper()
+        full_session = timing in {"全天", "全日", "全天停牌", "全日停牌"} or (
+            suspension_type == "S" and not timing
+        )
         if daily_row is None:
             if not full_session:
                 raise TushareSourceError(
@@ -1281,7 +1279,11 @@ def normalize_board(market: str) -> str:
     return {"主板": "main", "创业板": "chinext", "科创板": "star"}[market]
 
 
-def normalize_industries(rows: list[dict[str, object]]) -> list[dict[str, str]]:
+def normalize_industries(
+    rows: list[dict[str, object]],
+    *,
+    allowed_codes: set[str],
+) -> list[dict[str, str]]:
     intervals = [
         {
             "instrument_id": f"equity:{row['ts_code']}",
@@ -1292,7 +1294,9 @@ def normalize_industries(rows: list[dict[str, object]]) -> list[dict[str, str]]:
             "sw2021_l3": str(row.get("l3_code", "")),
         }
         for row in rows
-        if row.get("ts_code") and row.get("in_date")
+        if row.get("ts_code")
+        and str(row["ts_code"]) in allowed_codes
+        and row.get("in_date")
     ]
     intervals.sort(key=lambda item: (item["instrument_id"], item["active_from"]))
     previous: dict[str, str] = {}

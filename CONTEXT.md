@@ -846,7 +846,7 @@ The `equity.eod_price` Dataset Family keyed by Instrument Identity and Research
 Session. V1 maps all eleven long-history Tushare `daily` fields into normalized
 raw prices, reference close, price change, return ratio, share volume, and CNY
 turnover amount, then joins the separate Source Adjustment Factor and derives
-dynamic front-adjusted Research Prices.
+causal cumulative-adjusted Research Prices.
 _Avoid_: Tushare daily response, qfq table, user-selected field subset
 
 **Raw Market Price**:
@@ -856,13 +856,12 @@ It supplies execution-price conditions and real-market execution constraints.
 _Avoid_: Adjusted Research Price, qfq price, hfq price
 
 **Adjusted Research Price**:
-A corporate-action-continuous, per-instrument price coordinate derived from Raw
-Market Price and Source Adjustment Factor. Within one selected Data Generation,
-the instrument's latest available factor is the reference factor, so its latest
-Adjusted Research Price equals its Raw Market Price. Price-based Alphas and
-returns use this coordinate; a later Generation may rescale its retained
-history when a new factor becomes the latest reference.
-_Avoid_: Raw Market Price, CNY quote, fixed historical anchor, hfq history
+A corporate-action-continuous, per-instrument price coordinate derived by
+multiplying Raw Market Price by the same-session Source Adjustment Factor.
+Price-based Alphas and returns use this causal coordinate; a later factor never
+rescales a retained historical row. It is not the quoted execution price and
+does not force the latest adjusted row to equal Raw Market Price.
+_Avoid_: Raw Market Price, CNY quote, latest-factor qfq, vendor-adjusted history
 
 **Source Adjustment Factor**:
 The positive, finite, dimensionless decimal `adj_factor` value accepted from
@@ -872,11 +871,10 @@ same-session presence is required for every daily bar accepted by Data Refresh.
 _Avoid_: Adjustment Scale, adjusted price
 
 **Adjustment Scale**:
-The positive, finite, dimensionless decimal ratio of a session's Source
-Adjustment Factor to the same instrument's latest factor in the selected Data
-Generation. Multiplying Raw Market Price by this scale produces Adjusted
-Research Price; the latest available row's scale is `1`.
-_Avoid_: Source Adjustment Factor, fixed historical anchor, Strategy parameter
+The positive, finite, dimensionless same-session Source Adjustment Factor used
+as the multiplicative price scale. Multiplying Raw Market Price by this scale
+produces Adjusted Research Price without an anchor or future reference factor.
+_Avoid_: Raw Market Price, latest-factor ratio, Strategy parameter
 
 **Tushare Upstream**:
 The sole external data source for every Dataset Family supported by
