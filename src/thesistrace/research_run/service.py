@@ -33,6 +33,7 @@ from thesistrace.publication import (
     lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.research_folder import DEFAULT_FOLDER_ID
 from thesistrace.research_kernel.kernel_run import (
     InsufficientCalculationWarmupError,
     KernelRunError,
@@ -177,14 +178,15 @@ class ResearchRunService:
         row = transaction.execute(
             """
             INSERT INTO research_runs.runs (
-                id, definition_id, definition_revision,
+                id, folder_id, definition_id, definition_revision,
                 requested_start_date, requested_end_date, status, immutable_input
-            ) VALUES (%s, %s, %s, %s, %s, 'queued', %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, 'queued', %s)
             RETURNING id, status, definition_id, definition_revision,
                       requested_start_date, requested_end_date, rerun_of_id
             """,
             (
                 run_id,
+                DEFAULT_FOLDER_ID,
                 str(definition["id"]),
                 int(definition["revision"]),
                 immutable_input.requested_start_date,
@@ -369,11 +371,11 @@ class ResearchRunService:
             row = transaction.execute(
                 """
                 INSERT INTO research_runs.runs (
-                    id, definition_id, definition_revision,
+                    id, folder_id, definition_id, definition_revision,
                     requested_start_date, requested_end_date,
                     status, immutable_input, rerun_of_id
                 )
-                SELECT %s, definition_id, definition_revision,
+                SELECT %s, folder_id, definition_id, definition_revision,
                        requested_start_date, requested_end_date,
                        'queued', immutable_input, id
                 FROM research_runs.runs

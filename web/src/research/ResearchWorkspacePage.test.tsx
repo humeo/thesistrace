@@ -10,6 +10,7 @@ import {
   researchDraftKey,
 } from "./draft";
 import { ResearchDraftWorkspace } from "./ResearchWorkspacePage";
+import { ResearchFolderNavigation } from "./ResearchWorkspacePage";
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -50,6 +51,18 @@ describe("browser Research Draft", () => {
     expect(loadResearchDraft(storage, folder.id)).toEqual(draft);
   });
 
+  it("keeps independent Draft values under distinct Folder keys", () => {
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, "folder_default", { ...emptyResearchDraft(), formula: "close_adj" });
+    persistResearchDraft(storage, "folder_signals", { ...emptyResearchDraft(), formula: "volume_shares" });
+
+    expect(loadResearchDraft(storage, "folder_default").formula).toBe("close_adj");
+    expect(loadResearchDraft(storage, "folder_signals").formula).toBe("volume_shares");
+    storage.removeItem(researchDraftKey("folder_signals"));
+    expect(loadResearchDraft(storage, "folder_default").formula).toBe("close_adj");
+    expect(loadResearchDraft(storage, "folder_signals")).toEqual(emptyResearchDraft());
+  });
+
   it("requires confirmation only when New would discard unexecuted inputs", () => {
     expect(hasUnexecutedChanges(emptyResearchDraft())).toBe(false);
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close_adj" })).toBe(true);
@@ -65,6 +78,25 @@ describe("browser Research Draft", () => {
     expect(markup).toContain("New Research");
     expect(markup).toContain("Default Folder");
     for (const removed of ["Save", "Refresh", "Revision", "Add Alpha"]) expect(markup).not.toContain(removed);
+  });
+
+  it("renders one-level Folder navigation and protects Default management actions", () => {
+    const custom = { ...folder, id: "folder_signals", name: "Signals", is_default: false };
+    const markup = renderToStaticMarkup(
+      <ResearchFolderNavigation
+        activeFolder={folder}
+        error={null}
+        folders={[folder, custom]}
+        onCreate={async () => undefined}
+        onDelete={async () => undefined}
+        onRename={async () => undefined}
+      />,
+    );
+    expect(markup).toContain('href="/research"');
+    expect(markup).toContain('href="/research?folder=folder_signals"');
+    expect(markup).toContain("Signals");
+    expect(markup).not.toContain("Rename Folder");
+    expect(markup).not.toContain("Delete Folder");
   });
 });
 

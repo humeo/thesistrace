@@ -33,7 +33,13 @@ from thesistrace.definition import (
 )
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
-from thesistrace.research_folder import ResearchFolderList
+from thesistrace.research_folder import (
+    CreateResearchFolder,
+    RenameResearchFolder,
+    ResearchFolderConflict,
+    ResearchFolderList,
+    ResearchFolderSummary,
+)
 from thesistrace.research_run import (
     ResearchRunCancelCommand,
     ResearchRunCancelConflict,
@@ -72,6 +78,46 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     @app.get("/api/research-folders", response_model=ResearchFolderList)
     def list_research_folders(request: Request) -> ResearchFolderList:
         return _runtime(request).research_folders.list()
+
+    @app.post(
+        "/api/research-folders",
+        response_model=ResearchFolderSummary,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_research_folder(
+        request: Request,
+        command: CreateResearchFolder,
+    ) -> ResearchFolderSummary:
+        return _runtime(request).research_folders.create(command)
+
+    @app.patch(
+        "/api/research-folders/{folder_id}",
+        response_model=ResearchFolderSummary,
+    )
+    def rename_research_folder(
+        request: Request,
+        folder_id: str,
+        command: RenameResearchFolder,
+    ) -> ResearchFolderSummary:
+        try:
+            folder = _runtime(request).research_folders.rename(folder_id, command)
+        except ResearchFolderConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if folder is None:
+            raise HTTPException(status_code=404, detail="Research Folder not found")
+        return folder
+
+    @app.delete(
+        "/api/research-folders/{folder_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def delete_research_folder(request: Request, folder_id: str) -> None:
+        try:
+            deleted = _runtime(request).research_folders.delete(folder_id)
+        except ResearchFolderConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Research Folder not found")
 
     @app.post("/api/definitions/run", response_model=DefinitionRunOutcome)
     def run_new_definition(

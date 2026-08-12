@@ -68,6 +68,7 @@ CREATE TABLE research_runs.rerun_receipts (
 
 CREATE TABLE research_runs.runs (
     id text NOT NULL,
+    folder_id text NOT NULL,
     definition_id text NOT NULL,
     definition_revision integer NOT NULL,
     requested_start_date date NOT NULL,
@@ -153,6 +154,10 @@ ALTER TABLE ONLY research_runs.runs
     ADD CONSTRAINT runs_pkey PRIMARY KEY (id);
 
 
+ALTER TABLE ONLY research_runs.runs
+    ADD CONSTRAINT runs_folder_id_fkey FOREIGN KEY (folder_id) REFERENCES research_folders.folders(id);
+
+
 --
 -- Name: start_tracking_receipts start_tracking_receipts_pkey; Type: CONSTRAINT; Schema: research_runs; Owner: -
 --
@@ -173,6 +178,8 @@ CREATE UNIQUE INDEX research_runs_one_running_attempt_idx ON research_runs.attem
 --
 
 CREATE INDEX research_runs_runs_created_idx ON research_runs.runs USING btree (created_at DESC, id);
+
+CREATE INDEX research_runs_runs_folder_created_idx ON research_runs.runs USING btree (folder_id, created_at DESC, id);
 
 
 --

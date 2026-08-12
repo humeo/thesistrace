@@ -33,6 +33,7 @@ PRODUCT_SCHEMAS = {
     "publication": "publication",
     "research_folder": "research_folders",
 }
+ALLOWED_SCHEMA_REFERENCES = {("research_run", "research_folders")}
 
 
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
@@ -69,6 +70,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "daily_track",
             "data",
             "publication",
+            "research_folder",
             "research_kernel",
         },
         "definition": {"_postgres", "data", "research_kernel", "research_run"},
@@ -152,6 +154,8 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             if path.name != "schema.sql"
         )
         for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
+            if (module, foreign_schema) in ALLOWED_SCHEMA_REFERENCES:
+                continue
             assert f"{foreign_schema}." not in active_strings, (
                 f"{module} source contains cross-schema SQL for {foreign_schema}"
             )
@@ -160,6 +164,8 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
         for table in lifecycle_tables[module]:
             assert table in statements
         for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
+            if (module, foreign_schema) in ALLOWED_SCHEMA_REFERENCES:
+                continue
             assert f"{foreign_schema}." not in statements
 
 
@@ -327,6 +333,9 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),
         ("get", "/api/research-folders"),
+        ("post", "/api/research-folders"),
+        ("patch", "/api/research-folders/{folder_id}"),
+        ("delete", "/api/research-folders/{folder_id}"),
         ("get", "/api/definitions"),
         ("get", "/api/definitions/authoring-options"),
         ("get", "/api/definitions/{definition_id}"),

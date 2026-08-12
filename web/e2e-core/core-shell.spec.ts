@@ -82,6 +82,48 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.locator(".cm-content")).toHaveText("");
     expect(await page.evaluate(() => localStorage.getItem("thesistrace.research-draft.folder_default"))).toBeNull();
 
+    await page.getByLabel("New Folder").fill("Signals");
+    await page.getByRole("button", { name: "Create" }).click();
+    await expect(page).toHaveURL(/\/research\?folder=folder_[a-f0-9]+$/);
+    const customFolderId = new URL(page.url()).searchParams.get("folder");
+    expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
+    if (customFolderId === null) throw new Error("Custom Folder route is missing folder id");
+    await expect(page.getByText("Signals", { exact: true }).first()).toBeVisible();
+    await page.getByLabel("Research name").fill("Signals browser Draft");
+    await page.locator(".cm-content").click();
+    await page.keyboard.type("volume_shares");
+
+    page.once("dialog", async (dialog) => dialog.dismiss());
+    await workspaceNew.click();
+    await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
+
+    await page.getByRole("link", { name: "New Research", exact: true }).click();
+    await expect(page).toHaveURL(/\/research$/);
+    await expect(page.getByLabel("Research name")).toHaveValue("");
+    expect(await page.evaluate((folderId) => localStorage.getItem(`thesistrace.research-draft.${folderId}`), customFolderId)).not.toBeNull();
+    await page.getByRole("link", { name: "Signals", exact: true }).click();
+    await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
+    await expect(page.locator(".cm-content")).toHaveText("volume_shares");
+    expect(await page.evaluate(() => Object.keys(localStorage).sort())).toEqual([
+      `thesistrace.research-draft.${customFolderId}`,
+    ]);
+
+    await page.getByLabel("Folder name").fill("Momentum");
+    await page.getByRole("button", { name: "Rename Folder" }).click();
+    await expect(page.getByRole("link", { name: "Momentum", exact: true })).toBeVisible();
+    await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
+
+    const protectedDefault = await page.request.delete("/api/research-folders/folder_default");
+    expect(protectedDefault.status()).toBe(409);
+    page.once("dialog", async (dialog) => dialog.dismiss());
+    await page.getByRole("button", { name: "Delete Folder" }).click();
+    await expect(page.getByRole("link", { name: "Momentum", exact: true })).toBeVisible();
+    page.once("dialog", async (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete Folder" }).click();
+    await expect(page).toHaveURL(/\/research$/);
+    await expect(page.getByRole("link", { name: "Momentum", exact: true })).toHaveCount(0);
+    expect(await page.evaluate((folderId) => localStorage.getItem(`thesistrace.research-draft.${folderId}`), customFolderId)).toBeNull();
+
     const folderRead = await page.request.get("/api/research-folders");
     expect(folderRead.ok()).toBeTruthy();
     expect((await folderRead.json()).items).toMatchObject([

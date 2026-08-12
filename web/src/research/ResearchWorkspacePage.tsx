@@ -15,7 +15,7 @@ import {
   type ResearchDraft,
 } from "./draft";
 
-type ResearchFolder = {
+export type ResearchFolder = {
   id: string;
   name: string;
   is_default: boolean;
@@ -24,6 +24,7 @@ type ResearchFolder = {
 type ResearchFolderList = { items: ResearchFolder[]; next_cursor: null };
 type WorkspaceResources = {
   folder: ResearchFolder;
+  folders: ResearchFolder[];
   catalog: AlphaCatalog;
   data: DataOverview;
 };
@@ -31,6 +32,7 @@ type WorkspaceResources = {
 export function ResearchWorkspacePage() {
   const [resources, setResources] = useState<WorkspaceResources | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [folderError, setFolderError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -46,8 +48,12 @@ export function ResearchWorkspacePage() {
       const folders = (await folderResponse.json()) as ResearchFolderList;
       const defaults = folders.items.filter((folder) => folder.is_default);
       if (defaults.length !== 1) throw new Error("Default Folder unavailable");
+      const parameters = new URLSearchParams(window.location.search);
+      const requestedFolderId = parameters.has("new") ? null : parameters.get("folder");
+      const selected = folders.items.find((folder) => folder.id === requestedFolderId) ?? defaults[0];
       setResources({
-        folder: defaults[0],
+        folder: selected,
+        folders: folders.items,
         catalog: (await catalogResponse.json()) as AlphaCatalog,
         data: (await dataResponse.json()) as DataOverview,
       });
@@ -70,7 +76,149 @@ export function ResearchWorkspacePage() {
       <p>Opening Research…</p>
     </section>
   );
-  return <ResearchDraftWorkspace key={resources.folder.id} {...resources} />;
+  async function createFolder(name: string): Promise<void> {
+    setFolderError(null);
+    const response = await fetch("/api/research-folders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      setFolderError(await folderMutationError(response));
+      return;
+    }
+    const folder = (await response.json()) as ResearchFolder;
+    setResources((current) => current === null ? current : {
+      ...current,
+      folder,
+      folders: [...current.folders, folder],
+    });
+    window.history.replaceState(null, "", `/research?folder=${folder.id}`);
+  }
+
+  async function renameFolder(folderId: string, name: string): Promise<void> {
+    setFolderError(null);
+    const response = await fetch(`/api/research-folders/${folderId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!response.ok) {
+      setFolderError(await folderMutationError(response));
+      return;
+    }
+    const renamed = (await response.json()) as ResearchFolder;
+    setResources((current) => current === null ? current : {
+      ...current,
+      folder: current.folder.id === renamed.id ? renamed : current.folder,
+      folders: current.folders.map((folder) => folder.id === renamed.id ? renamed : folder),
+    });
+  }
+
+  async function deleteFolder(folder: ResearchFolder): Promise<void> {
+    const currentResources = resources;
+    if (currentResources === null) return;
+    if (!window.confirm(`Delete the empty ${folder.name} Folder and its browser Draft?`)) return;
+    setFolderError(null);
+    const response = await fetch(`/api/research-folders/${folder.id}`, { method: "DELETE" });
+    if (!response.ok) {
+      setFolderError(await folderMutationError(response));
+      return;
+    }
+    window.localStorage.removeItem(researchDraftKey(folder.id));
+    const defaultFolder = currentResources.folders.find((item) => item.is_default);
+    if (defaultFolder === undefined) throw new Error("Default Folder unavailable");
+    setResources({
+      ...currentResources,
+      folder: defaultFolder,
+      folders: currentResources.folders.filter((item) => item.id !== folder.id),
+    });
+    window.history.replaceState(null, "", "/research");
+  }
+
+  return (
+    <section aria-label="Research workspace" className="research-folder-layout">
+      <ResearchFolderNavigation
+        activeFolder={resources.folder}
+        error={folderError}
+        folders={resources.folders}
+        onCreate={createFolder}
+        onDelete={deleteFolder}
+        onRename={renameFolder}
+      />
+      <ResearchDraftWorkspace key={resources.folder.id} {...resources} />
+    </section>
+  );
+}
+
+export function ResearchFolderNavigation({
+  activeFolder,
+  folders,
+  error,
+  onCreate,
+  onRename,
+  onDelete,
+}: {
+  activeFolder: ResearchFolder;
+  folders: ResearchFolder[];
+  error: string | null;
+  onCreate: (name: string) => Promise<void>;
+  onRename: (folderId: string, name: string) => Promise<void>;
+  onDelete: (folder: ResearchFolder) => Promise<void>;
+}) {
+  const [newName, setNewName] = useState("");
+  const [renameName, setRenameName] = useState(activeFolder.name);
+  useEffect(() => setRenameName(activeFolder.name), [activeFolder.id, activeFolder.name]);
+  return (
+    <aside aria-label="Research Folders" className="research-folder-navigation">
+      <div className="folder-navigation-heading">
+        <span>Folders</span>
+        <small>One level</small>
+      </div>
+      <nav aria-label="Research Folder navigation">
+        {folders.map((folder) => (
+          <a
+            aria-current={folder.id === activeFolder.id ? "page" : undefined}
+            href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
+            key={folder.id}
+          >
+            <span>{folder.name}</span>
+            {folder.is_default ? <small>Default</small> : null}
+          </a>
+        ))}
+      </nav>
+      <form onSubmit={(event) => {
+        event.preventDefault();
+        if (newName.trim() === "") return;
+        void onCreate(newName).then(() => setNewName(""));
+      }}>
+        <label htmlFor="new-folder-name">New Folder</label>
+        <div className="folder-inline-action">
+          <input id="new-folder-name" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
+          <button disabled={newName.trim() === ""} type="submit">Create</button>
+        </div>
+      </form>
+      {!activeFolder.is_default ? (
+        <section aria-label="Selected Folder actions" className="folder-actions">
+          <label htmlFor="rename-folder-name">Folder name</label>
+          <input id="rename-folder-name" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
+          <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>Rename Folder</button>
+          <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>Delete Folder</button>
+        </section>
+      ) : null}
+      {error !== null ? <p className="inline-status inline-status-error" role="alert">{error}</p> : null}
+    </aside>
+  );
+}
+
+async function folderMutationError(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    if (typeof payload.detail === "string") return payload.detail;
+  } catch {
+    // The public status remains enough when an upstream response has no JSON body.
+  }
+  return `Folder request failed (${response.status})`;
 }
 
 export function ResearchDraftWorkspace({
@@ -80,7 +228,7 @@ export function ResearchDraftWorkspace({
   storage = window.localStorage,
   confirmDiscard = (message) => window.confirm(message),
   startNewOnOpen = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("new"),
-}: WorkspaceResources & {
+}: Omit<WorkspaceResources, "folders"> & {
   storage?: Storage;
   confirmDiscard?: (message: string) => boolean;
   startNewOnOpen?: boolean;

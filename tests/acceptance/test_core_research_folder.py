@@ -52,3 +52,99 @@ def test_fresh_core_has_exactly_one_deterministic_default_folder_and_public_read
         assert [(folder["id"], folder["is_default"]) for folder in folders] == [
             (DEFAULT_FOLDER_ID, True)
         ]
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_custom_folder_mutations_and_database_guards_are_transactional() -> None:
+    settings = CoreSettings.from_environment()
+    drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        blank = client.post("/api/research-folders", json={"name": "   "})
+        assert blank.status_code == 422
+        nested = client.post(
+            "/api/research-folders",
+            json={"name": "Momentum", "parent_id": DEFAULT_FOLDER_ID},
+        )
+        assert nested.status_code == 422
+
+        created = client.post("/api/research-folders", json={"name": "  Momentum  "})
+        assert created.status_code == 201
+        folder = created.json()
+        assert folder["name"] == "Momentum"
+        assert folder["is_default"] is False
+        assert client.get("/api/research-folders").json()["items"][-1] == folder
+
+        renamed = client.patch(
+            f"/api/research-folders/{folder['id']}",
+            json={"name": "Signals"},
+        )
+        assert renamed.status_code == 200
+        assert renamed.json() == {**folder, "name": "Signals"}
+        assert client.patch(
+            f"/api/research-folders/{DEFAULT_FOLDER_ID}",
+            json={"name": "Other"},
+        ).status_code == 409
+        assert client.delete(f"/api/research-folders/{DEFAULT_FOLDER_ID}").status_code == 409
+
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    INSERT INTO research_runs.runs (
+                        id, folder_id, definition_id, definition_revision,
+                        requested_start_date, requested_end_date, status, immutable_input
+                    ) VALUES (
+                        'run_folder_guard', %s, 'def_guard', 1,
+                        DATE '2026-08-03', DATE '2026-08-04', 'succeeded', '{}'::jsonb
+                    )
+                    """,
+                    (folder["id"],),
+                )
+        finally:
+            database.close()
+
+        nonempty = client.delete(f"/api/research-folders/{folder['id']}")
+        assert nonempty.status_code == 409
+        assert nonempty.json() == {"detail": "A nonempty Folder cannot be deleted"}
+        assert client.get("/api/research-folders").json()["items"][-1]["name"] == "Signals"
+
+        second = client.post("/api/research-folders", json={"name": "Disposable"}).json()
+        deleted = client.delete(f"/api/research-folders/{second['id']}")
+        assert deleted.status_code == 204
+        assert client.delete(f"/api/research-folders/{second['id']}").status_code == 404
+
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            with database.transaction() as transaction:
+                columns = transaction.execute(
+                    """
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_schema = 'research_folders' AND table_name = 'folders'
+                    ORDER BY ordinal_position
+                    """
+                ).fetchall()
+                run = transaction.execute(
+                    """
+                    SELECT folder_id, immutable_input
+                    FROM research_runs.runs
+                    WHERE id = 'run_folder_guard'
+                    """
+                ).fetchone()
+            assert [row["column_name"] for row in columns] == [
+                "id",
+                "name",
+                "is_default",
+                "created_at",
+                "updated_at",
+            ]
+            assert run == {"folder_id": folder["id"], "immutable_input": {}}
+        finally:
+            database.close()
