@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import { createDiagnosticsScheduler, type DiagnosticState } from "./diagnostics";
 import {
   emptyResearchDraft,
+  acceptPendingResearchRun,
+  beginResearchRun,
+  finishResearchRun,
   hasUnexecutedChanges,
   loadResearchDraft,
   persistResearchDraft,
@@ -38,6 +41,78 @@ const catalog = {
 const data = { readiness: true, dataset_coverage: { start: "2025-01-01", end: "2026-08-12" }, data_through_session: "2026-08-12", last_refresh_at: "2026-08-13T00:00:00Z" };
 
 describe("browser Research Draft", () => {
+  it("reuses one request ID for the same pending snapshot and preserves later edits on acceptance", () => {
+    const initial = {
+      ...emptyResearchDraft(),
+      name: "Mean",
+      formula: "ts_mean(close_adj, 20)",
+      startDate: "2026-08-03",
+      endDate: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      holdingsCount: "10",
+      rebalanceEverySessions: "2",
+    };
+    const first = beginResearchRun(initial, "folder_default", () => "run-request-1");
+    const retry = beginResearchRun(first.draft, "folder_default", () => "run-request-2");
+
+    expect(retry.command).toEqual(first.command);
+    expect(first.command).toMatchObject({
+      request_id: "run-request-1",
+      folder_id: "folder_default",
+      name: "Mean",
+      formula: "ts_mean(close_adj, 20)",
+      start_date: "2026-08-03",
+      end_date: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      holdings_count: 10,
+      rebalance_every_sessions: 2,
+    });
+
+    const editedWhilePending = { ...first.draft, formula: "ts_mean(close_adj, 60)" };
+    const accepted = acceptPendingResearchRun(editedWhilePending, "run-request-1");
+    expect(accepted.formula).toBe("ts_mean(close_adj, 60)");
+    expect(accepted.lastAdmittedBaseline?.formula).toBe("ts_mean(close_adj, 20)");
+    expect(accepted.pendingAdmission).toBeNull();
+    expect(hasUnexecutedChanges(accepted)).toBe(true);
+  });
+
+  it("persists the latest pending edit and accepted baseline before navigation", () => {
+    const storage = new MemoryStorage();
+    const initial = {
+      ...emptyResearchDraft(),
+      formula: "ts_mean(close_adj, 2)",
+      startDate: "2026-08-04",
+      endDate: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      holdingsCount: "10",
+      rebalanceEverySessions: "2",
+    };
+    const begun = beginResearchRun(initial, folder.id, () => "run-request-1");
+    persistResearchDraft(storage, folder.id, {
+      ...begun.draft,
+      formula: "ts_mean(close_adj, 3)",
+    });
+
+    const finished = finishResearchRun(storage, folder.id, "run-request-1");
+    expect(finished).not.toBeNull();
+    if (finished === null) throw new Error("Accepted Research was not finished");
+    expect(finished.formula).toBe("ts_mean(close_adj, 3)");
+    expect(finished.lastAdmittedBaseline?.formula).toBe("ts_mean(close_adj, 2)");
+    expect(loadResearchDraft(storage, folder.id)).toEqual(finished);
+  });
+
+  it("does not accept or persist a stale response after its pending Draft was replaced", () => {
+    const storage = new MemoryStorage();
+    const replacement = { ...emptyResearchDraft(), formula: "close_adj" };
+    persistResearchDraft(storage, folder.id, replacement);
+
+    expect(finishResearchRun(storage, folder.id, "stale-request")).toBeNull();
+    expect(loadResearchDraft(storage, folder.id)).toEqual(replacement);
+  });
+
   it("opens empty when its one Folder key is absent and round-trips the bounded payload", () => {
     const storage = new MemoryStorage();
     const empty = loadResearchDraft(storage, folder.id);
@@ -76,8 +151,29 @@ describe("browser Research Draft", () => {
     const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={new MemoryStorage()} />);
     expect(markup).toContain("Alpha formula editor");
     expect(markup).toContain("New Research");
+    expect(markup).toContain('disabled="" type="button">Run</button>');
     expect(markup).toContain("Default Folder");
-    for (const removed of ["Save", "Refresh", "Revision", "Add Alpha"]) expect(markup).not.toContain(removed);
+    for (const removed of ["Save", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
+  });
+
+  it("enables Run for one complete retained Draft", () => {
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, folder.id, {
+      ...emptyResearchDraft(),
+      formula: "close_adj",
+      startDate: "2026-08-03",
+      endDate: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      holdingsCount: "10",
+      rebalanceEverySessions: "2",
+    });
+
+    const markup = renderToStaticMarkup(
+      <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={storage} />,
+    );
+    expect(markup).toContain('type="button">Run</button>');
+    expect(markup).not.toContain('disabled="" type="button">Run</button>');
   });
 
   it("renders one-level Folder navigation and protects Default management actions", () => {

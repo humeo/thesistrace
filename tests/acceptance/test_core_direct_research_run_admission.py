@@ -102,6 +102,10 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
                 "RESEARCH_PERIOD_HAS_NO_SESSIONS",
             ),
             ({"formula": "volume_shares"}, "FIELD_UNAVAILABLE_IN_CURRENT_DATA"),
+            (
+                {"formula": "ts_mean(close_adj, 2)"},
+                "INSUFFICIENT_CALCULATION_WARMUP",
+            ),
             ({"folder_id": "folder_missing"}, "FOLDER_NOT_FOUND"),
         )
         for index, (changes, expected_code) in enumerate(cases):
@@ -127,7 +131,7 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
 def test_formula_dates_and_universe_over_budget_leave_no_admission_rows() -> None:
     settings = CoreSettings.from_environment()
     drop_product_schemas(settings)
-    sessions = tuple(date(2025, 1, 1) + timedelta(days=index) for index in range(253))
+    sessions = tuple(date(2024, 1, 1) + timedelta(days=index) for index in range(505))
     snapshot = DatasetAdmissionSnapshot(
         generation_manifest_sha256="a" * 64,
         data_through_session=sessions[-1],
@@ -141,7 +145,7 @@ def test_formula_dates_and_universe_over_budget_leave_no_admission_rows() -> Non
         {
             **_valid_command("direct-over-budget"),
             "formula": "ts_mean(close_adj, 252)",
-            "start_date": sessions[0],
+            "start_date": sessions[252],
             "end_date": sessions[-1],
             "universe": "top3000",
         }

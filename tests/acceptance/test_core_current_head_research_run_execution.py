@@ -1234,7 +1234,7 @@ def test_claim_commits_before_generation_parquet_is_opened(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> None:
+def test_insufficient_warmup_is_rejected_before_run_creation(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -1242,7 +1242,7 @@ def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> N
     _publish_head(settings, sessions=sessions, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
-        accepted = client.post(
+        rejected = client.post(
             "/api/research-runs",
             json=_run_command(
                 "attempt-insufficient-warmup",
@@ -1255,26 +1255,19 @@ def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> N
                 },
             ),
         )
-        run_id = accepted.json()["id"]
-
-        assert client.app.state.core_runtime.research_runs.process_next() is True
+        assert rejected.status_code == 422
+        assert rejected.json()["issues"] == [
+            {
+                "code": "INSUFFICIENT_CALCULATION_WARMUP",
+                "field": "start_date",
+                "message": "Research Period requires 1 sessions before 2026-08-03",
+                "severity": "error",
+                "range": None,
+                "details": None,
+            }
+        ]
+        assert client.get("/api/research-runs").json()["items"] == []
         assert client.app.state.core_runtime.research_runs.process_next() is False
-
-        detail = client.get(f"/api/research-runs/{run_id}").json()
-        assert detail["id"] == run_id
-        assert detail["status"] == "failed"
-        assert detail["start_date"] == sessions[0]
-        assert detail["end_date"] == sessions[-1]
-        assert detail["failure_reason"] == (
-            "Selected data does not contain the complete Calculation Warm-up."
-        )
-        assert detail["input"]["formula"] == "ts_mean(close_adj, 2)"
-        stored = _stored_execution(settings, run_id)
-        assert stored["attempt_count"] == 1
-        assert stored["attempt_failure_reason"] == "InsufficientCalculationWarmup"
-        assert stored["result_manifest_sha256"] is None
-        assert stored["result_provenance"] is None
-        assert stored["active_pin_count"] == 0
 
 
 @pytest.mark.parametrize("session_count", [1, 2])

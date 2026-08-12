@@ -7,13 +7,18 @@ import {
   type DiagnosticState,
 } from "./diagnostics";
 import {
+  beginResearchRun,
   emptyResearchDraft,
+  finishResearchRun,
   hasUnexecutedChanges,
+  isCompleteResearchInputs,
   loadResearchDraft,
   persistResearchDraft,
+  researchInputs,
   researchDraftKey,
   type ResearchDraft,
 } from "./draft";
+import type { FormulaDiagnostic } from "./diagnostics";
 
 export type ResearchFolder = {
   id: string;
@@ -236,13 +241,21 @@ export function ResearchDraftWorkspace({
   const [draft, setDraft] = useState<ResearchDraft>(() => loadResearchDraft(storage, folder.id));
   const [storageError, setStorageError] = useState<string | null>(null);
   const [diagnosticState, setDiagnosticState] = useState<DiagnosticState>({ kind: "idle", result: null });
+  const [admissionFeedback, setAdmissionFeedback] = useState<AdmissionFeedback | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const diagnostics = useRef(createDiagnosticsScheduler());
   const handledGlobalNew = useRef(false);
+  const admissionGeneration = useRef(0);
+  const admissionController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     diagnostics.current.diagnose(draft.formula, setDiagnosticState);
   }, [draft.formula]);
-  useEffect(() => () => diagnostics.current.dispose(), []);
+  useEffect(() => () => {
+    diagnostics.current.dispose();
+    admissionGeneration.current += 1;
+    admissionController.current?.abort();
+  }, []);
   useEffect(() => {
     if (!startNewOnOpen || handledGlobalNew.current) return;
     handledGlobalNew.current = true;
@@ -271,11 +284,92 @@ export function ResearchDraftWorkspace({
     storage.removeItem(researchDraftKey(folder.id));
     setDraft(emptyResearchDraft());
     setStorageError(null);
+    setAdmissionFeedback(null);
+  }
+
+  async function runResearch(): Promise<void> {
+    const inputs = researchInputs(draft);
+    if (!isCompleteResearchInputs(inputs) || submitting) return;
+    const begun = beginResearchRun(
+      draft,
+      folder.id,
+      () => `research_${crypto.randomUUID()}`,
+    );
+    try {
+      persistResearchDraft(storage, folder.id, begun.draft);
+      setStorageError(null);
+    } catch {
+      setStorageError("This Draft could not be retained in this browser.");
+      return;
+    }
+    setDraft(begun.draft);
+    setAdmissionFeedback(null);
+    setSubmitting(true);
+    const generation = ++admissionGeneration.current;
+    admissionController.current?.abort();
+    const controller = new AbortController();
+    admissionController.current = controller;
+    try {
+      const response = await fetch("/api/research-runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(begun.command),
+        signal: controller.signal,
+      });
+      if (generation !== admissionGeneration.current) return;
+      if (response.status === 422) {
+        const rejection = (await response.json()) as ResearchRunAdmissionRejection;
+        if (generation !== admissionGeneration.current) return;
+        setAdmissionFeedback({ formula: begun.command.formula, issues: rejection.issues });
+        return;
+      }
+      if (!response.ok) throw new Error(`Research Run request failed (${response.status})`);
+      const accepted = (await response.json()) as { id: string };
+      if (generation !== admissionGeneration.current) return;
+      let next: ResearchDraft | null;
+      try {
+        next = finishResearchRun(storage, folder.id, begun.command.request_id);
+      } catch {
+        setStorageError("The accepted Run is safe, but this Draft could not be retained in this browser.");
+        return;
+      }
+      if (next === null) return;
+      setDraft(next);
+      setStorageError(null);
+      window.location.assign(`/research-runs/${accepted.id}`);
+    } catch (reason: unknown) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (generation !== admissionGeneration.current) return;
+      setAdmissionFeedback({
+        formula: begun.command.formula,
+        issues: [{
+          code: "RUN_UNAVAILABLE",
+          field: "run",
+          message: reason instanceof Error ? reason.message : "Research Run request failed",
+          severity: "error",
+          range: null,
+        }],
+      });
+    } finally {
+      if (generation === admissionGeneration.current) {
+        admissionController.current = null;
+        setSubmitting(false);
+      }
+    }
   }
 
   const coverage = data.readiness ? data.dataset_coverage : null;
-  const serverDiagnostics = diagnosticState.kind === "complete"
+  const previewDiagnostics = diagnosticState.kind === "complete"
     ? diagnosticState.result.diagnostics
+    : [];
+  const admissionDiagnostics = admissionFeedback?.formula === draft.formula
+    ? admissionFeedback.issues.flatMap(issueAsFormulaDiagnostic)
+    : [];
+  const serverDiagnostics = admissionDiagnostics.length > 0
+    ? admissionDiagnostics
+    : previewDiagnostics;
+  const visibleIssues = admissionFeedback?.formula === draft.formula
+    ? admissionFeedback.issues
     : [];
   return (
     <section aria-label="Research" className="page-section research-workspace">
@@ -285,7 +379,7 @@ export function ResearchDraftWorkspace({
           <h1>Research</h1>
           <p className="hero-copy">Write an Alpha formula. This Draft stays in this browser until you choose to Run it.</p>
         </div>
-        <button className="button" onClick={startNewResearch}>New Research</button>
+        <button className="button" disabled={submitting} onClick={startNewResearch}>New Research</button>
       </header>
 
       <div className="research-authoring-grid">
@@ -319,6 +413,13 @@ export function ResearchDraftWorkspace({
             </ul>
           ) : null}
           {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{storageError}</p> : null}
+          {visibleIssues.length > 0 ? (
+            <ul aria-label="Run issues" className="formula-diagnostics">
+              {visibleIssues.map((issue, index) => (
+                <li key={`${issue.code}-${index}`}><code>{issue.code}</code> {issue.message}</li>
+              ))}
+            </ul>
+          ) : null}
         </section>
 
         <aside className="research-parameters" aria-label="Research parameters">
@@ -363,8 +464,37 @@ export function ResearchDraftWorkspace({
           </div>
         </aside>
       </div>
+      <footer className="research-run-action">
+        <button
+          className="button"
+          disabled={!isCompleteResearchInputs(researchInputs(draft)) || submitting}
+          onClick={() => void runResearch()}
+          type="button"
+        >
+          {submitting ? "Running…" : "Run"}
+        </button>
+      </footer>
     </section>
   );
+}
+
+type ResearchRunAdmissionIssue = {
+  code: string;
+  field: string;
+  message: string;
+  severity: "error";
+  range: FormulaDiagnostic["range"] | null;
+};
+
+type ResearchRunAdmissionRejection = { issues: ResearchRunAdmissionIssue[] };
+type AdmissionFeedback = {
+  formula: string;
+  issues: ResearchRunAdmissionIssue[];
+};
+
+function issueAsFormulaDiagnostic(issue: ResearchRunAdmissionIssue): FormulaDiagnostic[] {
+  if (issue.field !== "formula" || issue.range === null) return [];
+  return [{ code: issue.code, message: issue.message, severity: issue.severity, range: issue.range }];
 }
 
 function DiagnosticsStatus({ state }: { state: DiagnosticState }) {

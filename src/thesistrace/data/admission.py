@@ -12,6 +12,10 @@ from thesistrace.data.lifecycle import DatasetLifecycle
 type UniverseInstrumentCounter = Callable[[str, date, date], int]
 
 
+class DatasetWarmupUnavailable(ValueError):
+    """The selected Research Period cannot provide its complete lookback window."""
+
+
 @dataclass(frozen=True)
 class DatasetAdmissionSnapshot:
     generation_manifest_sha256: str
@@ -37,8 +41,12 @@ class DatasetAdmissionSnapshot:
     ) -> tuple[int, int]:
         start_index = self.research_sessions.index(start)
         end_index = self.research_sessions.index(end)
+        if start_index < lookback:
+            raise DatasetWarmupUnavailable(
+                f"Research Period requires {lookback} sessions before {start.isoformat()}"
+            )
         calculation_sessions = self.research_sessions[
-            max(0, start_index - lookback) : end_index + 1
+            start_index - lookback : end_index + 1
         ]
         instrument_count = self.count_universe_instruments(
             universe,

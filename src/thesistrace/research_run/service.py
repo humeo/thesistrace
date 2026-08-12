@@ -21,6 +21,7 @@ from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
 from thesistrace.data import (
     DatasetAdmissionSnapshot,
     DatasetLifecycle,
+    DatasetWarmupUnavailable,
     GenerationStoreError,
     MountedGenerationStore,
     read_alpha_field_series,
@@ -1139,12 +1140,23 @@ def _admitted_input(
                 )
             ]
         )
-    calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
-        start=sessions[0],
-        end=sessions[-1],
-        lookback=compiled.effective_lookback,
-        universe=command.universe,
-    )
+    try:
+        calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
+            start=sessions[0],
+            end=sessions[-1],
+            lookback=compiled.effective_lookback,
+            universe=command.universe,
+        )
+    except DatasetWarmupUnavailable as error:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="INSUFFICIENT_CALCULATION_WARMUP",
+                    field="start_date",
+                    message=str(error),
+                )
+            ]
+        ) from error
     estimated_run_work = estimate_alpha_run_work(
         compiled.estimated_work,
         research_session_count=calculation_session_count,

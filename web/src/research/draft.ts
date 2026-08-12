@@ -15,9 +15,30 @@ export type ResearchInputs = {
   rebalanceEverySessions: string;
 };
 
+export type PendingResearchRun = {
+  requestId: string;
+  folderId: string;
+  inputs: ResearchInputs;
+};
+
+export type ResearchRunAdmissionCommand = {
+  request_id: string;
+  folder_id: string;
+  name: string | null;
+  formula: string;
+  hypothesis: string | null;
+  start_date: string;
+  end_date: string;
+  universe: string;
+  neutralization: string;
+  holdings_count: number;
+  rebalance_every_sessions: number;
+};
+
 export type ResearchDraft = ResearchInputs & {
   editor: EditorState;
   lastAdmittedBaseline: ResearchInputs | null;
+  pendingAdmission: PendingResearchRun | null;
 };
 
 const MAX_DRAFT_BYTES = 64 * 1024;
@@ -37,6 +58,7 @@ export function emptyResearchDraft(): ResearchDraft {
     rebalanceEverySessions: "",
     editor: { anchor: 0, head: 0 },
     lastAdmittedBaseline: null,
+    pendingAdmission: null,
   };
 }
 
@@ -70,8 +92,81 @@ export function persistResearchDraft(
 }
 
 export function researchInputs(draft: ResearchDraft): ResearchInputs {
-  const { editor: _editor, lastAdmittedBaseline: _baseline, ...inputs } = draft;
+  const {
+    editor: _editor,
+    lastAdmittedBaseline: _baseline,
+    pendingAdmission: _pending,
+    ...inputs
+  } = draft;
   return inputs;
+}
+
+export function beginResearchRun(
+  draft: ResearchDraft,
+  folderId: string,
+  createRequestId: () => string,
+): { draft: ResearchDraft; command: ResearchRunAdmissionCommand } {
+  const inputs = researchInputs(draft);
+  const existing = draft.pendingAdmission;
+  const pending = existing !== null &&
+    existing.folderId === folderId &&
+    JSON.stringify(existing.inputs) === JSON.stringify(inputs)
+    ? existing
+    : { requestId: createRequestId(), folderId, inputs };
+  return {
+    draft: { ...draft, pendingAdmission: pending },
+    command: {
+      request_id: pending.requestId,
+      folder_id: pending.folderId,
+      name: pending.inputs.name.trim() === "" ? null : pending.inputs.name,
+      formula: pending.inputs.formula,
+      hypothesis: pending.inputs.hypothesis.trim() === "" ? null : pending.inputs.hypothesis,
+      start_date: pending.inputs.startDate,
+      end_date: pending.inputs.endDate,
+      universe: pending.inputs.universe,
+      neutralization: pending.inputs.neutralization,
+      holdings_count: Number(pending.inputs.holdingsCount),
+      rebalance_every_sessions: Number(pending.inputs.rebalanceEverySessions),
+    },
+  };
+}
+
+export function acceptPendingResearchRun(
+  draft: ResearchDraft,
+  requestId: string,
+): ResearchDraft {
+  if (draft.pendingAdmission?.requestId !== requestId) return draft;
+  return {
+    ...draft,
+    lastAdmittedBaseline: draft.pendingAdmission.inputs,
+    pendingAdmission: null,
+  };
+}
+
+export function finishResearchRun(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  folderId: string,
+  requestId: string,
+): ResearchDraft | null {
+  const latest = loadResearchDraft(storage, folderId);
+  if (latest.pendingAdmission?.requestId !== requestId) return null;
+  const accepted = acceptPendingResearchRun(latest, requestId);
+  persistResearchDraft(storage, folderId, accepted);
+  return accepted;
+}
+
+export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
+  const holdingsCount = Number(inputs.holdingsCount);
+  const rebalanceEverySessions = Number(inputs.rebalanceEverySessions);
+  return inputs.formula.trim() !== "" &&
+    /^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate) &&
+    inputs.startDate <= inputs.endDate &&
+    ["top300", "top1000", "top2000", "top3000"].includes(inputs.universe) &&
+    ["none", "industry"].includes(inputs.neutralization) &&
+    Number.isInteger(holdingsCount) && holdingsCount >= 1 && holdingsCount <= 100 &&
+    Number.isInteger(rebalanceEverySessions) &&
+    rebalanceEverySessions >= 1 && rebalanceEverySessions <= 20;
 }
 
 export function hasUnexecutedChanges(draft: ResearchDraft): boolean {
@@ -88,19 +183,37 @@ function readDraft(value: unknown): ResearchDraft | null {
   const inputs = readInputs(value);
   const editor = value.editor;
   const baseline = value.lastAdmittedBaseline;
+  const pending = value.pendingAdmission;
   if (
     inputs === null ||
     !isRecord(editor) ||
     !isSafeOffset(editor.anchor) ||
     !isSafeOffset(editor.head) ||
-    (baseline !== null && readInputs(baseline) === null)
+    (baseline !== null && readInputs(baseline) === null) ||
+    (pending !== null && readPendingResearchRun(pending) === null)
   ) return null;
   return {
     ...empty,
     ...inputs,
     editor: { anchor: editor.anchor, head: editor.head },
     lastAdmittedBaseline: baseline === null ? null : readInputs(baseline),
+    pendingAdmission: pending === null ? null : readPendingResearchRun(pending),
   };
+}
+
+function readPendingResearchRun(value: unknown): PendingResearchRun | null {
+  if (
+    !isRecord(value) ||
+    typeof value.requestId !== "string" ||
+    value.requestId.length < 1 ||
+    value.requestId.length > 200 ||
+    typeof value.folderId !== "string" ||
+    value.folderId.length < 1 ||
+    value.folderId.length > 200
+  ) return null;
+  const inputs = readInputs(value.inputs);
+  if (inputs === null) return null;
+  return { requestId: value.requestId, folderId: value.folderId, inputs };
 }
 
 function readInputs(value: unknown): ResearchInputs | null {

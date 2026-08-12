@@ -98,7 +98,7 @@ type ResearchResult = {
   };
 };
 
-type ResearchRun = {
+export type ResearchRun = {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   name: string;
@@ -326,12 +326,6 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
                 {startingTracking ? "Starting Tracking…" : "Start Tracking"}
               </button>
             ) : null}
-            <button
-              disabled={loadState !== null || canceling || startingTracking}
-              onClick={refresh}
-            >
-              Refresh
-            </button>
           </div>
         </header>
         {loadState === "refreshing" ? (
@@ -356,15 +350,26 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     <section aria-label="Research Runs">
       <h1>Research Runs</h1>
       {items?.length === 0 ? <p>No Research Runs yet.</p> : null}
-      <ol aria-label="Research Runs">
-        {items?.map((item) => (
-          <li key={item.id}>
-            <a href={`/research-runs/${item.id}`}>{item.name}</a>
-            <span> · {item.status} · {item.start_date} to {item.end_date}</span>
-          </li>
-        ))}
-      </ol>
+      <ResearchRunHistory items={items ?? []} />
     </section>
+  );
+}
+
+export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
+  return (
+    <ol aria-label="Research Runs" className="research-run-history">
+      {items.map((item) => (
+        <li key={item.id}>
+          <a href={`/research-runs/${item.id}`}><strong>{item.name}</strong></a>
+          <dl>
+            <div><dt>Run ID</dt><dd><code>{item.id}</code></dd></div>
+            <div><dt>Created</dt><dd><time dateTime={item.created_at}>{item.created_at}</time></dd></div>
+            <div><dt>Status</dt><dd>{item.status}</dd></div>
+            <div><dt>Formula</dt><dd><code>{item.formula_summary}</code></dd></div>
+          </dl>
+        </li>
+      ))}
+    </ol>
   );
 }
 

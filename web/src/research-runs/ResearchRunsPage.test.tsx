@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  ResearchRunHistory,
   TerminalStrategyStateView,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
@@ -47,5 +48,40 @@ describe("TerminalStrategyStateView", () => {
     expect(markup).toContain("cn.stock.000001");
     expect(markup).toContain("remains pending");
     expect(markup).not.toMatch(/Generation|manifest|checkpoint|fence|object location/i);
+  });
+});
+
+describe("ResearchRunHistory", () => {
+  it("distinguishes duplicate names by identity, time, status, and Formula", () => {
+    const items = [
+      {
+        id: "run_aaaaaaaa",
+        status: "succeeded" as const,
+        name: "Mean",
+        folder_id: "folder_default",
+        created_at: "2026-08-13T01:02:03Z",
+        start_date: "2026-08-01",
+        end_date: "2026-08-05",
+        formula_summary: "ts_mean(close_adj, 20)",
+      },
+      {
+        id: "run_bbbbbbbb",
+        status: "queued" as const,
+        name: "Mean",
+        folder_id: "folder_default",
+        created_at: "2026-08-13T01:03:04Z",
+        start_date: "2026-08-01",
+        end_date: "2026-08-05",
+        formula_summary: "ts_mean(close_adj, 60)",
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<ResearchRunHistory items={items} />);
+    expect(markup).toContain("run_aaaaaaaa");
+    expect(markup).toContain("run_bbbbbbbb");
+    expect(markup).toContain("2026-08-13T01:02:03Z");
+    expect(markup).toContain("succeeded");
+    expect(markup).toContain("ts_mean(close_adj, 20)");
+    expect(markup.match(/>Mean</g)).toHaveLength(2);
   });
 });

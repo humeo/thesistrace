@@ -1,4 +1,8 @@
-from thesistrace.data.admission import DatasetAdmissionService, DatasetAdmissionSnapshot
+from thesistrace.data.admission import (
+    DatasetAdmissionService,
+    DatasetAdmissionSnapshot,
+    DatasetWarmupUnavailable,
+)
 from thesistrace.data.collection import (
     CollectionOutcome,
     DataCollectionError,
@@ -64,6 +68,7 @@ __all__ = [
     "DataRefreshService",
     "DatasetAdmissionService",
     "DatasetAdmissionSnapshot",
+    "DatasetWarmupUnavailable",
     "DatasetCoverage",
     "DatasetOverviewService",
     "DataLifecycleError",
