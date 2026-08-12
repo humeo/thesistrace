@@ -9,7 +9,8 @@ strategy backtests, and continuous daily research tracking.
 
 **Investment Hypothesis**:
 A human-readable, optional claim about a market relationship that motivates an
-Alpha. It is not required to Save or Run a Research Definition.
+Alpha. It may be authored in a Browser Draft and frozen by a ResearchRun but is
+not required to request a Run.
 _Avoid_: Alpha, factor formula, strategy
 
 **Alpha**:
@@ -25,20 +26,131 @@ quantity must be negated explicitly in the Alpha Expression, and Factor
 Evaluation preserves the resulting metric signs.
 _Avoid_: Automatic factor reversal, absolute IC, inferred direction
 
-**Alpha Expression**:
-The bounded expression tree embedded in a Research Definition, composed only
-of stable Canonical Market Data Field References, numeric literals, and the V1
-Alpha Operator Set. It excludes Python, SQL, arbitrary code, and user-defined
-functions.
-_Avoid_: Research DSL, Python strategy, SQL query, compiled plan
+**Alpha Language**:
+The single backward-compatible, append-only contract for authoring, compiling,
+and executing Alpha Formulae. Existing syntax, stable Field References,
+Builtin identities and semantics, and compiled expression forms retain their
+published meaning; platform maintainers add capabilities without selecting or
+dispatching among language releases.
+_Avoid_: Alpha Language Release, selectable language version, runtime version dispatcher
 
-**V1 Alpha Operator Set**:
-The closed, versioned Alpha Expression operation set: arithmetic; `abs`, `log`,
+**Alpha Formula**:
+The author-editable, single-expression text held in a Browser Draft and
+submitted by Run. It uses bare Field Catalog names, numeric literals,
+arithmetic, parentheses, and calls to Alpha Builtins; it has no assignment,
+variable, statement, control-flow, import, or user-function form. An incomplete
+or invalid Formula may remain local but has no execution authority; an accepted
+ResearchRun freezes both its submitted Formula and compiled Alpha Expression.
+_Avoid_: Alpha Expression, `$`-prefixed field, Python code, executable program
+
+**Alpha Compiler**:
+The backend-only pure compiler that length-checks Formula source before using
+Python's expression-mode AST parser, exhaustively accepts only Alpha Language
+nodes, resolves Alpha Identifiers and static types, calculates lookback and
+admission cost, and emits either Alpha Diagnostics or a canonical Alpha
+Expression. Python AST is transient parsing data and is never compiled,
+evaluated, executed, or persisted as Alpha execution truth.
+_Avoid_: Python evaluator, frontend compiler, permissive AST visitor
+
+**Alpha Expression**:
+The canonical bounded expression tree compiled from an Alpha Formula and
+frozen by an accepted ResearchRun as its only Alpha execution truth. It is
+composed only of stable Canonical Market Data Field References, numeric
+literals, and the Alpha Operator Set; it excludes Python, SQL,
+arbitrary code, and user-defined functions.
+_Avoid_: Alpha Formula, Python strategy, SQL query, editable source
+
+**Composite Alpha**:
+One Alpha Formula that combines two or more Numeric Series through explicit
+Alpha Builtins, arithmetic, and literal weights to produce one Alpha Value per
+instrument and Research Session. Market and financial inputs may be combined
+after point-in-time alignment, but ThesisTrace creates no separate factor-list,
+implicit normalization, or machine-learning model resource.
+_Avoid_: Multi-factor configuration object, automatic weighting, model training
+
+**Alpha Execution Plan**:
+The transient deterministic post-order plan derived from a frozen Alpha
+Expression for one execution slice. Each node computes its complete Numeric
+Series once, rolling Builtins use one-pass series algorithms, Cross-Sectional
+Rank evaluates one selected-universe cross-section per Research Session, and
+downstream nodes consume those results instead of recursively reevaluating
+scalar cells. ResearchRun and DailyTrack use the same planner and evaluators;
+DailyTrack limits its slice to the Effective Alpha Lookback plus new Research
+Sessions.
+_Avoid_: Persisted execution truth, recursive per-cell evaluator, bytecode VM
+
+**Alpha Value Model**:
+The small static type system used to compile an Alpha Formula: a Canonical
+numeric Field Reference produces one `Numeric Series` value per instrument and
+Research Session; a numeric literal produces a `Number`; and a rolling or lag
+argument that requires a `Window` accepts only an integer literal from 1
+through 252. Arithmetic may broadcast a Number across a Numeric Series, and an
+admitted Formula must produce a Numeric Series. Boolean, categorical, date,
+table, and differently grained values are not Alpha value types.
+_Avoid_: Dynamically typed value, arbitrary object, physical column type
+
+**Alpha Operator Set**:
+The platform-maintained Alpha Expression operation set: arithmetic; `abs`, `log`,
 and `sign`; `lag`, `delta`, and `pct_change`; and `ts_mean`, `ts_sum`, `ts_std`,
-`ts_min`, and `ts_max`, with every time-series or rolling `n` restricted to an
-integer literal from 1 through 252. Industry Neutralization follows expression
-evaluation rather than acting as an operator.
-_Avoid_: Extensible function registry, user-defined function, strategy rule
+`ts_min`, and `ts_max`, plus `cs_rank`; every time-series or rolling `n` is
+restricted to an integer literal from 1 through 252. Industry Neutralization
+follows expression evaluation rather than acting as an operator. Platform
+maintainers may extend the set additively but never change an existing
+operator's identity, signature, or semantics; research authors cannot register
+operators or executable kernels at runtime.
+_Avoid_: Runtime-defined operator, user-defined function, strategy rule
+
+**Cross-Sectional Rank**:
+The `cs_rank(x)` Alpha Builtin that ranks finite values of one Numeric Series
+inside the selected Liquidity Universe independently for each Research Session.
+Ascending average ordinal rank maps linearly to the inclusive range 0 through 1;
+ties receive their average rank, one valid value receives 0.5, and Missing Alpha
+Values remain missing and do not enter the denominator. It preserves its
+child's Effective Alpha Lookback, higher input remains more bullish, and
+Industry Neutralization still follows the complete Alpha Expression.
+_Avoid_: Global-history rank, all-instrument rank, automatic factor normalization,
+industry rank
+
+**Alpha Builtin Catalog**:
+The Research Kernel-owned, append-only catalog of named functions available to
+the Alpha Language. Each stable entry defines the callable name, argument and
+result types, lookback rule, missing-value and numeric semantics, and the
+evaluator that executes the function. The compiler and authoring UI consume
+this catalog rather than maintaining independent function definitions.
+_Avoid_: User-defined function registry, frontend function list, executable plugin
+
+**Alpha Builtin Definition**:
+The single code-owned Research Kernel declaration for one Alpha Builtin. It
+binds one Alpha Identifier to its typed signature, authoring documentation and
+examples, argument validation, lookback and complexity rules, missing-value
+and numeric behavior, and evaluator. Registration and tests extend the catalog;
+the compiler, Worker, and authoring projection do not add parallel branches.
+_Avoid_: Evaluator switch branch, YAML function, duplicated frontend metadata
+
+**Alpha Authoring Catalog**:
+The read-only Alpha Language projection that combines the Field Catalog's
+Alpha-authorable subset with the Alpha Builtin Catalog. It gives the compiler
+and authoring UI one current discovery interface but owns neither field meaning
+nor function execution semantics. It rejects any duplicate Alpha Identifier
+before the application becomes ready.
+_Avoid_: Central semantic registry, editable configuration, per-Folder catalog
+
+**Alpha Field Capability**:
+The optional typed `alpha` member of a Data-owned Field Definition whose
+presence exposes that Canonical Field in the Alpha Language. It contains the
+stable Alpha Identifier and Alpha value type, while point-in-time meaning,
+grain, physical type, unit, availability, and missingness remain solely in the
+Field Definition. Data must provide a Series reader for every capable Field.
+The Authoring Catalog derives its Field subset from these capabilities;
+Canonical or numeric status alone never grants access.
+_Avoid_: Kernel field allowlist, all-numeric auto-exposure, frontend field option
+
+**Alpha Identifier**:
+The stable lowercase `snake_case` name used in an Alpha Formula for either one
+Alpha-authorable Field Reference or one Alpha Builtin. Field and Builtin names
+share one globally unique namespace, never change meaning after publication,
+and cannot be disambiguated by call syntax or capitalization.
+_Avoid_: Display label, `$`-prefixed field, context-dependent identifier
 
 **Alpha Numeric Semantics**:
 The V1 evaluation contract that converts valid Canonical numeric inputs to
@@ -62,6 +174,37 @@ accounting for nested lag and rolling functions. V1 permits at most 252
 Research Sessions, and missing observations do not extend that window.
 _Avoid_: Largest individual function argument, last valid observations,
 automatic data-range expansion
+
+**Alpha Admission Budget**:
+The deterministic Run-admission limits applied before any ResearchRun is
+created: Formula length, expression node count, nesting depth, Effective Alpha
+Lookback, and estimated execution work derived from Builtin costs and the
+selected research dimensions. An over-budget Browser Draft remains local with
+diagnostics, while Run rejects it without creating a ResearchRun or consuming
+Worker capacity. Numeric thresholds are fixed from representative Benchmarks
+and protected by tests.
+_Avoid_: Worker timeout policy, arbitrary UI limit, best-effort execution
+
+**Alpha Diagnostic**:
+A structured compiler finding with a stable reason code, human-readable
+message, and exact Alpha Formula source range, plus typed expected and actual
+details when applicable. The Browser Draft preview and Run admission use the
+same backend Alpha Compiler; the draft remains local with Diagnostics, while
+Run recompiles authoritatively and rejects every error without creating a Run.
+_Avoid_: Generic validation string, frontend-owned verdict, Worker exception
+
+**Alpha Editor**:
+The sole editable Alpha authoring surface for the Browser Draft in one selected
+Research Folder. It edits the Alpha Formula directly and uses the Alpha
+Authoring Catalog for searchable completion, insertion, signature help,
+documentation, and examples, while rendering backend Alpha Diagnostics at
+their source ranges. The initial financial product appears here only through
+its six Alpha-authorable fields; retained raw statement columns are not exposed
+as implicit fields or through a second financial-statement authoring surface.
+No visual tree builder or compiled Alpha Expression is a second editable
+representation.
+_Avoid_: General-purpose code editor, dual-mode builder, editable AST, raw
+statement field picker
 
 **Missing Alpha Value**:
 The absence of a usable Alpha score caused by missing formula inputs, an
@@ -102,11 +245,20 @@ alerting product
 **DailyTrack**:
 The stable identity of one continuous, fixed-inception Daily Tracking stream
 explicitly started from a successful seed ResearchRun. It freezes the complete
-Research Definition, carries cash, holdings, NAV, and Strategy phase, catches
-up to the Dataset Head, and then continues forward. It is blocked when its
+ResearchRun input snapshot, carries cash, holdings, NAV, and Strategy phase,
+catches up to the Dataset Head, and then continues forward. It is blocked when its
 current target cannot complete and terminally stopped only by an explicit Stop;
-editing or rerunning research never mutates it.
-_Avoid_: ResearchRun, rolling backtest, mutable latest Definition
+editing, rerunning, moving, renaming, or deleting the seed Research never
+mutates or deletes it. Only an explicit user DailyTrack deletion removes the
+Track and its owned state.
+_Avoid_: ResearchRun, rolling backtest, mutable Browser Draft
+
+**DailyTrack Deletion**:
+The explicit permanent removal of one `stopped` DailyTrack. An `active` or
+`blocked` Track must complete the separate Stop action before it can be deleted;
+Delete never stops ongoing work implicitly. Deletion removes Track-owned
+progressions, checkpoints, caches, receipts, and unreferenced physical objects.
+_Avoid_: Stop, Research Deletion, automatic cascade
 
 **Working Cache**:
 The latest-only, non-authoritative Pending Alpha and rolling Factor aggregate
@@ -116,7 +268,7 @@ currently available Canonical Market Data, and deleted when the Track stops.
 _Avoid_: Tracking Checkpoint, Result Bundle, Factor curve, permanent Alpha store
 
 **Tracking Origin**:
-The successful seed ResearchRun together with its frozen Research Definition,
+The successful seed ResearchRun together with its frozen research input,
 Research Period, and Terminal Strategy State from which the continuous
 simulation continues rather than starting a new rolling backtest.
 _Avoid_: Activation date only, latest rolling R1, Tracking Head
@@ -134,7 +286,7 @@ One idempotent execution that extends a `(DailyTrack, Tracking Generation)`
 through one or more later Research Sessions. Its Attempt pins the current Data
 Generation, processes sessions in order, survives failure, and publishes one
 Tracking Checkpoint only on complete success.
-_Avoid_: ResearchRun rerun, Data Refresh, partial result
+_Avoid_: New ResearchRun, Data Refresh, partial result
 
 **Tracking Advance Attempt**:
 One execution attempt under a persistent Tracking Advance, with
@@ -165,7 +317,7 @@ _Avoid_: Data Generation, partial patch, Dataset Head
 **Batch-Incremental Equivalence**:
 The core V1 correctness invariant that a reference execution and
 session-by-session Daily Tracking from the same Tracking Origin, frozen
-Research Definition, initial account state, per-session Canonical Market Data,
+ResearchRun input, initial account state, per-session Canonical Market Data,
 calculation kernel, and Numeric Execution Contract produce canonically exact
 retained results. It is an engineering comparison over supplied inputs, not a
 promise that ThesisTrace permanently retains every historical input.
@@ -190,8 +342,8 @@ across Factor quantiles.
 _Avoid_: Database row order, source-response order, Factor average rank
 
 **Holdings Count**:
-The explicit integer `holdings_count` from 1 through 100 in a frozen Research
-Definition, bounded by the selected Liquidity Universe size and defining the
+The explicit integer `holdings_count` from 1 through 100 in a frozen ResearchRun
+input, bounded by the selected Liquidity Universe size and defining the
 maximum number of Top-N equal-weight targets. Fewer eligible candidates produce
 fewer targets and residual cash.
 _Avoid_: Runtime default, percentage cutoff, guaranteed filled positions
@@ -199,7 +351,7 @@ _Avoid_: Runtime default, percentage cutoff, guaranteed filled positions
 **Initial Cash**:
 The CNY 10,000,000 recorded as both Gross NAV and Net NAV at the first Research
 Period open, with no Actual Holdings. V1 fixes and records the amount in the
-ResearchRun's frozen Definition; first deployment occurs at the next Research
+ResearchRun's frozen input; first deployment occurs at the next Research
 Session's open, and no later contribution, withdrawal, borrowing, leverage, or
 negative cash is permitted.
 _Avoid_: Runtime default, portfolio NAV, deployable cash after trades
@@ -334,7 +486,7 @@ initial deployment, then reports its event mean and
 _Avoid_: Order count, target-weight change, filled-notional double count
 
 **Rebalance Interval**:
-The explicit `rebalance_every_sessions` integer in a frozen Research Definition.
+The explicit `rebalance_every_sessions` integer in a frozen ResearchRun input.
 It may be any value from 1 through 20 and determines the distance between
 scheduled Strategy signal sessions.
 _Avoid_: Natural-day interval, fixed 1/5/20 enumeration, holding cohort
@@ -394,40 +546,82 @@ _Avoid_: New-buy eligibility, immediate forced sale, permanent eligibility
 
 ### Research Lifecycle and Factor Evaluation
 
-**Research Definition**:
-The mutable, saved authoring record for one research, containing one Alpha and
-its configurable research choices, including required natural-date `start_date`
-and `end_date`. It may be incomplete between Save actions; Run saves its
-current content and, when valid, freezes that content in a new ResearchRun.
-_Avoid_: Draft, frozen Definition resource, ResearchSpec, compiled plan
+**Research Folder**:
+A durable, user-named, one-level organizational container for ResearchRuns.
+Every ResearchRun belongs to exactly one Folder and may be moved without
+changing its immutable research input or results. A Folder stores no Alpha
+Formula, research parameter, Revision, execution state, or Browser Draft, and a
+non-empty Folder cannot be deleted until its Runs are moved or deleted. One
+system-owned Default Folder receives Research created from the global action
+and cannot be deleted; users may create other Folders and create Research
+directly inside them.
+_Avoid_: Research Definition, executable study, nested directory, Run snapshot
+
+**Browser Draft**:
+The one browser-local authoring state for one Research Folder, persisted only
+through browser storage and including the prospective Research name, Alpha
+Formula, Investment Hypothesis, Requested Research Dates, Universe,
+neutralization, Strategy parameters, and editor state. It has no server
+identity, Revision, or audit authority. Run does not clear it. When absent, the
+editor starts empty and never restores a prior ResearchRun automatically; `Use
+as Draft` is the only action that copies a selected Run's frozen input into it.
+`New` and `Use as Draft` require confirmation before overwriting unexecuted
+local changes.
+_Avoid_: ResearchRun, server Draft, latest Run, autosaved Definition
 
 **Run Action**:
-The Research Definition action that saves the submitted current content and
-attempts to create a ResearchRun. Rejected content remains saved but creates no
-ResearchRun, and accepted content does not select data until an Attempt starts.
-_Avoid_: Save followed by Run, Rerun, execution Attempt
+The action that submits one Browser Draft and its Research Folder to the backend
+Alpha Compiler and admission checks. Rejection returns Diagnostics and creates
+no durable backend resource; acceptance atomically creates one ResearchRun with
+the submitted input frozen. The Browser Draft remains local and data is not
+selected until an Attempt starts.
+_Avoid_: Save, Refresh, Use as Draft, execution Attempt
 
 **ResearchRun**:
-One durable execution request over frozen Research Definition content and
-Requested Research Dates. Its successful Attempt produces Factor Evaluation
-and Strategy Backtest conclusions and may seed a DailyTrack only after
-publishing a complete Result Bundle.
-_Avoid_: Research Definition, factor evaluation, backtest
+The durable resource shown to the user as one Research in exactly one Research
+Folder; there is no separate Research container above it. Its optional Research
+Name and Folder membership are mutable organization metadata. It separately
+freezes the submitted Formula, compiled Alpha Expression, Investment
+Hypothesis, Requested Research Dates, field bindings, Universe,
+neutralization, Strategy parameters, and calculation contracts. Its successful
+Attempt produces Factor Evaluation and Strategy Backtest conclusions and may
+seed a DailyTrack only after publishing a complete Result Bundle.
+_Avoid_: Research Folder, Browser Draft, factor evaluation, backtest
 
-**Rerun**:
-The user action that creates a new ResearchRun with the selected Run's same
-frozen Research Definition and Requested Research Dates. It ignores current
-Definition edits, while the new Run's Attempt independently selects the latest
-Dataset Head when it starts.
-_Avoid_: ResearchRun Attempt, Run Action, modified research
+**Research Name**:
+The mutable display name of one ResearchRun. The user may submit it in a Browser
+Draft or rename the Research later; an omitted or blank name receives a
+generated default. Names need not be unique within or across Research Folders;
+Run identity remains the stable `run_id`, and lists disambiguate names with
+creation time, status, and Formula summary. The name is stored outside the
+immutable research input, so renaming changes neither execution provenance nor
+results and creates no new ResearchRun.
+_Avoid_: Alpha name, immutable input field, ResearchRun identity, filename key
+
+**Research Deletion**:
+The explicit permanent removal of one terminal ResearchRun. Only `succeeded`,
+`failed`, or `cancelled` Research may be deleted; `queued` or `running` Research
+must first reach a terminal state. Deletion removes the Research resource and
+its unreferenced owned state but never deletes a DailyTrack seeded from it;
+Track-owned or shared physical objects remain until no durable reference needs
+them.
+_Avoid_: Cancel, Folder removal, cascading DailyTrack deletion
+
+**Use as Draft**:
+The sole action for reusing a ResearchRun's authorable values. It explicitly
+copies them into that Research Folder's Browser Draft after any required
+overwrite confirmation, creates no backend resource, and performs no execution.
+Running the copied values unchanged or after editing follows the ordinary Run
+Action and creates a new ResearchRun; there is no separate Rerun action.
+_Avoid_: Rerun, retry, automatic latest-Run restore
 
 **ResearchRun Attempt**:
 One infrastructure execution attempt belonging to an existing ResearchRun,
 which pins the latest Data Generation when it starts and recomputes the whole
 Run from the beginning. A retry creates another Attempt, may select a newer
-Generation, and never mixes partial artifacts; a user-requested rerun is a new
-ResearchRun.
-_Avoid_: ResearchRun, user rerun, modified run input
+Generation, and never mixes partial artifacts. Reusing research input requires
+Use as Draft followed by an ordinary Run Action.
+_Avoid_: ResearchRun, Use as Draft, modified run input
 
 **Result Bundle**:
 The immutable, minimal authoritative result of one successful ResearchRun. It
@@ -672,10 +866,10 @@ exchange is open does not form a V1 cross-market research observation.
 _Avoid_: Calendar day, source row, intraday session
 
 **Requested Research Dates**:
-The required natural-date `start_date` and `end_date` saved in a Research
-Definition and frozen by a ResearchRun. They form an inclusive range and need
-not themselves be Research Sessions; a reversed range or one containing no
-Research Session is invalid.
+The required natural-date `start_date` and `end_date` submitted from a Browser
+Draft and frozen by a ResearchRun. They form an inclusive range and need not
+themselves be Research Sessions; a reversed range or one containing no Research
+Session is invalid.
 _Avoid_: Session indexes, inferred default dates, Calculation Warm-up
 
 **Research Period**:
@@ -714,16 +908,61 @@ market-data bytes may be collected after no execution references them.
 _Avoid_: Permanent Dataset Release, user-selectable version, Result Bundle
 
 **Dataset Coverage**:
-The inclusive range from the earliest Research Session through the
-data-through session available in the current Dataset Head. Advancing the Head
-does not reset its Coverage Start.
-_Avoid_: Requested Research Dates, Calculation Warm-up, source request window
+The verified extent declared by one Dataset Family inside a Data Generation.
+Its coordinates and completeness evidence follow that family's grain and time
+semantics; a Generation aggregates family declarations without collapsing them
+into one universal date range.
+_Avoid_: Requested Research Dates, Calculation Warm-up, global intersection
+
+**Market Coverage**:
+The Dataset Coverage of end-of-day market families, expressed as the inclusive
+range from the earliest Research Session through the data-through session.
+Advancing the Dataset Head does not reset its Coverage Start. The first
+financial-capable product Head starts Market Coverage at the first Research
+Session of 2010 so its advertised Financial Coverage is executable over the
+same research horizon.
+_Avoid_: Financial Coverage, source request window, Research Period
+
+**Financial Coverage**:
+The Dataset Coverage of Point-in-Time Financial Data, proving that the complete
+expected source shard set was observed through a cutoff and recording its
+historical reconciliation and revision-coverage limits. It does not promise a
+non-missing Financial Fact for every instrument or report period.
+_Avoid_: Market date range, non-null guarantee, Run-owned coverage
+
+**Financial Coverage Start**:
+The first Research Session for which Financial Coverage guarantees complete
+collection of every Source Financial Version that becomes available from that
+session onward. The initial financial product starts at the first Research
+Session of 2010; report periods may be earlier when their source version first
+became available inside Coverage.
+_Avoid_: Source request start, earliest retained row, ResearchRun start
+
+**Financial Seed Fact**:
+A minimal pre-Coverage Financial Fact retained only so a Session-Aligned
+Financial Field can resolve a correct value at Financial Coverage Start. The
+initial seed is the latest available pre-start full-year fact for each Latest
+Annual Financial Field and the latest available pre-start balance-sheet fact
+for each Latest Reported Stock Field; it does not extend Financial Coverage
+backward.
+_Avoid_: Full pre-2010 history, earlier Financial Coverage, invented value
 
 **Data Overview**:
-The read-only user product view of current Dataset Coverage, data-through
-session, last refresh time, and readiness. It contains no update control,
-Generation history, or operator job status.
-_Avoid_: Data Refresh control, operations console, Dataset Release browser
+The read-only user product view of current family Dataset Coverage, data-through
+and observation-through coordinates, last refresh times, and Financial Research
+Readiness. It contains no update control, Generation history, or operator job
+status. The initial financial product adds no company-statement explorer or raw
+table browser to this view.
+_Avoid_: Data Refresh control, operations console, Dataset Release browser,
+financial statement browser
+
+**Financial Research Readiness**:
+The all-or-nothing published guarantee that the current Data Generation has
+complete Financial Coverage and that its initial six financial Alpha Field
+Capabilities resolve with the same point-in-time semantics in ResearchRun and
+DailyTrack execution. Raw Financial Batches, Canonical financial tables, or an
+internal candidate Generation alone never make this state ready.
+_Avoid_: Ingestion completion, table presence, partially authorable finance
 
 **Data Operator**:
 The trusted operational authority that may inspect and start a Data Refresh
@@ -732,15 +971,29 @@ a Worker service identity.
 _Avoid_: Ordinary user, research owner, Worker identity
 
 **Data Refresh**:
-The private, manually triggered operator action that builds and validates a
-candidate Data Generation before atomically moving the Dataset Head. It is not
-exposed through the ordinary user API or Web interface and has no automatic V1
-schedule. A later refresh requests a 20-Research-Session overlap plus every new
-session. Returned values replace matching values, and ordinary absence in the
-overlap preserves current data. Explicit governing trading-state or lifecycle
-evidence takes precedence and invalidates any conflicting stored price or
-turnover observation.
-_Avoid_: User product action, in-place partial mutation, automatic scheduler
+The private, manually triggered operator action that refreshes one declared
+Dataset Family group, builds a complete candidate Data Generation that reuses
+unchanged families, and atomically moves the one Dataset Head after validation.
+It is not exposed through the ordinary user API or Web interface and has no
+automatic V1 schedule.
+_Avoid_: User product action, in-place partial mutation, multi-Head publication
+
+**Market Refresh**:
+A Data Refresh targeting end-of-day market families. It requests a
+20-Research-Session overlap plus every new session and reuses the current
+Point-in-Time Financial Data unchanged.
+_Avoid_: Financial Refresh, full Dataset rebuild, independent market Head
+
+**Financial Refresh**:
+A manually triggered Data Refresh that re-requests the complete historical
+ordinary-interface `endpoint × instrument` shard set for Point-in-Time
+Financial Data, resumes incomplete collection from checkpoints, preserves every
+previously accepted Source Financial Version while appending newly observed
+versions, and publishes only after every expected shard and family invariant
+passes validation. It retains current market families unchanged, and its slower
+collection never becomes a prerequisite for publishing a Market Refresh.
+_Avoid_: Incremental financial window, rotating reconciliation, partial shard
+publication, independent financial Head
 
 **Dataset Bootstrap**:
 The explicit operator initialization of an empty Mounted Canonical Data Store.
@@ -753,8 +1006,8 @@ _Avoid_: Automatic startup download, fixed research history, Data Refresh retry
 The source-neutral fields and time semantics produced from validated upstream
 responses and held in the Mounted Canonical Data Store, using stable system
 names, types, and normalized units rather than Tushare's transport
-representation. Research Definitions depend on this contract rather than
-vendor field names or transport.
+representation. Alpha compilation and ResearchRun execution depend on this
+contract rather than vendor field names or transport.
 _Avoid_: Tushare response, vendor schema, runtime API data
 
 **Canonical EOD Price**:
@@ -802,28 +1055,29 @@ _Avoid_: Multi-provider abstraction, fallback source, cross-source consensus
 **Field Catalog**:
 The Data-owned inventory of stable Canonical Market Data fields and their
 meaning, type, unit, availability semantics, and current Head presence. Research
-authoring exposes only its Alpha-authorable subset together with the supported
-Alpha Operator Set.
+authoring exposes only fields with an Alpha Field Capability together with the
+supported Alpha Operator Set.
 _Avoid_: Dataset Schema selector, source documentation, physical table browser
 
 **Field Definition**:
 The immutable meaning of one stable `field_id`, including its type, unit,
-primary-key grain, and information-availability semantics. Adding a field
-creates a new Dataset Schema version, correcting values preserves the definition
-in a later Data Generation, and changing meaning requires a new `field_id`.
+primary-key grain, information-availability semantics, and any explicit Alpha
+Field Capability. Adding a field creates a new Dataset Schema version,
+correcting values preserves the definition in a later Data Generation, and
+changing meaning requires a new `field_id`.
 _Avoid_: Mutable field meaning, source column name, corrected data value
 
 **Field Reference**:
 One stable `field_id` selected from the Alpha-authorable Canonical Market Data
-subset and displayed through its short Field Catalog name. A Research
-Definition's Alpha Expression stores the stable reference directly.
+subset. An Alpha Formula uses its short Field Catalog name, while the compiled
+Alpha Expression stores the stable reference directly.
 _Avoid_: Vendor field name, manually typed identifier, compiled plan
 
 **Dataset Schema**:
 The internal, versioned contract for one Dataset Family's keys and fields. A
 Data Generation records its exact version; a user does not select it
 separately.
-_Avoid_: Field Catalog, Dataset Head, Research Definition parameter
+_Avoid_: Field Catalog, Dataset Head, per-Run schema parameter
 
 **Physical Data Object**:
 An immutable-while-referenced data partition identified by its exact bytes
@@ -850,12 +1104,11 @@ _Avoid_: Random UUID, surrogate-ID mapping table, asset-specific contract terms,
 general provider registry
 
 **Point-in-Time Financial Data**:
-The future non-V1 `equity.financial_pit` Dataset Family, separate from
-`equity.eod_price` and keyed by availability time so research sees only facts
-available by each session, with date-only disclosures becoming available on the
-next market session. It retains Tushare-provided versions and their availability
-times within Canonical Market Data and marks revision coverage incomplete when
-Tushare lacks the required history.
+The `equity.financial_pit` Dataset Family of reported financial facts, separate
+from `equity.eod_price` and keyed by availability time so research sees only
+facts available by each session. It retains every accepted Tushare statement
+field and version and marks revision coverage incomplete when Tushare lacks the
+required history.
 _Avoid_: Current financial snapshot, future backfill, invented revision history,
 OHLCV extension
 
@@ -865,6 +1118,56 @@ announcement, report type, update marker, and observed values. ThesisTrace
 preserves and maps source-provided versions but does not synthesize a company
 revision chain that the source does not provide.
 _Avoid_: Invented revision, destructive local overwrite, complete-PIT claim
+
+**Raw Financial Batch**:
+The immutable content-addressed response evidence from one accepted Tushare
+financial request. A bootstrap batch may contain rows earlier than Financial
+Coverage Start so one complete-history request can supply both covered versions
+and Financial Seed Facts; those extra raw rows are evidence only and do not
+become Canonical Financial Facts or extend Financial Coverage.
+_Avoid_: Source Financial Version table, Financial Coverage, authorable field
+
+**Financial Fact**:
+One nullable Canonical numeric measurement from a Source Financial Version,
+retaining its statement, report period, reporting scope, and availability. It is
+auditable Point-in-Time Financial Data, not by itself a daily Alpha input.
+_Avoid_: Filled zero, raw response, daily factor, unqualified financial field
+
+**Consolidated Reporting Scope**:
+The financial reporting boundary that combines a listed parent with its
+controlled subsidiaries while still distinguishing amounts attributable to the
+parent's owners. It is distinct from the parent's standalone statements.
+_Avoid_: Parent-only report, arbitrary latest report, mixed reporting scope
+
+**Session-Aligned Financial Field**:
+A stable Canonical numeric field that maps Financial Facts to at most one value
+per Instrument Identity and Research Session under fixed report-period,
+aggregation, revision, unit, and missingness semantics. Only this form may have
+an Alpha Field Capability.
+_Avoid_: Raw Tushare column, implicit latest report, differently grained value
+
+**Latest Annual Financial Field**:
+A Session-Aligned Financial Field that selects the most recent available
+full-year Financial Fact and holds it until another source version or later
+full-year report becomes available. It is an annual reported value, not a
+trailing-twelve-month or interim cumulative value.
+_Avoid_: TTM field, latest interim report, mixed-length flow
+
+**Latest Reported Stock Field**:
+A Session-Aligned Financial Field that selects the most recent available
+balance-sheet Financial Fact regardless of quarterly or annual report period.
+It represents one reported point in time and remains missing until such a fact
+is available.
+_Avoid_: Annual-only stock, period average, forward-filled zero
+
+**Financial Field Applicability**:
+The explicit set of reporting company types for which a Session-Aligned
+Financial Field has one comparable meaning. Values outside that set are missing
+and reported as coverage loss; applicability never silently rewrites the
+Liquidity Universe or supplies zero. The initial six financial fields explicitly
+apply to general industrial, banking, insurance, and securities companies;
+source nulls within that set remain missing observations.
+_Avoid_: Hidden company-type filter, universal-field assumption, zero fill
 
 **V1 Dataset Scope**:
 The implemented ordinary-A-share end-of-day data families: instrument
@@ -949,7 +1252,7 @@ classification to history, and V1 Industry Neutralization always uses L1.
 _Avoid_: Current-industry field, Liquidity Universe, industry quota
 
 **Industry Neutralization**:
-The Research Definition option that emits either unchanged scores for `none` or
+The ResearchRun input that emits either unchanged scores for `none` or
 one same-Run score set demeaned by each instrument's historical SW2021 L1
 industry after point-in-time ST exclusion for `industry`. Missing historical
 classification and groups with fewer than two valid instruments are excluded
