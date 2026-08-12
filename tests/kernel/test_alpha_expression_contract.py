@@ -3,13 +3,19 @@ import math
 import pytest
 from contracts import FIELD_BINDINGS, field, literal, operation
 
+from thesistrace.data import read_alpha_field_series
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import (
     evaluate_alpha_matrix,
     evaluate_series,
     validate_alpha,
 )
-from thesistrace.research_kernel.alpha_expression import AlphaValidationError, operator_catalog
+from thesistrace.research_kernel.alpha_expression import (
+    MAX_ALPHA_RUN_ESTIMATED_WORK,
+    AlphaValidationError,
+    estimate_alpha_run_work,
+    operator_catalog,
+)
 
 
 def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
@@ -64,6 +70,58 @@ def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
             "ts_max",
         )
     }
+
+
+def test_run_work_combines_formula_dates_and_universe_at_boundary() -> None:
+    boundary = estimate_alpha_run_work(
+        100,
+        research_session_count=50,
+        universe_instrument_count=3_000,
+    )
+    one_over = estimate_alpha_run_work(
+        100,
+        research_session_count=51,
+        universe_instrument_count=3_000,
+    )
+
+    assert boundary == MAX_ALPHA_RUN_ESTIMATED_WORK
+    assert one_over > MAX_ALPHA_RUN_ESTIMATED_WORK
+    assert (
+        estimate_alpha_run_work(
+            100,
+            research_session_count=50,
+            universe_instrument_count=0,
+        )
+        == 0
+    )
+
+
+def test_alpha_matrix_evaluates_only_the_selected_universe_union() -> None:
+    _, canonical = build_fixture()
+    selected = str(canonical["instruments"][0]["instrument_id"])
+    excluded = str(canonical["instruments"][1]["instrument_id"])
+    for snapshot in canonical["liquidity_universes"]["top300"]:
+        snapshot["instrument_ids"] = [selected]
+    reads: list[tuple[str, int]] = []
+
+    def reader(field_id, rows):
+        reads.append((field_id, len(rows)))
+        return read_alpha_field_series(field_id, rows)
+
+    matrix = evaluate_alpha_matrix(
+        canonical,
+        expression={"field_id": "price.close.adjusted"},
+        field_bindings=FIELD_BINDINGS,
+        universe_name="top300",
+        neutralization="none",
+        read_field_series=reader,
+    )
+
+    assert reads == [("price.close.adjusted", len(canonical["research_calendar"]))]
+    assert all(
+        excluded not in {row["instrument_id"] for row in session["values"]}
+        for session in matrix["sessions"]
+    )
 
 
 def test_normalized_input_has_one_bounded_semantics() -> None:
@@ -197,11 +255,14 @@ def test_normalized_evaluation_preserves_missing_and_non_finite_rules() -> None:
         values,
         field_bindings=FIELD_BINDINGS,
     ) == [None, None, None, None, math.log(4.0)]
-    assert evaluate_series(
-        operation("divide", close, operation("subtract", close, close)),
-        values,
-        field_bindings=FIELD_BINDINGS,
-    ) == [None] * 5
+    assert (
+        evaluate_series(
+            operation("divide", close, operation("subtract", close, close)),
+            values,
+            field_bindings=FIELD_BINDINGS,
+        )
+        == [None] * 5
+    )
     assert evaluate_series(literal(1), {}, field_bindings=FIELD_BINDINGS) == [1.0]
 
 
@@ -214,6 +275,7 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
         field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
     assert matrix["checksum"] == (
         "5acaa9358b7a109487c94477d93b96562f961307e7f780348c4ee8080e2048fb"

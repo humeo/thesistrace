@@ -124,3 +124,16 @@ def alpha_identifier_by_field_id() -> dict[str, str]:
         for field in alpha_field_catalog()
         if field.alpha is not None
     }
+
+
+def read_alpha_field_series(
+    field_id: str,
+    rows: Sequence[Mapping[str, object] | None],
+) -> AlphaSeries:
+    field = next(
+        (definition for definition in alpha_field_catalog() if definition.field_id == field_id),
+        None,
+    )
+    if field is None or field.alpha_series_reader is None:
+        raise KeyError(f"unknown Alpha field: {field_id}")
+    return field.alpha_series_reader(rows)

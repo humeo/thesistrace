@@ -33,7 +33,7 @@ from thesistrace.daily_track.checkpoint import (
     restore_tracking_origin,
     terminal_strategy_state,
 )
-from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data import DatasetLifecycle, MountedGenerationStore, read_alpha_field_series
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -1954,6 +1954,7 @@ def _kernel_input(
         commission_min_cny="5",
         stamp_duty_sell_rate="0.0005",
         transfer_fee_rate="0.00001",
+        read_field_series=read_alpha_field_series,
         research_start_session=sessions[0],
         research_end_session=sessions[-1],
     )

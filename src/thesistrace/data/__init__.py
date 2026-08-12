@@ -10,6 +10,7 @@ from thesistrace.data.fields import (
     alpha_field_catalog,
     alpha_identifier_by_field_id,
     field_definitions,
+    read_alpha_field_series,
 )
 from thesistrace.data.generation_store import (
     GenerationStoreError,
@@ -90,4 +91,5 @@ __all__ = [
     "bootstrap_collection_plan",
     "field_definitions",
     "refresh_collection_plan",
+    "read_alpha_field_series",
 ]

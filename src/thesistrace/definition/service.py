@@ -27,7 +27,11 @@ from thesistrace.definition.models import (
     OperatorOption,
     RunValidationIssue,
 )
-from thesistrace.research_kernel.alpha_expression import ParsedAlpha
+from thesistrace.research_kernel.alpha_expression import (
+    MAX_ALPHA_RUN_ESTIMATED_WORK,
+    ParsedAlpha,
+    estimate_alpha_run_work,
+)
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run import ImmutableRunInput, ResearchRunSummary
 
@@ -475,6 +479,30 @@ def _dataset_issues(
                 message="Alpha field is unavailable in current Data",
             )
         )
+    sessions = snapshot.research_period(start, end)
+    universe = str(content["universe"])
+    if not issues and sessions:
+        calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
+            start=sessions[0],
+            end=sessions[-1],
+            lookback=parsed_alpha.effective_lookback,
+            universe=universe,
+        )
+        estimated_work = estimate_alpha_run_work(
+            parsed_alpha.estimated_work,
+            research_session_count=calculation_session_count,
+            universe_instrument_count=universe_instrument_count,
+        )
+        if estimated_work > MAX_ALPHA_RUN_ESTIMATED_WORK:
+            issues.append(
+                RunValidationIssue(
+                    code="ALPHA_RUN_WORK_EXCEEDS_LIMIT",
+                    field="alpha",
+                    message=(
+                        "Alpha Formula, Research Dates, and Universe exceed the Run work budget"
+                    ),
+                )
+            )
     return issues
 
 

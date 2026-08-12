@@ -29,6 +29,7 @@ MAX_FORMULA_LENGTH = 4096
 MAX_EXPRESSION_NODES = 256
 MAX_EXPRESSION_DEPTH = 32
 MAX_EFFECTIVE_LOOKBACK = 252
+MAX_ESTIMATED_WORK = 4096
 ALPHA_IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
@@ -161,6 +162,18 @@ class AlphaLanguage:
                     kind="resource_limit",
                     expected=MAX_EFFECTIVE_LOOKBACK,
                     actual=built.effective_lookback,
+                ),
+            )
+        if built.estimated_work > MAX_ESTIMATED_WORK:
+            self._raise(
+                source,
+                "WORK_EXCEEDS_LIMIT",
+                f"Estimated work exceeds {MAX_ESTIMATED_WORK}",
+                parsed.body,
+                details=DiagnosticDetails(
+                    kind="resource_limit",
+                    expected=MAX_ESTIMATED_WORK,
+                    actual=built.estimated_work,
                 ),
             )
         return CompiledAlpha(

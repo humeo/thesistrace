@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from thesistrace.research_kernel.alpha import (
+    FieldSeriesReader,
     alpha_matrix_checksum,
     evaluate_alpha_matrix,
     validate_alpha,
@@ -31,6 +32,7 @@ class RunInput:
     _canonical_data_json: bytes = field(repr=False)
     _alpha_expression_json: bytes = field(repr=False)
     _field_bindings: tuple[tuple[str, str], ...] = field(repr=False)
+    _read_field_series: FieldSeriesReader = field(repr=False)
     universe: str
     neutralization: str
     holdings_count: int
@@ -49,6 +51,7 @@ class RunInput:
         canonical_data: dict[str, object],
         alpha_expression: AlphaExpression,
         field_bindings: Mapping[str, str],
+        read_field_series: FieldSeriesReader,
         universe: str,
         neutralization: str,
         holdings_count: int,
@@ -69,6 +72,7 @@ class RunInput:
             "_alpha_expression_json",
             canonical_json_bytes(alpha_expression),
         )
+        object.__setattr__(self, "_read_field_series", read_field_series)
         object.__setattr__(
             self,
             "_field_bindings",
@@ -101,6 +105,10 @@ class RunInput:
     def field_bindings_snapshot(self) -> dict[str, str]:
         return dict(self._field_bindings)
 
+    @property
+    def field_series_reader(self) -> FieldSeriesReader:
+        return self._read_field_series
+
     def with_canonical_data(
         self,
         canonical_data: dict[str, object],
@@ -111,6 +119,7 @@ class RunInput:
             canonical_data=canonical_data,
             alpha_expression=self.alpha_expression_snapshot(),
             field_bindings=self.field_bindings_snapshot(),
+            read_field_series=self._read_field_series,
             universe=self.universe,
             neutralization=self.neutralization,
             holdings_count=self.holdings_count,
@@ -122,9 +131,7 @@ class RunInput:
             transfer_fee_rate=self.transfer_fee_rate,
             research_start_session=self.research_start_session,
             research_end_session=(
-                self.research_end_session
-                if research_end_session is None
-                else research_end_session
+                self.research_end_session if research_end_session is None else research_end_session
             ),
         )
 
@@ -286,6 +293,7 @@ def _calculate(
         field_bindings=run_input.field_bindings_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
+        read_field_series=run_input.field_series_reader,
     )
     selected = set(period_sessions)
     matrix["sessions"] = [

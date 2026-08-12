@@ -17,7 +17,12 @@ from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
-from thesistrace.data import DatasetLifecycle, GenerationStoreError, MountedGenerationStore
+from thesistrace.data import (
+    DatasetLifecycle,
+    GenerationStoreError,
+    MountedGenerationStore,
+    read_alpha_field_series,
+)
 from thesistrace.publication import (
     PreparedPublication,
     Publication,
@@ -1074,6 +1079,7 @@ def _kernel_input(
         canonical_data=canonical,
         alpha_expression=dict(alpha),
         field_bindings=immutable_input.field_bindings,
+        read_field_series=read_alpha_field_series,
         universe=str(content["universe"]),
         neutralization=str(content["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),

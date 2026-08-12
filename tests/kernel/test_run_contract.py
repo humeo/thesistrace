@@ -3,6 +3,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from thesistrace.data import read_alpha_field_series
 from thesistrace.research_kernel import KernelRunError, KernelState, RunInput, RunOutput, run
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.result import build_result_payload
@@ -134,6 +135,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            read_field_series=read_alpha_field_series,
         )
 
 
@@ -184,6 +186,7 @@ def _run_input(
         commission_min_cny=str(costs["commission_min_cny"]),
         stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        read_field_series=read_alpha_field_series,
         research_start_session=str(calendar[20]) if include_period else None,
         research_end_session=str(calendar[-1]) if include_period else None,
     )

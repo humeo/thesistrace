@@ -1,9 +1,11 @@
 import copy
+import random
 from datetime import date, timedelta
 
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, literal, operation
 
+from thesistrace.data import read_alpha_field_series
 from thesistrace.research_kernel import (
     AdvanceInput,
     InsufficientCalculationWarmupError,
@@ -278,6 +280,54 @@ def test_explicit_period_advance_matches_batch_across_irregular_chunks(
     )
 
 
+def test_fixed_seed_nested_expression_batch_matches_daily_track_incremental() -> None:
+    complete = _canonical(session_count=5)
+    generator = random.Random(20260812)
+    for row in complete["prices"]:
+        row["close_adj"] = f"{10 + generator.random() * 5:.8f}"
+    expression = operation(
+        "add",
+        operation("ts_mean", CLOSE_ADJUSTED, literal(2)),
+        operation("delta", CLOSE_ADJUSTED, literal(1)),
+    )
+    expected = run(
+        _run_input(
+            complete,
+            expression=expression,
+            start=SESSIONS[1],
+            end=SESSIONS[-1],
+        )
+    ).track_state
+    actual = run(
+        _run_input(
+            complete,
+            expression=expression,
+            start=SESSIONS[1],
+            end=SESSIONS[1],
+        )
+    ).track_state
+
+    for index in range(2, len(SESSIONS)):
+        actual = advance(
+            AdvanceInput(
+                prior_state=actual,
+                target_canonical_data=slice_canonical_sessions(
+                    complete,
+                    list(SESSIONS[: index + 1]),
+                ),
+                appended_sessions=[SESSIONS[index]],
+                continuation=continuation_snapshot(actual),
+                calculation_scope="research_period",
+            )
+        )
+
+    actual_evidence = _retained_evidence(actual)
+    expected_evidence = _retained_evidence(expected)
+    assert equivalence_bytes(actual_evidence) == equivalence_bytes(expected_evidence), (
+        first_divergence(actual_evidence, expected_evidence)
+    )
+
+
 def test_explicit_period_advance_rebuilds_the_same_bounded_continuation() -> None:
     complete = _canonical(session_count=5)
     expression = operation("pct_change", CLOSE_ADJUSTED, literal(1))
@@ -434,6 +484,7 @@ def _run_input(
         commission_min_cny="5",
         stamp_duty_sell_rate="0.0005",
         transfer_fee_rate="0.00001",
+        read_field_series=read_alpha_field_series,
         research_start_session=start,
         research_end_session=end,
     )

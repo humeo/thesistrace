@@ -224,6 +224,47 @@ class MountedGenerationStore:
             research_calendar=calendar,
         )
 
+    def count_universe_instruments(
+        self,
+        manifest_sha256: str,
+        *,
+        universe: str,
+        start_session: str,
+        end_session: str,
+    ) -> int:
+        if universe not in _UNIVERSE_NAMES or start_session > end_session:
+            raise ValueError("Universe calculation window is invalid")
+        root = self._read_generation_manifest(manifest_sha256)
+        references = root["tables"]
+        assert isinstance(references, list)
+        index = next(
+            index for index, spec in enumerate(_TABLE_SPECS) if spec.name == "liquidity_universes"
+        )
+        spec = _TABLE_SPECS[index]
+        reference = references[index]
+        if not isinstance(reference, Mapping):
+            raise GenerationStoreError("Generation table reference is incompatible")
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
+        instruments: set[str] = set()
+        for ordinal, object_ref in enumerate(objects):
+            _validate_object_reference(object_ref, ordinal)
+            assert isinstance(object_ref, Mapping)
+            first_key = object_ref["first_sort_key"]
+            last_key = object_ref["last_sort_key"]
+            if first_key is None or last_key is None:
+                continue
+            if not isinstance(first_key, list) or not isinstance(last_key, list):
+                raise GenerationStoreError("Generation table object boundary is invalid")
+            if str(last_key[0]) < start_session or str(first_key[0]) > end_session:
+                continue
+            for row in self._open_partition(spec, object_ref, ordinal):
+                session = str(row["session"])
+                if start_session <= session <= end_session and str(row["universe"]) == universe:
+                    instruments.update(str(value) for value in row["instrument_ids"])
+        return len(instruments)
+
     def open_refresh_base(
         self,
         manifest_sha256: str,
@@ -432,9 +473,7 @@ class MountedGenerationStore:
             "field_availability": root["field_availability"],
             "tables": tables,
         }
-        if root["data_identity"] != hashlib.sha256(
-            canonical_json_bytes(identity)
-        ).hexdigest():
+        if root["data_identity"] != hashlib.sha256(canonical_json_bytes(identity)).hexdigest():
             raise GenerationStoreError("Generation data identity is invalid")
         _descriptor_from_root(manifest_sha256, root)
         return root
@@ -557,9 +596,7 @@ class MountedGenerationStore:
             prefix_rows.extend(
                 row
                 for row in self._open_partition(spec, object_ref, ordinal)
-                if rewrite_start_session
-                <= str(row[spec.session_field])
-                < replace_from_session
+                if rewrite_start_session <= str(row[spec.session_field]) < replace_from_session
             )
         affected_rows = [
             *prefix_rows,

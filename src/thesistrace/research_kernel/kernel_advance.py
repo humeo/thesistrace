@@ -253,6 +253,7 @@ def advance_continuation(
         field_bindings=run_input.field_bindings_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
+        read_field_series=run_input.field_series_reader,
     )
     evaluated_rows = evaluated.get("sessions")
     prior_rows = prior_alpha.get("sessions")
@@ -395,6 +396,7 @@ def _advance_alpha(
         field_bindings=run_input.field_bindings_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
+        read_field_series=run_input.field_series_reader,
     )
     new_set = set(new_sessions)
     evaluated_sessions = evaluated.get("sessions")
@@ -608,6 +610,7 @@ def _rebuild_explicit_alpha(
         field_bindings=run_input.field_bindings_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
+        read_field_series=run_input.field_series_reader,
     )
     selected = set(research_sessions)
     rows = [

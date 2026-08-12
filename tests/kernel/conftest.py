@@ -1,6 +1,7 @@
 import pytest
 from contracts import FIELD_BINDINGS, PCT_CHANGE_20
 
+from thesistrace.data import read_alpha_field_series
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel import KernelState, RunInput, RunOutput, run
 from thesistrace.research_kernel.alpha import alpha_matrix_checksum, evaluate_alpha_matrix
@@ -37,6 +38,7 @@ def accepted_calculation_case() -> dict[str, object]:
         field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
     selected = set(research_sessions)
     matrix["sessions"] = [
@@ -106,6 +108,7 @@ def accepted_kernel_run(
             commission_min_cny=str(costs["commission_min_cny"]),
             stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
             transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            read_field_series=read_alpha_field_series,
             research_start_session=str(canonical["research_calendar"][20]),
             research_end_session=str(canonical["research_calendar"][-1]),
         )

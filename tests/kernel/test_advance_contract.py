@@ -8,6 +8,7 @@ from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
     restore_tracking_checkpoint,
 )
+from thesistrace.data import read_alpha_field_series
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel import (
     AdvanceInput,
@@ -577,6 +578,7 @@ def _run_input(
         commission_min_cny=str(costs["commission_min_cny"]),
         stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        read_field_series=read_alpha_field_series,
         research_start_session=research_start_session,
         research_end_session=research_end_session,
     )

@@ -5,6 +5,7 @@ from decimal import Decimal
 
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 
+from thesistrace.data import read_alpha_field_series
 from thesistrace.research_kernel import RunInput, run
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.strategy import run_strategy
@@ -517,6 +518,7 @@ def test_manual_historical_universe_excludes_a_future_stock_and_changes_on_sched
         field_bindings=FIELD_BINDINGS,
         universe_name="manual",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
 
     assert [row["instrument_id"] for row in matrix["sessions"][0]["values"]] == [A]
@@ -671,6 +673,7 @@ def _kernel_run(
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
             transfer_fee_rate="0.00001",
+            read_field_series=read_alpha_field_series,
             research_start_session=SESSIONS[0],
             research_end_session=SESSIONS[-1],
         )

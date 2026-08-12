@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import ast
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from thesistrace.research_kernel.alpha_builtins import BUILTIN_DEFINITIONS
+
 type AlphaExpression = Mapping[str, object]
 type OperandRule = Literal["numeric", "window"]
+
+MAX_ALPHA_RUN_ESTIMATED_WORK = 15_000_000
 
 
 @dataclass(frozen=True)
@@ -26,10 +29,11 @@ class AlphaValidationError(ValueError):
 @dataclass(frozen=True)
 class ParsedAlpha:
     expression: AlphaExpression
-    tree: ast.Expression
     field_names: tuple[str, ...]
     field_ids: tuple[str, ...]
+    field_ids_by_identifier: dict[str, str]
     effective_lookback: int
+    estimated_work: int
 
 
 @dataclass(frozen=True)
@@ -98,7 +102,7 @@ def validate_normalized_alpha(
     *,
     field_bindings: Mapping[str, str],
 ) -> ParsedAlpha:
-    body, effective_lookback, fields, field_ids = _build_node(
+    expression, effective_lookback, estimated_work, fields, field_ids = _build_node(
         expression,
         location="alpha.expression",
         expected_rule="numeric",
@@ -111,12 +115,28 @@ def validate_normalized_alpha(
             f"effective lookback {effective_lookback} exceeds 252",
         )
     return ParsedAlpha(
-        expression=dict(expression),
-        tree=ast.fix_missing_locations(ast.Expression(body=body)),
+        expression=expression,
         field_names=tuple(sorted(fields)),
         field_ids=tuple(sorted(field_ids)),
+        field_ids_by_identifier={
+            identifier: field_id
+            for field_id, identifier in field_bindings.items()
+            if field_id in field_ids
+        },
         effective_lookback=effective_lookback,
+        estimated_work=estimated_work,
     )
+
+
+def estimate_alpha_run_work(
+    formula_work: int,
+    *,
+    research_session_count: int,
+    universe_instrument_count: int,
+) -> int:
+    if formula_work < 1 or research_session_count < 1 or universe_instrument_count < 0:
+        raise ValueError("Alpha Run work dimensions are invalid")
+    return formula_work * research_session_count * universe_instrument_count
 
 
 def _build_node(
@@ -125,10 +145,10 @@ def _build_node(
     location: str,
     expected_rule: OperandRule,
     field_bindings: Mapping[str, str],
-) -> tuple[ast.expr, int, set[str], set[str]]:
+) -> tuple[dict[str, object], int, int, set[str], set[str]]:
     if expected_rule == "window":
-        expression, lookback, fields = _build_window(node, location)
-        return expression, lookback, fields, set()
+        expression, lookback, work, fields = _build_window(node, location)
+        return expression, lookback, work, fields, set()
     if not isinstance(node, Mapping):
         _reject("MALFORMED_NODE", location, "expression node must be an object")
 
@@ -140,7 +160,7 @@ def _build_node(
         evaluation_name = field_bindings.get(field_id)
         if evaluation_name is None:
             _reject("UNKNOWN_FIELD", location, f"unknown field_id: {field_id}")
-        return ast.Name(id=f"f{evaluation_name}", ctx=ast.Load()), 0, {evaluation_name}, {field_id}
+        return {"kind": "field", "field_id": field_id}, 0, 1, {evaluation_name}, {field_id}
 
     if keys == {"literal"}:
         value = node["literal"]
@@ -152,7 +172,7 @@ def _build_node(
             finite_value = False
         if not finite_value:
             _reject("NON_FINITE_LITERAL", location, "literal must be finite")
-        return ast.Constant(value=value), 0, set(), set()
+        return {"kind": "number", "value": value}, 0, 1, set(), set()
 
     if keys != {"operator_id", "operands"}:
         _reject("MALFORMED_NODE", location, "node has unknown or missing properties")
@@ -182,23 +202,33 @@ def _build_node(
         for index, (operand, rule) in enumerate(zip(operands, operator.operand_rules, strict=True))
     ]
     child_lookback = max((item[1] for item in built), default=0)
-    fields = set().union(*(item[2] for item in built))
-    field_ids = set().union(*(item[3] for item in built))
+    child_work = sum(item[2] for item in built)
+    fields = set().union(*(item[3] for item in built))
+    field_ids = set().union(*(item[4] for item in built))
     if operator.kind == "historical":
         effective_lookback = child_lookback + int(operands[1]["literal"])
     elif operator.kind == "rolling":
         effective_lookback = child_lookback + int(operands[1]["literal"]) - 1
     else:
         effective_lookback = child_lookback
+    if operator.kind == "arithmetic":
+        estimated_work = child_work + 1
+    else:
+        builtin = next(
+            definition for definition in BUILTIN_DEFINITIONS if definition.identifier == operator_id
+        )
+        window = int(operands[1]["literal"]) if operator_id in WINDOW_OPERATOR_IDS else None
+        estimated_work = builtin.estimated_work(child_work, window)
     return (
-        _operator_ast(operator_id, [item[0] for item in built]),
+        _operator_expression(operator_id, [item[0] for item in built]),
         effective_lookback,
+        estimated_work,
         fields,
         field_ids,
     )
 
 
-def _build_window(node: object, location: str) -> tuple[ast.expr, int, set[str]]:
+def _build_window(node: object, location: str) -> tuple[dict[str, object], int, int, set[str]]:
     if not isinstance(node, Mapping) or set(node) != {"literal"}:
         _reject("INVALID_OPERAND", location, "window operand must be an integer literal")
     value = node["literal"]
@@ -206,21 +236,23 @@ def _build_window(node: object, location: str) -> tuple[ast.expr, int, set[str]]
         _reject("INVALID_OPERAND", location, "window operand must be an integer literal")
     if value < 1 or value > 252:
         _reject("WINDOW_OUT_OF_RANGE", location, "window must be between 1 and 252")
-    return ast.Constant(value=value), 0, set()
+    return {"kind": "number", "value": value}, 0, 1, set()
 
 
-def _operator_ast(operator_id: str, operands: list[ast.expr]) -> ast.expr:
-    binary = {
-        "add": ast.Add,
-        "subtract": ast.Sub,
-        "multiply": ast.Mult,
-        "divide": ast.Div,
-    }
-    if operator_type := binary.get(operator_id):
-        return ast.BinOp(left=operands[0], op=operator_type(), right=operands[1])
+def _operator_expression(
+    operator_id: str,
+    operands: list[dict[str, object]],
+) -> dict[str, object]:
+    if operator_id in {"add", "subtract", "multiply", "divide"}:
+        return {
+            "kind": "binary",
+            "operator": operator_id,
+            "left": operands[0],
+            "right": operands[1],
+        }
     if operator_id == "negate":
-        return ast.UnaryOp(op=ast.USub(), operand=operands[0])
-    return ast.Call(func=ast.Name(id=operator_id, ctx=ast.Load()), args=operands, keywords=[])
+        return {"kind": "unary", "operator": "negate", "operand": operands[0]}
+    return {"kind": "call", "identifier": operator_id, "arguments": operands}
 
 
 def _reject(reason_code: str, location: str, message: str) -> None:

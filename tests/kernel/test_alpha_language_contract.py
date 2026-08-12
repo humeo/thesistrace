@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from time import perf_counter
 
 import pytest
@@ -13,7 +14,10 @@ from thesistrace.alpha_language import (
     alpha_language,
 )
 from thesistrace.data import AlphaFieldCapability, FieldDefinition, alpha_field_catalog
-from thesistrace.research_kernel.alpha_builtins import BUILTIN_DEFINITIONS
+from thesistrace.research_kernel.alpha_builtins import (
+    BUILTIN_DEFINITIONS,
+    BuiltinWorkDefinition,
+)
 
 
 def test_catalog_composes_only_capable_fields_and_public_builtins() -> None:
@@ -460,3 +464,85 @@ def test_formula_node_limit_is_independent_of_depth_limit() -> None:
     outcome = alpha_language.diagnose(parts[0])
 
     assert outcome.diagnostics[0].code == "TOO_MANY_EXPRESSION_NODES"
+
+
+def test_work_limit_accepts_boundary_and_rejects_one_over() -> None:
+    abs_definition = next(
+        definition for definition in BUILTIN_DEFINITIONS if definition.identifier == "abs"
+    )
+    others = tuple(
+        definition for definition in BUILTIN_DEFINITIONS if definition.identifier != "abs"
+    )
+    boundary = AlphaLanguage(
+        fields=alpha_field_catalog(),
+        builtins=(
+            replace(abs_definition, work=BuiltinWorkDefinition(base_operations=4095)),
+            *others,
+        ),
+    )
+    one_over = AlphaLanguage(
+        fields=alpha_field_catalog(),
+        builtins=(
+            replace(abs_definition, work=BuiltinWorkDefinition(base_operations=4096)),
+            *others,
+        ),
+    )
+
+    assert boundary.compile("abs(close_adj)").estimated_work == 4096
+    diagnostic = one_over.diagnose("abs(close_adj)").diagnostics[0]
+    assert diagnostic.code == "WORK_EXCEEDS_LIMIT"
+    assert diagnostic.details is not None
+    assert diagnostic.details.expected == 4096
+    assert diagnostic.details.actual == 4097
+
+
+def test_source_limit_accepts_boundary_and_rejects_one_over() -> None:
+    boundary = "close_adj".ljust(4096)
+
+    assert alpha_language.compile(boundary).source == boundary
+    assert alpha_language.diagnose(f"{boundary} ").diagnostics[0].code == "FORMULA_TOO_LONG"
+
+
+def test_depth_limit_accepts_boundary_and_rejects_one_over() -> None:
+    boundary = "close_adj"
+    for _ in range(31):
+        boundary = f"abs({boundary})"
+
+    assert alpha_language.compile(boundary).depth == 32
+    assert alpha_language.diagnose(f"abs({boundary})").diagnostics[0].code == (
+        "EXPRESSION_TOO_DEEP"
+    )
+
+
+def test_lookback_limit_accepts_boundary_and_rejects_one_over() -> None:
+    assert alpha_language.compile("lag(close_adj, 252)").effective_lookback == 252
+    assert alpha_language.diagnose("lag(lag(close_adj, 252), 1)").diagnostics[0].code == (
+        "LOOKBACK_EXCEEDS_LIMIT"
+    )
+
+
+def test_node_limit_accepts_boundary_and_rejects_one_over() -> None:
+    boundary = _balanced_node_formula(node_count=256)
+    one_over = _balanced_node_formula(node_count=257)
+
+    assert alpha_language.compile(boundary).node_count == 256
+    assert alpha_language.diagnose(one_over).diagnostics[0].code == "TOO_MANY_EXPRESSION_NODES"
+
+
+def _balanced_node_formula(*, node_count: int) -> str:
+    leaves = ["close_adj" for _ in range(65)]
+    unary_count = node_count - (len(leaves) * 2 - 1)
+    assert 0 <= unary_count <= len(leaves) * 2
+    for index in range(unary_count):
+        leaf_index = index % len(leaves)
+        leaves[leaf_index] = f"abs({leaves[leaf_index]})"
+    while len(leaves) > 1:
+        leaves = [
+            (
+                f"({leaves[index]} + {leaves[index + 1]})"
+                if index + 1 < len(leaves)
+                else leaves[index]
+            )
+            for index in range(0, len(leaves), 2)
+        ]
+    return leaves[0]

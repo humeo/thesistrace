@@ -179,7 +179,7 @@ def test_reference_inventory_does_not_reopen_parquet_objects(
     assert GenerationFileRef("manifest", generation.manifest_sha256) in references
 
 
-def test_admission_projection_opens_only_root_metadata_and_research_calendar(
+def test_admission_projection_opens_only_research_calendar(
     tmp_path: Path,
 ) -> None:
     canonical = _canonical()
@@ -197,9 +197,7 @@ def test_admission_projection_opens_only_root_metadata_and_research_calendar(
     price_manifest = _manifest(tmp_path, price_reference["manifest_sha256"])
     _object_path(tmp_path, price_manifest["objects"][0]["sha256"]).unlink()
 
-    admission = MountedGenerationStore(tmp_path).open_admission(
-        generation.manifest_sha256
-    )
+    admission = MountedGenerationStore(tmp_path).open_admission(generation.manifest_sha256)
 
     assert admission.generation.manifest_sha256 == generation.manifest_sha256
     assert admission.generation.dataset_coverage == {
@@ -212,8 +210,55 @@ def test_admission_projection_opens_only_root_metadata_and_research_calendar(
         "price.close.adjusted",
     )
     assert admission.research_calendar == tuple(canonical["research_calendar"])
+    assert store.count_universe_instruments(
+        generation.manifest_sha256,
+        universe="top3000",
+        start_session=str(canonical["research_calendar"][0]),
+        end_session=str(canonical["research_calendar"][-1]),
+    ) == len(
+        {
+            str(instrument_id)
+            for row in canonical["liquidity_universes"]["top3000"]
+            for instrument_id in row["instrument_ids"]
+        }
+    )
     with pytest.raises(GenerationStoreError, match="missing"):
         MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
+
+
+def test_universe_count_opens_only_overlapping_session_partitions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = _canonical(session_count=GENERATION_SESSION_PARTITION_COUNT * 2 + 1)
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    opened: list[int] = []
+    original = store._open_partition
+
+    def record_partition(spec, object_ref, ordinal):
+        if spec.name == "liquidity_universes":
+            opened.append(ordinal)
+        return original(spec, object_ref, ordinal)
+
+    monkeypatch.setattr(store, "_open_partition", record_partition)
+    final_session = str(canonical["research_calendar"][-1])
+
+    assert (
+        store.count_universe_instruments(
+            generation.manifest_sha256,
+            universe="top3000",
+            start_session=final_session,
+            end_session=final_session,
+        )
+        == 2
+    )
+    assert opened == [2]
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
@@ -337,6 +382,7 @@ def test_inconsistent_adjusted_price_derivation_is_rejected(tmp_path: Path) -> N
             source_name="deterministic-test",
             source_lineage={"snapshot": "fixed"},
         )
+
 
 def test_base_pool_cannot_include_an_instrument_after_terminal_delisting(
     tmp_path: Path,

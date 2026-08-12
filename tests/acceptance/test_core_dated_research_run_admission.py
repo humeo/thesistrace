@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -89,9 +89,7 @@ def test_invalid_requested_dates_save_a_draft_without_queueing_or_reading_data(
         ]
         assert wrong_type.status_code == 422
         assert (
-            client.get(
-                f"/api/definitions/{not_ready_outcome['definition']['id']}"
-            ).json()
+            client.get(f"/api/definitions/{not_ready_outcome['definition']['id']}").json()
             == not_ready_outcome["definition"]
         )
         assert _counts(settings) == {"definitions": 3, "receipts": 3, "runs": 0}
@@ -292,6 +290,7 @@ def test_admission_snapshot_maps_weekend_and_holiday_boundaries() -> None:
             date(2026, 8, 7),
         ),
         available_field_ids=frozenset({"price.close.adjusted"}),
+        count_universe_instruments=lambda _universe, _start, _end: 1,
     )
 
     assert snapshot.research_period(date(2026, 8, 1), date(2026, 8, 5)) == (
@@ -299,6 +298,42 @@ def test_admission_snapshot_maps_weekend_and_holiday_boundaries() -> None:
         date(2026, 8, 4),
     )
     assert snapshot.research_period(date(2026, 8, 5), date(2026, 8, 5)) == ()
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_over_budget_formula_dates_and_universe_create_no_research_run(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = _business_sessions(date(2010, 1, 4), count=4_000)
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        rejected = client.post(
+            "/api/definitions/run",
+            json={
+                **_valid_command("dated-over-work-budget"),
+                "start_date": sessions[0],
+                "end_date": sessions[-1],
+                "universe": "top3000",
+                "alpha": _near_limit_normalized_alpha(),
+            },
+        )
+
+        assert rejected.status_code == 200
+        assert rejected.json()["issues"] == [
+            {
+                "code": "ALPHA_RUN_WORK_EXCEEDS_LIMIT",
+                "field": "alpha",
+                "message": (
+                    "Alpha Formula, Research Dates, and Universe exceed the Run work budget"
+                ),
+            }
+        ]
+        assert _counts(settings) == {"definitions": 1, "receipts": 1, "runs": 0}
 
 
 def _valid_command(request_id: str) -> dict[str, object]:
@@ -313,6 +348,36 @@ def _valid_command(request_id: str) -> dict[str, object]:
         "holdings_count": 1,
         "rebalance_every_sessions": 1,
     }
+
+
+def _business_sessions(start: date, *, count: int) -> tuple[str, ...]:
+    sessions: list[str] = []
+    cursor = start
+    while len(sessions) < count:
+        if cursor.weekday() < 5:
+            sessions.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return tuple(sessions)
+
+
+def _near_limit_normalized_alpha() -> dict[str, object]:
+    terms: list[dict[str, object]] = [
+        {
+            "operator_id": "ts_mean",
+            "operands": [
+                {"field_id": "price.close.adjusted"},
+                {"literal": 252},
+            ],
+        }
+        for _ in range(16)
+    ]
+    expression = terms[0]
+    for term in terms[1:]:
+        expression = {
+            "operator_id": "add",
+            "operands": [expression, term],
+        }
+    return expression
 
 
 def _canonical(
@@ -333,9 +398,7 @@ def _canonical(
             {
                 **template["field_catalog"][0],
                 "name": (
-                    "close_adj"
-                    if available_field_id == "price.close.adjusted"
-                    else "volume_shares"
+                    "close_adj" if available_field_id == "price.close.adjusted" else "volume_shares"
                 ),
                 "field_id": available_field_id,
             }

@@ -4,6 +4,7 @@ from decimal import Decimal
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 
+from thesistrace.data import read_alpha_field_series
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
 from thesistrace.research_kernel.strategy import (
@@ -29,9 +30,7 @@ def test_a_share_quantity_child_order_and_cost_rules() -> None:
     assert split_child_orders("main", 2_100_000) == [1_000_000, 1_000_000, 100_000]
     assert split_child_orders("chinext", 650_000) == [300_000, 300_000, 50_000]
     assert split_child_orders("star", 200_001) == [100_000, 99_801, 200]
-    assert split_child_orders(
-        "main", 1_000_050, complete_liquidation=True
-    ) == [1_000_000, 50]
+    assert split_child_orders("main", 1_000_050, complete_liquidation=True) == [1_000_000, 50]
     with pytest.raises(StrategyCalculationError, match="board lot"):
         split_child_orders("main", 1_000_050)
 
@@ -96,6 +95,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
         field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
     definition = {
         "universe": "top300",
@@ -194,9 +194,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
                 for event in metrics["turnover"]["events"]
                 if str(event["session"]) in sessions
             ],
-            cumulative_cost=Decimal(
-                str(chunk[-1]["cumulative_transaction_cost"])
-            ),
+            cumulative_cost=Decimal(str(chunk[-1]["cumulative_transaction_cost"])),
             rejections=[
                 rejection
                 for rejection in result["rejections"]
@@ -227,6 +225,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
         field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
     definition = {
         "universe": "top300",
@@ -273,6 +272,7 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
         field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
     definition = strategy_definition(rebalance_interval=20)
     report_start = 0
@@ -340,6 +340,7 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
         field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
     report_start = 0
     execution_session = canonical["research_calendar"][report_start + 1]
@@ -378,6 +379,7 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
         field_bindings=FIELD_BINDINGS,
         universe_name="top300",
         neutralization="none",
+        read_field_series=read_alpha_field_series,
     )
     definition = strategy_definition(rebalance_interval=20)
     report_start = 0

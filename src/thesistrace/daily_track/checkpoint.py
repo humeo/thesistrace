@@ -9,6 +9,7 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
 from thesistrace.daily_track.models import TrackingOrigin
+from thesistrace.data import read_alpha_field_series
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.canonical_state import canonical_sessions
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
@@ -86,6 +87,7 @@ def restore_tracking_checkpoint(
             str(key): str(item)
             for key, item in _mapping(contract.get("field_bindings"), "field bindings").items()
         },
+        read_field_series=read_alpha_field_series,
         universe=str(contract["universe"]),
         neutralization=str(contract["neutralization"]),
         holdings_count=int(contract["holdings_count"]),
@@ -292,6 +294,7 @@ def _origin_run_input(
         canonical_data=canonical,
         alpha_expression=dict(alpha),
         field_bindings={str(key): str(value) for key, value in field_bindings.items()},
+        read_field_series=read_alpha_field_series,
         universe=str(content["universe"]),
         neutralization=str(content["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),

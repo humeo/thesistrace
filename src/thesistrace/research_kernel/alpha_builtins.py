@@ -131,23 +131,30 @@ def _rolling_total(arguments: tuple[BuiltinArgument, ...], *, mean: bool) -> Num
     series, window = _series_window(arguments)
     result: list[float | None] = []
     buckets = [_CompensatedBucket() for _ in range(_SUM_BUCKET_COUNT)]
+    active_buckets: set[int] = set()
     missing = 0
     for index, value in enumerate(series):
         if value is None:
             missing += 1
         else:
-            _update_sum_bucket(buckets, value)
+            active_buckets.add(_update_sum_bucket(buckets, value))
         if index >= window:
             expired = series[index - window]
             if expired is None:
                 missing -= 1
             else:
-                _update_sum_bucket(buckets, -expired)
+                active_buckets.add(_update_sum_bucket(buckets, -expired))
         complete = index + 1 >= window and missing == 0
         if not complete:
             result.append(None)
             continue
-        result.append(_project_sum_buckets(buckets, divisor=window if mean else 1))
+        result.append(
+            _project_sum_buckets(
+                buckets,
+                active_buckets=active_buckets,
+                divisor=window if mean else 1,
+            )
+        )
     return tuple(result)
 
 
@@ -185,15 +192,22 @@ def _sum_bucket(value: float) -> tuple[int, int]:
     return index, scale_exponent
 
 
-def _update_sum_bucket(buckets: list[_CompensatedBucket], value: float) -> None:
+def _update_sum_bucket(buckets: list[_CompensatedBucket], value: float) -> int:
     index, scale_exponent = _sum_bucket(value)
     buckets[index].add(math.ldexp(value, -scale_exponent))
+    return index
 
 
-def _project_sum_buckets(buckets: list[_CompensatedBucket], *, divisor: int) -> float | None:
+def _project_sum_buckets(
+    buckets: list[_CompensatedBucket],
+    *,
+    active_buckets: set[int],
+    divisor: int,
+) -> float | None:
     projected: list[float] = []
     try:
-        for index, bucket in enumerate(buckets):
+        for index in sorted(active_buckets):
+            bucket = buckets[index]
             normalized = bucket.value() / divisor
             scale_exponent = _SUM_MIN_EXPONENT + index * _SUM_BUCKET_WIDTH
             projected.append(math.ldexp(normalized, scale_exponent))
