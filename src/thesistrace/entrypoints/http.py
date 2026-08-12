@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import JSONResponse
 
 from thesistrace.daily_track import (
@@ -32,6 +32,7 @@ from thesistrace.research_folder import (
     ResearchFolderSummary,
 )
 from thesistrace.research_run import (
+    OrganizeResearchRunCommand,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionConflict,
     ResearchRunAdmissionRejected,
@@ -40,6 +41,7 @@ from thesistrace.research_run import (
     ResearchRunCancelConflict,
     ResearchRunDetail,
     ResearchRunList,
+    ResearchRunOrganizationConflict,
     ResearchRunResultUnavailable,
     ResearchRunStartTrackingConflict,
     ResearchRunSummary,
@@ -133,8 +135,37 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             )
 
     @app.get("/api/research-runs", response_model=ResearchRunList)
-    def list_research_runs(request: Request) -> ResearchRunList:
-        return _runtime(request).research_runs.list()
+    def list_research_runs(
+        request: Request,
+        folder_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = Query(default=50, ge=1, le=100),
+    ) -> ResearchRunList:
+        try:
+            return _runtime(request).research_runs.list(
+                folder_id=folder_id,
+                cursor=cursor,
+                limit=limit,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.patch(
+        "/api/research-runs/{run_id}",
+        response_model=ResearchRunSummary,
+    )
+    def organize_research_run(
+        request: Request,
+        run_id: str,
+        command: OrganizeResearchRunCommand,
+    ) -> ResearchRunSummary:
+        try:
+            run = _runtime(request).research_runs.organize(run_id, command)
+        except ResearchRunOrganizationConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if run is None:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+        return run
 
     @app.get(
         "/api/research-runs/{run_id}",

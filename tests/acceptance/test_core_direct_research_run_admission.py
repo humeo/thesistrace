@@ -293,6 +293,112 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_research_organization_changes_without_changing_evidence(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        first = client.post(
+            "/api/research-runs",
+            json=_valid_command("organization-first"),
+        ).json()
+        second = client.post(
+            "/api/research-runs",
+            json=_valid_command("organization-second"),
+        ).json()
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        before = _stored_evidence(settings, first["id"])
+
+        folder = client.post("/api/research-folders", json={"name": "Signals"}).json()
+        duplicate_name = client.patch(
+            f"/api/research-runs/{first['id']}",
+            json={"name": second["name"]},
+        )
+        moved = client.patch(
+            f"/api/research-runs/{first['id']}",
+            json={"folder_id": folder["id"]},
+        )
+        missing = client.patch(
+            f"/api/research-runs/{first['id']}",
+            json={"folder_id": "folder_missing"},
+        )
+
+        assert duplicate_name.status_code == 200
+        assert moved.status_code == 200
+        assert moved.json()["name"] == second["name"]
+        assert moved.json()["folder_id"] == folder["id"]
+        assert missing.status_code == 409
+        assert client.get(f"/api/research-runs/{first['id']}").json()["folder_id"] == folder["id"]
+        assert _stored_evidence(settings, first["id"]) == before
+
+        custom_page = client.get(
+            "/api/research-runs",
+            params={"folder_id": folder["id"], "limit": 1},
+        ).json()
+        default_page = client.get(
+            "/api/research-runs",
+            params={"folder_id": "folder_default", "limit": 1},
+        ).json()
+        assert [item["id"] for item in custom_page["items"]] == [first["id"]]
+        assert [item["id"] for item in default_page["items"]] == [second["id"]]
+        assert client.get(
+            "/api/research-runs", params={"cursor": "not-a-cursor"}
+        ).status_code == 422
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_research_organization_updates_compose_concurrently_and_cursor_is_stable(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)) as client:
+        _publish_current_data(settings)
+        created = [
+            client.post(
+                "/api/research-runs",
+                json=_valid_command(f"organization-page-{index}"),
+            ).json()
+            for index in range(3)
+        ]
+        folder = client.post("/api/research-folders", json={"name": "Signals"}).json()
+        first_page = client.get("/api/research-runs", params={"limit": 1}).json()
+        assert len(first_page["items"]) == 1
+        assert first_page["next_cursor"] is not None
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            responses = list(
+                executor.map(
+                    lambda change: client.patch(
+                        f"/api/research-runs/{created[0]['id']}",
+                        json=change,
+                    ),
+                    ({"name": "Duplicate"}, {"folder_id": folder["id"]}),
+                )
+            )
+        assert {response.status_code for response in responses} == {200}
+        organized = client.get(f"/api/research-runs/{created[0]['id']}").json()
+        assert organized["name"] == "Duplicate"
+        assert organized["folder_id"] == folder["id"]
+
+        second_page = client.get(
+            "/api/research-runs",
+            params={"limit": 1, "cursor": first_page["next_cursor"]},
+        ).json()
+        assert len(second_page["items"]) == 1
+        assert second_page["items"][0]["id"] != first_page["items"][0]["id"]
+        assert second_page["next_cursor"] is not None
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 @pytest.mark.database_restart
 def test_direct_admission_reopens_and_replays_after_database_restart(
     tmp_path: Path,
@@ -365,6 +471,30 @@ def _admission_counts(settings: CoreSettings) -> dict[str, int]:
             ).fetchone()
         assert row is not None
         return {name: int(row[name]) for name in ("requests", "runs")}
+    finally:
+        database.close()
+
+
+def _stored_evidence(settings: CoreSettings, run_id: str) -> dict[str, object]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT immutable_input::text AS immutable_input,
+                       status, execution_fence, result_manifest_sha256,
+                       result_provenance::text AS result_provenance,
+                       failure_reason,
+                       (SELECT count(*) FROM research_runs.attempts
+                        WHERE run_id = %s) AS attempt_count
+                FROM research_runs.runs
+                WHERE id = %s
+                """,
+                (run_id, run_id),
+            ).fetchone()
+        assert row is not None
+        return dict(row)
     finally:
         database.close()
 

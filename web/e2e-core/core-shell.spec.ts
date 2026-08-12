@@ -233,12 +233,69 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const customDetail = await page.request.get(`/api/research-runs/${customRunId}`);
     expect((await customDetail.json()).folder_id).toBe(customFolderId);
 
+    const draftsBeforeOrganization = await page.evaluate(() => Object.fromEntries(
+      Object.entries(localStorage).filter(([key]) => key.startsWith("thesistrace.research-draft.")),
+    ));
+    let releaseOrganization: ((route: Route) => void) | undefined;
+    const heldOrganization = new Promise<Route>((resolve) => { releaseOrganization = resolve; });
+    await page.route(`**/api/research-runs/${customRunId}`, async (route) => {
+      if (route.request().method() !== "PATCH") {
+        await route.continue();
+        return;
+      }
+      releaseOrganization?.(route);
+    });
+    await page.getByLabel("Research name", { exact: true }).fill("Renamed Research");
+    await page.getByRole("button", { name: "Update organization" }).click();
+    const heldOrganizationRoute = await heldOrganization;
+    await expect(page.getByLabel("Research name", { exact: true })).toBeDisabled();
+    await expect(page.getByLabel("Research Folder")).toBeDisabled();
+    await heldOrganizationRoute.continue();
+    await page.unroute(`**/api/research-runs/${customRunId}`);
+    await expect(page.locator(".research-run-facts")).toContainText("Renamed Research");
+    await page.getByLabel("Research name", { exact: true }).fill("Duplicate Name");
+    await page.getByLabel("Research Folder").selectOption("folder_default");
+    await page.getByRole("button", { name: "Update organization" }).click();
+    await expect(page.locator(".research-run-facts")).toContainText("Duplicate Name");
+    const organizedDetail = await page.request.get(`/api/research-runs/${customRunId}`);
+    expect(await organizedDetail.json()).toMatchObject({
+      id: customRunId,
+      name: "Duplicate Name",
+      folder_id: "folder_default",
+      status: "succeeded",
+    });
+    expect(await page.evaluate(() => Object.fromEntries(
+      Object.entries(localStorage).filter(([key]) => key.startsWith("thesistrace.research-draft.")),
+    ))).toEqual(draftsBeforeOrganization);
+    await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
+
     await page.goto("/research-runs");
     await expect(page.getByRole("link", { name: "Duplicate Name" })).toHaveCount(2);
     await expect(page.getByText(defaultRunId ?? "missing-default-run-id", { exact: true })).toBeVisible();
     await expect(page.getByText(customRunId, { exact: true })).toBeVisible();
     await expect(page.getByText("ts_mean(close_adj, 2)", { exact: true })).toBeVisible();
     await expect(page.getByText("close_adj", { exact: true })).toBeVisible();
+    await page.getByLabel("Filter by Folder").selectOption(customFolderId);
+    await expect(page.getByText("No Research Runs yet.")).toBeVisible();
+    await page.getByLabel("Filter by Folder").selectOption("folder_default");
+    await expect(page.getByRole("link", { name: "Duplicate Name" })).toHaveCount(2);
+
+    let folderRequestCount = 0;
+    await page.route("**/api/research-folders", async (route) => {
+      folderRequestCount += 1;
+      if (folderRequestCount === 1) {
+        await route.fulfill({ status: 503, contentType: "application/json", body: "{}" });
+        return;
+      }
+      await route.continue();
+    });
+    await page.goto("/research-runs");
+    await expect(page.getByRole("link", { name: "Duplicate Name" })).toHaveCount(2);
+    await expect(page.getByRole("alert")).toHaveText("Research Folders unavailable");
+    await page.getByRole("button", { name: "Retry Folders" }).click();
+    await expect(page.getByLabel("Filter by Folder")).toBeVisible();
+    expect(folderRequestCount).toBe(2);
+    await page.unroute("**/api/research-folders");
     await expectRemovedAuthoringControlsToBeAbsent(page);
   } finally {
     await attachResponses(testInfo, responses);

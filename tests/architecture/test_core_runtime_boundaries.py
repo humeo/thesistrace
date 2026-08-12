@@ -334,6 +334,7 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("delete", "/api/research-folders/{folder_id}"),
         ("get", "/api/research-runs"),
         ("post", "/api/research-runs"),
+        ("patch", "/api/research-runs/{run_id}"),
         ("get", "/api/research-runs/{run_id}"),
         ("post", "/api/research-runs/{run_id}/cancel"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),

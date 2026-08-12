@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 
@@ -69,6 +76,29 @@ class ResearchRunAdmissionRejection(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     issues: list[ResearchRunAdmissionIssue]
+
+
+class OrganizeResearchRunCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    name: ResearchName | None = None
+    folder_id: FolderId | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Research name must not be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_change(self) -> OrganizeResearchRunCommand:
+        if self.name is None and self.folder_id is None:
+            raise ValueError("Research organization change is required")
+        return self
 
 
 class AlphaAdmissionFacts(BaseModel):

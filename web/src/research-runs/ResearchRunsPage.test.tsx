@@ -2,10 +2,23 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  ResearchFolderLoadFailure,
+  ResearchOrganizationPanel,
   ResearchRunHistory,
   TerminalStrategyStateView,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
+
+describe("ResearchFolderLoadFailure", () => {
+  it("keeps Folder recovery separate from ResearchRun loading", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchFolderLoadFailure error="Research Folders unavailable" onRetry={() => undefined} />,
+    );
+    expect(markup).toContain("Research Folders unavailable");
+    expect(markup).toContain("Retry Folders");
+    expect(markup).not.toContain("ResearchRun unavailable");
+  });
+});
 
 const TERMINAL_STATE: TerminalStrategyState = {
   session: "2026-08-05",
@@ -83,5 +96,34 @@ describe("ResearchRunHistory", () => {
     expect(markup).toContain("succeeded");
     expect(markup).toContain("ts_mean(close_adj, 20)");
     expect(markup.match(/>Mean</g)).toHaveLength(2);
+  });
+});
+
+describe("ResearchOrganizationPanel", () => {
+  it("offers mutable name and Folder controls without Run or Draft recreation", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchOrganizationPanel
+        folders={[
+          { id: "folder_default", name: "Default", is_default: true },
+          { id: "folder_signals", name: "Signals", is_default: false },
+        ]}
+        onOrganized={() => undefined}
+        run={{
+          id: "run_aaaaaaaa",
+          status: "succeeded",
+          name: "Duplicate",
+          folder_id: "folder_default",
+          created_at: "2026-08-13T01:02:03Z",
+          start_date: "2026-08-01",
+          end_date: "2026-08-05",
+          formula_summary: "close_adj",
+        }}
+      />,
+    );
+    expect(markup).toContain("Research name");
+    expect(markup).toContain("Research Folder");
+    expect(markup).toContain("Signals");
+    expect(markup).toContain("Update organization");
+    expect(markup).not.toMatch(/Draft|Rerun|Revision/);
   });
 });

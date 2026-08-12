@@ -1,5 +1,6 @@
 from thesistrace.research_run.models import (
     ImmutableRunInput,
+    OrganizeResearchRunCommand,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionRejection,
     ResearchRunCancelCommand,
@@ -13,6 +14,7 @@ from thesistrace.research_run.service import (
     ResearchRunAdmissionConflict,
     ResearchRunAdmissionRejected,
     ResearchRunCancelConflict,
+    ResearchRunOrganizationConflict,
     ResearchRunResultUnavailable,
     ResearchRunService,
     ResearchRunStartTrackingConflict,
@@ -22,6 +24,7 @@ from thesistrace.research_run.service import (
 
 __all__ = [
     "ImmutableRunInput",
+    "OrganizeResearchRunCommand",
     "ResearchRunAdmissionCommand",
     "ResearchRunAdmissionConflict",
     "ResearchRunAdmissionRejected",
@@ -32,6 +35,7 @@ __all__ = [
     "ResearchRunList",
     "ResearchRunResult",
     "ResearchRunResultUnavailable",
+    "ResearchRunOrganizationConflict",
     "ResearchRunService",
     "ResearchRunStartTrackingConflict",
     "ResearchRunSummary",

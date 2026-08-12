@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from binascii import Error as Base64DecodeError
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from threading import Event, Thread
 from uuid import uuid4
 
@@ -51,6 +54,7 @@ from thesistrace.research_run.models import (
     AlphaAdmissionFacts,
     DataAdmissionFacts,
     ImmutableRunInput,
+    OrganizeResearchRunCommand,
     ResearchRunAdmissionCommand,
     ResearchRunAdmissionIssue,
     ResearchRunAuthorableInput,
@@ -134,6 +138,10 @@ class ResearchRunInputInvalid(ValueError):
 
 
 class ResearchRunAdmissionConflict(RuntimeError):
+    pass
+
+
+class ResearchRunOrganizationConflict(RuntimeError):
     pass
 
 
@@ -325,7 +333,14 @@ class ResearchRunService:
                 )
         return True
 
-    def list(self) -> ResearchRunList:
+    def list(
+        self,
+        *,
+        folder_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> ResearchRunList:
+        cursor_created_at, cursor_id = _decode_list_cursor(cursor)
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
@@ -333,10 +348,32 @@ class ResearchRunService:
                        requested_end_date, created_at, immutable_input,
                        failure_reason
                 FROM research_runs.runs
+                WHERE (%s::text IS NULL OR folder_id = %s::text)
+                  AND (
+                    %s::timestamptz IS NULL
+                    OR created_at < %s::timestamptz
+                    OR (created_at = %s::timestamptz AND id > %s::text)
+                  )
                 ORDER BY created_at DESC, id
-                """
+                LIMIT %s::integer
+                """,
+                (
+                    folder_id,
+                    folder_id,
+                    cursor_created_at,
+                    cursor_created_at,
+                    cursor_created_at,
+                    cursor_id,
+                    limit + 1,
+                ),
             ).fetchall()
-        return ResearchRunList(items=[_summary(row) for row in rows], next_cursor=None)
+        has_more = len(rows) > limit
+        selected = rows[:limit]
+        next_cursor = _encode_list_cursor(selected[-1]) if has_more else None
+        return ResearchRunList(
+            items=[_summary(row) for row in selected],
+            next_cursor=next_cursor,
+        )
 
     def get(self, run_id: str) -> ResearchRunSummary | None:
         with self._database.transaction() as transaction:
@@ -349,6 +386,47 @@ class ResearchRunService:
                 WHERE id = %s
                 """,
                 (run_id,),
+            ).fetchone()
+        return None if row is None else _summary(row)
+
+    def organize(
+        self,
+        run_id: str,
+        command: OrganizeResearchRunCommand,
+    ) -> ResearchRunSummary | None:
+        with self._database.transaction() as transaction:
+            if command.folder_id is not None:
+                folder = transaction.execute(
+                    """
+                    SELECT id
+                    FROM research_folders.folders
+                    WHERE id = %s
+                    FOR KEY SHARE
+                    """,
+                    (command.folder_id,),
+                ).fetchone()
+                if folder is None:
+                    raise ResearchRunOrganizationConflict(
+                        "Research Folder does not exist"
+                    )
+            row = transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET name = CASE WHEN %s THEN %s ELSE name END,
+                    folder_id = CASE WHEN %s THEN %s ELSE folder_id END,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING id, name, folder_id, status, requested_start_date,
+                          requested_end_date, created_at, immutable_input,
+                          failure_reason
+                """,
+                (
+                    command.name is not None,
+                    command.name,
+                    command.folder_id is not None,
+                    command.folder_id,
+                    run_id,
+                ),
             ).fetchone()
         return None if row is None else _summary(row)
 
@@ -1091,6 +1169,35 @@ def _admission_receipt(
         """,
         (request_id,),
     ).fetchone()
+
+
+def _encode_list_cursor(row: Mapping[str, object]) -> str:
+    created_at = row["created_at"]
+    if not isinstance(created_at, datetime):
+        raise TypeError("ResearchRun created_at must be a datetime")
+    payload = json.dumps(
+        {"created_at": created_at.isoformat(), "id": row["id"]},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_list_cursor(cursor: str | None) -> tuple[datetime | None, str | None]:
+    if cursor is None:
+        return None, None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        decoded: object = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {"created_at", "id"}:
+            raise ValueError
+        created_at = datetime.fromisoformat(str(decoded["created_at"]))
+        run_id = decoded["id"]
+        if created_at.tzinfo is None or not isinstance(run_id, str) or not run_id:
+            raise ValueError
+    except (ValueError, UnicodeDecodeError, Base64DecodeError) as error:
+        raise ValueError("ResearchRun cursor is invalid") from error
+    return created_at, run_id
 
 
 def _admitted_input(

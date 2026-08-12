@@ -116,6 +116,12 @@ export type ResearchRun = {
 };
 
 type ResearchRunList = { items: ResearchRun[]; next_cursor: string | null };
+export type ResearchFolderOption = {
+  id: string;
+  name: string;
+  is_default: boolean;
+};
+type ResearchFolderList = { items: ResearchFolderOption[]; next_cursor: null };
 type LoadState = "loading" | "refreshing" | null;
 const FACTOR_HORIZONS = ["1", "5", "20"] as const;
 const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached";
@@ -125,11 +131,15 @@ const ACTIVE_TRACK_LIMIT_MESSAGE =
 export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [items, setItems] = useState<ResearchRun[] | null>(null);
+  const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
+  const [folderFilter, setFolderFilter] = useState("");
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
   const [startingTracking, setStartingTracking] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [folderRefreshGeneration, setFolderRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
   const cancelGeneration = useRef(0);
   const cancelController = useRef<AbortController | null>(null);
@@ -140,11 +150,31 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
   useEffect(() => {
     const controller = new AbortController();
+    setFolderError(null);
+    void fetch("/api/research-folders", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Research Folders unavailable");
+        const payload = (await response.json()) as ResearchFolderList;
+        setFolders(payload.items);
+      })
+      .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setFolderError("Research Folders unavailable");
+      });
+    return () => controller.abort();
+  }, [folderRefreshGeneration]);
+
+  useEffect(() => {
+    const controller = new AbortController();
     const generation = ++loadGeneration.current;
     let timeout: number | undefined;
     setError(null);
     setLoadState(refreshGeneration === 0 ? "loading" : "refreshing");
-    const path = runId ? `/api/research-runs/${runId}` : "/api/research-runs";
+    const path = runId
+      ? `/api/research-runs/${runId}`
+      : folderFilter
+        ? `/api/research-runs?folder_id=${encodeURIComponent(folderFilter)}`
+        : "/api/research-runs";
 
     async function load(polling = false) {
       try {
@@ -181,7 +211,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       if (timeout !== undefined) window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [refreshGeneration, runId]);
+  }, [folderFilter, refreshGeneration, runId]);
 
   useEffect(() => () => {
     cancelGeneration.current += 1;
@@ -196,6 +226,10 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
   function refresh() {
     setRefreshGeneration((generation) => generation + 1);
+  }
+
+  function refreshFolders() {
+    setFolderRefreshGeneration((generation) => generation + 1);
   }
 
   async function cancel() {
@@ -337,6 +371,20 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
           <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
         </div>
+        {folderError !== null ? (
+          <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
+        ) : folders.length === 0 ? (
+          <p role="status">Loading Research Folders…</p>
+        ) : (
+          <ResearchOrganizationPanel
+            folders={folders}
+            key={`${run.id}:${run.name}:${run.folder_id}`}
+            onOrganized={(organized) => setRun((current) => current === null
+              ? organized
+              : { ...current, ...organized })}
+            run={run}
+          />
+        )}
         {run.status === "failed" && run.failure_reason ? (
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
         ) : null}
@@ -349,8 +397,124 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   return (
     <section aria-label="Research Runs">
       <h1>Research Runs</h1>
+      {folderError !== null ? (
+        <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
+      ) : folders.length === 0 ? (
+        <p role="status">Loading Research Folders…</p>
+      ) : (
+        <label>Filter by Folder
+          <select
+            aria-label="Filter by Folder"
+            onChange={(event) => setFolderFilter(event.target.value)}
+            value={folderFilter}
+          >
+            <option value="">All Folders</option>
+            {folders.map((folder) => (
+              <option key={folder.id} value={folder.id}>{folder.name}</option>
+            ))}
+          </select>
+        </label>
+      )}
       {items?.length === 0 ? <p>No Research Runs yet.</p> : null}
       <ResearchRunHistory items={items ?? []} />
+    </section>
+  );
+}
+
+export function ResearchFolderLoadFailure({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <section aria-label="Research Folder availability">
+      <p role="alert">{error}</p>
+      <button onClick={onRetry}>Retry Folders</button>
+    </section>
+  );
+}
+
+export function ResearchOrganizationPanel({
+  run,
+  folders,
+  onOrganized,
+}: {
+  run: ResearchRun;
+  folders: ResearchFolderOption[];
+  onOrganized: (run: ResearchRun) => void;
+}) {
+  const [name, setName] = useState(run.name);
+  const [folderId, setFolderId] = useState(run.folder_id);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const normalizedName = name.trim();
+  const nameChanged = normalizedName !== "" && normalizedName !== run.name;
+  const folderChanged = folderId !== run.folder_id;
+
+  async function organize(): Promise<void> {
+    if ((!nameChanged && !folderChanged) || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    const body: { name?: string; folder_id?: string } = {};
+    if (nameChanged) body.name = normalizedName;
+    if (folderChanged) body.folder_id = folderId;
+    try {
+      const response = await fetch(`/api/research-runs/${run.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        let detail = `Research organization failed (${response.status})`;
+        try {
+          const payload = (await response.json()) as { detail?: unknown };
+          if (typeof payload.detail === "string") detail = payload.detail;
+        } catch {
+          // The HTTP status remains a sufficient public failure reason.
+        }
+        throw new Error(detail);
+      }
+      onOrganized((await response.json()) as ResearchRun);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : "Research organization failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section aria-label="Research organization" className="research-organization">
+      <h2>Organization</h2>
+      <label>Research name
+        <input
+          aria-label="Research name"
+          disabled={submitting}
+          maxLength={200}
+          onChange={(event) => setName(event.target.value)}
+          value={name}
+        />
+      </label>
+      <label>Research Folder
+        <select
+          aria-label="Research Folder"
+          disabled={submitting}
+          onChange={(event) => setFolderId(event.target.value)}
+          value={folderId}
+        >
+          {folders.map((folder) => (
+            <option key={folder.id} value={folder.id}>{folder.name}</option>
+          ))}
+        </select>
+      </label>
+      <button
+        disabled={submitting || (!nameChanged && !folderChanged)}
+        onClick={() => void organize()}
+      >
+        {submitting ? "Updating…" : "Update organization"}
+      </button>
+      {error !== null ? <p role="alert">{error}</p> : null}
     </section>
   );
 }
