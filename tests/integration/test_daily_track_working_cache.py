@@ -66,9 +66,21 @@ def test_working_cache_validates_one_independent_entry(
     assert not path.exists()
 
 
-def _store(cache: _DailyTrackWorkingCache) -> None:
+def test_working_cache_reconciliation_retains_only_live_track_entries(
+    tmp_path: Path,
+) -> None:
+    cache = _DailyTrackWorkingCache(tmp_path / "cache")
+    _store(cache, track_id=TRACK_ID)
+    _store(cache, track_id="deleted-track")
+
+    assert cache.reconcile([TRACK_ID]) == (1, 0)
+    assert cache.path(TRACK_ID).is_file()
+    assert not cache.path("deleted-track").exists()
+
+
+def _store(cache: _DailyTrackWorkingCache, *, track_id: str = TRACK_ID) -> None:
     assert cache.store(
-        track_id=TRACK_ID,
+        track_id=track_id,
         basis_sha256=BASIS_SHA256,
         head_manifest_sha256=HEAD_MANIFEST_SHA256,
         fence=FENCE,

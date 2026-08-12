@@ -139,6 +139,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "publication.objects",
             "publication.manifests",
             "publication.manifest_objects",
+            "publication.object_deletions",
         ),
         "research_folder": ("research_folders.folders",),
     }
@@ -335,11 +336,13 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("get", "/api/research-runs"),
         ("post", "/api/research-runs"),
         ("patch", "/api/research-runs/{run_id}"),
+        ("delete", "/api/research-runs/{run_id}"),
         ("get", "/api/research-runs/{run_id}"),
         ("post", "/api/research-runs/{run_id}/cancel"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),
         ("get", "/api/daily-tracks"),
         ("get", "/api/daily-tracks/{track_id}"),
+        ("delete", "/api/daily-tracks/{track_id}"),
         ("post", "/api/daily-tracks/{track_id}/retry"),
         ("post", "/api/daily-tracks/{track_id}/stop"),
     }
@@ -645,7 +648,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
     assert '"daily_tracks.activation.capacity"' in track_source
     assert "def _record_current_failure(" in track_source
-    assert "def reconcile_stopped_working_cache(" in track_source
+    assert "def reconcile_working_cache(" in track_source
     assert "def activate(" in track_source
     assert "def resolve_activation(" not in track_source
     assert "origin" in track_source
@@ -666,12 +669,12 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "AdvanceInput(" in track_source
     assert 'kind="daily-track.checkpoint"' in track_source
     assert "while runtime.daily_tracks.process_next()" in worker_source
-    assert "runtime.daily_tracks.reconcile_stopped_working_cache()" in worker_source
+    assert "runtime.daily_tracks.reconcile_working_cache()" in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
     assert '"/api/daily-tracks/{track_id}/retry"' in http_source
     assert '"/api/daily-tracks/{track_id}/stop"' in http_source
     assert '@app.post("/api/daily-tracks"' not in http_source
-    assert '@app.delete("/api/daily-tracks' not in http_source
+    assert '"/api/daily-tracks/{track_id}"' in http_source
     for legacy_coordinate in (
         "seed_release_id",
         "current_release_id",

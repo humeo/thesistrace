@@ -14,12 +14,15 @@ from thesistrace.research_run.service import (
     ResearchRunAdmissionConflict,
     ResearchRunAdmissionRejected,
     ResearchRunCancelConflict,
+    ResearchRunDeleteConflict,
     ResearchRunOrganizationConflict,
     ResearchRunResultUnavailable,
     ResearchRunService,
     ResearchRunStartTrackingConflict,
     ResearchRunTrackingTemporarilyUnavailable,
     ResearchRunTrackingUnavailable,
+    research_result_manifest_is_referenced,
+    research_run_exists,
 )
 
 __all__ = [
@@ -31,6 +34,7 @@ __all__ = [
     "ResearchRunAdmissionRejection",
     "ResearchRunCancelCommand",
     "ResearchRunCancelConflict",
+    "ResearchRunDeleteConflict",
     "ResearchRunDetail",
     "ResearchRunList",
     "ResearchRunResult",
@@ -42,4 +46,6 @@ __all__ = [
     "StartTrackingCommand",
     "ResearchRunTrackingUnavailable",
     "ResearchRunTrackingTemporarilyUnavailable",
+    "research_result_manifest_is_referenced",
+    "research_run_exists",
 ]

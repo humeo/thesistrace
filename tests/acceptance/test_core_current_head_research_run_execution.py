@@ -367,6 +367,308 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_research_delete_preserves_track_until_explicit_stop_and_delete(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("delete-preserves-track-seed"),
+        )
+        assert accepted.status_code == 202
+        run_id = str(accepted.json()["id"])
+        runtime = client.app.state.core_runtime
+        assert runtime.research_runs.process_next() is True
+        stored_run = _stored_execution(settings, run_id)
+        result_manifest = str(stored_run["result_manifest_sha256"])
+
+        tracking = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "delete-preserves-track-activation"},
+        )
+        assert tracking.status_code == 201
+        track_id = str(tracking.json()["id"])
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 409
+
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 204
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 404
+        assert client.get(f"/api/research-runs/{run_id}").status_code == 404
+        surviving = client.get(f"/api/daily-tracks/{track_id}")
+        assert surviving.status_code == 200
+        assert surviving.json()["origin"]["seed_run_id"] == run_id
+        assert surviving.json()["origin"]["seed_research_available"] is False
+        assert surviving.json()["strategy_session"] == seed_sessions[-1]
+        with runtime.database.transaction() as transaction:
+            assert transaction.execute(
+                "SELECT 1 FROM publication.manifests WHERE sha256 = %s",
+                (result_manifest,),
+            ).fetchone() == {"?column?": 1}
+            research_counts = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM research_runs.runs WHERE id = %s) AS runs,
+                    (SELECT count(*) FROM research_runs.attempts WHERE run_id = %s) AS attempts,
+                    (SELECT count(*) FROM research_runs.admission_requests
+                     WHERE run_id = %s) AS admissions,
+                    (SELECT count(*) FROM research_runs.start_tracking_receipts
+                     WHERE seed_run_id = %s) AS tracking_receipts
+                """,
+                (run_id, run_id, run_id, run_id),
+            ).fetchone()
+        assert research_counts == {
+            "runs": 0,
+            "attempts": 0,
+            "admissions": 0,
+            "tracking_receipts": 0,
+        }
+
+        advanced_sessions = (*seed_sessions, "2026-08-06", "2026-08-07")
+        advanced_head = _publish_head(
+            settings,
+            sessions=advanced_sessions,
+            price_offset=1,
+            expected_manifest=seed_head,
+        )
+        worker_cache_root = tmp_path / "separate-worker-cache"
+        worker_tracks = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            working_cache_root=worker_cache_root,
+        )
+        assert worker_tracks.process_next() is True
+        worker_cache_paths = list(worker_cache_root.glob("*.json"))
+        assert len(worker_cache_paths) == 1
+        advanced = client.get(f"/api/daily-tracks/{track_id}")
+        assert advanced.status_code == 200
+        assert advanced.json()["strategy_session"] == advanced_sessions[-1]
+        assert advanced.json()["origin"]["seed_research_available"] is False
+
+        with runtime.database.transaction() as transaction:
+            checkpoint_manifests = {
+                str(row["manifest_sha256"])
+                for row in transaction.execute(
+                    """
+                    SELECT manifest_sha256
+                    FROM daily_tracks.session_checkpoints
+                    WHERE track_id = %s
+                    """,
+                    (track_id,),
+                ).fetchall()
+            }
+            owned_manifests = checkpoint_manifests | {result_manifest}
+            owned_objects = {
+                str(row["object_sha256"])
+                for row in transaction.execute(
+                    """
+                    SELECT object_sha256
+                    FROM publication.manifest_objects
+                    WHERE manifest_sha256 = ANY(%s)
+                    """,
+                    (list(owned_manifests),),
+                ).fetchall()
+            }
+        assert checkpoint_manifests
+        assert owned_objects
+
+        stopped = client.post(
+            f"/api/daily-tracks/{track_id}/stop",
+            json={"request_id": "delete-preserves-track-stop"},
+        )
+        assert stopped.status_code == 202
+        assert stopped.json()["status"] == "stopped"
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 204
+        assert worker_cache_paths[0].is_file()
+        cache_mode = worker_cache_root.stat().st_mode
+        worker_cache_root.chmod(0o500)
+        try:
+            assert worker_tracks.reconcile_working_cache() == 0
+            assert worker_cache_paths[0].is_file()
+        finally:
+            worker_cache_root.chmod(cache_mode)
+        assert worker_tracks.reconcile_working_cache() == 1
+        assert not worker_cache_paths[0].exists()
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 404
+        assert client.get(f"/api/daily-tracks/{track_id}").status_code == 404
+
+        with runtime.database.transaction() as transaction:
+            track_counts = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM daily_tracks.tracks WHERE id = %s) AS tracks,
+                    (SELECT count(*) FROM daily_tracks.session_tracking_states
+                     WHERE track_id = %s) AS states,
+                    (SELECT count(*) FROM daily_tracks.session_checkpoints
+                     WHERE track_id = %s) AS checkpoints,
+                    (SELECT count(*) FROM daily_tracks.session_progressions
+                     WHERE track_id = %s) AS progressions,
+                    (SELECT count(*) FROM daily_tracks.session_progression_attempts
+                     WHERE track_id = %s) AS attempts,
+                    (SELECT count(*) FROM daily_tracks.stop_receipts
+                     WHERE track_id = %s) AS stop_receipts,
+                    (SELECT count(*) FROM daily_tracks.retry_receipts
+                     WHERE track_id = %s) AS retry_receipts,
+                    (SELECT count(*) FROM publication.manifests
+                     WHERE sha256 = ANY(%s)) AS owned_manifests,
+                    (SELECT count(*) FROM publication.objects
+                     WHERE sha256 = ANY(%s)) AS owned_objects,
+                    (SELECT count(*) FROM publication.object_deletions) AS pending_deletions
+                """,
+                (
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    list(owned_manifests),
+                    list(owned_objects),
+                ),
+            ).fetchone()
+        assert track_counts == {
+            "tracks": 0,
+            "states": 0,
+            "checkpoints": 0,
+            "progressions": 0,
+            "attempts": 0,
+            "stop_receipts": 0,
+            "retry_receipts": 0,
+            "owned_manifests": 0,
+            "owned_objects": 0,
+            "pending_deletions": 0,
+        }
+        current_head = DatasetLifecycle(
+            runtime.database,
+            settings.data_mount,
+        ).current_head()
+        assert current_head is not None
+        assert current_head.generation_manifest_sha256 == advanced_head
+        assert MountedGenerationStore(settings.data_mount).open_generation(
+            advanced_head
+        ).manifest_sha256 == advanced_head
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint_url,
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+        )
+        remaining_keys = {
+            str(item["Key"])
+            for item in s3.list_objects_v2(
+                Bucket=settings.s3_bucket,
+                Prefix="publication/v1/sha256/",
+            ).get("Contents", [])
+        }
+        assert not {
+            f"publication/v1/sha256/{digest[:2]}/{digest}"
+            for digest in owned_objects
+        } & remaining_keys
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_delete_races_linearize_with_cancel_and_stop(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(
+        settings,
+        sessions=("2026-08-03", "2026-08-04", "2026-08-05"),
+        price_offset=0,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        queued = client.post(
+            "/api/research-runs",
+            json=_run_command("delete-cancel-race"),
+        )
+        run_id = str(queued.json()["id"])
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 409
+        run_barrier = Barrier(2)
+
+        def cancel_run():
+            run_barrier.wait(timeout=10)
+            return client.post(
+                f"/api/research-runs/{run_id}/cancel",
+                json={"request_id": "delete-cancel-race-cancel"},
+            )
+
+        def delete_run():
+            run_barrier.wait(timeout=10)
+            return client.delete(f"/api/research-runs/{run_id}")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            cancel_future = executor.submit(cancel_run)
+            delete_future = executor.submit(delete_run)
+            cancel_response = cancel_future.result(timeout=30)
+            delete_response = delete_future.result(timeout=30)
+        assert cancel_response.status_code in {200, 404}
+        assert delete_response.status_code in {204, 409}
+        remaining_run = client.get(f"/api/research-runs/{run_id}")
+        if remaining_run.status_code == 200:
+            assert remaining_run.json()["status"] == "cancelled"
+            assert client.delete(f"/api/research-runs/{run_id}").status_code == 204
+        else:
+            assert remaining_run.status_code == 404
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 404
+
+        seed = client.post(
+            "/api/research-runs",
+            json=_run_command("delete-stop-race"),
+        )
+        seed_run_id = str(seed.json()["id"])
+        runtime = client.app.state.core_runtime
+        assert runtime.research_runs.process_next() is True
+        tracking = client.post(
+            f"/api/research-runs/{seed_run_id}/daily-tracks",
+            json={"request_id": "delete-stop-race-activation"},
+        )
+        track_id = str(tracking.json()["id"])
+        track_barrier = Barrier(2)
+
+        def stop_track():
+            track_barrier.wait(timeout=10)
+            return client.post(
+                f"/api/daily-tracks/{track_id}/stop",
+                json={"request_id": "delete-stop-race-stop"},
+            )
+
+        def delete_track():
+            track_barrier.wait(timeout=10)
+            return client.delete(f"/api/daily-tracks/{track_id}")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            stop_future = executor.submit(stop_track)
+            delete_future = executor.submit(delete_track)
+            stop_response = stop_future.result(timeout=30)
+            delete_response = delete_future.result(timeout=30)
+        assert stop_response.status_code in {202, 404}
+        assert delete_response.status_code in {204, 409}
+        remaining_track = client.get(f"/api/daily-tracks/{track_id}")
+        if remaining_track.status_code == 200:
+            assert remaining_track.json()["status"] == "stopped"
+            assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 204
+        else:
+            assert remaining_track.status_code == 404
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 404
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -1125,6 +1427,7 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
         worker.start()
         assert claimed.wait(timeout=5)
         assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 409
         head_b = _publish_head(
             settings,
             sessions=sessions,
@@ -1377,6 +1680,8 @@ def test_attempt_revalidates_the_selected_generation(
         assert stored["attempt_failure_reason"] == "SelectedDataInvalid"
         assert stored["result_manifest_sha256"] is None
         assert stored["active_pin_count"] == 0
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 204
+        assert client.get(f"/api/research-runs/{run_id}").status_code == 404
 
 
 @pytest.mark.skipif(

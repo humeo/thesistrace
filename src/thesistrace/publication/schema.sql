@@ -49,6 +49,12 @@ CREATE TABLE publication.objects (
 );
 
 
+CREATE TABLE publication.object_deletions (
+    object_sha256 text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
 --
 -- Name: manifest_objects manifest_objects_manifest_sha256_logical_name_key; Type: CONSTRAINT; Schema: publication; Owner: -
 --
@@ -81,6 +87,10 @@ ALTER TABLE ONLY publication.objects
     ADD CONSTRAINT objects_pkey PRIMARY KEY (sha256);
 
 
+ALTER TABLE ONLY publication.object_deletions
+    ADD CONSTRAINT object_deletions_pkey PRIMARY KEY (object_sha256);
+
+
 --
 -- Name: manifest_objects manifest_objects_manifest_sha256_fkey; Type: FK CONSTRAINT; Schema: publication; Owner: -
 --
@@ -95,3 +105,7 @@ ALTER TABLE ONLY publication.manifest_objects
 
 ALTER TABLE ONLY publication.manifest_objects
     ADD CONSTRAINT manifest_objects_object_sha256_fkey FOREIGN KEY (object_sha256) REFERENCES publication.objects(sha256);
+
+
+ALTER TABLE ONLY publication.object_deletions
+    ADD CONSTRAINT object_deletions_object_sha256_fkey FOREIGN KEY (object_sha256) REFERENCES publication.objects(sha256) ON DELETE CASCADE;

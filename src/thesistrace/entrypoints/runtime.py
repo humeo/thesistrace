@@ -21,7 +21,11 @@ from thesistrace.data import (
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
 from thesistrace.research_folder import ResearchFolderService
-from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run import (
+    ResearchRunService,
+    research_result_manifest_is_referenced,
+    research_run_exists,
+)
 from thesistrace.research_run.result import read_result_bundle
 
 CORE_ENVIRONMENT_NAMES = (
@@ -127,6 +131,8 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             generation_store=generation_store,
             read_result_bundle=read_result_bundle,
             working_cache_root=Path(working_cache.name) / "daily-tracks",
+            seed_research_exists=research_run_exists,
+            research_references_result=research_result_manifest_is_referenced,
         )
         research_runs = ResearchRunService(
             database,
@@ -136,6 +142,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             activate_track=daily_tracks.activate,
             compile_formula=alpha_language.compile,
             current_dataset=dataset_admission.current,
+            track_references_result=daily_tracks.references_result_manifest,
         )
         yield CoreRuntime(
             database=database,

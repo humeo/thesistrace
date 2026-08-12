@@ -140,6 +140,8 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
   const [startingTracking, setStartingTracking] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [folderRefreshGeneration, setFolderRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
@@ -149,6 +151,8 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const trackingGeneration = useRef(0);
   const trackingController = useRef<AbortController | null>(null);
   const trackingRequest = useRef<{ runId: string; requestId: string } | null>(null);
+  const deleteGeneration = useRef(0);
+  const deleteController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -224,6 +228,9 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     trackingController.current?.abort();
     trackingController.current = null;
     trackingRequest.current = null;
+    deleteGeneration.current += 1;
+    deleteController.current?.abort();
+    deleteController.current = null;
   }, [runId]);
 
   function refresh() {
@@ -274,7 +281,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   }
 
   async function startTracking() {
-    if (run === null || run.status !== "succeeded") return;
+    if (run === null || run.status !== "succeeded" || deleting) return;
     const targetRun = run;
     const generation = ++trackingGeneration.current;
     loadGeneration.current += 1;
@@ -325,6 +332,40 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     }
   }
 
+  async function deleteResearch(): Promise<void> {
+    if (
+      run === null
+      || !isTerminalResearch(run.status)
+      || deleting
+      || startingTracking
+    ) return;
+    if (!window.confirm(`Permanently delete ${run.name}? DailyTracks will remain.`)) return;
+    const generation = ++deleteGeneration.current;
+    deleteController.current?.abort();
+    const controller = new AbortController();
+    deleteController.current = controller;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const response = await fetch(`/api/research-runs/${run.id}`, {
+        method: "DELETE",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Research deletion failed (${response.status})`);
+      if (generation !== deleteGeneration.current) return;
+      window.location.assign("/research-runs");
+    } catch (reason: unknown) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (generation !== deleteGeneration.current) return;
+      setDeleteError(reason instanceof Error ? reason.message : "Research deletion failed");
+    } finally {
+      if (generation === deleteGeneration.current) {
+        deleteController.current = null;
+        setDeleting(false);
+      }
+    }
+  }
+
   if (error) {
     return (
       <section aria-label="Research Runs">
@@ -356,10 +397,18 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             ) : null}
             {run.status === "succeeded" ? (
               <button
-                disabled={startingTracking}
+                disabled={startingTracking || deleting}
                 onClick={() => void startTracking()}
               >
                 {startingTracking ? "Starting Tracking…" : "Start Tracking"}
+              </button>
+            ) : null}
+            {isTerminalResearch(run.status) ? (
+              <button
+                disabled={deleting || startingTracking}
+                onClick={() => void deleteResearch()}
+              >
+                {deleting ? "Deleting…" : "Delete Research"}
               </button>
             ) : null}
           </div>
@@ -373,7 +422,8 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
           <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
         </div>
-        {folderError !== null ? (
+        {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
+        {deleting ? null : folderError !== null ? (
           <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
         ) : folders.length === 0 ? (
           <p role="status">Loading Research Folders…</p>
@@ -387,7 +437,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             run={run}
           />
         )}
-        {folders.length > 0 && run.input !== undefined && isTerminalResearch(run.status) ? (
+        {!deleting && folders.length > 0 && run.input !== undefined && isTerminalResearch(run.status) ? (
           <UseAsDraftPanel folders={folders} input={run.input} sourceFolderId={run.folder_id} />
         ) : null}
         {run.status === "failed" && run.failure_reason ? (

@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import zlib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from uuid import uuid4
 
@@ -45,6 +45,20 @@ class _DailyTrackWorkingCache:
 
     def delete(self, track_id: str) -> None:
         _discard(self.path(track_id))
+
+    def reconcile(self, retained_track_ids: Iterable[str]) -> tuple[int, int]:
+        retained_names = {self.path(track_id).name for track_id in retained_track_ids}
+        removed = 0
+        pending = 0
+        for path in self.root.glob("*.json"):
+            if path.name in retained_names:
+                continue
+            _discard(path)
+            if path.exists():
+                pending += 1
+            else:
+                removed += 1
+        return removed, pending
 
     def load(
         self,

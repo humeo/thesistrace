@@ -337,6 +337,63 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const sourceAfterReuse = await page.request.get(`/api/research-runs/${defaultRunId}`);
     expect(await sourceAfterReuse.json()).toEqual(sourceBeforeReuse);
     await expectRemovedAuthoringControlsToBeAbsent(page);
+
+    let releaseStartTracking: ((route: Route) => void) | undefined;
+    const heldStartTracking = new Promise<Route>((resolve) => {
+      releaseStartTracking = resolve;
+    });
+    const startTrackingPath = `**/api/research-runs/${reusedRunId}/daily-tracks`;
+    await page.route(startTrackingPath, async (route) => {
+      releaseStartTracking?.(route);
+    });
+    await page.getByRole("button", { name: "Start Tracking" }).click();
+    const heldStartTrackingRoute = await heldStartTracking;
+    await expect(page.getByRole("button", { name: "Delete Research" })).toBeDisabled();
+    await heldStartTrackingRoute.continue();
+    await page.unroute(startTrackingPath);
+    await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+    const trackId = page.url().split("/").at(-1);
+    expect(trackId).toMatch(/^track_[a-f0-9]+$/);
+    if (trackId === undefined) throw new Error("DailyTrack route is missing track id");
+    await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
+
+    await page.goto(`/research-runs/${reusedRunId}`);
+    page.once("dialog", async (dialog) => dialog.dismiss());
+    await page.getByRole("button", { name: "Delete Research" }).click();
+    await expect(page).toHaveURL(new RegExp(`/research-runs/${reusedRunId}$`));
+    expect((await page.request.get(`/api/research-runs/${reusedRunId}`)).status()).toBe(200);
+    page.once("dialog", async (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete Research" }).click();
+    await expect(page).toHaveURL(/\/research-runs$/);
+    expect((await page.request.get(`/api/research-runs/${reusedRunId}`)).status()).toBe(404);
+
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/daily-tracks/${trackId}`);
+      if (!response.ok()) return "unavailable";
+      return ((await response.json()) as { strategy_session: string }).strategy_session;
+    }, { timeout: 90_000 }).toBe("2026-08-11");
+    await page.goto(`/daily-tracks/${trackId}`);
+    await expect(page.getByText(`${reusedRunId} (deleted)`, { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toHaveCount(0);
+    await expect(page.locator(".research-run-facts").first()).toContainText(
+      "Strategy session 2026-08-11",
+    );
+    await expect(page.getByRole("button", { name: "Delete DailyTrack" })).toHaveCount(0);
+
+    await page.getByRole("button", { name: "Stop DailyTrack" }).click();
+    await expect(page.locator(".research-run-facts").first()).toContainText("Status stopped");
+    const deleteTrackButton = page.getByRole("button", { name: "Delete DailyTrack" });
+    await expect(deleteTrackButton).toBeVisible();
+    page.once("dialog", async (dialog) => dialog.dismiss());
+    await deleteTrackButton.click();
+    await expect(page).toHaveURL(new RegExp(`/daily-tracks/${trackId}$`));
+    expect((await page.request.get(`/api/daily-tracks/${trackId}`)).status()).toBe(200);
+    page.once("dialog", async (dialog) => dialog.accept());
+    await deleteTrackButton.click();
+    await expect(page).toHaveURL(/\/daily-tracks$/);
+    expect((await page.request.get(`/api/daily-tracks/${trackId}`)).status()).toBe(404);
+    await expect(page.getByText("No DailyTracks yet.")).toBeVisible();
   } finally {
     await attachResponses(testInfo, responses);
   }

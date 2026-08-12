@@ -20,6 +20,7 @@ export type DailyTrackDetail = {
   status: "active" | "blocked" | "stopped";
   origin: {
     seed_run_id: string;
+    seed_research_available: boolean;
     result_checksum_sha256: string;
     strategy_session: string;
     terminal_account: TerminalStrategyState;
@@ -45,11 +46,21 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const [retryState, setRetryState] = useState<RetryState>(null);
   const [stopState, setStopState] = useState<StopState>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const loadGeneration = useRef(0);
+  const deleteGeneration = useRef(0);
+  const deleteController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     setRetryState(null);
     setStopState(null);
+    setDeleteError(null);
+  }, [trackId]);
+
+  useEffect(() => () => {
+    deleteGeneration.current += 1;
+    deleteController.current?.abort();
   }, [trackId]);
 
   useEffect(() => {
@@ -132,6 +143,37 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     }
   }
 
+  async function deleteTrack(): Promise<void> {
+    if (!trackId || track?.status !== "stopped" || deleting) return;
+    if (!window.confirm(`Permanently delete DailyTrack ${trackId}?`)) return;
+    const generation = ++deleteGeneration.current;
+    deleteController.current?.abort();
+    const controller = new AbortController();
+    deleteController.current = controller;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const response = await fetch(`/api/daily-tracks/${trackId}`, {
+        method: "DELETE",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`DailyTrack deletion failed (${response.status})`);
+      if (generation !== deleteGeneration.current) return;
+      window.location.assign("/daily-tracks");
+    } catch (reason: unknown) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (generation !== deleteGeneration.current) return;
+      setDeleteError(
+        reason instanceof Error ? reason.message : "DailyTrack deletion failed",
+      );
+    } finally {
+      if (generation === deleteGeneration.current) {
+        deleteController.current = null;
+        setDeleting(false);
+      }
+    }
+  }
+
   if (error) {
     return (
       <section aria-label="Daily Tracks">
@@ -159,7 +201,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             <p className="eyebrow">Persisted daily research</p>
             <h1>DailyTrack</h1>
           </div>
-          <button disabled={loadState !== null} onClick={refresh}>Refresh</button>
+          <button disabled={loadState !== null || deleting} onClick={refresh}>Refresh</button>
           {track.status === "blocked" ? (
             <button
               disabled={retryState === "submitting"}
@@ -174,6 +216,11 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
               onClick={() => void stopTrack()}
             >
               Stop DailyTrack
+            </button>
+          ) : null}
+          {track.status === "stopped" ? (
+            <button disabled={deleting} onClick={() => void deleteTrack()}>
+              {deleting ? "Deleting…" : "Delete DailyTrack"}
             </button>
           ) : null}
         </header>
@@ -195,6 +242,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         {stopState === "accepted" ? (
           <p role="status">DailyTrack stopped permanently.</p>
         ) : null}
+        {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
         <div className="research-run-facts">
           <p><strong>Status</strong> {track.status}</p>
           <p><strong>Data through</strong> {track.data_through_session}</p>
@@ -242,7 +290,11 @@ export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origi
       <div className="research-run-facts">
         <p>
           <strong>Seed ResearchRun</strong>{" "}
-          <a href={`/research-runs/${origin.seed_run_id}`}>{origin.seed_run_id}</a>
+          {origin.seed_research_available ? (
+            <a href={`/research-runs/${origin.seed_run_id}`}>{origin.seed_run_id}</a>
+          ) : (
+            <span>{origin.seed_run_id} (deleted)</span>
+          )}
         </p>
         <p><strong>Origin strategy session</strong> {origin.strategy_session}</p>
         <p><strong>Origin net NAV</strong> {origin.terminal_account.net_nav}</p>

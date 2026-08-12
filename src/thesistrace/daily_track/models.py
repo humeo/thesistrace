@@ -124,6 +124,7 @@ class DailyTrackOriginView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     seed_run_id: str
+    seed_research_available: bool
     result_checksum_sha256: str
     strategy_session: str
     terminal_account: DailyTrackOriginAccount

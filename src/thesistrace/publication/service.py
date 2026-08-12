@@ -364,6 +364,99 @@ class Publication:
             }
         return tuple(sorted(uploaded - recorded))
 
+    def release_manifest_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        manifest_sha256: str,
+        *,
+        still_referenced: bool,
+    ) -> None:
+        """Release one product reference and enqueue only newly unreferenced bytes."""
+        lock_publication_mutation(transaction)
+        if still_referenced:
+            return
+        objects = transaction.execute(
+            """
+            SELECT object_sha256
+            FROM publication.manifest_objects
+            WHERE manifest_sha256 = %s
+            """,
+            (manifest_sha256,),
+        ).fetchall()
+        transaction.execute(
+            "DELETE FROM publication.manifest_objects WHERE manifest_sha256 = %s",
+            (manifest_sha256,),
+        )
+        transaction.execute(
+            "DELETE FROM publication.manifests WHERE sha256 = %s",
+            (manifest_sha256,),
+        )
+        for row in objects:
+            digest = str(row["object_sha256"])
+            transaction.execute(
+                """
+                INSERT INTO publication.object_deletions (object_sha256)
+                SELECT %s
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM publication.manifest_objects
+                    WHERE object_sha256 = %s
+                )
+                ON CONFLICT (object_sha256) DO NOTHING
+                """,
+                (digest, digest),
+            )
+
+    def collect_one_pending_deletion(self) -> bool:
+        """Delete one unreferenced immutable object with a durable retry record."""
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            row = transaction.execute(
+                """
+                SELECT object_sha256
+                FROM publication.object_deletions
+                ORDER BY created_at, object_sha256
+                FOR UPDATE SKIP LOCKED
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return False
+            digest = str(row["object_sha256"])
+            referenced = transaction.execute(
+                """
+                SELECT 1
+                FROM publication.manifest_objects
+                WHERE object_sha256 = %s
+                LIMIT 1
+                """,
+                (digest,),
+            ).fetchone()
+            if referenced is not None:
+                transaction.execute(
+                    "DELETE FROM publication.object_deletions WHERE object_sha256 = %s",
+                    (digest,),
+                )
+                return True
+            self._delete_immutable(digest)
+            transaction.execute(
+                "DELETE FROM publication.object_deletions WHERE object_sha256 = %s",
+                (digest,),
+            )
+            transaction.execute(
+                """
+                DELETE FROM publication.objects
+                WHERE sha256 = %s
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM publication.manifest_objects
+                    WHERE object_sha256 = %s
+                  )
+                """,
+                (digest, digest),
+            )
+        return True
+
     @staticmethod
     def _verify_recorded_links(
         transaction: PostgresTransaction,
@@ -426,6 +519,20 @@ class Publication:
                 ) from error
         except TRANSIENT_S3_ERRORS as error:
             raise PublicationUnavailableError("Publication bucket could not be reached") from error
+
+    def _delete_immutable(self, digest: str) -> None:
+        try:
+            self._s3.delete_object(Bucket=self._bucket, Key=_object_key(digest))
+        except ClientError as error:
+            if _client_error_is_transient(error):
+                raise PublicationUnavailableError(
+                    "Publication object deletion is temporarily unavailable"
+                ) from error
+            raise PublicationPreparationError("Publication object deletion failed") from error
+        except TRANSIENT_S3_ERRORS as error:
+            raise PublicationUnavailableError(
+                "Publication object deletion is temporarily unavailable"
+            ) from error
 
     def _put_immutable(self, digest: str, content: bytes, *, media_type: str) -> None:
         if self._object_exists(digest):

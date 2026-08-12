@@ -36,6 +36,8 @@ from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
     Publication,
+    PublicationPreparationError,
+    PublicationUnavailableError,
     PublishedRef,
     VerifiedBundle,
     lock_publication_mutation,
@@ -61,6 +63,8 @@ logger = logging.getLogger(__name__)
 KernelAdvance = Callable[[AdvanceInput], KernelState]
 Progress = Callable[[str, str, str], None]
 ResultBundleReader = Callable[[VerifiedBundle], dict[str, object]]
+SeedResearchExists = Callable[[PostgresTransaction, str], bool]
+ResearchReferencesResult = Callable[[PostgresTransaction, str], bool]
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
@@ -101,6 +105,10 @@ class DailyTrackStopConflict(RuntimeError):
 
 
 class DailyTrackStopUnavailable(RuntimeError):
+    pass
+
+
+class DailyTrackDeleteConflict(RuntimeError):
     pass
 
 
@@ -145,6 +153,8 @@ class DailyTrackService:
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         working_cache_root: Path | None = None,
+        seed_research_exists: SeedResearchExists | None = None,
+        research_references_result: ResearchReferencesResult | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
@@ -161,6 +171,23 @@ class DailyTrackService:
         self._working_cache = (
             None if working_cache_root is None else _DailyTrackWorkingCache(working_cache_root)
         )
+        self._seed_research_exists = seed_research_exists
+        self._research_references_result = research_references_result
+
+    def references_result_manifest(
+        self,
+        transaction: PostgresTransaction,
+        manifest_sha256: str,
+    ) -> bool:
+        return transaction.execute(
+            """
+            SELECT 1
+            FROM daily_tracks.tracks
+            WHERE origin #>> '{verified_result,result_manifest_sha256}' = %s
+            LIMIT 1
+            """,
+            (manifest_sha256,),
+        ).fetchone() is not None
 
     def activate(
         self,
@@ -535,27 +562,98 @@ class DailyTrackService:
             self._working_cache.delete(track_id)
         return outcome
 
-    def reconcile_stopped_working_cache(self) -> int:
+    def delete(self, track_id: str) -> bool:
+        if self._publication is None:
+            raise RuntimeError("DailyTrack deletion is not configured")
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            row = transaction.execute(
+                """
+                SELECT status, origin
+                FROM daily_tracks.tracks
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (track_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["status"] != "stopped":
+                raise DailyTrackDeleteConflict(
+                    "DailyTrack deletion requires stopped status"
+                )
+            origin = TrackingOrigin.model_validate(row["origin"])
+            checkpoint_rows = transaction.execute(
+                """
+                SELECT manifest_sha256
+                FROM daily_tracks.session_checkpoints
+                WHERE track_id = %s
+                """,
+                (track_id,),
+            ).fetchall()
+            deleted = transaction.execute(
+                "DELETE FROM daily_tracks.tracks WHERE id = %s AND status = 'stopped'",
+                (track_id,),
+            )
+            if deleted.rowcount != 1:
+                raise DailyTrackDeleteConflict("DailyTrack deletion lost its stopped state")
+            for manifest_sha256 in {
+                str(checkpoint["manifest_sha256"]) for checkpoint in checkpoint_rows
+            }:
+                still_referenced = transaction.execute(
+                    """
+                    SELECT 1
+                    FROM daily_tracks.session_checkpoints
+                    WHERE manifest_sha256 = %s
+                    LIMIT 1
+                    """,
+                    (manifest_sha256,),
+                ).fetchone() is not None
+                self._publication.release_manifest_in_transaction(
+                    transaction,
+                    manifest_sha256,
+                    still_referenced=still_referenced,
+                )
+            seed_manifest_sha256 = origin.verified_result.result_manifest_sha256
+            seed_still_referenced = self.references_result_manifest(
+                transaction,
+                seed_manifest_sha256,
+            ) or (
+                self._research_references_result is not None
+                and self._research_references_result(
+                    transaction,
+                    seed_manifest_sha256,
+                )
+            )
+            self._publication.release_manifest_in_transaction(
+                transaction,
+                seed_manifest_sha256,
+                still_referenced=seed_still_referenced,
+            )
+        if self._working_cache is not None:
+            self._working_cache.delete(track_id)
+        _collect_publication_deletions(self._publication)
+        return True
+
+    def reconcile_working_cache(self) -> int:
         if self._working_cache is None:
             return 0
         with self._database.transaction() as transaction:
             rows = transaction.execute(
-                "SELECT id FROM daily_tracks.tracks WHERE status = 'stopped'"
+                """
+                SELECT id
+                FROM daily_tracks.tracks
+                WHERE status IN ('active', 'blocked')
+                """
             ).fetchall()
-        removed = 0
-        for row in rows:
-            track_id = str(row["id"])
-            path = self._working_cache.path(track_id)
-            if not path.exists():
-                continue
-            self._working_cache.delete(track_id)
-            if path.exists():
-                logger.warning(
-                    "Stopped DailyTrack Working Cache cleanup remains pending",
-                    extra={"track_id": track_id},
-                )
-                continue
-            removed += 1
+        removed, pending = self._working_cache.reconcile(
+            str(row["id"]) for row in rows
+        )
+        if pending:
+            logger.warning(
+                "DailyTrack Working Cache cleanup remains pending",
+                extra={"pending_cache_count": pending},
+            )
         return removed
 
     def get(self, track_id: str) -> DailyTrackDetail | None:
@@ -572,6 +670,15 @@ class DailyTrackService:
                 """,
                 (track_id,),
             ).fetchone()
+            if row is not None:
+                persisted_origin = TrackingOrigin.model_validate(row["origin"])
+                row["seed_research_available"] = (
+                    self._seed_research_exists is not None
+                    and self._seed_research_exists(
+                        transaction,
+                        persisted_origin.seed_run_id,
+                    )
+                )
         if row is None:
             return None
         origin = TrackingOrigin.model_validate(row["origin"])
@@ -656,6 +763,7 @@ class DailyTrackService:
                     "status": row["status"],
                     "origin": {
                         "seed_run_id": origin.seed_run_id,
+                        "seed_research_available": row["seed_research_available"],
                         "result_checksum_sha256": (
                             origin.verified_result.result_checksum_sha256
                         ),
@@ -1529,6 +1637,17 @@ def _origin_universe(origin: TrackingOrigin) -> str:
     if not isinstance(universe, str) or not universe:
         raise RuntimeError("Tracking Universe is invalid")
     return universe
+
+
+def _collect_publication_deletions(publication: Publication) -> None:
+    try:
+        while publication.collect_one_pending_deletion():
+            pass
+    except (PublicationPreparationError, PublicationUnavailableError) as error:
+        logger.warning(
+            "DailyTrack publication cleanup remains pending",
+            extra={"error_type": type(error).__name__},
+        )
 
 
 def _public_factor(value: Mapping[str, object]) -> dict[str, object]:

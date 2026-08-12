@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from thesistrace.daily_track import (
     DailyTrackActivationLimitReached,
+    DailyTrackDeleteConflict,
     DailyTrackDetail,
     DailyTrackDetailUnavailable,
     DailyTrackList,
@@ -39,6 +40,7 @@ from thesistrace.research_run import (
     ResearchRunAdmissionRejection,
     ResearchRunCancelCommand,
     ResearchRunCancelConflict,
+    ResearchRunDeleteConflict,
     ResearchRunDetail,
     ResearchRunList,
     ResearchRunOrganizationConflict,
@@ -183,6 +185,18 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="ResearchRun not found")
         return run
 
+    @app.delete(
+        "/api/research-runs/{run_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def delete_research_run(request: Request, run_id: str) -> None:
+        try:
+            deleted = _runtime(request).research_runs.delete(run_id)
+        except ResearchRunDeleteConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if not deleted:
+            raise HTTPException(status_code=404, detail="ResearchRun not found")
+
     @app.post(
         "/api/research-runs/{run_id}/cancel",
         response_model=ResearchRunSummary,
@@ -244,6 +258,18 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
         if track is None:
             raise HTTPException(status_code=404, detail="DailyTrack not found")
         return track
+
+    @app.delete(
+        "/api/daily-tracks/{track_id}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    def delete_daily_track(request: Request, track_id: str) -> None:
+        try:
+            deleted = _runtime(request).daily_tracks.delete(track_id)
+        except DailyTrackDeleteConflict as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        if not deleted:
+            raise HTTPException(status_code=404, detail="DailyTrack not found")
 
     @app.post(
         "/api/daily-tracks/{track_id}/retry",

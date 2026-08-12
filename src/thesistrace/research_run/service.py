@@ -33,6 +33,7 @@ from thesistrace.publication import (
     PreparedPublication,
     Publication,
     PublicationNotFoundError,
+    PublicationPreparationError,
     PublicationUnavailableError,
     PublicationVerificationError,
     PublishedRef,
@@ -99,6 +100,7 @@ RETRYABLE_FAILURES = (
 Progress = Callable[[str, str], None]
 CompileFormula = Callable[[str], CompiledAlpha]
 CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
+TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
 ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
@@ -142,6 +144,10 @@ class ResearchRunAdmissionConflict(RuntimeError):
 
 
 class ResearchRunOrganizationConflict(RuntimeError):
+    pass
+
+
+class ResearchRunDeleteConflict(RuntimeError):
     pass
 
 
@@ -200,6 +206,7 @@ class ResearchRunService:
         activate_track: ActivateTrack | None = None,
         compile_formula: CompileFormula | None = None,
         current_dataset: CurrentDataset | None = None,
+        track_references_result: TrackReferencesResult | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -213,6 +220,7 @@ class ResearchRunService:
         self._activate_track = activate_track
         self._compile_formula = compile_formula
         self._current_dataset = current_dataset
+        self._track_references_result = track_references_result
 
     def admit(
         self,
@@ -429,6 +437,63 @@ class ResearchRunService:
                 ),
             ).fetchone()
         return None if row is None else _summary(row)
+
+    def delete(self, run_id: str) -> bool:
+        if self._publication is None:
+            raise RuntimeError("ResearchRun deletion is not configured")
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            row = transaction.execute(
+                """
+                SELECT status, result_manifest_sha256
+                FROM research_runs.runs
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["status"] not in {"succeeded", "failed", "cancelled"}:
+                raise ResearchRunDeleteConflict(
+                    "ResearchRun deletion requires terminal status"
+                )
+            manifest_sha256 = row.get("result_manifest_sha256")
+            transaction.execute(
+                "DELETE FROM research_runs.start_tracking_receipts WHERE seed_run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.cancel_receipts WHERE run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.admission_requests WHERE run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.attempts WHERE run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.runs WHERE id = %s",
+                (run_id,),
+            )
+            if isinstance(manifest_sha256, str):
+                still_referenced = research_result_manifest_is_referenced(
+                    transaction,
+                    manifest_sha256,
+                ) or (
+                    self._track_references_result is not None
+                    and self._track_references_result(transaction, manifest_sha256)
+                )
+                self._publication.release_manifest_in_transaction(
+                    transaction,
+                    manifest_sha256,
+                    still_referenced=still_referenced,
+                )
+        _collect_publication_deletions(self._publication)
+        return True
 
     def cancel(
         self,
@@ -1582,3 +1647,36 @@ def _public_result(
             },
         }
     )
+
+
+def _collect_publication_deletions(publication: Publication) -> None:
+    try:
+        while publication.collect_one_pending_deletion():
+            pass
+    except (PublicationPreparationError, PublicationUnavailableError) as error:
+        logger.warning(
+            "ResearchRun publication cleanup remains pending",
+            extra={"error_type": type(error).__name__},
+        )
+
+
+def research_run_exists(transaction: PostgresTransaction, run_id: str) -> bool:
+    return transaction.execute(
+        "SELECT 1 FROM research_runs.runs WHERE id = %s",
+        (run_id,),
+    ).fetchone() is not None
+
+
+def research_result_manifest_is_referenced(
+    transaction: PostgresTransaction,
+    manifest_sha256: str,
+) -> bool:
+    return transaction.execute(
+        """
+        SELECT 1
+        FROM research_runs.runs
+        WHERE result_manifest_sha256 = %s
+        LIMIT 1
+        """,
+        (manifest_sha256,),
+    ).fetchone() is not None
