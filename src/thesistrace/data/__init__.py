@@ -27,6 +27,11 @@ from thesistrace.data.financial_collection import (
     FinancialDateShard,
     probe_financial_capability,
 )
+from thesistrace.data.financial_refresh import (
+    FinancialRefreshError,
+    FinancialRefreshOutcome,
+    FinancialRefreshService,
+)
 from thesistrace.data.generation_store import (
     GenerationStoreError,
     MountedDatasetFamilyDescriptor,
@@ -101,6 +106,9 @@ __all__ = [
     "FinancialCollectionService",
     "FinancialDateShard",
     "FinancialFamilyCandidate",
+    "FinancialRefreshOutcome",
+    "FinancialRefreshError",
+    "FinancialRefreshService",
     "FinancialSourceObservation",
     "FinancialVersionProjector",
     "GenerationStoreError",

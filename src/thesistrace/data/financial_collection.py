@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -12,7 +13,7 @@ from typing import Protocol
 from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.data.generation_files import AddressedFileStore
+from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_store import HistoricalInstrumentIdentity, MountedGenerationStore
 from thesistrace.data.source import RawSourceError, RawSourceResponse
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -425,18 +426,24 @@ class RawFinancialBatchStore:
 
     def store(self, content: bytes) -> str:
         sha256 = hashlib.sha256(content).hexdigest()
-        self._files.store(self._path(sha256), sha256, content)
+        try:
+            self._files.store(self._path(sha256), sha256, content)
+        except AddressedFileError as error:
+            raise FinancialCollectionError("RAW_BATCH_WRITE_FAILED") from error
         return sha256
 
     def read(self, sha256: str, *, byte_count: int | None = None) -> dict[str, object]:
         if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
             raise FinancialCollectionError("INVALID_RAW_BATCH_REFERENCE")
-        content = self._files.read(
-            self._path(sha256),
-            sha256,
-            expected_byte_count=byte_count,
-            max_byte_count=256 * 1024 * 1024,
-        )
+        try:
+            content = self._files.read(
+                self._path(sha256),
+                sha256,
+                expected_byte_count=byte_count,
+                max_byte_count=256 * 1024 * 1024,
+            )
+        except AddressedFileError as error:
+            raise FinancialCollectionError("RAW_BATCH_READ_FAILED") from error
         try:
             value = json.loads(content)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -457,6 +464,7 @@ class FinancialCollectionService:
         source: FinancialRawSource,
         *,
         clock: Callable[[], datetime] | None = None,
+        monotonic: Callable[[], float] | None = None,
         progress: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self._database = database
@@ -464,6 +472,7 @@ class FinancialCollectionService:
         self._batches = RawFinancialBatchStore(mount_root)
         self._source = source
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._monotonic = monotonic or time.monotonic
         self._progress = progress or (lambda _event: None)
 
     def collect(
@@ -474,6 +483,7 @@ class FinancialCollectionService:
         contract: FinancialCollectionContract,
     ) -> FinancialCollectionOutcome:
         _validate_collection_request(idempotency_key, generation_manifest_sha256, contract)
+        collection_started = self._monotonic()
         lock_name = f"financial-collection:{idempotency_key}"
         with self._database.session_advisory_lock(lock_name):
             identities = self._generation_store.read_historical_ordinary_a_share_identities(
@@ -507,6 +517,9 @@ class FinancialCollectionService:
                     "idempotency_key": idempotency_key,
                     "target_count": existing.target_count,
                     "completed_count": existing.completed_count,
+                    "failed_count": 0,
+                    "resumed_count": existing.completed_count,
+                    "duration_seconds": _duration(collection_started, self._monotonic()),
                 }
             )
             while checkpoint := self._next_pending(idempotency_key):
@@ -515,6 +528,7 @@ class FinancialCollectionService:
                     "ts_code": checkpoint.ts_code,
                     **_shard_by_name(contract, checkpoint.shard).parameters(),
                 }
+                request_started = self._monotonic()
                 self._progress(
                     {
                         "event": "financial_collection",
@@ -539,6 +553,13 @@ class FinancialCollectionService:
                         shard=checkpoint.shard,
                     )
                     self._mark_failed(idempotency_key, failure)
+                    self._failed_progress(
+                        checkpoint,
+                        existing.target_count,
+                        existing.completed_count,
+                        request_started,
+                        failure.code,
+                    )
                     raise failure from error
                 except Exception as error:
                     failure = FinancialCollectionError(
@@ -548,6 +569,13 @@ class FinancialCollectionService:
                         shard=checkpoint.shard,
                     )
                     self._mark_failed(idempotency_key, failure)
+                    self._failed_progress(
+                        checkpoint,
+                        existing.target_count,
+                        existing.completed_count,
+                        request_started,
+                        failure.code,
+                    )
                     raise failure from error
                 try:
                     batch_content, payload_sha256, extent = _raw_batch_content(
@@ -559,24 +587,37 @@ class FinancialCollectionService:
                             contract.suspected_truncation_row_counts
                         )[checkpoint.endpoint],
                     )
-                except FinancialCollectionError as failure:
+                    collected_at = self._clock()
+                    if collected_at.tzinfo is None:
+                        raise FinancialCollectionError("COLLECTION_TIME_INVALID")
+                    batch_sha256 = self._batches.store(batch_content)
+                    completed_count = self._complete_shard(
+                        idempotency_key=idempotency_key,
+                        checkpoint=checkpoint,
+                        batch_sha256=batch_sha256,
+                        payload_sha256=payload_sha256,
+                        parameters=parameters,
+                        response=response,
+                        extent=extent,
+                        byte_count=len(batch_content),
+                        collected_at=collected_at,
+                    )
+                except FinancialCollectionError as error:
+                    failure = FinancialCollectionError(
+                        error.code,
+                        endpoint=checkpoint.endpoint,
+                        instrument=checkpoint.ts_code,
+                        shard=checkpoint.shard,
+                    )
                     self._mark_failed(idempotency_key, failure)
-                    raise
-                collected_at = self._clock()
-                if collected_at.tzinfo is None:
-                    raise FinancialCollectionError("COLLECTION_TIME_INVALID")
-                batch_sha256 = self._batches.store(batch_content)
-                self._complete_shard(
-                    idempotency_key=idempotency_key,
-                    checkpoint=checkpoint,
-                    batch_sha256=batch_sha256,
-                    payload_sha256=payload_sha256,
-                    parameters=parameters,
-                    response=response,
-                    extent=extent,
-                    byte_count=len(batch_content),
-                    collected_at=collected_at,
-                )
+                    self._failed_progress(
+                        checkpoint,
+                        existing.target_count,
+                        existing.completed_count,
+                        request_started,
+                        failure.code,
+                    )
+                    raise failure from error
                 self._progress(
                     {
                         "event": "financial_collection",
@@ -586,9 +627,28 @@ class FinancialCollectionService:
                         "instrument": checkpoint.ts_code,
                         "shard": checkpoint.shard,
                         "batch_sha256": batch_sha256,
+                        "target_count": existing.target_count,
+                        "completed_count": completed_count,
+                        "failed_count": 0,
+                        "resumed_count": existing.completed_count,
+                        "duration_seconds": _duration(request_started, self._monotonic()),
                     }
                 )
-            return self._finish(idempotency_key)
+            outcome = self._finish(idempotency_key)
+            self._progress(
+                {
+                    "event": "financial_collection",
+                    "phase": "collection",
+                    "status": "completed",
+                    "idempotency_key": idempotency_key,
+                    "target_count": outcome.target_count,
+                    "completed_count": outcome.completed_count,
+                    "failed_count": 0,
+                    "resumed_count": existing.completed_count,
+                    "duration_seconds": _duration(collection_started, self._monotonic()),
+                }
+            )
+            return outcome
 
     def inspect(self, idempotency_key: str) -> tuple[FinancialShardCheckpoint, ...]:
         with self._database.transaction() as transaction:
@@ -603,6 +663,25 @@ class FinancialCollectionService:
                 (idempotency_key,),
             ).fetchall()
         return tuple(_checkpoint(row) for row in rows)
+
+    def inspect_outcome(self, idempotency_key: str) -> FinancialCollectionOutcome | None:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT status, target_count, completed_count
+                FROM data.financial_collection_operations
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return FinancialCollectionOutcome(
+            idempotency_key=idempotency_key,
+            status=str(row["status"]),
+            target_count=int(row["target_count"]),
+            completed_count=int(row["completed_count"]),
+        )
 
     def read_batch(self, batch_sha256: str) -> dict[str, object]:
         with self._database.transaction() as transaction:
@@ -774,7 +853,7 @@ class FinancialCollectionService:
         extent: tuple[str, str] | None,
         byte_count: int,
         collected_at: datetime,
-    ) -> None:
+    ) -> int:
         with self._database.transaction() as transaction:
             transaction.execute(
                 """
@@ -807,15 +886,54 @@ class FinancialCollectionService:
                 (batch_sha256, collected_at, idempotency_key, checkpoint.ordinal),
             ).rowcount
             if changed != 1:
-                raise FinancialCollectionError("SHARD_CHECKPOINT_CONFLICT")
-            transaction.execute(
+                raise FinancialCollectionError(
+                    "SHARD_CHECKPOINT_CONFLICT",
+                    endpoint=checkpoint.endpoint,
+                    instrument=checkpoint.ts_code,
+                    shard=checkpoint.shard,
+                )
+            operation = transaction.execute(
                 """
                 UPDATE data.financial_collection_operations
                 SET completed_count = completed_count + 1, updated_at = %s
                 WHERE idempotency_key = %s AND status = 'running'
+                RETURNING completed_count
                 """,
                 (collected_at, idempotency_key),
-            )
+            ).fetchone()
+            if operation is None:
+                raise FinancialCollectionError(
+                    "SHARD_CHECKPOINT_CONFLICT",
+                    endpoint=checkpoint.endpoint,
+                    instrument=checkpoint.ts_code,
+                    shard=checkpoint.shard,
+                )
+            return int(operation["completed_count"])
+
+    def _failed_progress(
+        self,
+        checkpoint: FinancialShardCheckpoint,
+        target_count: int,
+        resumed_count: int,
+        started: float,
+        failure_code: str,
+    ) -> None:
+        self._progress(
+            {
+                "event": "financial_collection",
+                "phase": "source_request",
+                "status": "failed",
+                "endpoint": checkpoint.endpoint,
+                "instrument": checkpoint.ts_code,
+                "shard": checkpoint.shard,
+                "failure_code": failure_code,
+                "target_count": target_count,
+                "completed_count": checkpoint.ordinal,
+                "failed_count": 1,
+                "resumed_count": resumed_count,
+                "duration_seconds": _duration(started, self._monotonic()),
+            }
+        )
 
     def _finish(self, idempotency_key: str) -> FinancialCollectionOutcome:
         finished_at = self._clock()
@@ -1056,6 +1174,10 @@ def _validate_probe_shards(
             raise ValueError("financial capability comparison shards are invalid")
     if str(shards[-1].end_date) < through.date().strftime("%Y%m%d"):
         raise ValueError("financial capability comparison shards are invalid")
+
+
+def _duration(started: float, finished: float) -> float:
+    return round(max(0.0, finished - started), 6)
 
 
 def _probe_query(

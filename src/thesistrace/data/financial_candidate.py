@@ -264,6 +264,109 @@ class FinancialCandidateStore:
         *,
         observation_through_session: str,
     ) -> FinancialFamilyCandidate:
+        return self._materialize(
+            collection,
+            observation_through_session=observation_through_session,
+            prior_checkpoints=(),
+            prior_candidate_manifest_sha256=None,
+        )
+
+    def rebuild(
+        self,
+        collection: CompletedFinancialCollection,
+        *,
+        prior_candidate_manifest_sha256: str,
+        observation_through_session: str,
+    ) -> FinancialFamilyCandidate:
+        prior = self.validate(prior_candidate_manifest_sha256)
+        if prior.observation_through_session > observation_through_session:
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CUTOFF_REGRESSION")
+        prior_manifest = self._read_family(prior_candidate_manifest_sha256)
+        prior_contract = self._manifest_collection_contract(prior_manifest)
+        if not _compatible_collection_contracts(prior_contract, collection.contract):
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CONTRACT_MISMATCH")
+        current_sessions = self._validated_market_sessions(
+            collection.generation_manifest_sha256,
+            observation_through_session,
+        )
+        current_lifecycles = self._market.read_historical_ordinary_a_share_lifecycles(
+            collection.generation_manifest_sha256
+        )
+        self._validated_evidence(
+            collection,
+            {item.instrument_id: item.ts_code for item in current_lifecycles},
+        )
+        prior_sessions = self._validated_market_sessions(
+            str(prior_manifest["source_generation_manifest_sha256"]),
+            prior.observation_through_session,
+        )
+        if [item for item in current_sessions if item <= prior.observation_through_session] != (
+            prior_sessions
+        ):
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
+        prior_entries = self._read_evidence_index(prior_manifest["raw_evidence"])
+        prior_checkpoints = tuple(_checkpoint_from_evidence(item) for item in prior_entries)
+        historical = {item.instrument_id: item.ts_code for item in current_lifecycles}
+        self._validate_historical_identities(prior_checkpoints, historical)
+        historical_checkpoints = _merge_evidence_checkpoints(
+            (*prior_checkpoints, *collection.shards)
+        )
+        if (
+            observation_through_session == prior.observation_through_session
+            and historical_checkpoints == prior_checkpoints
+        ):
+            return prior
+        return self._materialize(
+            collection,
+            observation_through_session=observation_through_session,
+            prior_checkpoints=prior_checkpoints,
+            prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+        )
+
+    def preflight_rebuild(
+        self,
+        *,
+        prior_candidate_manifest_sha256: str,
+        generation_manifest_sha256: str,
+        contract: FinancialCollectionContract,
+        observation_through_session: str,
+    ) -> None:
+        prior = self.validate(prior_candidate_manifest_sha256)
+        if prior.observation_through_session > observation_through_session:
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CUTOFF_REGRESSION")
+        prior_manifest = self._read_family(prior_candidate_manifest_sha256)
+        prior_contract = self._manifest_collection_contract(prior_manifest)
+        if not _compatible_collection_contracts(prior_contract, contract):
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CONTRACT_MISMATCH")
+        _validate_contract_coverage(contract, observation_through_session)
+        current_sessions = self._validated_market_sessions(
+            generation_manifest_sha256,
+            observation_through_session,
+        )
+        current_lifecycles = self._market.read_historical_ordinary_a_share_lifecycles(
+            generation_manifest_sha256
+        )
+        prior_sessions = self._validated_market_sessions(
+            str(prior_manifest["source_generation_manifest_sha256"]),
+            prior.observation_through_session,
+        )
+        if [item for item in current_sessions if item <= prior.observation_through_session] != (
+            prior_sessions
+        ):
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
+        prior_entries = self._read_evidence_index(prior_manifest["raw_evidence"])
+        prior_checkpoints = tuple(_checkpoint_from_evidence(item) for item in prior_entries)
+        historical = {item.instrument_id: item.ts_code for item in current_lifecycles}
+        self._validate_historical_identities(prior_checkpoints, historical)
+
+    def _materialize(
+        self,
+        collection: CompletedFinancialCollection,
+        *,
+        observation_through_session: str,
+        prior_checkpoints: Sequence[FinancialShardCheckpoint],
+        prior_candidate_manifest_sha256: str | None,
+    ) -> FinancialFamilyCandidate:
         sessions = self._validated_market_sessions(
             collection.generation_manifest_sha256,
             observation_through_session,
@@ -277,11 +380,25 @@ class FinancialCandidateStore:
         lifecycles = self._market.read_historical_ordinary_a_share_lifecycles(
             collection.generation_manifest_sha256
         )
-        evidence, endpoint_fields = self._validated_evidence(
+        current_evidence, endpoint_fields = self._validated_evidence(
             collection,
             {item.instrument_id: item.ts_code for item in lifecycles},
         )
-        versions, quarantine = self._canonical_versions(evidence, endpoint_fields, sessions)
+        historical_evidence = [
+            *(
+                (checkpoint, self._read_raw_batch(str(checkpoint.batch_sha256)))
+                for checkpoint in prior_checkpoints
+            ),
+            *current_evidence,
+        ]
+        historical_checkpoints = _merge_evidence_checkpoints(
+            (*prior_checkpoints, *collection.shards)
+        )
+        versions, quarantine = self._canonical_versions(
+            historical_evidence,
+            endpoint_fields,
+            sessions,
+        )
         in_scope_at_start = {
             item.instrument_id
             for item in lifecycles
@@ -303,7 +420,8 @@ class FinancialCandidateStore:
                     sessions,
                 )
             )
-        evidence_reference = self._materialize_evidence_index(collection.shards)
+        current_evidence_reference = self._materialize_evidence_index(collection.shards)
+        evidence_reference = self._materialize_evidence_index(historical_checkpoints)
         coverage = {
             "kind": "financial-observation-range",
             "start": coverage_start,
@@ -322,12 +440,14 @@ class FinancialCandidateStore:
             "family_id": _FAMILY_ID,
             "schema_contract": _SCHEMA_CONTRACT,
             "source_generation_manifest_sha256": collection.generation_manifest_sha256,
+            "prior_candidate_manifest_sha256": prior_candidate_manifest_sha256,
             "source_collection": {
                 "idempotency_key": collection.idempotency_key,
                 "contract": collection.contract.descriptor(),
                 "finished_at": collection.finished_at,
             },
             "dataset_coverage": coverage,
+            "current_raw_evidence": current_evidence_reference,
             "raw_evidence": evidence_reference,
             "quarantine": {
                 "row_count": len(quarantine),
@@ -338,7 +458,7 @@ class FinancialCandidateStore:
                 "table_count": len(table_references),
                 "row_count": sum(int(item["row_count"]) for item in table_references),
                 "object_count": sum(int(item["object_count"]) for item in table_references),
-                "raw_batch_count": collection.target_count,
+                "raw_batch_count": len(historical_checkpoints),
             },
             "tables": table_references,
         }
@@ -355,14 +475,30 @@ class FinancialCandidateStore:
         manifest = self._read_family(manifest_sha256)
         descriptor = self._descriptor(manifest_sha256, manifest)
         evidence = self._read_evidence_index(manifest["raw_evidence"])
+        current_evidence = self._read_evidence_index(manifest["current_raw_evidence"])
         if len(evidence) != descriptor.raw_batch_count:
             raise FinancialCandidateError("FINANCIAL_EVIDENCE_COUNT_INVALID")
         contract = self._manifest_collection_contract(manifest)
+        prior_sha256 = manifest.get("prior_candidate_manifest_sha256")
+        if prior_sha256 is not None:
+            _require_sha256(prior_sha256)
+            prior = self.validate(str(prior_sha256))
+            prior_manifest = self._read_family(str(prior_sha256))
+            prior_contract = self._manifest_collection_contract(prior_manifest)
+            if (
+                prior.observation_through_session > descriptor.observation_through_session
+                or not _compatible_collection_contracts(prior_contract, contract)
+            ):
+                raise FinancialCandidateError("FINANCIAL_REFRESH_PROVENANCE_INVALID")
+            prior_evidence = self._read_evidence_index(prior_manifest["raw_evidence"])
+        else:
+            prior_evidence = []
+        expected_union = _merge_evidence_descriptors((*prior_evidence, *current_evidence))
+        if _merge_evidence_descriptors(evidence) != expected_union:
+            raise FinancialCandidateError("FINANCIAL_REFRESH_EVIDENCE_UNION_INVALID")
         _validate_contract_coverage(contract, descriptor.observation_through_session)
-        endpoint_fields = self._validate_evidence_entries(
-            evidence,
-            contract=contract,
-        )
+        current_fields = self._validate_evidence_entries(current_evidence, contract=contract)
+        endpoint_fields = current_fields
         sessions = self._validated_market_sessions(
             str(manifest["source_generation_manifest_sha256"]),
             descriptor.observation_through_session,
@@ -371,18 +507,29 @@ class FinancialCandidateStore:
             str(manifest["source_generation_manifest_sha256"])
         )
         checkpoints = tuple(_checkpoint_from_evidence(item) for item in evidence)
+        current_checkpoints = tuple(_checkpoint_from_evidence(item) for item in current_evidence)
         source_collection = manifest["source_collection"]
         assert isinstance(source_collection, Mapping)
         finished_at = _aware_iso(str(source_collection["finished_at"]))
-        if finished_at[:10] < descriptor.observation_through_session or any(
-            str(item.collected_at) > finished_at for item in checkpoints
+        if _market_date(finished_at) < descriptor.observation_through_session or any(
+            _aware_iso(item.collected_at) > finished_at for item in checkpoints
         ):
             raise FinancialCandidateError("FINANCIAL_SOURCE_COLLECTION_INVALID")
         historical = {item.instrument_id: item.ts_code for item in lifecycles}
-        self._validate_target_set(checkpoints, historical, contract)
-        source_evidence = [
-            (checkpoint, self._raw.read(str(checkpoint.batch_sha256))) for checkpoint in checkpoints
+        self._validate_target_set(current_checkpoints, historical, contract)
+        self._validate_historical_identities(checkpoints, historical)
+        current_source_evidence = [
+            (checkpoint, self._read_raw_batch(str(checkpoint.batch_sha256)))
+            for checkpoint in current_checkpoints
         ]
+        prior_source_evidence = [
+            (
+                _checkpoint_from_evidence(item),
+                self._read_raw_batch(str(item["batch_sha256"])),
+            )
+            for item in prior_evidence
+        ]
+        source_evidence = [*prior_source_evidence, *current_source_evidence]
         versions, quarantine = self._canonical_versions(
             source_evidence,
             endpoint_fields,
@@ -435,8 +582,8 @@ class FinancialCandidateStore:
             "start": descriptor.coverage_start,
             "observation_through_session": descriptor.observation_through_session,
             "expected_instrument_count": len(historical),
-            "expected_shard_count": len(evidence),
-            "completed_shard_count": len(evidence),
+            "expected_shard_count": len(current_evidence),
+            "completed_shard_count": len(current_evidence),
             "reconciliation_status": "complete",
             "historical_reconciliation_watermark": descriptor.observation_through_session,
             "revision_coverage": "source-dated-and-first-observed-corrections",
@@ -453,7 +600,7 @@ class FinancialCandidateStore:
 
     def read_table(self, manifest_sha256: str, table_name: str) -> tuple[dict[str, object], ...]:
         manifest = self._read_family(manifest_sha256)
-        evidence = self._read_evidence_index(manifest["raw_evidence"])
+        evidence = self._read_evidence_index(manifest["current_raw_evidence"])
         contract = self._manifest_collection_contract(manifest)
         fields = self._validate_evidence_entries(
             evidence,
@@ -536,7 +683,7 @@ class FinancialCandidateStore:
         for checkpoint in collection.shards:
             assert checkpoint.batch_sha256 is not None
             try:
-                batch = self._raw.read(checkpoint.batch_sha256)
+                batch = self._read_raw_batch(checkpoint.batch_sha256)
             except (FinancialCollectionError, AddressedFileError) as error:
                 raise FinancialCandidateError("FINANCIAL_RAW_BATCH_INVALID") from error
             evidence.append((checkpoint, batch))
@@ -567,6 +714,14 @@ class FinancialCandidateStore:
         ):
             raise FinancialCandidateError("FINANCIAL_COLLECTION_TARGET_SET_INVALID")
 
+    @staticmethod
+    def _validate_historical_identities(
+        checkpoints: Sequence[FinancialShardCheckpoint],
+        historical: Mapping[str, str],
+    ) -> None:
+        if any(historical.get(item.instrument_id) != item.ts_code for item in checkpoints):
+            raise FinancialCandidateError("FINANCIAL_HISTORICAL_IDENTITY_INVALID")
+
     def _validate_evidence_entries(
         self,
         entries: Sequence[Mapping[str, object]],
@@ -584,7 +739,7 @@ class FinancialCandidateStore:
             batch = (
                 loaded_batches.get(batch_sha256)
                 if loaded_batches is not None
-                else self._raw.read(batch_sha256)
+                else self._read_raw_batch(batch_sha256)
             )
             if batch is None:
                 raise FinancialCandidateError("FINANCIAL_RAW_BATCH_INVALID")
@@ -594,13 +749,23 @@ class FinancialCandidateStore:
             previous = endpoint_fields.setdefault(endpoint, fields)
             if previous != fields:
                 raise FinancialCandidateError("FINANCIAL_SOURCE_SCHEMA_DRIFT")
-            identity = (endpoint, str(entry.get("instrument_id")), str(entry.get("shard")))
+            identity = (
+                endpoint,
+                str(entry.get("instrument_id")),
+                str(entry.get("shard")),
+            )
             if identity in seen:
                 raise FinancialCandidateError("FINANCIAL_EVIDENCE_DUPLICATE")
             seen.add(identity)
         if tuple(endpoint_fields) != FINANCIAL_ENDPOINTS:
             raise FinancialCandidateError("FINANCIAL_ENDPOINT_SET_INVALID")
         return endpoint_fields
+
+    def _read_raw_batch(self, batch_sha256: str) -> dict[str, object]:
+        try:
+            return self._raw.read(batch_sha256)
+        except FinancialCollectionError as error:
+            raise FinancialCandidateError("FINANCIAL_RAW_BATCH_INVALID") from error
 
     def _validate_raw_batch(
         self,
@@ -1003,12 +1168,20 @@ class FinancialCandidateStore:
         summary = manifest.get("validation_summary")
         quarantine = manifest.get("quarantine")
         raw = manifest.get("raw_evidence")
+        current_raw = manifest.get("current_raw_evidence")
         tables = manifest.get("tables")
         source_collection = manifest.get("source_collection")
         if (
-            not all(isinstance(value, Mapping) for value in (coverage, summary, quarantine, raw))
+            not all(
+                isinstance(value, Mapping)
+                for value in (coverage, summary, quarantine, raw, current_raw)
+            )
             or not isinstance(tables, list)
             or not isinstance(source_collection, Mapping)
+            or (
+                manifest.get("prior_candidate_manifest_sha256") is not None
+                and not isinstance(manifest.get("prior_candidate_manifest_sha256"), str)
+            )
         ):
             raise FinancialCandidateError("FINANCIAL_FAMILY_MANIFEST_INVALID")
         assert isinstance(coverage, Mapping)
@@ -1200,6 +1373,65 @@ def _checkpoint_from_evidence(value: Mapping[str, object]) -> FinancialShardChec
         batch_sha256=str(value["batch_sha256"]),
         collected_at=collected_at,
         first_observed_at=first_observed_at,
+    )
+
+
+def _compatible_collection_contracts(
+    prior: FinancialCollectionContract,
+    current: FinancialCollectionContract,
+) -> bool:
+    return prior.endpoint_fields == current.endpoint_fields
+
+
+def _merge_evidence_checkpoints(
+    checkpoints: Sequence[FinancialShardCheckpoint],
+) -> tuple[FinancialShardCheckpoint, ...]:
+    exact: dict[tuple[str, str, str, str, str], FinancialShardCheckpoint] = {}
+    for checkpoint in checkpoints:
+        if checkpoint.batch_sha256 is None or checkpoint.first_observed_at is None:
+            raise FinancialCandidateError("FINANCIAL_HISTORICAL_EVIDENCE_INVALID")
+        key = (
+            checkpoint.endpoint,
+            checkpoint.instrument_id,
+            checkpoint.shard,
+            checkpoint.batch_sha256,
+            _aware_iso(checkpoint.first_observed_at),
+        )
+        previous = exact.get(key)
+        if previous is None or _aware_iso(checkpoint.collected_at) < _aware_iso(
+            previous.collected_at
+        ):
+            exact[key] = checkpoint
+    ordered = sorted(
+        exact.values(),
+        key=lambda item: (
+            FINANCIAL_ENDPOINTS.index(item.endpoint),
+            item.instrument_id,
+            item.shard,
+            _aware_iso(item.first_observed_at),
+            str(item.batch_sha256),
+        ),
+    )
+    return tuple(replace(item, ordinal=ordinal) for ordinal, item in enumerate(ordered))
+
+
+def _merge_evidence_descriptors(
+    entries: Sequence[Mapping[str, object]],
+) -> tuple[tuple[object, ...], ...]:
+    checkpoints = _merge_evidence_checkpoints(
+        tuple(_checkpoint_from_evidence(entry) for entry in entries)
+    )
+    return tuple(
+        (
+            item.endpoint,
+            item.instrument_id,
+            item.ts_code,
+            item.shard,
+            item.batch_sha256,
+            item.collected_at,
+            item.first_observed_at,
+        )
+        for item in checkpoints
     )
 
 

@@ -29,12 +29,15 @@ from thesistrace.data import (
     DataRefreshError,
     DataRefreshService,
     DataSourceError,
+    FinancialCandidateError,
     FinancialCapabilityReport,
     FinancialCollectionContract,
     FinancialCollectionError,
     FinancialCollectionOutcome,
     FinancialCollectionService,
     FinancialDateShard,
+    FinancialRefreshError,
+    FinancialRefreshService,
     RefreshOutcome,
     probe_financial_capability,
 )
@@ -55,6 +58,8 @@ def main(arguments: list[str] | None = None) -> None:
         _failure(error.code, diagnostic=_failure_diagnostic(error))
     except FinancialCollectionError as error:
         _failure(error.code, diagnostic=error.diagnostic())
+    except (FinancialCandidateError, FinancialRefreshError) as error:
+        _failure(str(error))
     except Exception:
         _failure("OPERATOR_FAILURE")
     payload = outcome if isinstance(outcome, dict) else outcome.__dict__
@@ -99,6 +104,13 @@ def _run(
     financial_collect.add_argument("--generation-manifest-sha256", required=True)
     financial_collect.add_argument("--capability-report", type=Path, required=True)
     financial_collect.add_argument("--date-shard", action="append", metavar="NAME:START:END")
+    financial_refresh = subcommands.add_parser("refresh-financial")
+    financial_refresh.add_argument("--idempotency-key", required=True)
+    financial_refresh.add_argument("--generation-manifest-sha256", required=True)
+    financial_refresh.add_argument("--capability-report", type=Path, required=True)
+    financial_refresh.add_argument("--date-shard", action="append", metavar="NAME:START:END")
+    financial_refresh.add_argument("--prior-candidate-manifest-sha256", required=True)
+    financial_refresh.add_argument("--observation-through-session", required=True)
     parsed = parser.parse_args(arguments)
 
     transport: HttpTushareTransport | None = None
@@ -161,7 +173,7 @@ def _run(
                 observed_rate_limit_events=rate_limit_events,
             )
             return report.descriptor()
-        if parsed.command == "collect-financial":
+        if parsed.command in {"collect-financial", "refresh-financial"}:
             if live_provider is None:
                 raise FinancialCollectionError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
             report = _load_financial_capability(parsed.capability_report)
@@ -174,16 +186,37 @@ def _run(
                 report,
                 date_shards=date_shards,
             )
-            return FinancialCollectionService(
+            if parsed.command == "collect-financial":
+                return FinancialCollectionService(
+                    database,
+                    mount_root,
+                    live_provider,
+                    progress=_progress,
+                ).collect(
+                    idempotency_key=parsed.idempotency_key,
+                    generation_manifest_sha256=parsed.generation_manifest_sha256,
+                    contract=contract,
+                )
+            outcome = FinancialRefreshService(
                 database,
                 mount_root,
                 live_provider,
                 progress=_progress,
-            ).collect(
+            ).rebuild(
                 idempotency_key=parsed.idempotency_key,
                 generation_manifest_sha256=parsed.generation_manifest_sha256,
                 contract=contract,
+                prior_candidate_manifest_sha256=parsed.prior_candidate_manifest_sha256,
+                observation_through_session=parsed.observation_through_session,
             )
+            return {
+                "idempotency_key": outcome.idempotency_key,
+                "status": "succeeded",
+                "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
+                "expected_shard_count": outcome.expected_shard_count,
+                "completed_shard_count": outcome.completed_shard_count,
+                "resumed_shard_count": outcome.resumed_shard_count,
+            }
         source = TushareDataSource(provider=provider, progress=_progress)
         if parsed.command == "bootstrap":
             outcome = DataOperator(

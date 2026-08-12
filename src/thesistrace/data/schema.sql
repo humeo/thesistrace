@@ -135,6 +135,36 @@ CREATE TABLE data.financial_collection_operations (
 
 
 --
+-- Name: financial_refresh_operations; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_refresh_operations (
+    idempotency_key text NOT NULL,
+    fingerprint text NOT NULL,
+    generation_manifest_sha256 text NOT NULL,
+    prior_candidate_manifest_sha256 text NOT NULL,
+    observation_through_session date NOT NULL,
+    status text NOT NULL,
+    candidate_manifest_sha256 text,
+    expected_shard_count integer,
+    completed_shard_count integer,
+    resumed_shard_count integer,
+    failure_code text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT financial_refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_refresh_operations_generation_check CHECK ((generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_refresh_operations_prior_check CHECK ((prior_candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_refresh_operations_candidate_check CHECK (((candidate_manifest_sha256 IS NULL) OR (candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_refresh_operations_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
+    CONSTRAINT financial_refresh_operations_counts_check CHECK (((expected_shard_count IS NULL) OR ((expected_shard_count >= 0) AND (completed_shard_count >= 0) AND (completed_shard_count <= expected_shard_count) AND (resumed_shard_count >= 0) AND (resumed_shard_count <= completed_shard_count)))),
+    CONSTRAINT financial_refresh_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text]))),
+    CONSTRAINT financial_refresh_operations_state_check CHECK ((((status = 'running'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = 'succeeded'::text) AND (candidate_manifest_sha256 IS NOT NULL) AND (expected_shard_count IS NOT NULL) AND (completed_shard_count IS NOT NULL) AND (resumed_shard_count IS NOT NULL) AND (expected_shard_count = completed_shard_count) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL))))
+);
+
+
+--
 -- Name: financial_raw_batches; Type: TABLE; Schema: data; Owner: -
 --
 
@@ -315,6 +345,10 @@ ALTER TABLE ONLY data.generation_candidates
 
 ALTER TABLE ONLY data.financial_collection_operations
     ADD CONSTRAINT financial_collection_operations_pkey PRIMARY KEY (idempotency_key);
+
+
+ALTER TABLE ONLY data.financial_refresh_operations
+    ADD CONSTRAINT financial_refresh_operations_pkey PRIMARY KEY (idempotency_key);
 
 
 ALTER TABLE ONLY data.financial_raw_batches

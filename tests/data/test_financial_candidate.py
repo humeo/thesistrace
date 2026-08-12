@@ -463,6 +463,237 @@ def test_projector_orders_mixed_offsets_and_uses_shanghai_session_date() -> None
     assert versions[1].effective_available_session == "2026-08-14"
 
 
+def test_candidate_validation_compares_collected_at_as_an_instant(tmp_path: Path) -> None:
+    store, _candidate, _repeated, snapshot = _materialized_candidate(tmp_path)
+    mixed_offset = replace(
+        snapshot,
+        finished_at="2026-08-13T02:00:00+00:00",
+        shards=(
+            replace(snapshot.shards[0], collected_at="2026-08-13T10:00:00+09:00"),
+            *snapshot.shards[1:],
+        ),
+    )
+
+    candidate = store.materialize(
+        mixed_offset,
+        observation_through_session="2026-08-13",
+    )
+
+    assert store.validate(candidate.manifest_sha256) == candidate
+
+
+def test_rebuild_unions_prior_evidence_and_never_deletes_absent_versions(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    raw = RawFinancialBatchStore(tmp_path)
+    current_checkpoint = snapshot.shards[0]
+    assert current_checkpoint.batch_sha256 is not None
+    current_batch = raw.read(current_checkpoint.batch_sha256)
+    current_items = [["000001.SZ", "20100420", "", "20091231", "1", "1", "4", "102", "1"]]
+    current_batch["items"] = current_items
+    current_batch["row_count"] = 1
+    current_batch["source_date_extent"] = ["20100420", "20100420"]
+    current_batch["payload_sha256"] = hashlib.sha256(
+        canonical_json_bytes({"fields": list(FIELDS), "items": current_items})
+    ).hexdigest()
+    current_sha256 = raw.store(canonical_json_bytes(current_batch))
+    refreshed = replace(
+        snapshot,
+        idempotency_key="financial-refresh",
+        shards=(
+            replace(
+                current_checkpoint,
+                batch_sha256=current_sha256,
+                collected_at="2026-04-25T08:00:00+00:00",
+                first_observed_at="2026-04-25T08:00:00+00:00",
+            ),
+            *snapshot.shards[1:],
+        ),
+    )
+
+    candidate = store.rebuild(
+        refreshed,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+    repeated = store.rebuild(
+        refreshed,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert candidate == repeated == store.validate(candidate.manifest_sha256)
+    assert candidate.raw_batch_count == prior.raw_batch_count + 1
+    income = store.read_table(candidate.manifest_sha256, "income_statement_versions")
+    assert {row["revenue"] for row in income} >= {None, "25", "81", "90", "101", "102", "200"}
+    correction = next(row for row in income if row["revenue"] == "102")
+    assert correction["revision_basis"] == "observed_correction"
+    assert correction["effective_available_session"] == "2026-04-27"
+    assert not (tmp_path / "HEAD.json").exists()
+
+    candidate_path = (
+        tmp_path
+        / "manifests"
+        / "sha256"
+        / candidate.manifest_sha256[:2]
+        / f"{candidate.manifest_sha256}.json"
+    )
+    forged = json.loads(candidate_path.read_bytes())
+    forged["raw_evidence"] = forged["current_raw_evidence"]
+    forged["validation_summary"]["raw_batch_count"] = forged["raw_evidence"]["entry_count"]
+    forged_content = canonical_json_bytes(forged)
+    forged_sha256 = hashlib.sha256(forged_content).hexdigest()
+    AddressedFileStore(tmp_path).store(
+        tmp_path / "manifests" / "sha256" / forged_sha256[:2] / f"{forged_sha256}.json",
+        forged_sha256,
+        forged_content,
+    )
+    with pytest.raises(
+        FinancialCandidateError,
+        match="FINANCIAL_REFRESH_EVIDENCE_UNION_INVALID",
+    ):
+        store.validate(forged_sha256)
+
+
+def test_rebuild_rejects_prior_evidence_missing_from_current_market_identity_map(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    current_market = _market_generation(tmp_path, include_second=False)
+    current_shards = tuple(
+        replace(checkpoint, ordinal=ordinal)
+        for ordinal, checkpoint in enumerate(
+            checkpoint
+            for checkpoint in snapshot.shards
+            if checkpoint.instrument_id == "equity:000001.SZ"
+        )
+    )
+    current = replace(
+        snapshot,
+        idempotency_key="financial-refresh-after-identity-removal",
+        generation_manifest_sha256=current_market,
+        target_count=len(current_shards),
+        shards=current_shards,
+    )
+
+    with pytest.raises(FinancialCandidateError, match="FINANCIAL_HISTORICAL_IDENTITY_INVALID"):
+        store.rebuild(
+            current,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+
+def test_exact_refresh_reuses_prior_family_manifest(tmp_path: Path) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+
+    replay = store.rebuild(
+        replace(snapshot, idempotency_key="exact-refresh-replay"),
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session=prior.observation_through_session,
+    )
+
+    assert replay == prior
+
+
+def test_exact_refresh_reuses_prior_manifest_across_timestamp_offsets(tmp_path: Path) -> None:
+    store, _prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    prior_snapshot = replace(
+        snapshot,
+        idempotency_key="offset-prior",
+        shards=tuple(
+            replace(
+                checkpoint,
+                collected_at="2026-08-13T10:00:00+09:00",
+                first_observed_at="2026-08-13T00:00:00+00:00",
+            )
+            for checkpoint in snapshot.shards
+        ),
+    )
+    prior = store.materialize(
+        prior_snapshot,
+        observation_through_session="2026-08-13",
+    )
+    replay_snapshot = replace(
+        snapshot,
+        idempotency_key="offset-replay",
+        shards=tuple(
+            replace(
+                checkpoint,
+                collected_at="2026-08-13T02:00:00+00:00",
+                first_observed_at="2026-08-13T00:00:00+00:00",
+            )
+            for checkpoint in snapshot.shards
+        ),
+    )
+
+    replay = store.rebuild(
+        replay_snapshot,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert replay == prior
+
+
+def test_refresh_rejects_contract_and_cutoff_regressions_without_head(tmp_path: Path) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    incompatible = replace(
+        snapshot.contract,
+        endpoint_fields=tuple(
+            (endpoint, (*fields, "ebit")) for endpoint, fields in snapshot.contract.endpoint_fields
+        ),
+    )
+
+    with pytest.raises(FinancialCandidateError, match="FINANCIAL_REFRESH_CONTRACT_MISMATCH"):
+        store.rebuild(
+            replace(snapshot, contract=incompatible),
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session=prior.observation_through_session,
+        )
+    with pytest.raises(FinancialCandidateError, match="FINANCIAL_REFRESH_CUTOFF_REGRESSION"):
+        store.rebuild(
+            snapshot,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2010-04-22",
+        )
+    assert not (tmp_path / "HEAD.json").exists()
+
+
+def test_bounded_refresh_extends_cutoff_with_a_new_complete_shard_contract(
+    tmp_path: Path,
+) -> None:
+    market_manifest = _market_generation(tmp_path)
+    store = FinancialCandidateStore(tmp_path)
+    prior_snapshot = _empty_bounded_snapshot(
+        tmp_path,
+        market_manifest,
+        through="20260427",
+        idempotency_key="bounded-prior",
+    )
+    prior = store.materialize(
+        prior_snapshot,
+        observation_through_session="2026-04-27",
+    )
+    current_snapshot = _empty_bounded_snapshot(
+        tmp_path,
+        market_manifest,
+        through="20260813",
+        idempotency_key="bounded-current",
+    )
+
+    current = store.rebuild(
+        current_snapshot,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session="2026-08-13",
+    )
+
+    assert current.observation_through_session == "2026-08-13"
+    assert current.raw_batch_count > prior.raw_batch_count
+    assert store.validate(current.manifest_sha256) == current
+
+
 def _bounded_shards(through: str) -> tuple[FinancialDateShard, ...]:
     start = date(1990, 1, 1)
     final = datetime.strptime(through, "%Y%m%d").date()
@@ -480,7 +711,68 @@ def _bounded_shards(through: str) -> tuple[FinancialDateShard, ...]:
     return tuple(shards)
 
 
-def _market_generation(root: Path) -> str:
+def _empty_bounded_snapshot(
+    root: Path,
+    market_manifest: str,
+    *,
+    through: str,
+    idempotency_key: str,
+) -> CompletedFinancialCollection:
+    raw = RawFinancialBatchStore(root)
+    shards = _bounded_shards(through)
+    checkpoints: list[FinancialShardCheckpoint] = []
+    payload_sha256 = hashlib.sha256(
+        canonical_json_bytes({"fields": list(FIELDS), "items": []})
+    ).hexdigest()
+    instruments = (
+        ("equity:000001.SZ", "000001.SZ"),
+        ("equity:000002.SZ", "000002.SZ"),
+    )
+    for endpoint in FINANCIAL_ENDPOINTS:
+        for instrument_id, ts_code in instruments:
+            for shard in shards:
+                payload = {
+                    "format": "thesistrace-raw-financial-batch",
+                    "version": 1,
+                    "source_contract_version": "tushare-financial-ordinary-v1",
+                    "endpoint": endpoint,
+                    "parameters": {"ts_code": ts_code, **shard.parameters()},
+                    "returned_fields": list(FIELDS),
+                    "items": [],
+                    "row_count": 0,
+                    "source_date_extent": None,
+                    "payload_sha256": payload_sha256,
+                }
+                checkpoints.append(
+                    FinancialShardCheckpoint(
+                        ordinal=len(checkpoints),
+                        endpoint=endpoint,
+                        instrument_id=instrument_id,
+                        ts_code=ts_code,
+                        shard=shard.name,
+                        status="completed",
+                        batch_sha256=raw.store(canonical_json_bytes(payload)),
+                        collected_at="2026-08-13T08:00:00+00:00",
+                        first_observed_at="2026-08-13T08:00:00+00:00",
+                    )
+                )
+    contract = FinancialCollectionContract(
+        capability_sha256=("c" if "prior" in idempotency_key else "d") * 64,
+        endpoint_fields=tuple((endpoint, FIELDS) for endpoint in FINANCIAL_ENDPOINTS),
+        suspected_truncation_row_counts=tuple((endpoint, None) for endpoint in FINANCIAL_ENDPOINTS),
+        shards=shards,
+    )
+    return CompletedFinancialCollection(
+        idempotency_key=idempotency_key,
+        generation_manifest_sha256=market_manifest,
+        contract=contract,
+        finished_at="2026-08-13T09:00:00+00:00",
+        target_count=len(checkpoints),
+        shards=tuple(checkpoints),
+    )
+
+
+def _market_generation(root: Path, *, include_second: bool = True) -> str:
     canonical = build_minimal_canonical_fixture()
     template_price = dict(canonical["prices"][0])
     template_state = dict(canonical["trading_states"][0])
@@ -490,18 +782,19 @@ def _market_generation(root: Path) -> str:
         name: dict(rows[0]) for name, rows in canonical["liquidity_universes"].items()
     }
     canonical["research_calendar"] = list(SESSIONS)
-    canonical["instruments"] = [
-        *canonical["instruments"],
-        {
-            "instrument_id": "equity:000002.SZ",
-            "ts_code": "000002.SZ",
-            "asset_type": "ordinary_a_share",
-            "exchange": "SZSE",
-            "board": "main",
-            "listed_from": "2015-01-05",
-            "listed_to": "2020-01-02",
-        },
-    ]
+    if include_second:
+        canonical["instruments"] = [
+            *canonical["instruments"],
+            {
+                "instrument_id": "equity:000002.SZ",
+                "ts_code": "000002.SZ",
+                "asset_type": "ordinary_a_share",
+                "exchange": "SZSE",
+                "board": "main",
+                "listed_from": "2015-01-05",
+                "listed_to": "2020-01-02",
+            },
+        ]
     canonical["prices"] = [dict(template_price, session=session) for session in SESSIONS]
     canonical["trading_states"] = [dict(template_state, session=session) for session in SESSIONS]
     canonical["price_limits"] = [dict(template_limit, session=session) for session in SESSIONS]

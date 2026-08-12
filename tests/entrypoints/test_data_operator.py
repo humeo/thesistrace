@@ -32,6 +32,16 @@ def test_bootstrap_cli_exposes_an_explicit_start_date(
             "collect-financial",
             ("--generation-manifest-sha256", "--capability-report", "--date-shard"),
         ),
+        (
+            "refresh-financial",
+            (
+                "--generation-manifest-sha256",
+                "--capability-report",
+                "--date-shard",
+                "--prior-candidate-manifest-sha256",
+                "--observation-through-session",
+            ),
+        ),
     ],
 )
 def test_private_financial_operator_exposes_explicit_contract_inputs(
