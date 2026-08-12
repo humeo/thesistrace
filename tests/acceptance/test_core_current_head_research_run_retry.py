@@ -134,7 +134,9 @@ class _BlockedWorker:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -> None:
+def test_worker_loss_retry_recomputes_on_the_admission_frozen_generation(
+    tmp_path: Path,
+) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -155,7 +157,7 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
             }
         ]
         _expire_live_attempt(settings, run_id)
-        head_b = _publish_head(settings, price_offset=7, expected_manifest=head_a)
+        _publish_head(settings, price_offset=7, expected_manifest=head_a)
 
     with TestClient(create_app(settings)) as restarted_process:
         runtime = restarted_process.app.state.core_runtime
@@ -178,11 +180,11 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
                 "ordinal": 2,
                 "status": "succeeded",
                 "failure_reason": None,
-                "data_generation_id": head_b,
+                "data_generation_id": head_a,
             },
         ]
         stored = _stored_run(settings, run_id)
-        assert stored["result_provenance"]["data_generation_id"] == head_b
+        assert stored["result_provenance"]["data_generation_id"] == head_a
         assert stored["result_provenance"]["data_through_session"] == SESSIONS[-1]
         assert set(_read_result(runtime, stored)) == {
             "factor_summary",
@@ -190,7 +192,7 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
             "strategy_daily_observations",
             "terminal_strategy_state",
         }
-        expected = _reference_result(settings, head_b)
+        expected = _reference_result(settings, head_a)
         assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(expected)
         assert len(_attempts(settings, run_id)) == 2
 
@@ -214,7 +216,7 @@ def test_recovered_winner_fences_a_stale_prepared_attempt(tmp_path: Path) -> Non
             _terminate_backend(settings, backend_pid)
             stale.release_barrier()
             _expire_live_attempt(settings, run_id)
-            head_b = _publish_head(settings, price_offset=9, expected_manifest=head_a)
+            _publish_head(settings, price_offset=9, expected_manifest=head_a)
 
             completed_worker = _run_worker_once(settings)
             assert completed_worker.returncode == 0, (
@@ -232,7 +234,7 @@ def test_recovered_winner_fences_a_stale_prepared_attempt(tmp_path: Path) -> Non
             "succeeded",
         ]
         stored = _stored_run(settings, run_id)
-        assert stored["result_provenance"]["data_generation_id"] == head_b
+        assert stored["result_provenance"]["data_generation_id"] == head_a
         assert _research_result_manifest_count(settings) == 1
 
 
@@ -289,7 +291,7 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
-    _publish_head(settings, price_offset=0)
+    head_a = _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
         run_id = _admit_run(client, request_id="resource-exhaustion")
@@ -300,6 +302,7 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
             retrying = client.get(f"/api/research-runs/{run_id}").json()
             assert retrying["status"] == "running"
             assert "failure_reason" not in retrying
+            assert _live_run_retention(settings, run_id) == head_a
 
             second = _run_worker_once(settings)
             assert second.returncode == 0, second.stdout + second.stderr
@@ -318,75 +321,6 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
     with TestClient(create_app(settings)) as restarted:
         assert restarted.get(f"/api/research-runs/{run_id}").json() == failed
         assert len(_attempts(settings, run_id)) == 2
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_rerun_preserves_the_question_and_executes_on_current_data(
-    tmp_path: Path,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    head_a = _publish_head(settings, price_offset=0)
-
-    with TestClient(create_app(settings)) as client:
-        runtime = client.app.state.core_runtime
-        source_id = _admit_run(client, request_id="rerun-source")
-        source_worker = _run_worker_once(settings)
-        assert source_worker.returncode == 0, source_worker.stdout + source_worker.stderr
-        source_before = client.get(f"/api/research-runs/{source_id}").json()
-        source_stored_before = _stored_run(settings, source_id)
-        source_input = source_stored_before["immutable_input"]
-        assert source_stored_before["result_provenance"]["data_generation_id"] == head_a
-
-        edited = client.put(
-            f"/api/definitions/{source_before['definition_id']}",
-            json={
-                "expected_revision": source_before["definition_revision"],
-                "name": "Edited after source Run",
-                "holdings_count": 2,
-            },
-        )
-        assert edited.status_code == 200
-        head_b = _publish_head(settings, price_offset=11, expected_manifest=head_a)
-
-        command = {"request_id": "rerun-current-data"}
-        accepted = client.post(f"/api/research-runs/{source_id}/rerun", json=command)
-        assert accepted.status_code == 202
-        rerun = accepted.json()
-        assert rerun["status"] == "queued"
-        assert rerun["rerun_of_id"] == source_id
-        assert rerun["start_date"] == SESSIONS[0]
-        assert rerun["end_date"] == SESSIONS[-1]
-        rerun_stored = _stored_run(settings, rerun["id"])
-        assert canonical_json_bytes(rerun_stored["immutable_input"]) == canonical_json_bytes(
-            source_input
-        )
-
-        replay = client.post(f"/api/research-runs/{source_id}/rerun", json=command)
-        assert replay.status_code == 202
-        assert replay.json() == rerun
-        conflict = client.post(
-            f"/api/research-runs/{rerun['id']}/rerun",
-            json=command,
-        )
-        assert conflict.status_code == 409
-
-        rerun_worker = _run_worker_once(settings)
-        assert rerun_worker.returncode == 0, rerun_worker.stdout + rerun_worker.stderr
-        completed = client.get(f"/api/research-runs/{rerun['id']}").json()
-        assert completed["status"] == "succeeded"
-        assert completed["rerun_of_id"] == source_id
-        completed_stored = _stored_run(settings, rerun["id"])
-        assert completed_stored["result_provenance"]["data_generation_id"] == head_b
-        assert canonical_json_bytes(_read_result(runtime, completed_stored)) == (
-            canonical_json_bytes(_reference_result(settings, head_b))
-        )
-        assert client.get(f"/api/research-runs/{source_id}").json() == source_before
-        assert _stored_run(settings, source_id) == source_stored_before
 
 
 def _admit_run(client: TestClient, *, request_id: str) -> str:
@@ -560,6 +494,24 @@ def _stored_run(settings: CoreSettings, run_id: str) -> dict[str, object]:
             ).fetchone()
         assert row is not None
         return row
+    finally:
+        database.close()
+
+
+def _live_run_retention(settings: CoreSettings, run_id: str) -> str | None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT generation_manifest_sha256
+                FROM data.generation_candidates
+                WHERE operation_id = %s AND status = 'live'
+                """,
+                (f"queued-research-run:{run_id}",),
+            ).fetchone()
+        return None if row is None else str(row["generation_manifest_sha256"])
     finally:
         database.close()
 

@@ -15,6 +15,8 @@ class AuthorableField:
     missingness: str = "missing"
     source_lineage: str = "tushare.daily"
     applicable_company_types: tuple[str, ...] = ()
+    source_endpoint: str = ""
+    source_column: str = ""
 
 
 MARKET_FIELDS = (
@@ -68,6 +70,8 @@ FINANCIAL_FIELDS = (
         report_period_selection="latest_visible_full_year",
         source_lineage="tushare.income.total_revenue",
         applicable_company_types=("1", "2", "3", "4"),
+        source_endpoint="income",
+        source_column="total_revenue",
     ),
     AuthorableField(
         "net_profit_parent_latest_fy",
@@ -80,6 +84,8 @@ FINANCIAL_FIELDS = (
         report_period_selection="latest_visible_full_year",
         source_lineage="tushare.income.n_income_attr_p",
         applicable_company_types=("1", "2", "3", "4"),
+        source_endpoint="income",
+        source_column="n_income_attr_p",
     ),
     AuthorableField(
         "operating_cash_flow_latest_fy",
@@ -92,6 +98,8 @@ FINANCIAL_FIELDS = (
         report_period_selection="latest_visible_full_year",
         source_lineage="tushare.cashflow.n_cashflow_act",
         applicable_company_types=("1", "2", "3", "4"),
+        source_endpoint="cashflow",
+        source_column="n_cashflow_act",
     ),
     AuthorableField(
         "total_assets_latest_reported",
@@ -104,6 +112,8 @@ FINANCIAL_FIELDS = (
         report_period_selection="latest_visible_quarterly_or_annual",
         source_lineage="tushare.balancesheet.total_assets",
         applicable_company_types=("1", "2", "3", "4"),
+        source_endpoint="balancesheet",
+        source_column="total_assets",
     ),
     AuthorableField(
         "total_liabilities_latest_reported",
@@ -116,6 +126,8 @@ FINANCIAL_FIELDS = (
         report_period_selection="latest_visible_quarterly_or_annual",
         source_lineage="tushare.balancesheet.total_liab",
         applicable_company_types=("1", "2", "3", "4"),
+        source_endpoint="balancesheet",
+        source_column="total_liab",
     ),
     AuthorableField(
         "equity_parent_latest_reported",
@@ -128,10 +140,12 @@ FINANCIAL_FIELDS = (
         report_period_selection="latest_visible_quarterly_or_annual",
         source_lineage="tushare.balancesheet.total_hldr_eqy_exc_min_int",
         applicable_company_types=("1", "2", "3", "4"),
+        source_endpoint="balancesheet",
+        source_column="total_hldr_eqy_exc_min_int",
     ),
 )
 
-AUTHORABLE_FIELDS = MARKET_FIELDS
+AUTHORABLE_FIELDS = (*MARKET_FIELDS, *FINANCIAL_FIELDS)
 
 
 def authorable_fields() -> tuple[AuthorableField, ...]:

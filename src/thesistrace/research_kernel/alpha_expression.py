@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -32,11 +32,20 @@ class ParsedAlpha:
     effective_lookback: int
 
 
+COMPILED_ALPHA_FORMAT = "thesistrace-compiled-alpha"
+COMPILED_ALPHA_VERSION = 1
+
+
 @dataclass(frozen=True)
 class OperatorDefinition:
     operator_id: str
-    kind: Literal["arithmetic", "scalar", "historical", "rolling"]
+    kind: Literal["arithmetic", "scalar", "historical", "rolling", "cross-sectional"]
     operand_rules: tuple[OperandRule, ...]
+    lookback_rule: Literal["none", "historical", "rolling"] = "none"
+    complexity: str = "linear-in-series-length"
+    cross_section_evaluator: Callable[
+        [Sequence[tuple[str, float]]], dict[str, float]
+    ] | None = None
 
     @property
     def rolling_bounds(self) -> dict[str, int] | None:
@@ -52,6 +61,8 @@ class OperatorDefinition:
             "operand_rules": list(self.operand_rules),
             "result_type": "numeric",
             "rolling_bounds": self.rolling_bounds,
+            "lookback_rule": self.lookback_rule,
+            "complexity": self.complexity,
         }
 
 
@@ -64,14 +75,20 @@ OPERATORS = (
     OperatorDefinition("abs", "scalar", ("numeric",)),
     OperatorDefinition("log", "scalar", ("numeric",)),
     OperatorDefinition("sign", "scalar", ("numeric",)),
-    OperatorDefinition("lag", "historical", ("numeric", "window")),
-    OperatorDefinition("delta", "historical", ("numeric", "window")),
-    OperatorDefinition("pct_change", "historical", ("numeric", "window")),
-    OperatorDefinition("ts_mean", "rolling", ("numeric", "window")),
-    OperatorDefinition("ts_sum", "rolling", ("numeric", "window")),
-    OperatorDefinition("ts_std", "rolling", ("numeric", "window")),
-    OperatorDefinition("ts_min", "rolling", ("numeric", "window")),
-    OperatorDefinition("ts_max", "rolling", ("numeric", "window")),
+    OperatorDefinition("lag", "historical", ("numeric", "window"), "historical"),
+    OperatorDefinition("delta", "historical", ("numeric", "window"), "historical"),
+    OperatorDefinition("pct_change", "historical", ("numeric", "window"), "historical"),
+    OperatorDefinition("ts_mean", "rolling", ("numeric", "window"), "rolling"),
+    OperatorDefinition("ts_sum", "rolling", ("numeric", "window"), "rolling"),
+    OperatorDefinition("ts_std", "rolling", ("numeric", "window"), "rolling"),
+    OperatorDefinition("ts_min", "rolling", ("numeric", "window"), "rolling"),
+    OperatorDefinition("ts_max", "rolling", ("numeric", "window"), "rolling"),
+    OperatorDefinition(
+        "cs_rank",
+        "cross-sectional",
+        ("numeric",),
+        cross_section_evaluator=lambda values: _ascending_average_ordinal_rank(values),
+    ),
 )
 OPERATOR_BY_ID = {operator.operator_id: operator for operator in OPERATORS}
 SCALAR_OPERATOR_IDS = frozenset(
@@ -86,9 +103,27 @@ ROLLING_OPERATOR_IDS = frozenset(
 WINDOW_OPERATOR_IDS = HISTORICAL_OPERATOR_IDS | ROLLING_OPERATOR_IDS
 
 
+def _ascending_average_ordinal_rank(
+    values: Sequence[tuple[str, float]],
+) -> dict[str, float]:
+    if len(values) == 1:
+        return {values[0][0]: 0.5}
+    ordered = sorted(values, key=lambda item: (item[1], item[0]))
+    ranked: dict[str, float] = {}
+    position = 0
+    while position < len(ordered):
+        end = position + 1
+        while end < len(ordered) and ordered[end][1] == ordered[position][1]:
+            end += 1
+        rank = ((position + end - 1) / 2) / (len(ordered) - 1)
+        ranked.update((instrument_id, rank) for instrument_id, _value in ordered[position:end])
+        position = end
+    return ranked
+
+
 def operator_catalog() -> dict[str, object]:
     return {
-        "semantic_version": "1.0.0",
+        "semantic_version": "1.1.0",
         "operators": [operator.public() for operator in OPERATORS],
     }
 
@@ -116,6 +151,132 @@ def validate_normalized_alpha(
         field_names=tuple(sorted(fields)),
         field_ids=tuple(sorted(field_ids)),
         effective_lookback=effective_lookback,
+    )
+
+
+def freeze_parsed_alpha(parsed: ParsedAlpha) -> dict[str, object]:
+    """Freeze validated Alpha IR without retaining a live operator catalog."""
+    return {
+        "format": COMPILED_ALPHA_FORMAT,
+        "version": COMPILED_ALPHA_VERSION,
+        "expression": dict(parsed.expression),
+        "execution_tree": _freeze_execution_node(parsed.tree.body),
+        "field_names": list(parsed.field_names),
+        "field_ids": list(parsed.field_ids),
+        "effective_lookback": parsed.effective_lookback,
+    }
+
+
+def restore_compiled_alpha(value: Mapping[str, object]) -> ParsedAlpha:
+    """Restore frozen execution IR without consulting the authoring catalog."""
+    if set(value) != {
+        "format",
+        "version",
+        "expression",
+        "execution_tree",
+        "field_names",
+        "field_ids",
+        "effective_lookback",
+    } or (
+        value.get("format") != COMPILED_ALPHA_FORMAT
+        or value.get("version") != COMPILED_ALPHA_VERSION
+    ):
+        raise ValueError("compiled Alpha contract is invalid")
+    expression = value.get("expression")
+    field_names = value.get("field_names")
+    field_ids = value.get("field_ids")
+    lookback = value.get("effective_lookback")
+    if (
+        not isinstance(expression, Mapping)
+        or not isinstance(field_names, list)
+        or not all(isinstance(item, str) and item for item in field_names)
+        or field_names != sorted(set(field_names))
+        or not isinstance(field_ids, list)
+        or not all(isinstance(item, str) and item for item in field_ids)
+        or field_ids != sorted(set(field_ids))
+        or isinstance(lookback, bool)
+        or not isinstance(lookback, int)
+        or not 0 <= lookback <= 252
+    ):
+        raise ValueError("compiled Alpha contract is invalid")
+    tree, restored_names = _restore_execution_node(value.get("execution_tree"))
+    if restored_names != set(field_names):
+        raise ValueError("compiled Alpha fields are invalid")
+    return ParsedAlpha(
+        expression=dict(expression),
+        tree=ast.fix_missing_locations(ast.Expression(body=tree)),
+        field_names=tuple(field_names),
+        field_ids=tuple(field_ids),
+        effective_lookback=lookback,
+    )
+
+
+def _freeze_execution_node(node: ast.AST) -> dict[str, object]:
+    if isinstance(node, ast.Name):
+        return {"kind": "field", "evaluation_name": node.id[1:]}
+    if isinstance(node, ast.Constant):
+        return {"kind": "literal", "value": node.value}
+    if isinstance(node, ast.UnaryOp):
+        return {
+            "kind": "operator",
+            "operator_id": "negate",
+            "operands": [_freeze_execution_node(node.operand)],
+        }
+    if isinstance(node, ast.BinOp):
+        operator_id = {
+            ast.Add: "add",
+            ast.Sub: "subtract",
+            ast.Mult: "multiply",
+            ast.Div: "divide",
+        }.get(type(node.op))
+        if operator_id is None:
+            raise ValueError("validated Alpha contains an unsupported execution node")
+        return {
+            "kind": "operator",
+            "operator_id": operator_id,
+            "operands": [
+                _freeze_execution_node(node.left),
+                _freeze_execution_node(node.right),
+            ],
+        }
+    if isinstance(node, ast.Call):
+        return {
+            "kind": "operator",
+            "operator_id": node.func.id,
+            "operands": [_freeze_execution_node(operand) for operand in node.args],
+        }
+    raise ValueError("validated Alpha contains an unsupported execution node")
+
+
+def _restore_execution_node(value: object) -> tuple[ast.expr, set[str]]:
+    if not isinstance(value, Mapping):
+        raise ValueError("compiled Alpha execution tree is invalid")
+    kind = value.get("kind")
+    if kind == "field" and set(value) == {"kind", "evaluation_name"}:
+        name = value.get("evaluation_name")
+        if not isinstance(name, str) or not name:
+            raise ValueError("compiled Alpha field is invalid")
+        return ast.Name(id=f"f{name}", ctx=ast.Load()), {name}
+    if kind == "literal" and set(value) == {"kind", "value"}:
+        literal = value.get("value")
+        if isinstance(literal, bool) or not isinstance(literal, (int, float)):
+            raise ValueError("compiled Alpha literal is invalid")
+        return ast.Constant(value=literal), set()
+    if kind != "operator" or set(value) != {"kind", "operator_id", "operands"}:
+        raise ValueError("compiled Alpha execution tree is invalid")
+    operator_id = value.get("operator_id")
+    operands = value.get("operands")
+    definition = OPERATOR_BY_ID.get(operator_id) if isinstance(operator_id, str) else None
+    if (
+        definition is None
+        or not isinstance(operands, list)
+        or len(operands) != len(definition.operand_rules)
+    ):
+        raise ValueError("compiled Alpha operator is invalid")
+    restored = [_restore_execution_node(operand) for operand in operands]
+    return (
+        _operator_ast(operator_id, [item[0] for item in restored]),
+        set().union(*(item[1] for item in restored)),
     )
 
 

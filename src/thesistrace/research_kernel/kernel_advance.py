@@ -9,7 +9,7 @@ from typing import Literal
 
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
-    evaluate_alpha_matrix,
+    evaluate_compiled_alpha_matrix,
 )
 from thesistrace.research_kernel.factor import (
     HORIZONS,
@@ -241,9 +241,9 @@ def advance_continuation(
         target_research_data,
         calendar[max(0, first_index - MAX_ALPHA_LOOKBACK_SESSIONS) :],
     )
-    evaluated = evaluate_alpha_matrix(
+    evaluated = evaluate_compiled_alpha_matrix(
         window,
-        expression=run_input.alpha_expression_snapshot(),
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )
@@ -382,9 +382,9 @@ def _advance_alpha(
     calendar = research_sessions(research_data)
     window_start = max(0, prior_session_count - lookback)
     window = slice_research_sessions(research_data, calendar[window_start:])
-    evaluated = evaluate_alpha_matrix(
+    evaluated = evaluate_compiled_alpha_matrix(
         window,
-        expression=run_input.alpha_expression_snapshot(),
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )
@@ -587,9 +587,9 @@ def _rebuild_explicit_alpha(
     research_data: AlignedResearchData,
     research_sessions: list[str],
 ) -> dict[str, object]:
-    evaluated = evaluate_alpha_matrix(
+    evaluated = evaluate_compiled_alpha_matrix(
         research_data,
-        expression=run_input.alpha_expression_snapshot(),
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )

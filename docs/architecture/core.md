@@ -155,9 +155,9 @@ run(current content, expected revision, request ID)
 ```
 
 Run validates the requested Research Period against the current Dataset Head,
-freezes the research question and calculation contracts, and atomically admits
-a queued ResearchRun. It does not select a Data Generation for execution; that
-selection belongs to the Attempt start.
+freezes the research question, calculation contracts, and selected Data
+Generation, then atomically admits a queued ResearchRun with durable Generation
+retention. Claim replaces that retention with an Attempt pin before data opens.
 
 The same request ID and fingerprint returns the original outcome. Reusing the
 ID with different input is a conflict. Invalid runnable semantics preserve the
@@ -165,23 +165,24 @@ saved Definition but create no ResearchRun.
 
 ## ResearchRuns
 
-ResearchRun creation is available only through Definition Run or Rerun.
+ResearchRun creation is available only through the Run action. Reusing an
+earlier Research requires Use as Draft followed by an ordinary Run action.
 
 ```text
 queued -> running -> succeeded | failed
 queued | running -> cancelled
 ```
 
-When an Attempt starts, it atomically selects and pins the then-current Data
-Generation. The pin remains fixed for the complete calculation even if Refresh
-moves the Dataset Head concurrently. A retry starts a new Attempt, selects the
-then-current Head, and recomputes from the beginning; partial outputs from
-different Generations are never combined.
+When an Attempt starts, it atomically pins the Data Generation frozen at Run
+admission. The pin remains fixed for the complete calculation even if Refresh
+moves the Dataset Head concurrently. A retry pins the same frozen Generation
+and recomputes from the beginning; retryable gaps retain that Generation and
+partial outputs are never combined.
 
-Rerun creates a new ResearchRun from the selected Run's frozen research
-question, selected dates, and calculation contracts. Its Attempt still selects
-the current Dataset Head when it starts. Definition edits do not mutate either
-the original Run or its Rerun input.
+Use as Draft copies an earlier Run's authorable values into browser-local state.
+Submitting that Draft follows ordinary compilation and admission, including a
+fresh current Data Generation selection, and creates a new ResearchRun. Edits
+never mutate the original Run.
 
 A succeeded Run exposes one immutable Result containing bounded Factor
 summaries, Strategy metrics and daily observations, benchmark results, terminal

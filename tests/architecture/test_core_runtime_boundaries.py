@@ -126,7 +126,6 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "research_runs.runs",
             "research_runs.attempts",
             "research_runs.cancel_receipts",
-            "research_runs.rerun_receipts",
             "research_runs.start_tracking_receipts",
         ),
         "daily_track": (
@@ -328,7 +327,6 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("get", "/api/research-runs"),
         ("get", "/api/research-runs/{run_id}"),
         ("post", "/api/research-runs/{run_id}/cancel"),
-        ("post", "/api/research-runs/{run_id}/rerun"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),
         ("get", "/api/daily-tracks"),
         ("get", "/api/daily-tracks/{track_id}"),
@@ -606,9 +604,9 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "def cancel(" in run_source
     assert "CREATE TABLE research_runs.cancel_receipts" in run_schema
     assert "execution_fence = execution_fence + 1" in run_source
-    assert "def rerun(" in run_source
-    assert "CREATE TABLE research_runs.rerun_receipts" in run_schema
-    assert "immutable_input, rerun_of_id" in run_source
+    assert "def rerun(" not in run_source
+    assert "CREATE TABLE research_runs.rerun_receipts" not in run_schema
+    assert "rerun_of_id" not in run_schema
     assert "self._publication.record(" in run_source
     assert "runtime.research_runs.process_next()" in worker_source
     for removed in ("outbox", "dispatch", "global job", "temporal"):

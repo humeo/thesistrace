@@ -471,6 +471,59 @@ class FinancialCandidateStore:
         manifest = self._read_family(manifest_sha256)
         return self._descriptor(manifest_sha256, manifest)
 
+    def source_generation_manifest_sha256(self, manifest_sha256: str) -> str:
+        manifest = self._read_family(manifest_sha256)
+        source = manifest.get("source_generation_manifest_sha256")
+        _require_sha256(source)
+        return str(source)
+
+    def source_fields_by_endpoint(
+        self,
+        manifest_sha256: str,
+    ) -> dict[str, frozenset[str]]:
+        manifest = self._read_family(manifest_sha256)
+        fields: dict[str, frozenset[str]] = {}
+        for endpoint, table_name in _ENDPOINT_TABLES.items():
+            reference = next(
+                item
+                for item in manifest["tables"]
+                if isinstance(item, Mapping) and item.get("name") == table_name
+            )
+            table_manifest = self._read_json(
+                self._manifest_path(str(reference["manifest_sha256"])),
+                str(reference["manifest_sha256"]),
+                int(reference["manifest_byte_count"]),
+            )
+            source_fields = table_manifest.get("source_fields")
+            if not isinstance(source_fields, list) or not all(
+                isinstance(value, str) and value for value in source_fields
+            ):
+                raise FinancialCandidateError("FINANCIAL_SOURCE_FIELDS_INVALID")
+            fields[endpoint] = frozenset(source_fields)
+        return fields
+
+    def family_reference(self, manifest_sha256: str) -> dict[str, object]:
+        manifest = self._read_family(manifest_sha256)
+        descriptor = self._descriptor(manifest_sha256, manifest)
+        content = self._read(
+            self._manifest_path(manifest_sha256),
+            manifest_sha256,
+            None,
+            GENERATION_MANIFEST_MAX_BYTES,
+        )
+        return {
+            "family_id": descriptor.family_id,
+            "schema_contract": descriptor.schema_contract,
+            "dataset_coverage": dict(manifest["dataset_coverage"]),
+            "validation_summary": {
+                key: manifest["validation_summary"][key]
+                for key in ("status", "table_count", "row_count", "object_count")
+            },
+            "table_names": list(descriptor.table_names),
+            "manifest_sha256": manifest_sha256,
+            "manifest_byte_count": len(content),
+        }
+
     def validate(self, manifest_sha256: str) -> FinancialFamilyCandidate:
         manifest = self._read_family(manifest_sha256)
         descriptor = self._descriptor(manifest_sha256, manifest)

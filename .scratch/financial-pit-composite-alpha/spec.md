@@ -381,8 +381,10 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
   composition began. If the Head changed, the stale root is not published; the
   completed target family is combined with the latest unchanged families and
   all cross-family invariants are revalidated.
-- A ResearchRun Attempt or Tracking Advance Attempt pins one root descriptor
-  when it starts. Claim and pin do not enumerate or open all Parquet objects.
+- ResearchRun admission retains one root descriptor and each ResearchRun
+  Attempt atomically replaces that retention with a pin to the same root.
+  Tracking Advance Attempts select and pin one current root when they start.
+  Claim and pin do not enumerate or open all Parquet objects.
 - The pinned root identifies the exact family Manifests used throughout the
   Attempt. A concurrent Data Refresh may publish another root, but it cannot
   change the active Attempt's reads.
@@ -491,9 +493,9 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
   observation-through cutoff. Market-only admission does not consult Financial
   Coverage as a gate.
 - The Worker claims the queued ResearchRun, creates an Attempt, and pins the
-  current Data Generation descriptor before changing execution state. Opening
-  the required data objects belongs to execution after claim, not to claim
-  eligibility.
+  Data Generation descriptor frozen by admission before changing execution
+  state. Opening the required data objects belongs to execution after claim,
+  not to claim eligibility.
 - ResearchRun evaluates the requested Research Period plus only the Effective
   Alpha Lookback required by the admitted Expression.
 - DailyTrack freezes the successful seed ResearchRun input and uses the same

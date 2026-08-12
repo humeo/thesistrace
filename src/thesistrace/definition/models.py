@@ -129,7 +129,9 @@ class OperatorOption(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     operator_id: str
-    kind: Literal["arithmetic", "scalar", "historical", "rolling"]
+    kind: Literal["arithmetic", "scalar", "historical", "rolling", "cross-sectional"]
+    lookback_rule: Literal["none", "historical", "rolling"]
+    complexity: str
     arity: int
     operand_rules: list[Literal["numeric", "window"]]
     result_type: Literal["numeric"]

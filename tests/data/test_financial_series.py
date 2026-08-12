@@ -48,7 +48,7 @@ def test_catalog_declares_six_complete_financial_field_meanings() -> None:
         "latest_visible_full_year",
         "latest_visible_quarterly_or_annual",
     }
-    assert set(FINANCIAL_FIELDS).isdisjoint(authorable_fields())
+    assert set(FINANCIAL_FIELDS) <= set(authorable_fields())
 
 
 def test_resolves_annual_and_latest_reported_fields_without_fallback() -> None:

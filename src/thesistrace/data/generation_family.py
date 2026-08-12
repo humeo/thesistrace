@@ -129,6 +129,7 @@ class MountedFamilyGenerationDescriptor:
     field_availability: tuple[str, ...]
     preparation: dict[str, str]
     families: tuple[MountedDatasetFamilyDescriptor, ...]
+    financial_candidate_manifest_sha256: str | None = None
 
 
 _SESSION_COVERAGE = ResearchSessionRangeCoverage()

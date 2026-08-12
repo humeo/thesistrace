@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  browserDraftFromRun,
+  storeResearchDraft,
+  type ResearchRunDraft,
+} from "../definitions/browserDraft";
+
 type CorrelationSummary = {
   mean: number | null;
   sample_deviation: number | null;
@@ -105,7 +111,7 @@ type ResearchRun = {
   definition_revision: number;
   start_date: string;
   end_date: string;
-  rerun_of_id?: string;
+  draft: ResearchRunDraft;
   failure_reason?: string;
   result?: ResearchResult;
 };
@@ -123,16 +129,12 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
-  const [rerunning, setRerunning] = useState(false);
   const [startingTracking, setStartingTracking] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
   const cancelGeneration = useRef(0);
   const cancelController = useRef<AbortController | null>(null);
   const cancelRequest = useRef<{ runId: string; requestId: string } | null>(null);
-  const rerunGeneration = useRef(0);
-  const rerunController = useRef<AbortController | null>(null);
-  const rerunRequest = useRef<{ runId: string; requestId: string } | null>(null);
   const trackingGeneration = useRef(0);
   const trackingController = useRef<AbortController | null>(null);
   const trackingRequest = useRef<{ runId: string; requestId: string } | null>(null);
@@ -187,10 +189,6 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     cancelController.current?.abort();
     cancelController.current = null;
     cancelRequest.current = null;
-    rerunGeneration.current += 1;
-    rerunController.current?.abort();
-    rerunController.current = null;
-    rerunRequest.current = null;
     trackingGeneration.current += 1;
     trackingController.current?.abort();
     trackingController.current = null;
@@ -199,6 +197,16 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
   function refresh() {
     setRefreshGeneration((generation) => generation + 1);
+  }
+
+  function useAsDraft() {
+    if (run === null) return;
+    const stored = storeResearchDraft(
+      browserDraftFromRun(run.draft),
+      window.localStorage,
+      () => window.confirm("Replace the existing browser draft?"),
+    );
+    if (stored) window.location.assign("/definitions");
   }
 
   async function cancel() {
@@ -236,46 +244,6 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       if (generation === cancelGeneration.current) {
         cancelController.current = null;
         setCanceling(false);
-      }
-    }
-  }
-
-  async function rerunSelected() {
-    if (run === null || !["succeeded", "failed", "cancelled"].includes(run.status)) return;
-    const targetRun = run;
-    const generation = ++rerunGeneration.current;
-    loadGeneration.current += 1;
-    setLoadState(null);
-    rerunController.current?.abort();
-    const controller = new AbortController();
-    rerunController.current = controller;
-    setRerunning(true);
-    setError(null);
-    const pending = rerunRequest.current;
-    const requestId = pending?.runId === targetRun.id
-      ? pending.requestId
-      : `rerun_${crypto.randomUUID()}`;
-    rerunRequest.current = { runId: targetRun.id, requestId };
-    try {
-      const response = await fetch(`/api/research-runs/${targetRun.id}/rerun`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request_id: requestId }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("ResearchRun rerun failed");
-      const nextRun = (await response.json()) as ResearchRun;
-      if (generation !== rerunGeneration.current) return;
-      rerunRequest.current = null;
-      window.location.assign(`/research-runs/${nextRun.id}`);
-    } catch (reason: unknown) {
-      if (reason instanceof DOMException && reason.name === "AbortError") return;
-      if (generation !== rerunGeneration.current) return;
-      setError("ResearchRun rerun failed");
-    } finally {
-      if (generation === rerunGeneration.current) {
-        rerunController.current = null;
-        setRerunning(false);
       }
     }
   }
@@ -361,24 +329,19 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
                 {canceling ? "Cancelling…" : "Cancel"}
               </button>
             ) : null}
-            {["succeeded", "failed", "cancelled"].includes(run.status) ? (
-              <button
-                disabled={rerunning || startingTracking}
-                onClick={() => void rerunSelected()}
-              >
-                {rerunning ? "Rerunning on current data…" : "Rerun on current data"}
-              </button>
-            ) : null}
             {run.status === "succeeded" ? (
               <button
-                disabled={rerunning || startingTracking}
+                disabled={startingTracking}
                 onClick={() => void startTracking()}
               >
                 {startingTracking ? "Starting Tracking…" : "Start Tracking"}
               </button>
             ) : null}
+            <button disabled={startingTracking} onClick={useAsDraft}>
+              Use as Draft
+            </button>
             <button
-              disabled={loadState !== null || canceling || rerunning || startingTracking}
+              disabled={loadState !== null || canceling || startingTracking}
               onClick={refresh}
             >
               Refresh
@@ -397,12 +360,6 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             </a>
           </p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
-          {run.rerun_of_id ? (
-            <p>
-              <strong>Rerun of</strong>{" "}
-              <a href={`/research-runs/${run.rerun_of_id}`}>{run.rerun_of_id}</a>
-            </p>
-          ) : null}
         </div>
         {run.status === "failed" && run.failure_reason ? (
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>

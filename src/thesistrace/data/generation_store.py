@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -184,7 +184,11 @@ class MountedGenerationStore:
         assert isinstance(references, list)
         candidate_tables: dict[str, list[dict[str, object]]] = {}
         calendar: list[str] | None = None
-        for reference, family_spec in zip(references, MARKET_FAMILY_SPECS, strict=True):
+        for reference, family_spec in zip(
+            references[: len(MARKET_FAMILY_SPECS)],
+            MARKET_FAMILY_SPECS,
+            strict=True,
+        ):
             if not isinstance(reference, Mapping):
                 raise GenerationStoreError("Dataset Family reference is incompatible")
             family_manifest = self._read_family_manifest(family_spec, reference)
@@ -208,8 +212,96 @@ class MountedGenerationStore:
                     calendar = [str(row["session"]) for row in rows]
         canonical = _validate_candidate_semantics(candidate_tables)
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        if descriptor.financial_candidate_manifest_sha256 is not None:
+            from thesistrace.data.financial_candidate import (
+                FinancialCandidateError,
+                FinancialCandidateStore,
+            )
+
+            financial_store = FinancialCandidateStore(self._root)
+            try:
+                financial = financial_store.validate(
+                    descriptor.financial_candidate_manifest_sha256
+                )
+                expected_reference = financial_store.family_reference(
+                    descriptor.financial_candidate_manifest_sha256
+                )
+            except FinancialCandidateError as error:
+                raise GenerationStoreError("Financial Dataset Family is invalid") from error
+            financial_reference = references[-1]
+            if not isinstance(financial_reference, Mapping) or dict(financial_reference) != (
+                expected_reference
+            ):
+                raise GenerationStoreError(
+                    "Financial Dataset Family reference does not match its manifest"
+                )
+            if financial.observation_through_session > descriptor.data_through_session:
+                raise GenerationStoreError("Financial candidate exceeds Market Coverage")
         _validate_candidate_projection(descriptor, canonical)
         return descriptor
+
+    def compose_financial_candidate(
+        self,
+        market_generation_manifest_sha256: str,
+        financial_candidate_manifest_sha256: str,
+        *,
+        prepared_at: datetime,
+    ) -> MountedFamilyGenerationDescriptor:
+        from thesistrace.data.fields import FINANCIAL_FIELDS
+        from thesistrace.data.financial_candidate import FinancialCandidateStore
+
+        market = self.validate_generation(market_generation_manifest_sha256)
+        if market.financial_candidate_manifest_sha256 is not None:
+            raise GenerationStoreError("Generation already contains Financial Data")
+        financial_store = FinancialCandidateStore(self._root)
+        financial = financial_store.validate(financial_candidate_manifest_sha256)
+        source_fields = financial_store.source_fields_by_endpoint(
+            financial_candidate_manifest_sha256
+        )
+        if (
+            financial_store.source_generation_manifest_sha256(
+                financial_candidate_manifest_sha256
+            )
+            != market_generation_manifest_sha256
+            or financial.coverage_start < market.research_sessions[0]
+            or financial.observation_through_session > market.data_through_session
+            or any(
+                field.source_column not in source_fields.get(field.source_endpoint, ())
+                for field in FINANCIAL_FIELDS
+            )
+        ):
+            raise GenerationStoreError("Financial candidate is incompatible with Market Data")
+        root = self._read_family_generation_root(market_generation_manifest_sha256)
+        identity = {
+            "schema_contract": root["schema_contract"],
+            "data_through_session": root["data_through_session"],
+            "research_sessions": root["research_sessions"],
+            "field_availability": sorted(
+                {*root["field_availability"], *(field.field_id for field in FINANCIAL_FIELDS)}
+            ),
+            "families": [
+                *root["families"],
+                financial_store.family_reference(financial_candidate_manifest_sha256),
+            ],
+        }
+        manifest = {
+            "format": _FAMILY_GENERATION_FORMAT,
+            "version": _MANIFEST_VERSION,
+            "data_identity": hashlib.sha256(canonical_json_bytes(identity)).hexdigest(),
+            **identity,
+            "preparation": _preparation(
+                prepared_at,
+                "financial-composition",
+                {
+                    "market_generation_manifest_sha256": market_generation_manifest_sha256,
+                    "financial_candidate_manifest_sha256": financial_candidate_manifest_sha256,
+                },
+            ),
+        }
+        content = _bounded_manifest_bytes(manifest)
+        sha256 = hashlib.sha256(content).hexdigest()
+        self._store_addressed(self._manifest_path(sha256), sha256, content)
+        return self.validate_generation(sha256)
 
     def read_historical_ordinary_a_share_identities(
         self,
@@ -363,6 +455,72 @@ class MountedGenerationStore:
         except MarketSeriesError as error:
             raise GenerationStoreError(str(error)) from error
         return MountedMarketSeries(generation=descriptor, research_data=research_data)
+
+    def read_composite_slice(
+        self,
+        manifest_sha256: str,
+        *,
+        sessions: list[str],
+        universe_name: str,
+        neutralization: str,
+        field_bindings: Mapping[str, str],
+    ) -> MountedMarketSeries:
+        """Resolve one storage-independent market/financial calculation slice."""
+        from thesistrace.data.fields import FINANCIAL_FIELDS, MARKET_FIELDS
+        from thesistrace.data.financial_candidate import (
+            FinancialCandidateError,
+            FinancialCandidateStore,
+        )
+        from thesistrace.data.financial_series import (
+            FinancialSeriesError,
+            FinancialSeriesResolver,
+        )
+
+        market_field_ids = {field.field_id for field in MARKET_FIELDS}
+        financial_field_ids = {field.field_id for field in FINANCIAL_FIELDS}
+        unknown = set(field_bindings) - market_field_ids - financial_field_ids
+        if unknown:
+            raise GenerationStoreError("Composite Series field binding is unsupported")
+        market_bindings = {
+            field_id: evaluation_name
+            for field_id, evaluation_name in field_bindings.items()
+            if field_id in market_field_ids
+        }
+        financial_bindings = {
+            field_id: evaluation_name
+            for field_id, evaluation_name in field_bindings.items()
+            if field_id in financial_field_ids
+        }
+        market = self.read_market_slice(
+            manifest_sha256,
+            sessions=sessions,
+            universe_name=universe_name,
+            neutralization=neutralization,
+            field_bindings=market_bindings,
+        )
+        if not financial_bindings:
+            return market
+        financial_manifest = market.generation.financial_candidate_manifest_sha256
+        if financial_manifest is None:
+            raise GenerationStoreError("Composite Series lacks Financial Data")
+        try:
+            financial_values = FinancialSeriesResolver(
+                FinancialCandidateStore(self._root)
+            ).resolve(
+                manifest_sha256=financial_manifest,
+                field_ids=tuple(financial_bindings),
+                sessions=tuple(sessions),
+                instrument_ids=tuple(sorted(market.research_data.instruments)),
+            )
+        except (FinancialCandidateError, FinancialSeriesError) as error:
+            raise GenerationStoreError(str(error)) from error
+        return MountedMarketSeries(
+            generation=market.generation,
+            research_data=replace(
+                market.research_data,
+                fields={**market.research_data.fields, **financial_values},
+            ),
+        )
 
     def open_admission(self, manifest_sha256: str) -> MountedGenerationAdmission:
         root = self._read_family_generation_root(manifest_sha256)
@@ -562,6 +720,9 @@ class MountedGenerationStore:
         for family in families:
             assert isinstance(family, Mapping)
             family_sha256 = str(family["manifest_sha256"])
+            if family.get("family_id") == "equity.financial_pit":
+                references.update(self._financial_referenced_files(family_sha256))
+                continue
             references.add(GenerationFileRef("manifest", family_sha256))
             family_manifest = self._read_manifest(family_sha256)
             tables = family_manifest["tables"]
@@ -579,6 +740,49 @@ class MountedGenerationStore:
                     if isinstance(object_ref, Mapping)
                 )
         return frozenset(references)
+
+    def _financial_referenced_files(
+        self,
+        manifest_sha256: str,
+    ) -> set[GenerationFileRef]:
+        references = {GenerationFileRef("manifest", manifest_sha256)}
+        manifest = self._read_manifest(manifest_sha256)
+        source_generation = manifest.get("source_generation_manifest_sha256")
+        if isinstance(source_generation, str):
+            references.update(self.referenced_files(source_generation))
+        prior = manifest.get("prior_candidate_manifest_sha256")
+        if isinstance(prior, str):
+            references.update(self._financial_referenced_files(prior))
+        tables = manifest.get("tables")
+        if isinstance(tables, list):
+            for table in tables:
+                if not isinstance(table, Mapping):
+                    continue
+                table_sha256 = str(table.get("manifest_sha256"))
+                references.add(GenerationFileRef("manifest", table_sha256))
+                table_manifest = self._read_manifest(table_sha256)
+                objects = table_manifest.get("objects")
+                if isinstance(objects, list):
+                    references.update(
+                        GenerationFileRef("object", str(item["sha256"]))
+                        for item in objects
+                        if isinstance(item, Mapping)
+                    )
+        for key in ("current_raw_evidence", "raw_evidence"):
+            evidence = manifest.get(key)
+            if not isinstance(evidence, Mapping):
+                continue
+            index_sha256 = str(evidence.get("manifest_sha256"))
+            references.add(GenerationFileRef("manifest", index_sha256))
+            index = self._read_manifest(index_sha256)
+            chunks = index.get("chunks")
+            if isinstance(chunks, list):
+                references.update(
+                    GenerationFileRef("manifest", str(chunk["sha256"]))
+                    for chunk in chunks
+                    if isinstance(chunk, Mapping)
+                )
+        return references
 
     def inventory(self) -> frozenset[GenerationFileRef]:
         references = {
@@ -623,9 +827,13 @@ class MountedGenerationStore:
         }:
             raise GenerationStoreError("Family Generation candidate schema is incompatible")
         families = root["families"]
-        if not isinstance(families, list) or [
+        family_ids = [
             entry.get("family_id") for entry in families if isinstance(entry, Mapping)
-        ] != [spec.family_id for spec in MARKET_FAMILY_SPECS]:
+        ] if isinstance(families, list) else []
+        if family_ids not in (
+            [spec.family_id for spec in MARKET_FAMILY_SPECS],
+            [*(spec.family_id for spec in MARKET_FAMILY_SPECS), "equity.financial_pit"],
+        ):
             raise GenerationStoreError("Family Generation candidate set is incompatible")
         identity = {
             "schema_contract": root["schema_contract"],
@@ -1239,22 +1447,31 @@ def _family_generation_descriptor_from_root(
     except FamilyManifestError as error:
         raise GenerationStoreError(str(error)) from error
     family_references = root.get("families")
-    if not isinstance(family_references, list) or len(family_references) != len(
-        MARKET_FAMILY_SPECS
-    ):
+    if not isinstance(family_references, list) or len(family_references) not in {
+        len(MARKET_FAMILY_SPECS),
+        len(MARKET_FAMILY_SPECS) + 1,
+    }:
         raise GenerationStoreError("Family Generation candidate set is incompatible")
     families: list[MountedDatasetFamilyDescriptor] = []
     for reference, family_spec in zip(
-        family_references,
+        family_references[: len(MARKET_FAMILY_SPECS)],
         MARKET_FAMILY_SPECS,
         strict=True,
     ):
         if not isinstance(reference, Mapping):
             raise GenerationStoreError("Dataset Family reference is incompatible")
         families.append(_family_descriptor_from_reference(reference, family_spec))
+    financial_candidate: str | None = None
+    if len(family_references) > len(MARKET_FAMILY_SPECS):
+        reference = family_references[-1]
+        if not isinstance(reference, Mapping):
+            raise GenerationStoreError("Financial Dataset Family reference is incompatible")
+        financial_family = _financial_family_descriptor_from_reference(reference)
+        financial_candidate = financial_family.manifest_sha256
+        families.append(financial_family)
     try:
         validate_synchronized_coverages(
-            tuple(families),
+            tuple(families[: len(MARKET_FAMILY_SPECS)]),
             data_through_session=data_through_session,
         )
     except FamilyManifestError as error:
@@ -1275,6 +1492,9 @@ def _family_generation_descriptor_from_root(
         field_availability=tuple(field_availability),
         preparation=preparation,
         families=tuple(families),
+        financial_candidate_manifest_sha256=(
+            None if financial_candidate is None else str(financial_candidate)
+        ),
     )
 
 
@@ -1334,6 +1554,60 @@ def _family_descriptor_from_reference(
         },
         manifest_sha256=str(manifest_sha256),
         table_names=tuple(table_names),
+    )
+
+
+def _financial_family_descriptor_from_reference(
+    reference: Mapping[str, object],
+) -> MountedDatasetFamilyDescriptor:
+    expected_keys = {
+        "family_id",
+        "schema_contract",
+        "dataset_coverage",
+        "validation_summary",
+        "manifest_sha256",
+        "manifest_byte_count",
+        "table_names",
+    }
+    coverage = reference.get("dataset_coverage")
+    table_names = reference.get("table_names")
+    if (
+        set(reference) != expected_keys
+        or reference.get("family_id") != "equity.financial_pit"
+        or reference.get("schema_contract") != "financial-pit-wide-v1"
+        or table_names
+        != [
+            "income_statement_versions",
+            "balance_sheet_versions",
+            "cash_flow_statement_versions",
+        ]
+        or not isinstance(coverage, Mapping)
+        or coverage.get("kind") != "financial-observation-range"
+    ):
+        raise GenerationStoreError("Financial Dataset Family reference is incompatible")
+    summary = reference.get("validation_summary")
+    if (
+        not isinstance(summary, Mapping)
+        or set(summary) != {"status", "table_count", "row_count", "object_count"}
+        or summary.get("status") != "validated"
+        or any(
+            isinstance(summary.get(key), bool)
+            or not isinstance(summary.get(key), int)
+            or int(summary[key]) < 0
+            for key in ("table_count", "row_count", "object_count")
+        )
+    ):
+        raise GenerationStoreError("Financial Dataset Family summary is incompatible")
+    manifest_sha256 = reference.get("manifest_sha256")
+    _require_sha256(manifest_sha256)
+    _required_byte_count(reference.get("manifest_byte_count"), "Financial Family manifest")
+    return MountedDatasetFamilyDescriptor(
+        family_id="equity.financial_pit",
+        schema_contract="financial-pit-wide-v1",
+        dataset_coverage=dict(coverage),
+        validation_summary=dict(summary),
+        manifest_sha256=str(manifest_sha256),
+        table_names=tuple(str(value) for value in table_names),
     )
 
 
@@ -1453,14 +1727,22 @@ def _validate_candidate_projection(
     field_catalog = canonical["field_catalog"]
     assert isinstance(calendar, list)
     assert isinstance(field_catalog, list)
-    actual_fields = tuple(sorted(str(row["field_id"]) for row in field_catalog))
+    actual_fields = {str(row["field_id"]) for row in field_catalog}
+    if descriptor.financial_candidate_manifest_sha256 is not None:
+        from thesistrace.data.fields import FINANCIAL_FIELDS
+
+        actual_fields.update(field.field_id for field in FINANCIAL_FIELDS)
     if (
         descriptor.data_through_session != str(calendar[-1])
         or descriptor.research_sessions != tuple(str(session) for session in calendar)
-        or descriptor.field_availability != actual_fields
+        or descriptor.field_availability != tuple(sorted(actual_fields))
     ):
         raise GenerationStoreError("Family Generation root projection is incompatible")
-    for family, spec in zip(descriptor.families, MARKET_FAMILY_SPECS, strict=True):
+    for family, spec in zip(
+        descriptor.families[: len(MARKET_FAMILY_SPECS)],
+        MARKET_FAMILY_SPECS,
+        strict=True,
+    ):
         try:
             actual_coverage = build_family_coverage(
                 spec,

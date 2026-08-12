@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data import (
+    FINANCIAL_FIELDS,
     AuthorableField,
     DatasetAdmissionSnapshot,
     authorable_field_bindings,
@@ -27,7 +28,7 @@ from thesistrace.definition.models import (
     OperatorOption,
     RunValidationIssue,
 )
-from thesistrace.research_kernel.alpha_expression import ParsedAlpha
+from thesistrace.research_kernel.alpha_expression import ParsedAlpha, freeze_parsed_alpha
 from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run import ImmutableRunInput, ResearchRunSummary
 
@@ -97,6 +98,16 @@ class DefinitionService:
         raw_operators = catalog.get("operators")
         if not isinstance(raw_operators, list):
             raise RuntimeError("Research Kernel operator catalog is malformed")
+        snapshot = self._current_dataset()
+        available_field_ids = (
+            {
+                field.field_id
+                for field in self._authorable_fields()
+                if field.family_id == "equity.eod_price"
+            }
+            if snapshot is None
+            else snapshot.available_field_ids
+        )
         return DefinitionAuthoringOptions(
             fields=[
                 AuthorableFieldOption(
@@ -105,6 +116,7 @@ class DefinitionService:
                     unit=field.unit,
                 )
                 for field in self._authorable_fields()
+                if field.field_id in available_field_ids
             ],
             operators=[OperatorOption.model_validate(item) for item in raw_operators],
             universes=["top300", "top1000", "top2000", "top3000"],
@@ -335,6 +347,8 @@ class DefinitionService:
                     for field_id in parsed_alpha.field_ids
                 },
                 operator_catalog=self._operator_catalog(),
+                parsed_alpha=parsed_alpha,
+                dataset=snapshot,
             )
             run = self._admit_run(transaction, immutable_input)
             transaction.execute(
@@ -468,6 +482,34 @@ def _dataset_issues(
                 message="Alpha field is unavailable in current Data",
             )
         )
+    financial_field_ids = {field.field_id for field in FINANCIAL_FIELDS}
+    if (
+        set(parsed_alpha.field_ids) & financial_field_ids
+        and set(parsed_alpha.field_ids) <= snapshot.available_field_ids
+    ):
+        selected = snapshot.research_period(start, end)
+        financial_start = snapshot.financial_coverage_start
+        financial_end = snapshot.financial_coverage_end
+        warmup_start: date | None = None
+        if selected:
+            first_index = snapshot.research_sessions.index(selected[0])
+            warmup_index = first_index - parsed_alpha.effective_lookback
+            if warmup_index >= 0:
+                warmup_start = snapshot.research_sessions[warmup_index]
+        if (
+            financial_start is None
+            or financial_end is None
+            or warmup_start is None
+            or warmup_start < financial_start
+            or (selected and selected[-1] > financial_end)
+        ):
+            issues.append(
+                RunValidationIssue(
+                    code="FINANCIAL_CALCULATION_OUTSIDE_COVERAGE",
+                    field="alpha",
+                    message="Financial Alpha calculation slice exceeds Financial Coverage",
+                )
+            )
     return issues
 
 
@@ -515,6 +557,8 @@ def _immutable_run_input(
     content: dict[str, object],
     field_bindings: dict[str, str],
     operator_catalog: dict[str, object],
+    parsed_alpha: ParsedAlpha,
+    dataset: DatasetAdmissionSnapshot,
 ) -> ImmutableRunInput:
     catalog_version = operator_catalog.get("semantic_version")
     if not isinstance(catalog_version, str):
@@ -524,6 +568,24 @@ def _immutable_run_input(
             "id": definition_id,
             "revision": definition_revision,
             "content": dict(content),
+        },
+        compiled_alpha=freeze_parsed_alpha(parsed_alpha),
+        data_generation_manifest_sha256=dataset.generation_manifest_sha256,
+        data_generation_facts={
+            "data_identity": dataset.data_identity,
+            "coverage_start": dataset.coverage_start.isoformat(),
+            "coverage_end": dataset.coverage_end.isoformat(),
+            "financial_coverage_start": (
+                None
+                if dataset.financial_coverage_start is None
+                else dataset.financial_coverage_start.isoformat()
+            ),
+            "financial_coverage_end": (
+                None
+                if dataset.financial_coverage_end is None
+                else dataset.financial_coverage_end.isoformat()
+            ),
+            "available_field_ids": sorted(dataset.available_field_ids),
         },
         requested_start_date=_content_date(content["start_date"]),
         requested_end_date=_content_date(content["end_date"]),

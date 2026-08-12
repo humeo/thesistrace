@@ -1081,7 +1081,8 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "thesistrace_meta.schema_contract",
         "private `thesistrace-data-operator`",
         "Attempt starts",
-        "pins the then-current Data",
+        "Data Generation frozen at Run",
+        "Use as Draft copies an earlier Run's authorable values",
         "There is no upgrade, downgrade, fallback",
     ):
         assert current in architecture
@@ -1091,6 +1092,5 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "migration-runner",
         "data.next_release",
         "Data Update product action",
-        "Rerun always creates a new ResearchRun ID using exactly",
     ):
         assert obsolete not in architecture

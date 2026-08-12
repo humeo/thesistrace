@@ -55,6 +55,7 @@ test("current data supports one visible ResearchRun and DailyTrack journey", asy
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/, {
       timeout: 30_000,
     });
+    const sourceRunUrl = page.url();
     await expect(
       page.locator(".research-run-facts p").filter({ hasText: "Status" }),
     ).toContainText("succeeded", { timeout: 30_000 });
@@ -88,6 +89,33 @@ test("current data supports one visible ResearchRun and DailyTrack journey", asy
     ).toContain("Up to date");
     await expect(page.getByText("Strategy session 2026-08-11", { exact: true })).toBeVisible();
     await expectForbiddenProductInternalsToBeAbsent(page);
+
+    await page.goto(sourceRunUrl);
+    await expect(page.getByRole("button", { name: "Use as Draft" })).toBeVisible();
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toBe("Replace the existing browser draft?");
+      await dialog.accept();
+    });
+    await page.getByRole("button", { name: "Use as Draft" }).click();
+    await expect(page).toHaveURL(/\/definitions$/);
+    await expect(page.getByLabel("Definition name")).toHaveValue("Browser Current Data Alpha");
+    await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-03");
+    await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
+    await expect(page.getByLabel("Universe")).toHaveValue("top300");
+    await expect(page.getByLabel("Neutralization")).toHaveValue("none");
+    await page.getByLabel("Definition name").fill("Copied Browser Current Data Alpha");
+    await page.reload();
+    await expect(page.getByLabel("Definition name")).toHaveValue(
+      "Copied Browser Current Data Alpha",
+    );
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/, {
+      timeout: 30_000,
+    });
+    expect(page.url()).not.toBe(sourceRunUrl);
+    await expect(
+      page.locator(".research-run-facts p").filter({ hasText: "Status" }),
+    ).toContainText("succeeded", { timeout: 30_000 });
     expect(externalRequests, "browser journey must remain local-only").toEqual([]);
   } finally {
     await attachResponses(testInfo, responses);

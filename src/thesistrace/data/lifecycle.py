@@ -170,6 +170,7 @@ class DatasetLifecycle:
                     """,
                     (operation_id, generation_manifest_sha256, lease_seconds),
                 )
+
             elif row != {
                 "generation_manifest_sha256": generation_manifest_sha256,
                 "status": "live",
@@ -184,6 +185,49 @@ class DatasetLifecycle:
                     """,
                     (lease_seconds, operation_id),
                 )
+
+    def retain_generation_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        retention_id: str,
+        generation_manifest_sha256: str,
+        lease_seconds: float,
+    ) -> None:
+        _require_identity(retention_id, "Generation retention")
+        _require_lease(lease_seconds)
+        lock_data_lifecycle(transaction)
+        self._heads.inspect_generation(generation_manifest_sha256)
+        transaction.execute(
+            """
+            INSERT INTO data.generation_candidates (
+                operation_id, generation_manifest_sha256, status, lease_expires_at
+            ) VALUES (%s, %s, 'live', now() + make_interval(secs => %s))
+            ON CONFLICT (operation_id) DO UPDATE
+            SET generation_manifest_sha256 = EXCLUDED.generation_manifest_sha256,
+                status = 'live',
+                lease_expires_at = EXCLUDED.lease_expires_at,
+                released_at = NULL,
+                updated_at = now()
+            """,
+            (retention_id, generation_manifest_sha256, lease_seconds),
+        )
+
+    def release_retention_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        retention_id: str,
+    ) -> None:
+        lock_data_lifecycle(transaction)
+        transaction.execute(
+            """
+            UPDATE data.generation_candidates
+            SET status = 'released', released_at = now(), updated_at = now()
+            WHERE operation_id = %s AND status = 'live'
+            """,
+            (retention_id,),
+        )
 
     @contextmanager
     def protected_refresh_candidate(
@@ -354,6 +398,48 @@ class DatasetLifecycle:
                     owner_kind,
                     owner_id,
                     pointer.generation_manifest_sha256,
+                    lease_seconds,
+                ),
+            ).fetchone()
+        except UniqueViolation as error:
+            raise DataLifecycleError("Generation pin owner already has a pin") from error
+        assert row is not None
+        return PinnedGeneration(pin=_pin(row), descriptor=generation)
+
+    def pin_generation_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        *,
+        generation_manifest_sha256: str,
+        owner_kind: str,
+        owner_id: str,
+        lease_seconds: float,
+    ) -> PinnedGeneration:
+        if owner_kind not in _OWNER_KINDS:
+            raise ValueError("Generation pin owner kind is invalid")
+        _require_identity(owner_id, "Generation pin owner")
+        _require_lease(lease_seconds)
+        lock_data_lifecycle(transaction)
+        generation = self._heads.inspect_generation(generation_manifest_sha256)
+        pin_id = f"generation_pin_{uuid4().hex[:20]}"
+        try:
+            row = transaction.execute(
+                """
+                INSERT INTO data.generation_pins (
+                    id, owner_kind, owner_id, generation_manifest_sha256,
+                    status, lease_expires_at
+                ) VALUES (
+                    %s, %s, %s, %s, 'active',
+                    now() + make_interval(secs => %s)
+                )
+                RETURNING id, owner_kind, owner_id, generation_manifest_sha256,
+                          status, lease_expires_at, heartbeat_at
+                """,
+                (
+                    pin_id,
+                    owner_kind,
+                    owner_id,
+                    generation_manifest_sha256,
                     lease_seconds,
                 ),
             ).fetchone()

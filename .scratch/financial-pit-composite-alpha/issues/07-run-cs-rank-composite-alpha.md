@@ -9,34 +9,34 @@ publication.
 **Blocked by:** 06 — Resolve six Session-Aligned Financial Fields; external
 prerequisite — Alpha Language and Research Workspace feature.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] The composed Alpha Authoring Catalog exposes all six financial fields and
+- [x] The composed Alpha Authoring Catalog exposes all six financial fields and
   one cs_rank Builtin without adding a second field allowlist.
-- [ ] cs_rank accepts and returns a Numeric Series and evaluates independently
+- [x] cs_rank accepts and returns a Numeric Series and evaluates independently
   for every Research Session inside the selected Liquidity Universe.
-- [ ] Finite child values receive ascending average ordinal ranks mapped to the
+- [x] Finite child values receive ascending average ordinal ranks mapped to the
   inclusive zero-to-one range.
-- [ ] Ties receive their average rank, one valid value receives 0.5, and an
+- [x] Ties receive their average rank, one valid value receives 0.5, and an
   all-missing cross-section remains missing.
-- [ ] Missing and non-finite values are excluded from the denominator and
+- [x] Missing and non-finite values are excluded from the denominator and
   remain missing at their original coordinates.
-- [ ] Lower-is-better behavior requires explicit Formula negation and Industry
+- [x] Lower-is-better behavior requires explicit Formula negation and Industry
   Neutralization remains a post-expression operation.
-- [ ] cs_rank preserves the child's Effective Alpha Lookback and the Execution
+- [x] cs_rank preserves the child's Effective Alpha Lookback and the Execution
   Plan evaluates each child once before ranking complete cross-sections.
-- [ ] Authoritative admission freezes the Formula, compiled Expression,
+- [x] Authoritative admission freezes the Formula, compiled Expression,
   resolved Field References, calculation contracts, and selected Data
   Generation facts before queuing.
-- [ ] A financial Formula whose calculation slice exceeds Financial Coverage
+- [x] A financial Formula whose calculation slice exceeds Financial Coverage
   is rejected before durable queue mutation.
-- [ ] An otherwise equivalent market-only Formula remains admissible when
+- [x] An otherwise equivalent market-only Formula remains admissible when
   Financial Coverage is behind.
-- [ ] The Worker executes the admitted Expression and pinned Generation without
+- [x] The Worker executes the admitted Expression and pinned Generation without
   recompiling current source or consulting a mutable catalog.
-- [ ] One deterministic market-financial Composite Alpha completes through the
+- [x] One deterministic market-financial Composite Alpha completes through the
   real HTTP, database, claim, Worker, and result-publication seams.
-- [ ] No factor-list, factor-weight, multi-factor-model, or alternative
+- [x] No factor-list, factor-weight, multi-factor-model, or alternative
   financial authoring resource is introduced.
 
 ## Comments

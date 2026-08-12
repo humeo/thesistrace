@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -35,10 +36,19 @@ from thesistrace.daily_track.checkpoint import (
     terminal_strategy_state,
 )
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.financial_candidate import FinancialCandidateStore
+from thesistrace.data.financial_collection import (
+    CompletedFinancialCollection,
+    FinancialCollectionContract,
+    FinancialDateShard,
+    FinancialShardCheckpoint,
+    RawFinancialBatchStore,
+)
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
+from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
     KernelRunError,
@@ -61,7 +71,119 @@ from thesistrace.research_series import (
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> None:
+def test_composite_alpha_runs_through_http_claim_worker_and_publication(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = (
+        "2010-01-04",
+        "2010-04-20",
+        "2010-04-21",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+    generation_id = _publish_composite_head(settings, sessions=sessions)
+    alpha = {
+        "operator_id": "add",
+        "operands": [
+            {
+                "operator_id": "cs_rank",
+                "operands": [{"field_id": "price.close.adjusted"}],
+            },
+            {
+                "operator_id": "cs_rank",
+                "operands": [{"field_id": "total_revenue_latest_fy"}],
+            },
+        ],
+    }
+
+    with TestClient(create_app(settings)) as client:
+        options = client.get("/api/definitions/authoring-options").json()
+        assert "cs_rank" in {item["operator_id"] for item in options["operators"]}
+        assert {
+            "total_revenue_latest_fy",
+            "net_profit_parent_latest_fy",
+            "operating_cash_flow_latest_fy",
+            "total_assets_latest_reported",
+            "total_liabilities_latest_reported",
+            "equity_parent_latest_reported",
+        } <= {item["field_id"] for item in options["fields"]}
+        accepted = client.post(
+            "/api/definitions/run",
+            json=_run_command("composite-e2e", alpha=alpha),
+        )
+        assert accepted.status_code == 200
+        assert accepted.json()["outcome"] == "accepted"
+        run_id = accepted.json()["run"]["id"]
+
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        detail = client.get(f"/api/research-runs/{run_id}")
+        assert detail.status_code == 200
+        assert detail.json()["status"] == "succeeded"
+        assert len(detail.json()["result"]["strategy"]["observations"]) == 3
+        stored = _stored_execution(settings, run_id)
+        assert stored["attempt_data_generation_id"] == generation_id
+        assert stored["attempt_status"] == "succeeded"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_financial_cutoff_rejects_only_financial_formula_before_queueing(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = (
+        "2010-01-04",
+        "2010-04-20",
+        "2010-04-21",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+    _publish_composite_head(
+        settings,
+        sessions=sessions,
+        financial_through="2026-08-04",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        financial = client.post(
+            "/api/definitions/run",
+            json=_run_command(
+                "financial-cutoff",
+                alpha={"field_id": "total_revenue_latest_fy"},
+            ),
+        ).json()
+        market = client.post(
+            "/api/definitions/run",
+            json=_run_command("market-past-financial-cutoff"),
+        ).json()
+
+    assert financial["outcome"] == "rejected"
+    assert financial["issues"] == [
+        {
+            "code": "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE",
+            "field": "alpha",
+            "message": "Financial Alpha calculation slice exceeds Financial Coverage",
+        }
+    ]
+    assert market["outcome"] == "accepted"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -96,7 +218,19 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             "definition_revision",
             "start_date",
             "end_date",
+            "draft",
             "result",
+        }
+        assert public_run["draft"] == {
+            "name": "Attempt-scoped current data",
+            "hypothesis": None,
+            "start_date": sessions[0],
+            "end_date": sessions[-1],
+            "alpha": {"field_id": "price.close.adjusted"},
+            "universe": "top300",
+            "neutralization": "none",
+            "holdings_count": 1,
+            "rebalance_every_sessions": 1,
         }
         assert set(public_run["result"]) == {
             "factor",
@@ -133,9 +267,9 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert "generation" not in str(public_run).lower()
 
         stored = _stored_execution(settings, run_id)
-        assert stored["attempt_data_generation_id"] == head_b
+        assert stored["attempt_data_generation_id"] == head_a
         assert stored["attempt_data_through_session"].isoformat() == sessions[-1]
-        assert stored["result_provenance"]["data_generation_id"] == head_b
+        assert stored["result_provenance"]["data_generation_id"] == head_a
         assert stored["result_provenance"]["data_through_session"] == sessions[-1]
         assert stored["active_pin_count"] == 0
 
@@ -361,6 +495,47 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert reopened_track.status_code == 200
         assert "release" not in reopened_track.text.lower()
         assert "generation" not in reopened_track.text.lower()
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_use_as_draft_submits_frozen_values_through_ordinary_run_admission(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head_a = _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        source = client.post(
+            "/api/definitions/run",
+            json=_run_command("use-as-draft-source"),
+        ).json()["run"]
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        frozen_draft = client.get(f"/api/research-runs/{source['id']}").json()["draft"]
+        head_b = _publish_head(
+            settings,
+            sessions=sessions,
+            price_offset=4,
+            expected_manifest=head_a,
+        )
+
+        copied = client.post(
+            "/api/definitions/run",
+            json={"request_id": "use-as-draft-copy", **frozen_draft},
+        )
+
+        assert copied.status_code == 200
+        assert copied.json()["outcome"] == "accepted"
+        copied_run_id = copied.json()["run"]["id"]
+        assert copied_run_id != source["id"]
+        copied_input = _stored_run_input(settings, copied_run_id)
+        assert copied_input["definition"]["content"] == frozen_draft
+        assert copied_input["data_generation_manifest_sha256"] == head_b
 
 
 @pytest.mark.skipif(
@@ -1353,6 +1528,8 @@ def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> N
         assert client.app.state.core_runtime.research_runs.process_next() is False
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
+        draft = detail.pop("draft")
+        assert draft["alpha"]["operator_id"] == "ts_mean"
         assert detail == {
             "id": run_id,
             "status": "failed",
@@ -1425,55 +1602,6 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
         assert terminal["rebalance_phase"]["report_session_count"] == session_count
         assert terminal["metric_state"]["session_count"] == session_count
         assert isinstance(terminal["positions"], list)
-        assert stored["active_pin_count"] == 0
-
-
-@pytest.mark.parametrize("incompatibility", ["coverage", "field"])
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_attempt_revalidates_the_selected_generation(
-    tmp_path: Path,
-    incompatibility: str,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
-    head_a = _publish_head(settings, sessions=sessions, price_offset=0)
-
-    with TestClient(create_app(settings)) as client:
-        accepted = client.post(
-            "/api/definitions/run",
-            json=_run_command(f"attempt-revalidate-{incompatibility}"),
-        )
-        run_id = accepted.json()["run"]["id"]
-        replacement_sessions = sessions[1:] if incompatibility == "coverage" else sessions
-        _publish_head(
-            settings,
-            sessions=replacement_sessions,
-            price_offset=2,
-            expected_manifest=head_a,
-            available_field_id=(
-                "market.volume.shares" if incompatibility == "field" else "price.close.adjusted"
-            ),
-        )
-
-        assert client.app.state.core_runtime.research_runs.process_next() is True
-        assert client.app.state.core_runtime.research_runs.process_next() is False
-
-        detail = client.get(f"/api/research-runs/{run_id}").json()
-        assert detail["status"] == "failed"
-        assert detail["start_date"] == sessions[0]
-        assert detail["end_date"] == sessions[-1]
-        assert detail["failure_reason"] == (
-            "Current data cannot execute the requested Research Period."
-        )
-        stored = _stored_execution(settings, run_id)
-        assert stored["attempt_count"] == 1
-        assert stored["attempt_failure_reason"] == "SelectedDataInvalid"
-        assert stored["result_manifest_sha256"] is None
         assert stored["active_pin_count"] == 0
 
 
@@ -1980,6 +2108,159 @@ def _publish_canonical_head(
     return generation.manifest_sha256
 
 
+def _publish_composite_head(
+    settings: CoreSettings,
+    *,
+    sessions: tuple[str, ...],
+    financial_through: str | None = None,
+) -> str:
+    market_store = MountedGenerationStore(settings.data_mount)
+    market = market_store.materialize(
+        _two_instrument_canonical(sessions, corrected=False),
+        prepared_at=datetime(2026, 8, 5, 10, tzinfo=UTC),
+        source_name="composite-alpha-test",
+        source_lineage={"fixture": "composite-alpha"},
+    )
+    endpoint_fields = {
+        "income": (
+            "ts_code",
+            "ann_date",
+            "f_ann_date",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "end_type",
+            "total_revenue",
+            "n_income_attr_p",
+            "update_flag",
+        ),
+        "balancesheet": (
+            "ts_code",
+            "ann_date",
+            "f_ann_date",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "end_type",
+            "total_assets",
+            "total_liab",
+            "total_hldr_eqy_exc_min_int",
+            "update_flag",
+        ),
+        "cashflow": (
+            "ts_code",
+            "ann_date",
+            "f_ann_date",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "end_type",
+            "n_cashflow_act",
+            "update_flag",
+        ),
+    }
+    values = {
+        "income": (("100", "10"), ("200", "20")),
+        "balancesheet": (("1000", "400", "600"), ("2000", "800", "1200")),
+        "cashflow": (("30",), ("60",)),
+    }
+    raw = RawFinancialBatchStore(settings.data_mount)
+    checkpoints: list[FinancialShardCheckpoint] = []
+    for endpoint in ("income", "balancesheet", "cashflow"):
+        fields = endpoint_fields[endpoint]
+        for index, (instrument_id, ts_code) in enumerate(
+            (
+                ("equity:000001.SZ", "000001.SZ"),
+                ("equity:000002.SZ", "000002.SZ"),
+            )
+        ):
+            item = [
+                ts_code,
+                "20100420",
+                "",
+                "20091231",
+                "1",
+                "1",
+                "4",
+                *values[endpoint][index],
+                "0",
+            ]
+            payload_sha256 = hashlib.sha256(
+                canonical_json_bytes({"fields": list(fields), "items": [item]})
+            ).hexdigest()
+            payload = {
+                "format": "thesistrace-raw-financial-batch",
+                "version": 1,
+                "source_contract_version": "tushare-financial-ordinary-v1",
+                "endpoint": endpoint,
+                "parameters": {"ts_code": ts_code},
+                "returned_fields": list(fields),
+                "items": [item],
+                "row_count": 1,
+                "source_date_extent": ["20100420", "20100420"],
+                "payload_sha256": payload_sha256,
+            }
+            checkpoints.append(
+                FinancialShardCheckpoint(
+                    ordinal=len(checkpoints),
+                    endpoint=endpoint,
+                    instrument_id=instrument_id,
+                    ts_code=ts_code,
+                    shard="complete-history",
+                    status="completed",
+                    batch_sha256=raw.store(canonical_json_bytes(payload)),
+                    collected_at="2026-08-05T09:00:00+00:00",
+                    first_observed_at="2026-08-05T09:00:00+00:00",
+                )
+            )
+    contract = FinancialCollectionContract(
+        capability_sha256="e" * 64,
+        endpoint_fields=tuple(
+            (endpoint, endpoint_fields[endpoint])
+            for endpoint in ("income", "balancesheet", "cashflow")
+        ),
+        suspected_truncation_row_counts=(
+            ("income", None),
+            ("balancesheet", None),
+            ("cashflow", None),
+        ),
+        shards=(FinancialDateShard("complete-history"),),
+    )
+    financial = FinancialCandidateStore(settings.data_mount).materialize(
+        CompletedFinancialCollection(
+            idempotency_key="composite-e2e",
+            generation_manifest_sha256=market.manifest_sha256,
+            contract=contract,
+            finished_at="2026-08-05T10:00:00+00:00",
+            target_count=len(checkpoints),
+            shards=tuple(checkpoints),
+        ),
+        observation_through_session=financial_through or sessions[-1],
+    )
+    composite = market_store.compose_financial_candidate(
+        market.manifest_sha256,
+        financial.manifest_sha256,
+        prepared_at=datetime(2026, 8, 5, 11, tzinfo=UTC),
+    )
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        lifecycle = DatasetLifecycle(database, settings.data_mount)
+        lifecycle.protect_candidate(
+            operation_id="composite-e2e",
+            generation_manifest_sha256=composite.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=None,
+            candidate_generation_manifest_sha256=composite.manifest_sha256,
+            operation_id="composite-e2e",
+        )
+    finally:
+        database.close()
+    return composite.manifest_sha256
+
+
 def _publish_head(
     settings: CoreSettings,
     *,
@@ -2076,6 +2357,21 @@ def _stored_execution(settings: CoreSettings, run_id: str) -> dict[str, object]:
             ).fetchone()
         assert row is not None
         return row
+    finally:
+        database.close()
+
+
+def _stored_run_input(settings: CoreSettings, run_id: str) -> dict[str, object]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                "SELECT immutable_input FROM research_runs.runs WHERE id = %s",
+                (run_id,),
+            ).fetchone()
+        assert row is not None
+        return dict(row["immutable_input"])
     finally:
         database.close()
 

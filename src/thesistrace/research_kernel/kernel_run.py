@@ -8,10 +8,14 @@ from dataclasses import dataclass, field
 
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
-    evaluate_alpha_matrix,
+    evaluate_compiled_alpha_matrix,
     validate_alpha,
 )
-from thesistrace.research_kernel.alpha_expression import AlphaExpression
+from thesistrace.research_kernel.alpha_expression import (
+    AlphaExpression,
+    freeze_parsed_alpha,
+    restore_compiled_alpha,
+)
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import transition_strategy
@@ -30,6 +34,7 @@ class InsufficientCalculationWarmupError(KernelRunError):
 class RunInput:
     _research_data: AlignedResearchData = field(repr=False)
     _alpha_expression_json: bytes = field(repr=False)
+    _compiled_alpha_json: bytes = field(repr=False)
     _field_bindings: tuple[tuple[str, str], ...] = field(repr=False)
     universe: str
     neutralization: str
@@ -48,6 +53,7 @@ class RunInput:
         *,
         research_data: AlignedResearchData,
         alpha_expression: AlphaExpression,
+        compiled_alpha: Mapping[str, object] | None = None,
         field_bindings: Mapping[str, str],
         universe: str,
         neutralization: str,
@@ -68,6 +74,25 @@ class RunInput:
             self,
             "_alpha_expression_json",
             canonical_json_bytes(alpha_expression),
+        )
+        frozen_alpha = (
+            freeze_parsed_alpha(validate_alpha(alpha_expression, field_bindings=field_bindings))
+            if compiled_alpha is None
+            else dict(compiled_alpha)
+        )
+        try:
+            restored = restore_compiled_alpha(frozen_alpha)
+        except ValueError as error:
+            raise KernelRunError(str(error)) from error
+        if (
+            dict(restored.expression) != dict(alpha_expression)
+            or not set(restored.field_ids) <= set(field_bindings)
+        ):
+            raise KernelRunError("compiled Alpha does not match frozen Formula references")
+        object.__setattr__(
+            self,
+            "_compiled_alpha_json",
+            canonical_json_bytes(frozen_alpha),
         )
         object.__setattr__(
             self,
@@ -98,6 +123,12 @@ class RunInput:
     def field_bindings_snapshot(self) -> dict[str, str]:
         return dict(self._field_bindings)
 
+    def compiled_alpha_snapshot(self) -> dict[str, object]:
+        value = json.loads(self._compiled_alpha_json)
+        if not isinstance(value, dict):
+            raise KernelRunError("compiled Alpha snapshot is invalid")
+        return value
+
     def with_research_data(
         self,
         research_data: AlignedResearchData,
@@ -107,6 +138,7 @@ class RunInput:
         return RunInput(
             research_data=research_data,
             alpha_expression=self.alpha_expression_snapshot(),
+            compiled_alpha=self.compiled_alpha_snapshot(),
             field_bindings=self.field_bindings_snapshot(),
             universe=self.universe,
             neutralization=self.neutralization,
@@ -243,11 +275,7 @@ def _run_explicit_period(
     if start_index > end_index:
         raise KernelRunError("Research Period first session is after its last session")
 
-    alpha_expression = run_input.alpha_expression_snapshot()
-    parsed = validate_alpha(
-        alpha_expression,
-        field_bindings=run_input.field_bindings_snapshot(),
-    )
+    parsed = restore_compiled_alpha(run_input.compiled_alpha_snapshot())
     warmup_start = start_index - parsed.effective_lookback
     if warmup_start < 0:
         raise InsufficientCalculationWarmupError(
@@ -275,9 +303,9 @@ def _calculate(
 ) -> RunOutput:
     alpha_expression = run_input.alpha_expression_snapshot()
     definition = calculation_definition(run_input, alpha_expression)
-    matrix = evaluate_alpha_matrix(
+    matrix = evaluate_compiled_alpha_matrix(
         research_data,
-        expression=alpha_expression,
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )

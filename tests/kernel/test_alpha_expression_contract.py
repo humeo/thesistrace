@@ -11,11 +11,12 @@ from thesistrace.research_kernel.alpha import (
     validate_alpha,
 )
 from thesistrace.research_kernel.alpha_expression import AlphaValidationError, operator_catalog
+from thesistrace.research_series import AlignedResearchData, InstrumentProfile
 
 
 def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
     catalog = operator_catalog()
-    assert catalog["semantic_version"] == "1.0.0"
+    assert catalog["semantic_version"] == "1.1.0"
     operators = catalog["operators"]
     assert [item["operator_id"] for item in operators] == [
         "add",
@@ -34,6 +35,7 @@ def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
         "ts_std",
         "ts_min",
         "ts_max",
+        "cs_rank",
     ]
     assert all(
         set(item)
@@ -42,8 +44,10 @@ def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
             "kind",
             "arity",
             "operand_rules",
-            "result_type",
-            "rolling_bounds",
+                "result_type",
+                "rolling_bounds",
+                "lookback_rule",
+                "complexity",
         }
         for item in operators
     )
@@ -65,6 +69,57 @@ def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
             "ts_max",
         )
     }
+
+
+def test_cs_rank_preserves_child_lookback_and_ranks_complete_cross_sections() -> None:
+    parsed = validate_alpha(
+        operation(
+            "cs_rank",
+            operation("ts_mean", field("price.close.adjusted"), literal(20)),
+        ),
+        field_bindings=FIELD_BINDINGS,
+    )
+    assert parsed.effective_lookback == 19
+
+    sessions = ("2026-08-11", "2026-08-12", "2026-08-13")
+    instruments = ["equity:a", "equity:b", "equity:c"]
+    data = AlignedResearchData(
+        sessions=sessions,
+        instruments={item: InstrumentProfile(board="main", listed_to="") for item in instruments},
+        fields={
+            "financial.test": {
+                (sessions[0], instruments[0]): 1,
+                (sessions[0], instruments[1]): 1,
+                (sessions[1], instruments[0]): 2,
+                (sessions[1], instruments[1]): 4,
+                (sessions[1], instruments[2]): 3,
+                (sessions[2], instruments[2]): 8,
+            }
+        },
+        universe_members={session: tuple(instruments) for session in sessions},
+        industries={},
+        execution_prices={},
+        trading_states={},
+        price_limits={},
+    )
+
+    ranked = evaluate_alpha_matrix(
+        data,
+        expression=operation("cs_rank", field("financial.test")),
+        field_bindings={"financial.test": "financial_test"},
+        neutralization="none",
+    )
+
+    assert ranked["sessions"][0]["values"] == [
+        {"instrument_id": instruments[0], "value": 0.5},
+        {"instrument_id": instruments[1], "value": 0.5},
+    ]
+    assert ranked["sessions"][1]["values"] == [
+        {"instrument_id": instruments[0], "value": 0.0},
+        {"instrument_id": instruments[1], "value": 1.0},
+        {"instrument_id": instruments[2], "value": 0.5},
+    ]
+    assert ranked["sessions"][2]["values"] == [{"instrument_id": instruments[2], "value": 0.5}]
 
 
 def test_normalized_input_has_one_bounded_semantics() -> None:
@@ -207,6 +262,80 @@ def test_normalized_evaluation_preserves_missing_and_non_finite_rules() -> None:
         == [None] * 5
     )
     assert evaluate_series(literal(1), {}, field_bindings=FIELD_BINDINGS) == [1.0]
+
+
+@pytest.mark.parametrize("operator_id", ["ts_sum", "ts_mean", "ts_std"])
+def test_rolling_numeric_result_is_independent_of_execution_prefix(operator_id: str) -> None:
+    values = [1e16, 1e16, -1e16, 1.0]
+
+    def last_value(series: list[float]) -> float:
+        sessions = tuple(f"2026-08-{day:02d}" for day in range(1, len(series) + 1))
+        instrument = "equity:a"
+        data = AlignedResearchData(
+            sessions=sessions,
+            instruments={instrument: InstrumentProfile(board="main", listed_to="")},
+            fields={
+                "price.close.adjusted": {
+                    (session, instrument): value
+                    for session, value in zip(sessions, series, strict=True)
+                }
+            },
+            universe_members={session: (instrument,) for session in sessions},
+            industries={},
+            execution_prices={},
+            trading_states={},
+            price_limits={},
+        )
+        result = evaluate_alpha_matrix(
+            data,
+            expression=operation(
+                operator_id,
+                field("price.close.adjusted"),
+                literal(3),
+            ),
+            field_bindings=FIELD_BINDINGS,
+            neutralization="none",
+        )
+        return result["sessions"][-1]["values"][0]["value"]
+
+    assert last_value(values) == last_value(values[-3:])
+
+
+def test_rolling_and_cross_sectional_operators_normalize_non_finite_inputs_to_missing() -> None:
+    sessions = ("2026-08-01", "2026-08-02")
+    instruments = ("equity:a", "equity:b", "equity:c")
+    data = AlignedResearchData(
+        sessions=sessions,
+        instruments={item: InstrumentProfile(board="main", listed_to="") for item in instruments},
+        fields={
+            "price.close.adjusted": {
+                (sessions[0], instruments[0]): 1.0,
+                (sessions[1], instruments[0]): 3.0,
+                (sessions[0], instruments[1]): math.inf,
+                (sessions[1], instruments[1]): 4.0,
+                (sessions[0], instruments[2]): math.nan,
+                (sessions[1], instruments[2]): -math.inf,
+            }
+        },
+        universe_members={session: instruments for session in sessions},
+        industries={},
+        execution_prices={},
+        trading_states={},
+        price_limits={},
+    )
+    result = evaluate_alpha_matrix(
+        data,
+        expression=operation(
+            "cs_rank",
+            operation("ts_mean", field("price.close.adjusted"), literal(2)),
+        ),
+        field_bindings=FIELD_BINDINGS,
+        neutralization="none",
+    )
+
+    assert result["sessions"][1]["values"] == [
+        {"instrument_id": "equity:a", "value": 0.5}
+    ]
 
 
 def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:

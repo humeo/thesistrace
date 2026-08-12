@@ -85,6 +85,9 @@ class MountedDatasetHeadStore:
     def validate_generation(self, manifest_sha256: str) -> MountedFamilyGenerationDescriptor:
         return self._generations.validate_generation(manifest_sha256)
 
+    def inspect_generation(self, manifest_sha256: str) -> MountedFamilyGenerationDescriptor:
+        return self._generations.inspect_root(manifest_sha256)
+
     def resolve_admission(self, pointer: DatasetHeadPointer) -> MountedGenerationAdmission:
         try:
             admission = self._generations.open_admission(pointer.generation_manifest_sha256)

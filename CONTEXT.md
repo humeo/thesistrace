@@ -248,7 +248,7 @@ explicitly started from a successful seed ResearchRun. It freezes the complete
 ResearchRun input snapshot, carries cash, holdings, NAV, and Strategy phase,
 catches up to the Dataset Head, and then continues forward. It is blocked when its
 current target cannot complete and terminally stopped only by an explicit Stop;
-editing, rerunning, moving, renaming, or deleting the seed Research never
+editing, reusing as a Draft, moving, renaming, or deleting the seed Research never
 mutates or deletes it. Only an explicit user DailyTrack deletion removes the
 Track and its owned state.
 _Avoid_: ResearchRun, rolling backtest, mutable Browser Draft
@@ -573,8 +573,8 @@ _Avoid_: ResearchRun, server Draft, latest Run, autosaved Definition
 The action that submits one Browser Draft and its Research Folder to the backend
 Alpha Compiler and admission checks. Rejection returns Diagnostics and creates
 no durable backend resource; acceptance atomically creates one ResearchRun with
-the submitted input frozen. The Browser Draft remains local and data is not
-selected until an Attempt starts.
+the submitted input and selected Data Generation frozen. The Browser Draft
+remains local; the backend chooses data rather than the user.
 _Avoid_: Save, Refresh, Use as Draft, execution Attempt
 
 **ResearchRun**:
@@ -583,7 +583,8 @@ Folder; there is no separate Research container above it. Its optional Research
 Name and Folder membership are mutable organization metadata. It separately
 freezes the submitted Formula, compiled Alpha Expression, Investment
 Hypothesis, Requested Research Dates, field bindings, Universe,
-neutralization, Strategy parameters, and calculation contracts. Its successful
+neutralization, Strategy parameters, calculation contracts, and selected Data
+Generation identity and Coverage. Its successful
 Attempt produces Factor Evaluation and Strategy Backtest conclusions and may
 seed a DailyTrack only after publishing a complete Result Bundle.
 _Avoid_: Research Folder, Browser Draft, factor evaluation, backtest
@@ -617,9 +618,9 @@ _Avoid_: Rerun, retry, automatic latest-Run restore
 
 **ResearchRun Attempt**:
 One infrastructure execution attempt belonging to an existing ResearchRun,
-which pins the latest Data Generation when it starts and recomputes the whole
-Run from the beginning. A retry creates another Attempt, may select a newer
-Generation, and never mixes partial artifacts. Reusing research input requires
+which pins the Data Generation frozen at Run admission and recomputes the whole
+Run from the beginning. A retry creates another Attempt, retains and pins the
+same Generation, and never mixes partial artifacts. Reusing research input requires
 Use as Draft followed by an ordinary Run Action.
 _Avoid_: ResearchRun, Use as Draft, modified run input
 

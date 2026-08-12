@@ -14,6 +14,9 @@ class ImmutableRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     definition: dict[str, object]
+    compiled_alpha: dict[str, object]
+    data_generation_manifest_sha256: str
+    data_generation_facts: dict[str, object]
     requested_start_date: date
     requested_end_date: date
     field_bindings: dict[str, str]
@@ -33,10 +36,6 @@ class ResearchRunSummary(BaseModel):
     definition_revision: int
     start_date: date
     end_date: date
-    rerun_of_id: str | None = Field(
-        default=None,
-        exclude_if=lambda value: value is None,
-    )
     failure_reason: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -44,12 +43,6 @@ class ResearchRunSummary(BaseModel):
 
 
 class ResearchRunCancelCommand(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    request_id: RequestId
-
-
-class ResearchRunRerunCommand(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     request_id: RequestId
@@ -212,7 +205,22 @@ class ResearchRunResult(BaseModel):
     provenance: ResultProvenance
 
 
+class ResearchRunDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    hypothesis: str | None
+    start_date: date
+    end_date: date
+    alpha: dict[str, object]
+    universe: Literal["top300", "top1000", "top2000", "top3000"]
+    neutralization: Literal["none", "industry"]
+    holdings_count: int
+    rebalance_every_sessions: int
+
+
 class ResearchRunDetail(ResearchRunSummary):
+    draft: ResearchRunDraft
     result: ResearchRunResult | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

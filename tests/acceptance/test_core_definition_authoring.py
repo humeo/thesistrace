@@ -3,7 +3,7 @@ from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
-from thesistrace.data.fields import AUTHORABLE_FIELDS
+from thesistrace.data.fields import MARKET_FIELDS
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.research_kernel.alpha_expression import operator_catalog
 
@@ -28,7 +28,7 @@ def test_authoring_options_and_saved_tree_use_authoritative_stable_ids() -> None
                 "unit": field.unit,
                 "result_type": "numeric",
             }
-            for field in AUTHORABLE_FIELDS
+            for field in MARKET_FIELDS
         ]
         assert options["operators"] == operator_catalog()["operators"]
         assert options["universes"] == ["top300", "top1000", "top2000", "top3000"]

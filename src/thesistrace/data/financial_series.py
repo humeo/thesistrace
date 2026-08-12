@@ -9,6 +9,7 @@ from typing import Protocol
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from thesistrace.data.fields import FINANCIAL_FIELDS
 from thesistrace.research_series import Coordinate, NumericValue
 
 
@@ -35,33 +36,16 @@ class _FieldProjection:
     period_selection: str
 
 
-_PROJECTIONS = (
-    _FieldProjection("total_revenue_latest_fy", "income", "total_revenue", "annual"),
-    _FieldProjection("net_profit_parent_latest_fy", "income", "n_income_attr_p", "annual"),
+_PROJECTIONS = tuple(
     _FieldProjection(
-        "operating_cash_flow_latest_fy",
-        "cashflow",
-        "n_cashflow_act",
-        "annual",
-    ),
-    _FieldProjection(
-        "total_assets_latest_reported",
-        "balancesheet",
-        "total_assets",
-        "latest_reported",
-    ),
-    _FieldProjection(
-        "total_liabilities_latest_reported",
-        "balancesheet",
-        "total_liab",
-        "latest_reported",
-    ),
-    _FieldProjection(
-        "equity_parent_latest_reported",
-        "balancesheet",
-        "total_hldr_eqy_exc_min_int",
-        "latest_reported",
-    ),
+        field.field_id,
+        field.source_endpoint,
+        field.source_column,
+        "annual"
+        if field.report_period_selection == "latest_visible_full_year"
+        else "latest_reported",
+    )
+    for field in FINANCIAL_FIELDS
 )
 _PROJECTION_BY_ID = {projection.field_id: projection for projection in _PROJECTIONS}
 _ENDPOINTS = ("income", "balancesheet", "cashflow")

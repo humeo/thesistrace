@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { DataOverview } from "../data/DataPage";
+import {
+  confirmDraftReplacement,
+  persistResearchDraft,
+  readResearchDraft,
+  type ResearchBrowserDraft,
+} from "./browserDraft";
 
 type DefinitionSummary = { id: string; name: string; revision: number };
 type DefinitionList = { items: DefinitionSummary[]; next_cursor: string | null };
@@ -139,6 +145,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const skipNextRouteLoad = useRef(false);
+  const draftHydrated = useRef(false);
   const runAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const coverage = dataOverview?.readiness
     ? dataOverview.dataset_coverage
@@ -165,11 +172,29 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setCreating(false);
   }, []);
 
+  const applyBrowserDraft = useCallback((draft: ResearchBrowserDraft, catalog: AuthoringOptions) => {
+    setDefinition(null);
+    setActiveDefinitionId(undefined);
+    setName(draft.name);
+    setHypothesis(draft.hypothesis);
+    setStartDate(draft.start_date);
+    setEndDate(draft.end_date);
+    setAlpha(draft.alpha);
+    setAlphaEditor(readAlphaEditor(draft.alpha, catalog));
+    setUniverse(draft.universe);
+    setNeutralization(draft.neutralization);
+    setHoldingsCount(draft.holdings_count);
+    setRebalanceInterval(draft.rebalance_every_sessions);
+    setCreating(true);
+    draftHydrated.current = true;
+  }, []);
+
   const load = useCallback(async (
     kind: "loading" | "refreshing" = "loading",
     supersede = false,
   ) => {
     if (busyRef.current && !supersede) return;
+    draftHydrated.current = false;
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
@@ -216,6 +241,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         const loaded = (await response.json()) as DefinitionList;
         if (generation !== loadGeneration.current) return;
         setItems(loaded.items);
+        const browserDraft = readResearchDraft(window.localStorage);
+        if (browserDraft) applyBrowserDraft(browserDraft, catalog);
       }
       if (kind === "refreshing") setStatus("Refreshed.");
     } catch (reason: unknown) {
@@ -236,7 +263,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         setBusy(null);
       }
     }
-  }, [activeDefinitionId, applyDefinition]);
+  }, [activeDefinitionId, applyBrowserDraft, applyDefinition]);
 
   useEffect(() => {
     if (skipNextRouteLoad.current) {
@@ -250,7 +277,37 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     };
   }, [load]);
 
+  useEffect(() => {
+    if (!draftHydrated.current || !creating) return;
+    persistResearchDraft({
+      name,
+      hypothesis,
+      start_date: startDate,
+      end_date: endDate,
+      alpha,
+      universe: universe as ResearchBrowserDraft["universe"],
+      neutralization: neutralization as ResearchBrowserDraft["neutralization"],
+      holdings_count: holdingsCount,
+      rebalance_every_sessions: rebalanceInterval,
+    }, window.localStorage);
+  }, [
+    alpha,
+    creating,
+    endDate,
+    holdingsCount,
+    hypothesis,
+    name,
+    neutralization,
+    rebalanceInterval,
+    startDate,
+    universe,
+  ]);
+
   function startNew() {
+    if (!confirmDraftReplacement(
+      window.localStorage,
+      () => window.confirm("Replace the existing browser draft?"),
+    )) return;
     setCreating(true);
     setDefinition(null);
     setActiveDefinitionId(undefined);
@@ -268,6 +325,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
     setError(null);
     setErrorKind(null);
     setRunIssues([]);
+    draftHydrated.current = true;
   }
 
   function startAlpha() {
@@ -486,6 +544,9 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
         </>
       ) : (
         <form onSubmit={(event) => { event.preventDefault(); void save(); }}>
+          <button disabled={busy !== null} type="button" onClick={startNew}>
+            New
+          </button>
           <label>
             Definition name
             <input aria-label="Definition name" onChange={(event) => setName(event.target.value)} value={name} />

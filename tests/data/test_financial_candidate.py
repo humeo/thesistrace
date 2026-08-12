@@ -48,6 +48,15 @@ FIELDS = (
     "revenue",
     "update_flag",
 )
+FULL_EXECUTABLE_FIELDS = (
+    *FIELDS,
+    "total_revenue",
+    "n_income_attr_p",
+    "n_cashflow_act",
+    "total_assets",
+    "total_liab",
+    "total_hldr_eqy_exc_min_int",
+)
 
 
 def _materialized_candidate(tmp_path: Path):
@@ -238,6 +247,95 @@ def test_materializes_sparse_versioned_financial_family_without_publishing(tmp_p
     pending_balance = [row for row in balance if row["availability_status"] == "pending_calendar"]
     assert {row["revenue"] for row in pending_balance} == {"999"}
     assert not (tmp_path / "HEAD.json").exists()
+
+
+def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
+    tmp_path: Path,
+) -> None:
+    candidate_store, incomplete, _repeated, _snapshot = _materialized_candidate(tmp_path)
+    market_manifest = candidate_store.source_generation_manifest_sha256(
+        incomplete.manifest_sha256
+    )
+    generation_store = MountedGenerationStore(tmp_path)
+
+    with pytest.raises(RuntimeError, match="incompatible"):
+        generation_store.compose_financial_candidate(
+            market_manifest,
+            incomplete.manifest_sha256,
+            prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+        )
+
+    complete = candidate_store.materialize(
+        _empty_bounded_snapshot(
+            tmp_path,
+            market_manifest,
+            through="20260813",
+            idempotency_key="complete-six-fields",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        observation_through_session="2026-08-13",
+    )
+    composite = generation_store.compose_financial_candidate(
+        market_manifest,
+        complete.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+
+    assert composite.financial_candidate_manifest_sha256 == complete.manifest_sha256
+    assert composite.families[-1].family_id == "equity.financial_pit"
+    assert composite.families[-1].manifest_sha256 == complete.manifest_sha256
+    assert {
+        "total_revenue_latest_fy",
+        "net_profit_parent_latest_fy",
+        "operating_cash_flow_latest_fy",
+        "total_assets_latest_reported",
+        "total_liabilities_latest_reported",
+        "equity_parent_latest_reported",
+    } <= set(composite.field_availability)
+    resolved = generation_store.read_composite_slice(
+        composite.manifest_sha256,
+        sessions=["2026-08-13"],
+        universe_name="top300",
+        neutralization="none",
+        field_bindings={"total_revenue_latest_fy": "total_revenue_latest_fy"},
+    )
+    assert resolved.research_data.fields == {"total_revenue_latest_fy": {}}
+    retained = generation_store.referenced_files(composite.manifest_sha256)
+    assert retained <= generation_store.inventory()
+    assert any(
+        reference.kind == "manifest" and reference.sha256 == complete.manifest_sha256
+        for reference in retained
+    )
+
+    root_path = (
+        tmp_path
+        / "manifests"
+        / "sha256"
+        / composite.manifest_sha256[:2]
+        / f"{composite.manifest_sha256}.json"
+    )
+    forged = json.loads(root_path.read_bytes())
+    forged["families"][-1]["validation_summary"]["row_count"] += 1
+    identity = {
+        key: forged[key]
+        for key in (
+            "schema_contract",
+            "data_through_session",
+            "research_sessions",
+            "field_availability",
+            "families",
+        )
+    }
+    forged["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    forged_content = canonical_json_bytes(forged)
+    forged_sha256 = hashlib.sha256(forged_content).hexdigest()
+    forged_path = (
+        tmp_path / "manifests" / "sha256" / forged_sha256[:2] / f"{forged_sha256}.json"
+    )
+    AddressedFileStore(tmp_path).store(forged_path, forged_sha256, forged_content)
+
+    with pytest.raises(RuntimeError, match="does not match its manifest"):
+        generation_store.validate_generation(forged_sha256)
 
 
 def test_financial_series_read_projects_requested_columns_and_instruments(
@@ -753,12 +851,13 @@ def _empty_bounded_snapshot(
     *,
     through: str,
     idempotency_key: str,
+    fields: tuple[str, ...] = FIELDS,
 ) -> CompletedFinancialCollection:
     raw = RawFinancialBatchStore(root)
     shards = _bounded_shards(through)
     checkpoints: list[FinancialShardCheckpoint] = []
     payload_sha256 = hashlib.sha256(
-        canonical_json_bytes({"fields": list(FIELDS), "items": []})
+        canonical_json_bytes({"fields": list(fields), "items": []})
     ).hexdigest()
     instruments = (
         ("equity:000001.SZ", "000001.SZ"),
@@ -773,7 +872,7 @@ def _empty_bounded_snapshot(
                     "source_contract_version": "tushare-financial-ordinary-v1",
                     "endpoint": endpoint,
                     "parameters": {"ts_code": ts_code, **shard.parameters()},
-                    "returned_fields": list(FIELDS),
+                    "returned_fields": list(fields),
                     "items": [],
                     "row_count": 0,
                     "source_date_extent": None,
@@ -794,7 +893,7 @@ def _empty_bounded_snapshot(
                 )
     contract = FinancialCollectionContract(
         capability_sha256=("c" if "prior" in idempotency_key else "d") * 64,
-        endpoint_fields=tuple((endpoint, FIELDS) for endpoint in FINANCIAL_ENDPOINTS),
+        endpoint_fields=tuple((endpoint, fields) for endpoint in FINANCIAL_ENDPOINTS),
         suspected_truncation_row_counts=tuple((endpoint, None) for endpoint in FINANCIAL_ENDPOINTS),
         shards=shards,
     )

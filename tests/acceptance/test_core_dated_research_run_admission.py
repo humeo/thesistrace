@@ -101,7 +101,7 @@ def test_invalid_requested_dates_save_a_draft_without_queueing_or_reading_data(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_current_calendar_admits_any_positive_inclusive_period_without_binding_head(
+def test_current_calendar_admits_any_positive_inclusive_period_and_freezes_head(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -185,9 +185,10 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
         assert frozen["field_bindings"] == {
             "price.close.adjusted": "close_adj",
         }
-        serialized = str(frozen).lower()
-        for forbidden in ("release", "generation", "manifest", "head", first_manifest):
-            assert forbidden not in serialized
+        assert frozen["data_generation_manifest_sha256"] == first_manifest
+        assert frozen["data_generation_facts"]["coverage_start"] == sessions[0]
+        assert frozen["data_generation_facts"]["coverage_end"] == sessions[-1]
+        assert frozen["compiled_alpha"]["format"] == "thesistrace-compiled-alpha"
         assert _pin_count(settings) == 0
         assert _attempt_count(settings, outcome["run"]["id"]) == 0
         assert _stored_run(settings, outcome["run"]["id"])["status"] == "queued"
@@ -221,6 +222,7 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
 
         listing = client.get("/api/research-runs").json()
         detail = client.get(f"/api/research-runs/{outcome['run']['id']}").json()
+        assert detail.pop("draft") == frozen["definition"]["content"]
         assert detail == outcome["run"]
         assert outcome["run"] in listing["items"]
         public = f"{outcome} {listing} {detail}".lower()
@@ -235,7 +237,11 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
     )
     assert second_manifest != first_manifest
     with TestClient(create_app(settings)) as reopened:
-        assert reopened.get(f"/api/research-runs/{outcome['run']['id']}").json() == outcome["run"]
+        reopened_detail = reopened.get(
+            f"/api/research-runs/{outcome['run']['id']}"
+        ).json()
+        assert reopened_detail.pop("draft") == frozen["definition"]["content"]
+        assert reopened_detail == outcome["run"]
     assert _pin_count(settings) == 0
 
 
@@ -282,6 +288,8 @@ def test_admission_snapshot_maps_weekend_and_holiday_boundaries() -> None:
     from thesistrace.data import DatasetAdmissionSnapshot
 
     snapshot = DatasetAdmissionSnapshot(
+        generation_manifest_sha256="a" * 64,
+        data_identity="b" * 64,
         coverage_start=date(2026, 7, 31),
         coverage_end=date(2026, 8, 7),
         research_sessions=(

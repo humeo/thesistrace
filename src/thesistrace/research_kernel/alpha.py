@@ -1,14 +1,17 @@
 import ast
 import hashlib
 import math
-from collections import Counter
+from collections import Counter, deque
 from collections.abc import Mapping
+from fractions import Fraction
 
 from thesistrace.research_kernel.alpha_expression import (
+    OPERATOR_BY_ID,
     SCALAR_OPERATOR_IDS,
     AlphaExpression,
     AlphaValidationIssue,
     ParsedAlpha,
+    restore_compiled_alpha,
     validate_normalized_alpha,
 )
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes
@@ -143,6 +146,39 @@ def evaluate_alpha_matrix(
     neutralization: str,
 ) -> dict[str, object]:
     parsed = validate_alpha(expression, field_bindings=field_bindings)
+    return evaluate_parsed_alpha_matrix(
+        research_data,
+        parsed=parsed,
+        field_bindings=field_bindings,
+        neutralization=neutralization,
+    )
+
+
+def evaluate_compiled_alpha_matrix(
+    research_data: AlignedResearchData,
+    *,
+    compiled_alpha: Mapping[str, object],
+    field_bindings: Mapping[str, str],
+    neutralization: str,
+) -> dict[str, object]:
+    parsed = restore_compiled_alpha(compiled_alpha)
+    if not set(parsed.field_ids) <= set(field_bindings):
+        raise ValueError("compiled Alpha Field References are invalid")
+    return evaluate_parsed_alpha_matrix(
+        research_data,
+        parsed=parsed,
+        field_bindings=field_bindings,
+        neutralization=neutralization,
+    )
+
+
+def evaluate_parsed_alpha_matrix(
+    research_data: AlignedResearchData,
+    *,
+    parsed: ParsedAlpha,
+    field_bindings: Mapping[str, str],
+    neutralization: str,
+) -> dict[str, object]:
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization must be none or industry")
     calendar = list(research_data.sessions)
@@ -150,24 +186,29 @@ def evaluate_alpha_matrix(
     field_ids_by_name = {
         evaluation_name: field_id for field_id, evaluation_name in field_bindings.items()
     }
-    evaluated: dict[str, list[float | None]] = {}
-    for instrument_id in instruments:
-        inputs: dict[str, list[float | None]] = {}
-        for field in parsed.field_names:
-            values = research_data.fields[field_ids_by_name[field]]
-            inputs[field] = [
+    inputs = {
+        evaluation_name: {
+            instrument_id: [
                 (
-                    float(value)
-                    if (value := values.get((session, instrument_id))) is not None
+                    finite_or_missing(float(value))
+                    if (value := research_data.fields[field_id].get((session, instrument_id)))
+                    is not None
                     else None
                 )
                 for session in calendar
             ]
-        evaluated[instrument_id] = evaluate_parsed_series(
-            parsed,
-            inputs,
-            length=len(calendar),
-        )
+            for instrument_id in instruments
+        }
+        for evaluation_name, field_id in field_ids_by_name.items()
+        if evaluation_name in parsed.field_names
+    }
+    evaluated = _evaluate_matrix_node(
+        parsed.tree.body,
+        inputs,
+        instruments,
+        calendar,
+        research_data.universe_members,
+    )
 
     session_results: list[dict[str, object]] = []
     for session_index, session in enumerate(calendar):
@@ -204,12 +245,210 @@ def evaluate_alpha_matrix(
             {"session": session, "values": rows, "coverage_loss": dict(sorted(coverage.items()))}
         )
     return {
-        "expression": expression,
+        "expression": parsed.expression,
         "effective_lookback": parsed.effective_lookback,
         "neutralization": neutralization,
         "sessions": session_results,
         "checksum": alpha_matrix_checksum(session_results),
     }
+
+
+def _evaluate_matrix_node(
+    node: ast.AST,
+    inputs: Mapping[str, dict[str, list[float | None]]],
+    instruments: list[str],
+    sessions: list[str],
+    universe_members: Mapping[str, tuple[str, ...]],
+) -> dict[str, list[float | None]]:
+    if isinstance(node, ast.Name):
+        return inputs[node.id[1:]]
+    if isinstance(node, ast.Constant):
+        value = finite_or_missing(float(node.value))
+        return {instrument_id: [value] * len(sessions) for instrument_id in instruments}
+    definition = OPERATOR_BY_ID.get(node.func.id) if isinstance(node, ast.Call) else None
+    if definition is not None and definition.kind == "cross-sectional":
+        child = _evaluate_matrix_node(node.args[0], inputs, instruments, sessions, universe_members)
+        ranked = {instrument_id: [None] * len(sessions) for instrument_id in instruments}
+        evaluator = definition.cross_section_evaluator
+        assert evaluator is not None
+        for session_index, session in enumerate(sessions):
+            finite = [
+                (instrument_id, value)
+                for instrument_id in universe_members.get(session, ())
+                if (value := child[instrument_id][session_index]) is not None
+                and math.isfinite(value)
+            ]
+            for instrument_id, rank in evaluator(finite).items():
+                ranked[instrument_id][session_index] = rank
+        return ranked
+    children = [
+        _evaluate_matrix_node(child, inputs, instruments, sessions, universe_members)
+        for child in _numeric_children(node)
+    ]
+    return {
+        instrument_id: _evaluate_operator_series(
+            node,
+            [child[instrument_id] for child in children],
+            len(sessions),
+        )
+        for instrument_id in instruments
+    }
+
+
+def _numeric_children(node: ast.AST) -> list[ast.AST]:
+    if isinstance(node, ast.UnaryOp):
+        return [node.operand]
+    if isinstance(node, ast.BinOp):
+        return [node.left, node.right]
+    if isinstance(node, ast.Call):
+        return [node.args[0]]
+    raise AssertionError(f"unsupported validated matrix node: {type(node).__name__}")
+
+
+def _evaluate_operator_series(
+    node: ast.AST,
+    children: list[list[float | None]],
+    length: int,
+) -> list[float | None]:
+    if isinstance(node, ast.UnaryOp):
+        return [None if value is None else finite_or_missing(-value) for value in children[0]]
+    if isinstance(node, ast.BinOp):
+        return [
+            _binary_value(node.op, left, right)
+            for left, right in zip(children[0], children[1], strict=True)
+        ]
+    if not isinstance(node, ast.Call):
+        raise AssertionError("unsupported validated Series operator")
+    operator_id = node.func.id
+    values = children[0]
+    if operator_id in SCALAR_OPERATOR_IDS:
+        return [_scalar_value(operator_id, value) for value in values]
+    window = int(node.args[1].value)
+    if operator_id in {"lag", "delta", "pct_change"}:
+        return _historical_series(operator_id, values, window)
+    return _rolling_series(operator_id, values, window)
+
+
+def _binary_value(
+    operator: ast.operator,
+    left: float | None,
+    right: float | None,
+) -> float | None:
+    if left is None or right is None:
+        return None
+    if isinstance(operator, ast.Add):
+        return finite_or_missing(left + right)
+    if isinstance(operator, ast.Sub):
+        return finite_or_missing(left - right)
+    if isinstance(operator, ast.Mult):
+        return finite_or_missing(left * right)
+    if isinstance(operator, ast.Div):
+        return None if right == 0.0 else finite_or_missing(left / right)
+    raise AssertionError("unsupported validated binary operator")
+
+
+def _scalar_value(operator_id: str, value: float | None) -> float | None:
+    if value is None:
+        return None
+    if operator_id == "abs":
+        return finite_or_missing(abs(value))
+    if operator_id == "log":
+        return None if value <= 0 else finite_or_missing(math.log(value))
+    return -1.0 if value < 0 else (1.0 if value > 0 else 0.0)
+
+
+def _historical_series(
+    operator_id: str,
+    values: list[float | None],
+    window: int,
+) -> list[float | None]:
+    output: list[float | None] = [None] * len(values)
+    for index in range(window, len(values)):
+        current = values[index]
+        prior = values[index - window]
+        if operator_id == "lag":
+            output[index] = prior
+        elif current is not None and prior is not None:
+            output[index] = (
+                finite_or_missing(current - prior)
+                if operator_id == "delta"
+                else (None if prior == 0 else finite_or_missing(current / prior - 1.0))
+            )
+    return output
+
+
+def _rolling_series(
+    operator_id: str,
+    values: list[float | None],
+    window: int,
+) -> list[float | None]:
+    output: list[float | None] = [None] * len(values)
+    queue: deque[float | None] = deque()
+    missing = 0
+    total = 0
+    squares = 0
+    extrema: deque[tuple[int, float]] = deque()
+    for index, value in enumerate(values):
+        queue.append(value)
+        if value is None:
+            missing += 1
+        else:
+            exact = _scaled_binary64(value)
+            total += exact
+            squares += exact * exact
+            if operator_id in {"ts_min", "ts_max"}:
+                while extrema and (
+                    extrema[-1][1] >= value
+                    if operator_id == "ts_min"
+                    else extrema[-1][1] <= value
+                ):
+                    extrema.pop()
+                extrema.append((index, value))
+        if len(queue) > window:
+            expired = queue.popleft()
+            if expired is None:
+                missing -= 1
+            else:
+                exact = _scaled_binary64(expired)
+                total -= exact
+                squares -= exact * exact
+            while extrema and extrema[0][0] <= index - window:
+                extrema.popleft()
+        if len(queue) != window or missing:
+            continue
+        if operator_id == "ts_sum":
+            output[index] = _fraction_or_missing(Fraction(total, _BINARY64_SCALE))
+        elif operator_id == "ts_mean":
+            output[index] = _fraction_or_missing(
+                Fraction(total, _BINARY64_SCALE * window)
+            )
+        elif operator_id in {"ts_min", "ts_max"}:
+            output[index] = extrema[0][1]
+        else:
+            variance = Fraction(
+                squares * window - total * total,
+                _BINARY64_SCALE * _BINARY64_SCALE * window * window,
+            )
+            finite_variance = _fraction_or_missing(variance)
+            output[index] = (
+                None if finite_variance is None else math.sqrt(finite_variance)
+            )
+    return output
+
+
+_BINARY64_SCALE = 1 << 1074
+
+
+def _scaled_binary64(value: float) -> int:
+    numerator, denominator = value.as_integer_ratio()
+    return numerator * (_BINARY64_SCALE // denominator)
+
+
+def _fraction_or_missing(value: Fraction) -> float | None:
+    try:
+        return finite_or_missing(float(value))
+    except OverflowError:
+        return None
 
 
 def alpha_matrix_checksum(sessions: list[dict[str, object]]) -> str:
