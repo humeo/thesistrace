@@ -201,7 +201,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             <p className="eyebrow">Persisted daily research</p>
             <h1>DailyTrack</h1>
           </div>
-          <button disabled={loadState !== null || deleting} onClick={refresh}>Refresh</button>
+          <button disabled={loadState !== null || deleting} onClick={refresh}>Reload</button>
           {track.status === "blocked" ? (
             <button
               disabled={retryState === "submitting"}

@@ -792,6 +792,48 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
     assert not (package / "definition" / "schema.sql").exists()
 
 
+def test_obsolete_authoring_contract_cannot_reenter_the_active_runtime() -> None:
+    package = ROOT / "src" / "thesistrace"
+    http_source = (package / "entrypoints" / "http.py").read_text()
+    entrypoint_source = "\n".join(
+        path.read_text() for path in (package / "entrypoints").glob("*.py")
+    )
+    schema_source = (package / "entrypoints" / "schema.py").read_text()
+    worker_source = (package / "entrypoints" / "worker.py").read_text()
+    web_source = "\n".join(
+        path.read_text()
+        for path in (ROOT / "web" / "src").rglob("*")
+        if path.suffix in {".ts", ".tsx", ".css"} and ".test." not in path.name
+    )
+
+    assert '"research_folders"' in schema_source
+    assert '"definitions"' not in schema_source
+    assert "/api/definitions" not in entrypoint_source
+    assert "/rerun" not in entrypoint_source
+    assert "compile_formula" not in worker_source
+    assert "/definitions" not in web_source
+    assert "definition-list" not in web_source
+    assert not (package / "migrations").exists()
+    assert not (ROOT / "migrations").exists()
+
+    active_authoring = "\n".join(
+        (
+            http_source,
+            schema_source,
+            (package / "research_run" / "models.py").read_text(),
+            (package / "research_run" / "schema.sql").read_text(),
+        )
+    ).lower()
+    for forbidden in (
+        "revision_id",
+        "rerun_receipts",
+        "compatibility endpoint",
+        "definition_id",
+        "alpha_release_id",
+    ):
+        assert forbidden not in active_authoring
+
+
 
 def _string_literals(path: Path) -> str:
     tree = ast.parse(path.read_text())

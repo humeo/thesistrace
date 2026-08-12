@@ -22,7 +22,7 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("Data through");
     expect(markup).toContain("Last successful refresh");
     expect(markup).toContain("Ready for research");
-    expect(markup).toContain("Refresh");
+    expect(markup).toContain("Reload");
     expect(markup).not.toMatch(/Update data|Release|Generation|history|operator/i);
   });
 

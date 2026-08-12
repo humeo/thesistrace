@@ -14,7 +14,7 @@ not required to request a Run.
 _Avoid_: Alpha, factor formula, strategy
 
 **Alpha**:
-A versioned, executable definition whose Alpha Expression produces a
+An executable research quantity whose Alpha Expression produces a
 cross-sectional score for each eligible instrument at each market session.
 Higher scores always express a stronger expectation of higher future return;
 the runtime never reverses that direction from historical results.

@@ -48,3 +48,11 @@ desktop browser loop before the old runtime is removed.
 - Historical Hosted implementation and deployment decisions have no authority
   over Core. Their recoverable snapshot exists only at the documented archive
   ref.
+
+## Superseded clauses
+
+ADR-0171 replaces the server-saved Research Definition, visible Revision, and
+Run-saves-Definition authoring lifecycle with one browser-local Draft per
+Research Folder and direct ResearchRun admission. ADR-0182 removes product
+Rerun. The module-first topology, PostgreSQL lifecycle authority, Attempt,
+publication, and independent DailyTrack decisions remain accepted.

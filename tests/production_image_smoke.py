@@ -55,6 +55,29 @@ def _before_restart(
     mounted_data_sha256: str,
 ) -> dict[str, object]:
     assert _request_json(api_origin, "GET", "/api/data") == EXPECTED_OVERVIEW
+    catalog = _request_json(api_origin, "GET", "/api/alpha/catalog")
+    assert {field["identifier"] for field in catalog["fields"]} >= {
+        "close_adj",
+        "volume_shares",
+    }
+    assert {builtin["identifier"] for builtin in catalog["builtins"]} >= {
+        "lag",
+        "ts_mean",
+    }
+    folders = _request_json(api_origin, "GET", "/api/research-folders")
+    assert folders["items"] == [
+        {
+            "id": "folder_default",
+            "name": "Default",
+            "is_default": True,
+            "created_at": folders["items"][0]["created_at"],
+        }
+    ]
+    for obsolete_path in (
+        "/api/definitions",
+        "/api/definitions/definition_obsolete",
+    ):
+        assert _request_status(api_origin, "GET", obsolete_path) == 404
     accepted = _request_json(
         api_origin,
         "POST",
@@ -76,9 +99,23 @@ def _before_restart(
     assert accepted["status"] == "queued"
     run_id = str(accepted["id"])
     detail = _wait_for_run(api_origin, run_id)
+    assert _request_status(
+        api_origin,
+        "POST",
+        f"/api/research-runs/{run_id}/rerun",
+        {"request_id": "obsolete-rerun"},
+    ) == 404
+    track = _request_json(
+        api_origin,
+        "POST",
+        f"/api/research-runs/{run_id}/daily-tracks",
+        {"request_id": "production-image-smoke-track"},
+    )
+    assert track["status"] == "active"
     durable = _durable_result(settings, run_id)
     return {
         "run_id": run_id,
+        "track_id": track["id"],
         "public_result_sha256": hashlib.sha256(canonical_json_bytes(detail)).hexdigest(),
         "result_manifest_sha256": durable["manifest_sha256"],
         "attempt_count": durable["attempt_count"],
@@ -106,12 +143,25 @@ def _after_restart(
     assert durable["attempt_count"] == expected["attempt_count"] == 1
     assert durable["execution_snapshot"] == expected["execution_snapshot"]
     assert _directory_sha256(settings.data_mount) == expected["mounted_data_sha256"]
+    track_id = str(expected["track_id"])
+    track = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
+    assert track["status"] == "active"
+    stopped = _request_json(
+        api_origin,
+        "POST",
+        f"/api/daily-tracks/{track_id}/stop",
+        {"request_id": "production-image-smoke-stop"},
+    )
+    assert stopped["status"] == "stopped"
+    assert _request_status(api_origin, "DELETE", f"/api/daily-tracks/{track_id}") == 204
+    assert _request_status(api_origin, "GET", f"/api/daily-tracks/{track_id}") == 404
     return {
         "run_id": run_id,
         "status": detail["status"],
         "result_manifest_sha256": durable["manifest_sha256"],
         "attempt_count": durable["attempt_count"],
         "readiness": overview["readiness"],
+        "track_deleted": True,
     }
 
 
@@ -213,6 +263,27 @@ def _request_json(
         ) from error
     assert isinstance(value, dict)
     return value
+
+
+def _request_status(
+    api_origin: str,
+    method: str,
+    path: str,
+    body: dict[str, object] | None = None,
+) -> int:
+    payload = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(
+        f"{api_origin}{path}",
+        data=payload,
+        headers={"Content-Type": "application/json"} if payload is not None else {},
+        method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status
+    except urllib.error.HTTPError as error:
+        error.read()
+        return error.code
 
 
 def _assert_web_image(web_origin: str) -> None:

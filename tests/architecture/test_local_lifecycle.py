@@ -1080,6 +1080,9 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "one-shot schema initializer",
         "thesistrace_meta.schema_contract",
         "private `thesistrace-data-operator`",
+        "one browser-local Draft per Research Folder",
+        "direct Run admission",
+        "`Use as Draft` is the sole reuse action",
         "Attempt starts",
         "pins the then-current Data",
         "There is no upgrade, downgrade, fallback",
@@ -1091,6 +1094,9 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "migration-runner",
         "data.next_release",
         "Data Update product action",
+        "## Research Definitions",
+        "/definitions/:definitionId",
+        "Run saves the submitted revision",
         "Rerun always creates a new ResearchRun ID using exactly",
     ):
         assert obsolete not in architecture

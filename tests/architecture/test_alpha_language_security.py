@@ -43,3 +43,20 @@ def test_alpha_matrix_has_no_recursive_evaluator_or_physical_field_map() -> None
     assert "import ast" not in plan_source
     assert "ParsedAlpha" not in plan_source
     assert "for node in plan.nodes" in plan_source
+
+
+def test_alpha_language_has_one_parser_and_no_cutover_switches() -> None:
+    language_root = ROOT / "src" / "thesistrace" / "alpha_language"
+    sources = "\n".join(path.read_text() for path in language_root.glob("*.py"))
+
+    assert sources.count("ast.parse(") == 1
+    for forbidden in (
+        "fallback parser",
+        "legacy parser",
+        "language_version",
+        "alpha_release",
+        "feature_flag",
+        "old_language",
+        "new_language",
+    ):
+        assert forbidden not in sources.lower()

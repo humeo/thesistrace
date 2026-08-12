@@ -18,6 +18,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.goto("/data");
     await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
     await expect(page.getByText("Ready for research")).toBeVisible();
+    await expectRemovedAuthoringControlsToBeAbsent(page);
 
     await page.getByRole("link", { name: "New Research", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
@@ -374,6 +375,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       return ((await response.json()) as { strategy_session: string }).strategy_session;
     }, { timeout: 90_000 }).toBe("2026-08-11");
     await page.goto(`/daily-tracks/${trackId}`);
+    await expectRemovedAuthoringControlsToBeAbsent(page);
     await expect(page.getByText(`${reusedRunId} (deleted)`, { exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: reusedRunId, exact: true })).toHaveCount(0);
     await expect(page.locator(".research-run-facts").first()).toContainText(

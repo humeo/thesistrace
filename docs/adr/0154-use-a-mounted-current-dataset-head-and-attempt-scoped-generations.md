@@ -50,3 +50,11 @@ market, calculation, or validation rule needs a data coordinate, that
 coordinate is the Dataset Head or the execution-pinned Data Generation. State
 machines, atomic publication, numeric rules, and the module-first architecture
 remain independent of that coordinate.
+
+## Superseded clauses
+
+Under ADR-0171, references above to frozen Research Definition content mean the
+immutable ResearchRun input admitted directly from a Browser Draft. ADR-0182
+supersedes the user-Rerun clause with `Use as Draft` followed by ordinary Run.
+Dataset Head selection, Attempt-scoped Generation pins, recomputation, and
+DailyTrack progression remain accepted.
