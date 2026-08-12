@@ -13,6 +13,7 @@ from threading import Event
 from uuid import uuid4
 
 import pytest
+from canonical_store import align_canonical_market_data, open_complete_refresh_basis
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
@@ -465,10 +466,18 @@ def _canonical(*, price_offset: int) -> dict[str, object]:
 
 
 def _reference_result(settings: CoreSettings, generation_id: str) -> dict[str, object]:
-    canonical = MountedGenerationStore(settings.data_mount).open_generation(generation_id).canonical
+    canonical = open_complete_refresh_basis(
+        MountedGenerationStore(settings.data_mount),
+        generation_id,
+    )
     output = run(
         RunInput(
-            canonical_data=canonical,
+            research_data=align_canonical_market_data(
+                canonical,
+                field_bindings={"price.close.adjusted": "close_adj"},
+                universe="top300",
+                neutralization="none",
+            ),
             alpha_expression={"field_id": "price.close.adjusted"},
             field_bindings={"price.close.adjusted": "close_adj"},
             universe="top300",

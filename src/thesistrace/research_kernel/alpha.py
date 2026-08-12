@@ -3,7 +3,6 @@ import hashlib
 import math
 from collections import Counter
 from collections.abc import Mapping
-from typing import Any
 
 from thesistrace.research_kernel.alpha_expression import (
     SCALAR_OPERATOR_IDS,
@@ -13,6 +12,7 @@ from thesistrace.research_kernel.alpha_expression import (
     validate_normalized_alpha,
 )
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes
+from thesistrace.research_series import AlignedResearchData
 
 
 def validate_alpha(
@@ -136,38 +136,31 @@ def evaluate_node(
 
 
 def evaluate_alpha_matrix(
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     *,
     expression: AlphaExpression,
     field_bindings: Mapping[str, str],
-    universe_name: str,
     neutralization: str,
 ) -> dict[str, object]:
     parsed = validate_alpha(expression, field_bindings=field_bindings)
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization must be none or industry")
-    calendar = [str(item) for item in canonical["research_calendar"]]
-    instruments = sorted(str(item["instrument_id"]) for item in canonical["instruments"])
-    prices_by_position = {
-        (str(row["session"]), str(row["instrument_id"])): row for row in canonical["prices"]
-    }
-    canonical_keys = {
-        "open_adj": "open_adj",
-        "high_adj": "high_adj",
-        "low_adj": "low_adj",
-        "close_adj": "close_adj",
-        "volume_shares": "volume_shares",
-        "turnover_amount_cny": "turnover_cny",
+    calendar = list(research_data.sessions)
+    instruments = sorted(research_data.instruments)
+    field_ids_by_name = {
+        evaluation_name: field_id for field_id, evaluation_name in field_bindings.items()
     }
     evaluated: dict[str, list[float | None]] = {}
     for instrument_id in instruments:
         inputs: dict[str, list[float | None]] = {}
         for field in parsed.field_names:
-            key = canonical_keys[field]
+            values = research_data.fields[field_ids_by_name[field]]
             inputs[field] = [
-                float(row[key])
-                if (row := prices_by_position.get((session, instrument_id)))
-                else None
+                (
+                    float(value)
+                    if (value := values.get((session, instrument_id))) is not None
+                    else None
+                )
                 for session in calendar
             ]
         evaluated[instrument_id] = evaluate_parsed_series(
@@ -176,17 +169,11 @@ def evaluate_alpha_matrix(
             length=len(calendar),
         )
 
-    universes = canonical["liquidity_universes"]
-    universe_snapshots = {
-        str(item["session"]): [str(value) for value in item["instrument_ids"]]
-        for item in universes[universe_name]
-    }
-    industries = canonical["industry_membership"]
     session_results: list[dict[str, object]] = []
     for session_index, session in enumerate(calendar):
         coverage = Counter()
         raw_values: dict[str, float] = {}
-        for instrument_id in universe_snapshots.get(session, []):
+        for instrument_id in research_data.universe_members.get(session, ()):
             value = evaluated[instrument_id][session_index]
             if value is None:
                 coverage["missing_expression"] += 1
@@ -196,7 +183,7 @@ def evaluate_alpha_matrix(
         if neutralization == "industry":
             groups: dict[str, list[tuple[str, float]]] = {}
             for instrument_id, value in raw_values.items():
-                industry = resolve_industry(industries, instrument_id, session)
+                industry = research_data.industries.get((session, instrument_id))
                 if industry is None:
                     coverage["missing_industry"] += 1
                     continue
@@ -240,21 +227,6 @@ def alpha_matrix_checksum(sessions: list[dict[str, object]]) -> str:
             checksum.update(b"\0")
             checksum.update(canonical_binary64_bytes(float(row["value"])))
     return checksum.hexdigest()
-
-
-def resolve_industry(
-    memberships: Any,
-    instrument_id: str,
-    session: str,
-) -> str | None:
-    for item in memberships:
-        if item["instrument_id"] != instrument_id:
-            continue
-        active_to = str(item.get("active_to", ""))
-        if str(item["active_from"]) <= session and (not active_to or session < active_to):
-            value = str(item.get("sw2021_l1", ""))
-            return value or None
-    return None
 
 
 def finite_or_missing(value: float) -> float | None:

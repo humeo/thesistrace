@@ -12,10 +12,10 @@ from thesistrace.research_kernel.alpha import (
     validate_alpha,
 )
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
-from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import transition_strategy
+from thesistrace.research_series import AlignedResearchData, slice_research_sessions
 
 
 class KernelRunError(ValueError):
@@ -28,7 +28,7 @@ class InsufficientCalculationWarmupError(KernelRunError):
 
 @dataclass(frozen=True, init=False)
 class RunInput:
-    _canonical_data_json: bytes = field(repr=False)
+    _research_data: AlignedResearchData = field(repr=False)
     _alpha_expression_json: bytes = field(repr=False)
     _field_bindings: tuple[tuple[str, str], ...] = field(repr=False)
     universe: str
@@ -46,7 +46,7 @@ class RunInput:
     def __init__(
         self,
         *,
-        canonical_data: dict[str, object],
+        research_data: AlignedResearchData,
         alpha_expression: AlphaExpression,
         field_bindings: Mapping[str, str],
         universe: str,
@@ -63,7 +63,7 @@ class RunInput:
     ) -> None:
         if not isinstance(alpha_expression, Mapping):
             raise KernelRunError("Alpha expression must be a normalized tree")
-        object.__setattr__(self, "_canonical_data_json", canonical_json_bytes(canonical_data))
+        object.__setattr__(self, "_research_data", research_data.snapshot())
         object.__setattr__(
             self,
             "_alpha_expression_json",
@@ -86,11 +86,8 @@ class RunInput:
         object.__setattr__(self, "research_start_session", research_start_session)
         object.__setattr__(self, "research_end_session", research_end_session)
 
-    def canonical_snapshot(self) -> dict[str, object]:
-        value = json.loads(self._canonical_data_json)
-        if not isinstance(value, dict):
-            raise KernelRunError("canonical data snapshot is invalid")
-        return value
+    def research_data_snapshot(self) -> AlignedResearchData:
+        return self._research_data.snapshot()
 
     def alpha_expression_snapshot(self) -> AlphaExpression:
         value = json.loads(self._alpha_expression_json)
@@ -101,14 +98,14 @@ class RunInput:
     def field_bindings_snapshot(self) -> dict[str, str]:
         return dict(self._field_bindings)
 
-    def with_canonical_data(
+    def with_research_data(
         self,
-        canonical_data: dict[str, object],
+        research_data: AlignedResearchData,
         *,
         research_end_session: str | None = None,
     ) -> RunInput:
         return RunInput(
-            canonical_data=canonical_data,
+            research_data=research_data,
             alpha_expression=self.alpha_expression_snapshot(),
             field_bindings=self.field_bindings_snapshot(),
             universe=self.universe,
@@ -122,9 +119,7 @@ class RunInput:
             transfer_fee_rate=self.transfer_fee_rate,
             research_start_session=self.research_start_session,
             research_end_session=(
-                self.research_end_session
-                if research_end_session is None
-                else research_end_session
+                self.research_end_session if research_end_session is None else research_end_session
             ),
         )
 
@@ -146,9 +141,9 @@ class KernelState:
         strategy_resume: dict[str, object],
         origin_session: str,
     ) -> None:
-        calendar = run_input.canonical_snapshot().get("research_calendar")
-        if not isinstance(calendar, list) or not calendar:
-            raise KernelRunError("Kernel state requires canonical sessions")
+        calendar = run_input.research_data_snapshot().sessions
+        if not calendar:
+            raise KernelRunError("Kernel state requires aligned Research Sessions")
         object.__setattr__(self, "_run_input", run_input)
         object.__setattr__(self, "_output_json", canonical_json_bytes(output))
         object.__setattr__(
@@ -160,8 +155,8 @@ class KernelState:
         object.__setattr__(self, "session_count", len(calendar))
         object.__setattr__(self, "boundary_session", str(calendar[-1]))
 
-    def canonical_snapshot(self) -> dict[str, object]:
-        return self._run_input.canonical_snapshot()
+    def research_data_snapshot(self) -> AlignedResearchData:
+        return self._run_input.research_data_snapshot()
 
     def output_snapshot(self) -> dict[str, dict[str, object]]:
         value = json.loads(self._output_json)
@@ -169,14 +164,14 @@ class KernelState:
             raise KernelRunError("Kernel output snapshot is invalid")
         return value
 
-    def run_input_with_canonical(
+    def run_input_with_research_data(
         self,
-        canonical_data: dict[str, object],
+        research_data: AlignedResearchData,
         *,
         research_end_session: str | None = None,
     ) -> RunInput:
-        return self._run_input.with_canonical_data(
-            canonical_data,
+        return self._run_input.with_research_data(
+            research_data,
             research_end_session=research_end_session,
         )
 
@@ -222,18 +217,18 @@ class RunOutput:
 
 
 def run(run_input: RunInput) -> RunOutput:
-    canonical = run_input.canonical_snapshot()
-    calendar = canonical.get("research_calendar")
-    if not isinstance(calendar, list) or not calendar:
-        raise KernelRunError("Kernel Run requires canonical Research Sessions")
+    research_data = run_input.research_data_snapshot()
+    calendar = list(research_data.sessions)
+    if not calendar:
+        raise KernelRunError("Kernel Run requires aligned Research Sessions")
     if run_input.research_start_session is None or run_input.research_end_session is None:
         raise KernelRunError("Research Period requires both first and last Research Sessions")
-    return _run_explicit_period(run_input, canonical, [str(session) for session in calendar])
+    return _run_explicit_period(run_input, research_data, calendar)
 
 
 def _run_explicit_period(
     run_input: RunInput,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     calendar: list[str],
 ) -> RunOutput:
     start_session = str(run_input.research_start_session)
@@ -261,11 +256,11 @@ def _run_explicit_period(
         )
     period_sessions = calendar[start_index : end_index + 1]
     calculation_sessions = calendar[warmup_start : end_index + 1]
-    calculation_canonical = slice_canonical_sessions(canonical, calculation_sessions)
-    calculation_input = run_input.with_canonical_data(calculation_canonical)
+    calculation_data = slice_research_sessions(research_data, calculation_sessions)
+    calculation_input = run_input.with_research_data(calculation_data)
     return _calculate(
         calculation_input,
-        calculation_canonical,
+        calculation_data,
         origin_session=start_session,
         period_sessions=period_sessions,
     )
@@ -273,7 +268,7 @@ def _run_explicit_period(
 
 def _calculate(
     run_input: RunInput,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     *,
     origin_session: str,
     period_sessions: list[str],
@@ -281,10 +276,9 @@ def _calculate(
     alpha_expression = run_input.alpha_expression_snapshot()
     definition = calculation_definition(run_input, alpha_expression)
     matrix = evaluate_alpha_matrix(
-        canonical,
+        research_data,
         expression=alpha_expression,
         field_bindings=run_input.field_bindings_snapshot(),
-        universe_name=run_input.universe,
         neutralization=run_input.neutralization,
     )
     selected = set(period_sessions)
@@ -292,10 +286,10 @@ def _calculate(
         session for session in matrix["sessions"] if str(session["session"]) in selected
     ]
     matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
-    labels = build_forward_labels(canonical, matrix, signal_sessions=period_sessions)
+    labels = build_forward_labels(research_data, matrix, signal_sessions=period_sessions)
     factor = evaluate_factor(labels)
     strategy = transition_strategy(
-        canonical,
+        research_data,
         matrix,
         definition,
         origin_session=origin_session,

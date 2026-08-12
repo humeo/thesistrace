@@ -11,10 +11,6 @@ from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
     evaluate_alpha_matrix,
 )
-from thesistrace.research_kernel.canonical_state import (
-    canonical_sessions,
-    slice_canonical_sessions,
-)
 from thesistrace.research_kernel.factor import (
     HORIZONS,
     affected_label_sessions,
@@ -31,6 +27,11 @@ from thesistrace.research_kernel.kernel_run import (
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import transition_strategy
+from thesistrace.research_series import (
+    AlignedResearchData,
+    research_sessions,
+    slice_research_sessions,
+)
 
 MAX_PENDING_ALPHA_SESSIONS = 21
 MAX_ROLLING_FACTOR_SESSIONS = 504
@@ -40,7 +41,7 @@ MAX_ALPHA_LOOKBACK_SESSIONS = 252
 @dataclass(frozen=True, init=False)
 class AdvanceInput:
     _prior_state: KernelState = field(repr=False)
-    _target_canonical_json: bytes = field(repr=False)
+    _target_research_data: AlignedResearchData = field(repr=False)
     _appended_sessions: tuple[str, ...] = field(repr=False)
     _continuation_json: bytes = field(repr=False)
     _calculation_scope: Literal["research_period", "forward_tracking"]
@@ -49,14 +50,14 @@ class AdvanceInput:
         self,
         *,
         prior_state: KernelState,
-        target_canonical_data: dict[str, object],
+        target_research_data: AlignedResearchData,
         appended_sessions: list[str],
         continuation: Mapping[str, object],
         calculation_scope: Literal["research_period", "forward_tracking"],
     ) -> None:
         if calculation_scope not in {"research_period", "forward_tracking"}:
             raise KernelRunError("Advance calculation scope is invalid")
-        run_input = prior_state.run_input_with_canonical(prior_state.canonical_snapshot())
+        run_input = prior_state.run_input_with_research_data(prior_state.research_data_snapshot())
         has_research_period = (
             run_input.research_start_session is not None
             and run_input.research_end_session is not None
@@ -67,14 +68,12 @@ class AdvanceInput:
             run_input.research_start_session is not None
             or run_input.research_end_session is not None
         ):
-            raise KernelRunError(
-                "Forward Tracking Advance cannot carry Research Period boundaries"
-            )
+            raise KernelRunError("Forward Tracking Advance cannot carry Research Period boundaries")
         object.__setattr__(self, "_prior_state", prior_state)
         object.__setattr__(
             self,
-            "_target_canonical_json",
-            canonical_json_bytes(target_canonical_data),
+            "_target_research_data",
+            target_research_data.snapshot(),
         )
         object.__setattr__(self, "_appended_sessions", tuple(appended_sessions))
         object.__setattr__(
@@ -87,11 +86,8 @@ class AdvanceInput:
     def prior_state(self) -> KernelState:
         return self._prior_state
 
-    def target_canonical_snapshot(self) -> dict[str, object]:
-        value = json.loads(self._target_canonical_json)
-        if not isinstance(value, dict):
-            raise KernelRunError("Advance canonical snapshot is invalid")
-        return value
+    def target_research_data_snapshot(self) -> AlignedResearchData:
+        return self._target_research_data.snapshot()
 
     def appended_sessions_snapshot(self) -> list[str]:
         return list(self._appended_sessions)
@@ -114,41 +110,39 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     prior_output = _with_continuation(prior_output, continuation)
     prior_matrix = _mapping(prior_output.get("alpha_matrix"), "prior Alpha Matrix")
     prior_factor = _mapping(prior_output.get("factor_evaluation"), "prior Factor")
-    canonical = _accept_target_canonical_data(
-        prior.canonical_snapshot(),
-        advance_input.target_canonical_snapshot(),
+    research_data = _accept_target_research_data(
+        prior.research_data_snapshot(),
+        advance_input.target_research_data_snapshot(),
         advance_input.appended_sessions_snapshot(),
     )
     new_sessions = advance_input.appended_sessions_snapshot()
-    run_input = prior.run_input_with_canonical(
-        canonical,
+    run_input = prior.run_input_with_research_data(
+        research_data,
         research_end_session=(
-            new_sessions[-1]
-            if advance_input.calculation_scope == "research_period"
-            else None
+            new_sessions[-1] if advance_input.calculation_scope == "research_period" else None
         ),
     )
     matrix = _advance_alpha(
         run_input,
-        canonical,
+        research_data,
         prior_matrix,
         new_sessions,
         prior.session_count,
     )
     if advance_input.calculation_scope == "research_period":
-        research_sessions = _research_period_sessions(run_input, canonical)
-        if _alpha_session_ids(matrix) != research_sessions:
-            matrix = _rebuild_explicit_alpha(run_input, canonical, research_sessions)
+        selected_sessions = _research_period_sessions(run_input, research_data)
+        if _alpha_session_ids(matrix) != selected_sessions:
+            matrix = _rebuild_explicit_alpha(run_input, research_data, selected_sessions)
         labels = build_forward_labels(
-            canonical,
+            research_data,
             matrix,
-            signal_sessions=research_sessions,
+            signal_sessions=selected_sessions,
         )
         factor = evaluate_factor(labels)
     else:
-        labels = _advance_labels_from_continuation(canonical, matrix, new_sessions)
+        labels = _advance_labels_from_continuation(research_data, matrix, new_sessions)
         factor = _advance_factor(
-            canonical,
+            research_data,
             labels,
             prior_factor,
             new_sessions,
@@ -156,7 +150,7 @@ def advance(advance_input: AdvanceInput) -> KernelState:
     strategy_resume = prior.strategy_resume_snapshot()
     definition = calculation_definition(run_input)
     strategy = transition_strategy(
-        canonical,
+        research_data,
         matrix,
         definition,
         origin_session=prior.origin_session,
@@ -217,7 +211,7 @@ def advance_continuation(
     *,
     run_input: RunInput,
     prior_continuation: Mapping[str, object],
-    target_canonical: dict[str, object],
+    target_research_data: AlignedResearchData,
     appended_sessions: list[str],
 ) -> dict[str, object]:
     """Advance only the bounded transient Alpha and Factor working state."""
@@ -239,19 +233,18 @@ def advance_continuation(
     )
     prior_alpha = _mapping(restored.get("alpha_matrix"), "prior Alpha continuation")
     prior_factor = _mapping(restored.get("factor_evaluation"), "prior Factor continuation")
-    calendar = canonical_sessions(target_canonical, "Continuation rebuild")
+    calendar = research_sessions(target_research_data)
     if not appended_sessions or any(session not in calendar for session in appended_sessions):
         raise KernelRunError("Continuation rebuild appended sessions are invalid")
     first_index = calendar.index(appended_sessions[0])
-    window = slice_canonical_sessions(
-        target_canonical,
+    window = slice_research_sessions(
+        target_research_data,
         calendar[max(0, first_index - MAX_ALPHA_LOOKBACK_SESSIONS) :],
     )
     evaluated = evaluate_alpha_matrix(
         window,
         expression=run_input.alpha_expression_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
-        universe_name=run_input.universe,
         neutralization=run_input.neutralization,
     )
     evaluated_rows = evaluated.get("sessions")
@@ -287,7 +280,7 @@ def advance_continuation(
         partial_daily: list[dict[str, object]] = []
         if affected:
             labels = build_forward_labels(
-                target_canonical,
+                target_research_data,
                 matrix,
                 signal_sessions=affected,
                 horizons=(horizon,),
@@ -380,20 +373,19 @@ def _with_continuation(
 
 def _advance_alpha(
     run_input: RunInput,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     prior_matrix: Mapping[str, object],
     new_sessions: list[str],
     prior_session_count: int,
 ) -> dict[str, object]:
     lookback = int(prior_matrix["effective_lookback"])
-    calendar = canonical_sessions(canonical, "Canonical")
+    calendar = research_sessions(research_data)
     window_start = max(0, prior_session_count - lookback)
-    window = slice_canonical_sessions(canonical, calendar[window_start:])
+    window = slice_research_sessions(research_data, calendar[window_start:])
     evaluated = evaluate_alpha_matrix(
         window,
         expression=run_input.alpha_expression_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
-        universe_name=run_input.universe,
         neutralization=run_input.neutralization,
     )
     new_set = set(new_sessions)
@@ -420,17 +412,17 @@ def _advance_alpha(
 
 
 def _advance_labels_from_continuation(
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     matrix: dict[str, object],
     new_sessions: list[str],
 ) -> dict[str, object]:
     """Recompute only labels whose value can change at this Release boundary."""
-    calendar = canonical_sessions(canonical, "Canonical")
+    calendar = research_sessions(research_data)
     horizons: dict[str, object] = {}
     for horizon in HORIZONS:
         affected_sessions = affected_label_sessions(calendar, new_sessions, horizon)
         partial = build_forward_labels(
-            canonical,
+            research_data,
             matrix,
             signal_sessions=affected_sessions,
             horizons=(horizon,),
@@ -448,12 +440,12 @@ def _advance_labels_from_continuation(
 
 
 def _advance_factor(
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     labels: dict[str, object],
     prior_factor: Mapping[str, object],
     new_sessions: list[str],
 ) -> dict[str, object]:
-    calendar = canonical_sessions(canonical, "Canonical")
+    calendar = research_sessions(research_data)
     label_horizons = _mapping(labels.get("horizons"), "Label horizons")
     prior_horizons = _mapping(prior_factor.get("horizons"), "prior Factor horizons")
     partial_horizons: dict[str, object] = {}
@@ -508,9 +500,9 @@ def _advance_factor(
             for item in [*prior_daily, *partial_daily]
             if isinstance(item, Mapping)
         }
-        selected = [
-            session for session in calendar if session in available_sessions
-        ][-MAX_ROLLING_FACTOR_SESSIONS:]
+        selected = [session for session in calendar if session in available_sessions][
+            -MAX_ROLLING_FACTOR_SESSIONS:
+        ]
         selected_set = set(selected)
         by_session = {
             str(item["session"]): dict(item)
@@ -521,8 +513,7 @@ def _advance_factor(
             {
                 str(item["session"]): dict(item)
                 for item in partial_daily
-                if isinstance(item, Mapping)
-                and str(item.get("session")) in selected_set
+                if isinstance(item, Mapping) and str(item.get("session")) in selected_set
             }
         )
         if set(by_session) != selected_set:
@@ -540,31 +531,25 @@ def _advance_factor(
     return {"horizons": horizons}
 
 
-def _accept_target_canonical_data(
-    prior: dict[str, object],
-    target: dict[str, object],
+def _accept_target_research_data(
+    prior: AlignedResearchData,
+    target: AlignedResearchData,
     appended_sessions: list[str],
-) -> dict[str, object]:
-    prior_calendar = prior.get("research_calendar")
-    target_calendar = target.get("research_calendar")
-    if not isinstance(prior_calendar, list) or not isinstance(target_calendar, list):
-        raise KernelRunError("Advance requires canonical Research Sessions")
+) -> AlignedResearchData:
     new_sessions = [str(value) for value in appended_sessions]
     if not new_sessions:
         raise KernelRunError("Advance requires at least one new Research Session")
-    prior_sessions = [str(value) for value in prior_calendar]
-    selected_target = [str(value) for value in target_calendar]
+    prior_sessions = research_sessions(prior)
+    selected_target = research_sessions(target)
     if (
         new_sessions != sorted(set(new_sessions))
         or selected_target[: len(prior_sessions)] != prior_sessions
         or selected_target[len(prior_sessions) :] != new_sessions
     ):
         raise KernelRunError("Advance Research Sessions must be new and canonically ordered")
-    if target.get("schema_version") != prior.get("schema_version"):
-        raise KernelRunError("Advance canonical schema does not match prior state")
-    if target.get("field_catalog") != prior.get("field_catalog"):
-        raise KernelRunError("Advance cannot replace pinned static table: field_catalog")
-    return json.loads(canonical_json_bytes(target))
+    if set(target.fields) != set(prior.fields):
+        raise KernelRunError("Advance aligned Field set does not match prior state")
+    return target.snapshot()
 
 
 def _mapping(value: object, name: str) -> Mapping[str, object]:
@@ -582,11 +567,11 @@ def _alpha_session_ids(matrix: Mapping[str, object]) -> list[str]:
 
 def _research_period_sessions(
     run_input: RunInput,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
 ) -> list[str]:
     if run_input.research_start_session is None or run_input.research_end_session is None:
         raise KernelRunError("Advance Research Period boundaries are incomplete")
-    calendar = canonical_sessions(canonical, "Canonical")
+    calendar = research_sessions(research_data)
     try:
         start = calendar.index(run_input.research_start_session)
         end = calendar.index(run_input.research_end_session)
@@ -599,14 +584,13 @@ def _research_period_sessions(
 
 def _rebuild_explicit_alpha(
     run_input: RunInput,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     research_sessions: list[str],
 ) -> dict[str, object]:
     evaluated = evaluate_alpha_matrix(
-        canonical,
+        research_data,
         expression=run_input.alpha_expression_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
-        universe_name=run_input.universe,
         neutralization=run_input.neutralization,
     )
     selected = set(research_sessions)

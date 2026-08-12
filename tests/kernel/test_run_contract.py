@@ -2,6 +2,7 @@ import copy
 from dataclasses import FrozenInstanceError
 
 import pytest
+from series import aligned_market_data
 
 from thesistrace.research_kernel import KernelRunError, KernelState, RunInput, RunOutput, run
 from thesistrace.research_kernel.serialization import canonical_json_bytes
@@ -122,7 +123,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
 
     with pytest.raises(KernelRunError, match="normalized tree"):
         RunInput(
-            canonical_data=accepted_calculation_case["canonical"],
+            research_data=accepted_calculation_case["research_data"],
             alpha_expression="pct_change($close_adj, 20)",  # type: ignore[arg-type]
             field_bindings=FIELD_BINDINGS,
             universe=str(definition["universe"]),
@@ -172,7 +173,11 @@ def _run_input(
     calendar = canonical["research_calendar"]
     assert isinstance(calendar, list)
     return RunInput(
-        canonical_data=canonical,
+        research_data=aligned_market_data(
+            canonical,
+            universe=str(definition["universe"]),
+            neutralization=str(definition["neutralization"]),
+        ),
         alpha_expression=alpha["expression"],
         field_bindings=FIELD_BINDINGS,
         universe=str(definition["universe"]),

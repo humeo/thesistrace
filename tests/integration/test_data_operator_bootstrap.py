@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from canonical_store import open_complete_refresh_basis
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.errors import RaiseException
 
@@ -71,11 +72,16 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
         assert source.plans[0].start_date.isoformat() == "2025-08-03"
         assert source.plans[0].completed_through_date.isoformat() == "2026-08-03"
         assert first.prepared_at == COMPLETED_AT.isoformat()
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == first.generation_manifest_sha256
-        assert head.generation.canonical == build_minimal_canonical_fixture()
-        assert head.generation.preparation["prepared_at"] == PREPARED_AT.isoformat()
+        assert (
+            open_complete_refresh_basis(
+                MountedGenerationStore(tmp_path), head.generation_manifest_sha256
+            )
+            == build_minimal_canonical_fixture()
+        )
+        assert head.prepared_at == COMPLETED_AT.isoformat()
 
         with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
             operator.bootstrap(idempotency_key="cannot-overwrite", as_of=AS_OF)
@@ -146,7 +152,7 @@ def test_collection_failure_leaves_no_head_and_replays_sanitized_failure(
                 operator.bootstrap(idempotency_key="source-failure", as_of=AS_OF)
             assert failure.value.code == "SOURCE_UNAVAILABLE"
         assert len(source.plans) == 1
-        assert DatasetLifecycle(database, tmp_path).current_head() is None
+        assert DatasetLifecycle(database, tmp_path).current_pointer() is None
         assert not (tmp_path / "HEAD.json").exists()
     finally:
         database.close()
@@ -172,7 +178,7 @@ def test_validation_failure_and_head_cas_loser_never_replace_the_winner(
                 as_of=AS_OF,
             )
         assert failure.value.code == "INVALID_CANONICAL_DATA"
-        assert DatasetLifecycle(database, tmp_path).current_head() is None
+        assert DatasetLifecycle(database, tmp_path).current_pointer() is None
 
         class WinnerPublishingSource(RecordingBootstrapSource):
             def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
@@ -202,9 +208,11 @@ def test_validation_failure_and_head_cas_loser_never_replace_the_winner(
                 as_of=AS_OF,
             )
         assert failure.value.code == "HEAD_ALREADY_EXISTS"
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
-        assert head.generation.canonical == build_minimal_canonical_fixture(price_offset=9)
+        assert open_complete_refresh_basis(
+            MountedGenerationStore(tmp_path), head.generation_manifest_sha256
+        ) == build_minimal_canonical_fixture(price_offset=9)
         with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
             DataOperator(database, tmp_path, losing_source, clock=lambda: PREPARED_AT).bootstrap(
                 idempotency_key="cas-loser",
@@ -258,7 +266,7 @@ def test_expired_bootstrap_attempt_is_fenced_and_taken_over_without_sleep(
             stale.result(timeout=10)
 
         assert stale_failure.value.code == "BOOTSTRAP_INFRASTRUCTURE_FAILURE"
-        assert DatasetLifecycle(database, tmp_path).current_head() is not None
+        assert DatasetLifecycle(database, tmp_path).current_pointer() is not None
         assert outcome.prepared_at == COMPLETED_AT.isoformat()
         with database.transaction() as transaction:
             row = transaction.execute(
@@ -443,7 +451,7 @@ def test_takeover_revokes_an_old_protected_candidate_before_head_cas(
             stale.result(timeout=10)
         assert stale_failure.value.code == "BOOTSTRAP_INFRASTRUCTURE_FAILURE"
 
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == winner.generation_manifest_sha256
         with database.transaction() as transaction:
@@ -496,7 +504,7 @@ def test_expired_bootstrap_reconciles_a_committed_head_after_process_loss(
                 idempotency_key="head-committed",
                 as_of=AS_OF,
             )
-        committed = DatasetLifecycle(database, tmp_path).current_head()
+        committed = DatasetLifecycle(database, tmp_path).current_pointer()
         assert committed is not None
         with database.transaction() as transaction:
             transaction.execute(
@@ -589,7 +597,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:
-        head = DatasetLifecycle(database, mount).current_head()
+        head = DatasetLifecycle(database, mount).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == outcome["generation_manifest_sha256"]
         assert head.data_through_session == "2026-08-03"

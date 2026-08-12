@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
+from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
@@ -18,6 +19,7 @@ from thesistrace.research_kernel.strategy import (
     strategy_metrics_from_state,
     transaction_cost,
 )
+from thesistrace.research_series import ExecutionPrice, InstrumentProfile
 
 
 def test_a_share_quantity_child_order_and_cost_rules() -> None:
@@ -29,9 +31,7 @@ def test_a_share_quantity_child_order_and_cost_rules() -> None:
     assert split_child_orders("main", 2_100_000) == [1_000_000, 1_000_000, 100_000]
     assert split_child_orders("chinext", 650_000) == [300_000, 300_000, 50_000]
     assert split_child_orders("star", 200_001) == [100_000, 99_801, 200]
-    assert split_child_orders(
-        "main", 1_000_050, complete_liquidation=True
-    ) == [1_000_000, 50]
+    assert split_child_orders("main", 1_000_050, complete_liquidation=True) == [1_000_000, 50]
     with pytest.raises(StrategyCalculationError, match="board lot"):
         split_child_orders("main", 1_000_050)
 
@@ -91,10 +91,9 @@ def test_market_rejections_are_three_explicit_categories() -> None:
 def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     definition = {
@@ -114,13 +113,13 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
 
     origin_session = str(canonical["research_calendar"][0])
     result = run_strategy(
-        canonical,
+        aligned_market_data(canonical),
         matrix,
         definition,
         origin_session=origin_session,
     )
     repeated = run_strategy(
-        canonical,
+        aligned_market_data(canonical),
         matrix,
         definition,
         origin_session=origin_session,
@@ -194,9 +193,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
                 for event in metrics["turnover"]["events"]
                 if str(event["session"]) in sessions
             ],
-            cumulative_cost=Decimal(
-                str(chunk[-1]["cumulative_transaction_cost"])
-            ),
+            cumulative_cost=Decimal(str(chunk[-1]["cumulative_transaction_cost"])),
             rejections=[
                 rejection
                 for rejection in result["rejections"]
@@ -222,10 +219,9 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
 def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     definition = {
@@ -258,7 +254,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
 
     with pytest.raises(StrategyCalculationError, match="unexplained missing Open"):
         run_strategy(
-            canonical,
+            aligned_market_data(canonical),
             matrix,
             definition,
             origin_session=str(canonical["research_calendar"][report_start]),
@@ -268,10 +264,9 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
 def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     definition = strategy_definition(rebalance_interval=20)
@@ -288,7 +283,7 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
             row["state"] = "full_session_suspension"
 
     result = run_strategy(
-        canonical,
+        aligned_market_data(canonical),
         matrix,
         definition,
         origin_session=str(canonical["research_calendar"][report_start]),
@@ -301,20 +296,16 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
     } in result["daily"][2]["valuation_events"]
     entry_session = canonical["research_calendar"][report_start + 1]
     reopen_session = canonical["research_calendar"][report_start + 3]
-    prices = {(row["session"], row["instrument_id"]): row for row in canonical["prices"]}
-    states = {
-        (row["session"], row["instrument_id"]): row["state"] for row in canonical["trading_states"]
-    }
-    instruments = {row["instrument_id"]: row for row in canonical["instruments"]}
+    benchmark_data = aligned_market_data(canonical)
     assert (
         equal_weight_benchmark_return(
             entry_session,
             entry_session,
             suspended_session,
-            {entry_session: [held_candidate]},
-            prices,
-            states,
-            instruments,
+            {entry_session: (held_candidate,)},
+            benchmark_data.execution_prices,
+            benchmark_data.trading_states,
+            benchmark_data.instruments,
         )
         == 0
     )
@@ -323,10 +314,10 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
             suspended_session,
             suspended_session,
             reopen_session,
-            {suspended_session: [held_candidate]},
-            prices,
-            states,
-            instruments,
+            {suspended_session: (held_candidate,)},
+            benchmark_data.execution_prices,
+            benchmark_data.trading_states,
+            benchmark_data.instruments,
         )
         != 0
     )
@@ -335,10 +326,9 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
 def test_suspended_new_target_creates_one_logical_rejection_without_children() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     report_start = 0
@@ -354,7 +344,7 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
             row["state"] = "full_session_suspension"
 
     result = run_strategy(
-        canonical,
+        aligned_market_data(canonical),
         matrix,
         strategy_definition(rebalance_interval=20),
         origin_session=str(canonical["research_calendar"][report_start]),
@@ -373,10 +363,9 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
 def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     definition = strategy_definition(rebalance_interval=20)
@@ -401,7 +390,7 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
                 ]
 
     result = run_strategy(
-        canonical,
+        aligned_market_data(canonical),
         matrix,
         definition,
         origin_session=str(canonical["research_calendar"][report_start]),
@@ -426,14 +415,10 @@ def test_benchmark_rejects_unexplained_missing_exit() -> None:
             "2026-01-01",
             "2026-01-02",
             "2026-01-03",
-            {"2026-01-01": ["equity:1.SH"]},
-            {
-                ("2026-01-02", "equity:1.SH"): {
-                    "open_adj": "10",
-                }
-            },
+            {"2026-01-01": ("equity:1.SH",)},
+            {("2026-01-02", "equity:1.SH"): ExecutionPrice("10", "10")},
             {},
-            {"equity:1.SH": {"listed_to": ""}},
+            {"equity:1.SH": InstrumentProfile("main", "")},
         )
 
 

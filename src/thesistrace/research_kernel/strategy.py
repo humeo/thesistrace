@@ -7,16 +7,19 @@ from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
 from statistics import stdev
 
-from thesistrace.research_kernel.canonical_state import (
-    canonical_sessions,
-    slice_canonical_sessions,
-)
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
     canonical_decimal,
     require_finite_decimal,
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_series import (
+    AlignedResearchData,
+    ExecutionPrice,
+    InstrumentProfile,
+    PriceLimit,
+    slice_research_sessions,
+)
 
 INITIAL_CASH = Decimal("10000000")
 
@@ -40,7 +43,7 @@ class StrategyTransition:
 
 
 def transition_strategy(
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     alpha_matrix: dict[str, object],
     definition: dict[str, object],
     *,
@@ -50,21 +53,21 @@ def transition_strategy(
     """Calculate a boundary and retain the state immediately before its terminal."""
     ledger: list[dict[str, object]] = []
     finalized = run_strategy(
-        canonical,
+        research_data,
         alpha_matrix,
         definition,
         origin_session=origin_session,
         continuation=continuation,
         ledger=ledger,
     )
-    calendar = canonical_sessions(canonical, "Canonical")
-    resumable_canonical = (
-        canonical
+    calendar = list(research_data.sessions)
+    resumable_research_data = (
+        research_data
         if calendar[-1] == origin_session
-        else slice_canonical_sessions(canonical, calendar[:-1])
+        else slice_research_sessions(research_data, calendar[:-1])
     )
     resumable = run_strategy(
-        resumable_canonical,
+        resumable_research_data,
         alpha_matrix,
         definition,
         origin_session=origin_session,
@@ -163,7 +166,7 @@ def market_rejection_reason(
 
 
 def run_strategy(
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     alpha_matrix: dict[str, object],
     definition: dict[str, object],
     *,
@@ -173,7 +176,7 @@ def run_strategy(
     skip_execution_sessions: set[str] | None = None,
     ledger: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    calendar = [str(value) for value in canonical["research_calendar"]]
+    calendar = list(research_data.sessions)
     if continuation is None:
         if origin_session is None:
             raise StrategyCalculationError("Strategy requires an explicit origin session")
@@ -200,43 +203,17 @@ def run_strategy(
     costs = {name: Decimal(str(value)) for name, value in definition["costs"].items()}
     skipped_sessions = skip_execution_sessions or set()
 
-    instruments = {str(item["instrument_id"]): item for item in canonical["instruments"]}
-    price_source = canonical["prices"]
-    prices = (
-        price_source
-        if isinstance(price_source, Mapping)
-        else {(str(item["session"]), str(item["instrument_id"])): item for item in price_source}
-    )
-    state_source = canonical["trading_states"]
-    states = (
-        state_source
-        if isinstance(state_source, Mapping)
-        else {
-            (str(item["session"]), str(item["instrument_id"])): str(item["state"])
-            for item in state_source
-        }
-    )
-    limit_source = canonical["price_limits"]
-    limits = (
-        limit_source
-        if isinstance(limit_source, Mapping)
-        else {(str(item["session"]), str(item["instrument_id"])): item for item in limit_source}
-    )
+    instruments = research_data.instruments
+    prices = research_data.execution_prices
+    states = research_data.trading_states
+    limits = research_data.price_limits
     value_store = alpha_matrix.get("value_store")
     alpha_by_session = (
         value_store
         if isinstance(value_store, Mapping)
         else {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
     )
-    universe_source = canonical["liquidity_universes"][str(definition["universe"])]
-    universes = (
-        universe_source
-        if isinstance(universe_source, Mapping)
-        else {
-            str(item["session"]): [str(value) for value in item["instrument_ids"]]
-            for item in universe_source
-        }
-    )
+    universes = research_data.universe_members
 
     if continuation is None:
         positions: dict[str, Position] = {}
@@ -356,7 +333,7 @@ def run_strategy(
                         money(Decimal(position.execution_shares) * reduction / current_value)
                     )
                 quantity = legal_order_quantity(
-                    str(instruments[instrument_id]["board"]),
+                    instruments[instrument_id].board,
                     "sell",
                     unrounded,
                     complete_liquidation=complete,
@@ -429,7 +406,7 @@ def run_strategy(
                         }
                     )
                     state = states.get((session, instrument_id))
-                    listed_to = str(instruments[instrument_id].get("listed_to", ""))
+                    listed_to = instruments[instrument_id].listed_to
                     if state == "full_session_suspension":
                         order_id = len(orders)
                         orders.append(
@@ -469,11 +446,11 @@ def run_strategy(
                         f"unexplained executable Open for {instrument_id} on {session}"
                     )
                 else:
-                    raw_open = Decimal(str(price["open_raw"]))
+                    raw_open = Decimal(price.raw_open)
                     unrounded = int(deficit / raw_open) if deficit > 0 else 0
                     legal_quantity = (
                         legal_order_quantity(
-                            str(instruments[instrument_id]["board"]),
+                            instruments[instrument_id].board,
                             "buy",
                             unrounded,
                             complete_liquidation=False,
@@ -482,7 +459,7 @@ def run_strategy(
                         else 0
                     )
                     quantity = affordable_quantity(
-                        board=str(instruments[instrument_id]["board"]),
+                        board=instruments[instrument_id].board,
                         quantity=legal_quantity,
                         raw_open=raw_open,
                         net_cash=net_cash,
@@ -636,18 +613,12 @@ def run_strategy(
                     "intended_orders": event_intended_orders,
                     "submitted_orders": [dict(item) for item in orders[event_order_start:]],
                     "fills": [dict(item) for item in fills[event_fill_start:]],
-                    "rejections": [
-                        dict(item) for item in rejections[event_rejection_start:]
-                    ],
-                    "diagnostics": [
-                        dict(item) for item in diagnostics[event_diagnostic_start:]
-                    ],
+                    "rejections": [dict(item) for item in rejections[event_rejection_start:]],
+                    "diagnostics": [dict(item) for item in diagnostics[event_diagnostic_start:]],
                     "gross_cash": canonical_decimal(gross_cash),
                     "net_cash": canonical_decimal(net_cash),
                     "positions": _position_payload(positions),
-                    "transaction_cost_cny": canonical_decimal(
-                        cumulative_cost - event_cost_start
-                    ),
+                    "transaction_cost_cny": canonical_decimal(cumulative_cost - event_cost_start),
                     "cumulative_transaction_cost": canonical_decimal(cumulative_cost),
                     "gross_nav": canonical_decimal(gross_nav),
                     "net_nav": canonical_decimal(net_nav),
@@ -709,16 +680,16 @@ def _position_payload(positions: Mapping[str, Position]) -> list[dict[str, objec
 def mark_positions(
     session: str,
     positions: dict[str, Position],
-    prices: dict[tuple[str, str], dict[str, object]],
+    prices: dict[tuple[str, str], ExecutionPrice],
     states: dict[tuple[str, str], str],
-    instruments: dict[str, dict[str, object]],
+    instruments: dict[str, InstrumentProfile],
 ) -> tuple[dict[str, Decimal], list[dict[str, object]]]:
     marks: dict[str, Decimal] = {}
     events: list[dict[str, object]] = []
     for instrument_id in list(positions):
         price = prices.get((session, instrument_id))
         if price is not None:
-            mark = Decimal(str(price["open_adj"]))
+            mark = Decimal(price.adjusted_open)
             positions[instrument_id].last_adjusted_price = mark
             marks[instrument_id] = mark
             continue
@@ -732,7 +703,7 @@ def mark_positions(
                 }
             )
             continue
-        listed_to = str(instruments[instrument_id].get("listed_to", ""))
+        listed_to = instruments[instrument_id].listed_to
         if listed_to and listed_to <= session:
             positions.pop(instrument_id)
             events.append(
@@ -756,10 +727,10 @@ def execute_order(
     side: str,
     quantity: int,
     positions: dict[str, Position],
-    prices: dict[tuple[str, str], dict[str, object]],
+    prices: dict[tuple[str, str], ExecutionPrice],
     states: dict[tuple[str, str], str],
-    limits: dict[tuple[str, str], dict[str, object]],
-    instruments: dict[str, dict[str, object]],
+    limits: dict[tuple[str, str], PriceLimit],
+    instruments: dict[str, InstrumentProfile],
     costs: dict[str, Decimal],
     gross_cash: Decimal,
     net_cash: Decimal,
@@ -773,11 +744,11 @@ def execute_order(
     price = prices.get((session, instrument_id))
     limit = limits.get((session, instrument_id))
     state = states.get((session, instrument_id))
-    raw_open = Decimal(str(price["open_raw"])) if price is not None else None
+    raw_open = Decimal(price.raw_open) if price is not None else None
     if limit is None and state != "full_session_suspension":
         raise StrategyCalculationError(f"missing price limit for {instrument_id} on {session}")
-    upper = Decimal(str(limit["upper"])) if limit is not None else Decimal(0)
-    lower = Decimal(str(limit["lower"])) if limit is not None else Decimal(0)
+    upper = Decimal(limit.upper) if limit is not None else Decimal(0)
+    lower = Decimal(limit.lower) if limit is not None else Decimal(0)
     rejection = market_rejection_reason(
         side=side,
         state=state,
@@ -812,8 +783,8 @@ def execute_order(
         return gross_cash, net_cash, Decimal(0)
     if price is None or raw_open is None:
         raise StrategyCalculationError(f"unexplained executable Open for {instrument_id}")
-    adjusted_open = Decimal(str(price["open_adj"]))
-    board = str(instruments[instrument_id]["board"])
+    adjusted_open = Decimal(price.adjusted_open)
+    board = instruments[instrument_id].board
     total_cost = Decimal(0)
     total_quantity = 0
     position = positions.get(instrument_id)
@@ -929,17 +900,17 @@ def equal_weight_benchmark_return(
     signal_session: str,
     entry_session: str,
     exit_session: str,
-    universes: dict[str, list[str]],
-    prices: dict[tuple[str, str], dict[str, object]],
+    universes: dict[str, tuple[str, ...]],
+    prices: dict[tuple[str, str], ExecutionPrice],
     states: dict[tuple[str, str], str],
-    instruments: dict[str, dict[str, object]],
+    instruments: dict[str, InstrumentProfile],
 ) -> Decimal:
     returns: list[Decimal] = []
     for instrument_id in universes.get(signal_session, []):
         entry = prices.get((entry_session, instrument_id))
         exit_price = prices.get((exit_session, instrument_id))
         if entry is not None:
-            entry_open = Decimal(str(entry["open_adj"]))
+            entry_open = Decimal(entry.adjusted_open)
         elif states.get((entry_session, instrument_id)) == "full_session_suspension":
             prior = latest_adjusted_open_before(
                 entry_session,
@@ -952,7 +923,7 @@ def equal_weight_benchmark_return(
                 )
             entry_open = prior
         else:
-            listed_to = str(instruments[instrument_id].get("listed_to", ""))
+            listed_to = instruments[instrument_id].listed_to
             if listed_to and listed_to <= entry_session:
                 returns.append(Decimal(0))
                 continue
@@ -960,12 +931,12 @@ def equal_weight_benchmark_return(
                 f"unexplained Benchmark Open for {instrument_id} on {entry_session}"
             )
         if exit_price is not None:
-            returns.append(money(Decimal(str(exit_price["open_adj"])) / entry_open - 1))
+            returns.append(money(Decimal(exit_price.adjusted_open) / entry_open - 1))
             continue
         if states.get((exit_session, instrument_id)) == "full_session_suspension":
             returns.append(Decimal(0))
             continue
-        listed_to = str(instruments[instrument_id].get("listed_to", ""))
+        listed_to = instruments[instrument_id].listed_to
         if listed_to and listed_to <= exit_session:
             returns.append(Decimal(-1))
             continue
@@ -978,14 +949,14 @@ def equal_weight_benchmark_return(
 def latest_adjusted_open_before(
     session: str,
     instrument_id: str,
-    prices: dict[tuple[str, str], dict[str, object]],
+    prices: dict[tuple[str, str], ExecutionPrice],
 ) -> Decimal | None:
     optimized = getattr(prices, "latest_adjusted_open_before", None)
     if callable(optimized):
         value = optimized(session, instrument_id)
         return None if value is None else Decimal(str(value))
     candidates = [
-        (price_session, Decimal(str(row["open_adj"])))
+        (price_session, Decimal(row.adjusted_open))
         for (price_session, price_instrument), row in prices.items()
         if price_instrument == instrument_id and price_session < session
     ]

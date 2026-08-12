@@ -5,6 +5,7 @@ from collections.abc import Sequence
 from statistics import stdev
 
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_series import AlignedResearchData, InstrumentProfile
 
 HORIZONS = (1, 5, 20)
 
@@ -28,19 +29,16 @@ def affected_label_sessions(
 
 
 def build_forward_labels(
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     alpha_matrix: dict[str, object],
     *,
     signal_sessions: Sequence[str],
     horizons: Sequence[int] = HORIZONS,
 ) -> dict[str, object]:
-    calendar = [str(value) for value in canonical["research_calendar"]]
-    prices = {(str(row["session"]), str(row["instrument_id"])): row for row in canonical["prices"]}
-    states = {
-        (str(row["session"]), str(row["instrument_id"])): str(row["state"])
-        for row in canonical["trading_states"]
-    }
-    instruments = {str(row["instrument_id"]): row for row in canonical["instruments"]}
+    calendar = list(research_data.sessions)
+    prices = research_data.execution_prices
+    states = research_data.trading_states
+    instruments = research_data.instruments
     alpha_by_session = {str(item["session"]): item for item in alpha_matrix["sessions"]}
     selected_sessions = [str(session) for session in signal_sessions]
     horizon_results: dict[str, object] = {}
@@ -118,8 +116,8 @@ def build_forward_labels(
                         )
                         continue
                 else:
-                    entry_open = float(entry["open_adj"])
-                    exit_open = float(exit_price["open_adj"])
+                    entry_open = float(entry.adjusted_open)
+                    exit_open = float(exit_price.adjusted_open)
                     if entry_open == 0.0:
                         raise FactorDataError(
                             f"invalid Label entry Open for {instrument_id} on {entry_session}"
@@ -165,12 +163,12 @@ def build_forward_labels(
 
 def unavailable_reason(
     trading_state: str | None,
-    instrument: dict[str, object],
+    instrument: InstrumentProfile,
     session: str,
     *,
     valid_entry: bool,
 ) -> str:
-    listed_to = str(instrument.get("listed_to", ""))
+    listed_to = instrument.listed_to
     if listed_to and listed_to <= session:
         return "terminal_delisting" if valid_entry else "confirmed_market_open_unavailable"
     if trading_state == "full_session_suspension":

@@ -10,7 +10,6 @@ from decimal import Decimal
 
 from thesistrace.daily_track.models import TrackingOrigin
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
-from thesistrace.research_kernel.canonical_state import canonical_sessions
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
 from thesistrace.research_kernel.kernel_run import KernelRunError, KernelState, RunInput
 from thesistrace.research_kernel.numeric import canonical_decimal
@@ -22,6 +21,7 @@ from thesistrace.research_kernel.strategy import (
 from thesistrace.research_kernel.terminal_state_schema import (
     TerminalStrategyStateValue,
 )
+from thesistrace.research_series import AlignedResearchData, research_sessions
 
 
 def project_tracking_checkpoint(
@@ -30,7 +30,7 @@ def project_tracking_checkpoint(
     retained_strategy_sessions: Sequence[str],
 ) -> dict[str, object]:
     """Project transient Kernel internals into bounded immutable product truth."""
-    run_input = state.run_input_with_canonical(state.canonical_snapshot())
+    run_input = state.run_input_with_research_data(state.research_data_snapshot())
     output = state.output_snapshot()
     alpha = _mapping(output.get("alpha_matrix"), "Alpha Matrix")
     factor = _mapping(output.get("factor_evaluation"), "Factor Evaluation")
@@ -75,12 +75,12 @@ def project_tracking_checkpoint(
 def restore_tracking_checkpoint(
     value: Mapping[str, object],
     *,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
 ) -> KernelState:
     """Restore the compact authoritative state; transient values remain absent."""
     contract = _mapping(value.get("run_input"), "Tracking run input")
     run_input = RunInput(
-        canonical_data=canonical,
+        research_data=research_data,
         alpha_expression=contract["alpha_expression"],
         field_bindings={
             str(key): str(item)
@@ -96,11 +96,11 @@ def restore_tracking_checkpoint(
         stamp_duty_sell_rate=str(contract["stamp_duty_sell_rate"]),
         transfer_fee_rate=str(contract["transfer_fee_rate"]),
     )
-    sessions = canonical_sessions(canonical, "DailyTrack Canonical Data")
+    sessions = research_sessions(research_data)
     if len(sessions) != int(value["session_count"]) or sessions[-1] != str(
         value["boundary_session"]
     ):
-        raise KernelRunError("DailyTrack Checkpoint boundary does not match Canonical Data")
+        raise KernelRunError("DailyTrack Checkpoint boundary does not match Research Data")
     factor_summary = _mapping(value.get("factor_summary"), "Factor Summary")
     factor_horizons = _mapping(factor_summary.get("horizons"), "Factor horizons")
     if set(factor_horizons) != {"1", "5", "20"}:
@@ -167,11 +167,11 @@ def restore_tracking_checkpoint(
 def restore_tracking_origin(
     origin: TrackingOrigin,
     terminal_value: Mapping[str, object],
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
 ) -> KernelState:
     """Build the first forward-only Kernel state without replaying the seed Run."""
     terminal = TerminalStrategyStateValue.model_validate(terminal_value)
-    run_input = _origin_run_input(origin, canonical)
+    run_input = _origin_run_input(origin, research_data)
     parsed_alpha = validate_normalized_alpha(
         run_input.alpha_expression_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
@@ -241,8 +241,8 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
     metric_state = _mapping(strategy.get("metric_state"), "Strategy metric state")
     terminal = daily[-1]
     session_count = int(metric_state["session_count"])
-    rebalance_interval = state.run_input_with_canonical(
-        state.canonical_snapshot()
+    rebalance_interval = state.run_input_with_research_data(
+        state.research_data_snapshot()
     ).rebalance_interval
     return {
         "session": str(terminal["session"]),
@@ -251,9 +251,7 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
         "gross_nav": str(terminal["gross_nav"]),
         "net_nav": str(terminal["net_nav"]),
         "benchmark_nav": str(terminal["benchmark_nav"]),
-        "cumulative_transaction_cost": str(
-            terminal["cumulative_transaction_cost"]
-        ),
+        "cumulative_transaction_cost": str(terminal["cumulative_transaction_cost"]),
         "positions": [copy.deepcopy(dict(item)) for item in positions],
         "rebalance_phase": {
             "origin_session": state.origin_session,
@@ -276,7 +274,7 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
 
 def _origin_run_input(
     origin: TrackingOrigin,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
 ) -> RunInput:
     immutable_input = origin.immutable_input
     definition = _mapping(immutable_input.get("definition"), "Tracking Definition")
@@ -289,7 +287,7 @@ def _origin_run_input(
         "Tracking field bindings",
     )
     return RunInput(
-        canonical_data=canonical,
+        research_data=research_data,
         alpha_expression=dict(alpha),
         field_bindings={str(key): str(value) for key, value in field_bindings.items()},
         universe=str(content["universe"]),
@@ -371,8 +369,8 @@ def _strategy_state(
     continuation_terminal = resume_daily[-1]
     report_count = int(metric_state["session_count"])
     final_report_count = report_count + 1
-    rebalance_interval = state.run_input_with_canonical(
-        state.canonical_snapshot()
+    rebalance_interval = state.run_input_with_research_data(
+        state.research_data_snapshot()
     ).rebalance_interval
     return {
         "summary": _compact_strategy_metrics(metrics),

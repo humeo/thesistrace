@@ -2,6 +2,7 @@ import math
 
 import pytest
 from contracts import FIELD_BINDINGS, field, literal, operation
+from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import (
@@ -197,11 +198,14 @@ def test_normalized_evaluation_preserves_missing_and_non_finite_rules() -> None:
         values,
         field_bindings=FIELD_BINDINGS,
     ) == [None, None, None, None, math.log(4.0)]
-    assert evaluate_series(
-        operation("divide", close, operation("subtract", close, close)),
-        values,
-        field_bindings=FIELD_BINDINGS,
-    ) == [None] * 5
+    assert (
+        evaluate_series(
+            operation("divide", close, operation("subtract", close, close)),
+            values,
+            field_bindings=FIELD_BINDINGS,
+        )
+        == [None] * 5
+    )
     assert evaluate_series(literal(1), {}, field_bindings=FIELD_BINDINGS) == [1.0]
 
 
@@ -209,10 +213,9 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
     _, canonical = build_fixture()
     normalized = operation("pct_change", field("price.close.adjusted"), literal(20))
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=normalized,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     assert matrix["checksum"] == (

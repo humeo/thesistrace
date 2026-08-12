@@ -12,9 +12,8 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from thesistrace.data.generation_store import (
-    MountedGeneration,
+    MountedFamilyGenerationDescriptor,
     MountedGenerationAdmission,
-    MountedGenerationDescriptor,
     MountedGenerationStore,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -35,26 +34,12 @@ class DatasetHeadConflict(DatasetHeadError):
 
 
 @dataclass(frozen=True)
-class DatasetHead:
-    generation_manifest_sha256: str
-    data_identity: str
-    dataset_coverage: dict[str, object]
-    data_through_session: str
-    prepared_at: str
-    generation: MountedGeneration
-
-
-@dataclass(frozen=True)
 class DatasetHeadPointer:
     generation_manifest_sha256: str
     data_identity: str
     dataset_coverage: dict[str, object]
     data_through_session: str
     prepared_at: str
-
-
-class _ResolvedHeadCandidate:
-    __slots__ = ()
 
 
 class _ResolvedHeadPointerCandidate:
@@ -67,14 +52,9 @@ class MountedDatasetHeadStore:
     def __init__(self, root: Path | str) -> None:
         self._root = Path(root).resolve()
         self._generations = MountedGenerationStore(self._root)
-        self._resolved_candidates: dict[_ResolvedHeadCandidate, MountedGeneration] = {}
         self._resolved_pointer_candidates: dict[
-            _ResolvedHeadPointerCandidate, MountedGenerationDescriptor
+            _ResolvedHeadPointerCandidate, MountedFamilyGenerationDescriptor
         ] = {}
-
-    def current(self) -> DatasetHead | None:
-        pointer = self.current_pointer()
-        return None if pointer is None else self.resolve(pointer)
 
     def current_pointer(self) -> DatasetHeadPointer | None:
         root_fd = self._open_root()
@@ -89,27 +69,9 @@ class MountedDatasetHeadStore:
             return None
         return _pointer_from_manifest(_parse_head(content))
 
-    def open_generation(self, manifest_sha256: str) -> MountedGeneration:
-        return self._generations.open_generation(manifest_sha256)
-
-    def resolve(self, pointer: DatasetHeadPointer) -> DatasetHead:
+    def resolve_descriptor(self, pointer: DatasetHeadPointer) -> MountedFamilyGenerationDescriptor:
         try:
-            generation = self._generations.open_generation(pointer.generation_manifest_sha256)
-        except RuntimeError as error:
-            raise DatasetHeadError("Dataset Head Generation is missing or invalid") from error
-        expected = _head_from_generation(
-            generation,
-            prepared_at=datetime.fromisoformat(pointer.prepared_at),
-        )
-        if pointer != _pointer_from_head(expected):
-            raise DatasetHeadError("Dataset Head projection is incompatible")
-        return expected
-
-    def resolve_descriptor(self, pointer: DatasetHeadPointer) -> MountedGenerationDescriptor:
-        try:
-            generation = self._generations.inspect_root(
-                pointer.generation_manifest_sha256
-            )
+            generation = self._generations.inspect_root(pointer.generation_manifest_sha256)
         except RuntimeError as error:
             raise DatasetHeadError("Dataset Head Generation is missing or invalid") from error
         expected = _pointer_from_generation(
@@ -120,11 +82,12 @@ class MountedDatasetHeadStore:
             raise DatasetHeadError("Dataset Head projection is incompatible")
         return generation
 
+    def validate_generation(self, manifest_sha256: str) -> MountedFamilyGenerationDescriptor:
+        return self._generations.validate_generation(manifest_sha256)
+
     def resolve_admission(self, pointer: DatasetHeadPointer) -> MountedGenerationAdmission:
         try:
-            admission = self._generations.open_admission(
-                pointer.generation_manifest_sha256
-            )
+            admission = self._generations.open_admission(pointer.generation_manifest_sha256)
         except RuntimeError as error:
             raise DatasetHeadError("Dataset Head Generation is missing or invalid") from error
         expected = _pointer_from_generation(
@@ -135,73 +98,25 @@ class MountedDatasetHeadStore:
             raise DatasetHeadError("Dataset Head projection is incompatible")
         return admission
 
-    def compare_and_swap(
-        self,
-        *,
-        expected_generation_manifest_sha256: str | None,
-        candidate_generation_manifest_sha256: str,
-        prepared_at: datetime | None = None,
-    ) -> DatasetHead:
-        with self.resolved_candidate(candidate_generation_manifest_sha256) as candidate:
-            return self.compare_and_swap_resolved(
-                expected_generation_manifest_sha256=expected_generation_manifest_sha256,
-                candidate=candidate,
-                prepared_at=prepared_at,
-            )
-
-    @contextmanager
-    def resolved_candidate(self, manifest_sha256: str) -> Iterator[_ResolvedHeadCandidate]:
-        generation = self._generations.open_generation(manifest_sha256)
-        candidate = _ResolvedHeadCandidate()
-        self._resolved_candidates[candidate] = generation
-        try:
-            yield candidate
-        finally:
-            self._resolved_candidates.pop(candidate, None)
-
-    def compare_and_swap_resolved(
-        self,
-        *,
-        expected_generation_manifest_sha256: str | None,
-        candidate: _ResolvedHeadCandidate,
-        prepared_at: datetime | None = None,
-    ) -> DatasetHead:
-        generation = self._resolved_candidates.pop(candidate, None)
-        if generation is None:
-            raise DatasetHeadError("Dataset Head candidate belongs to another mounted store")
-        candidate_head = _head_from_generation(generation, prepared_at=prepared_at)
-        content = _head_bytes(candidate_head)
-        root_fd = self._open_root()
-        lock_fd: int | None = None
-        try:
-            lock_fd = _open_lock(root_fd)
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
-            current_content = _read_optional_entry(root_fd, _HEAD_NAME)
-            current = (
-                None
-                if current_content is None
-                else _pointer_from_manifest(_parse_head(current_content))
-            )
-            current_identity = None if current is None else current.generation_manifest_sha256
-            if current_identity != expected_generation_manifest_sha256:
-                raise DatasetHeadConflict("Dataset Head changed before compare-and-swap")
-            _replace_entry(root_fd, _HEAD_NAME, content)
-            return candidate_head
-        except DatasetHeadError:
-            raise
-        except OSError as error:
-            raise DatasetHeadError("Dataset Head filesystem operation failed") from error
-        finally:
-            if lock_fd is not None:
-                os.close(lock_fd)
-            os.close(root_fd)
-
     @contextmanager
     def resolved_pointer_candidate(
         self,
         manifest_sha256: str,
     ) -> Iterator[_ResolvedHeadPointerCandidate]:
-        generation = self._generations.inspect_generation(manifest_sha256)
+        generation = self._generations.validate_generation(manifest_sha256)
+        candidate = _ResolvedHeadPointerCandidate()
+        self._resolved_pointer_candidates[candidate] = generation
+        try:
+            yield candidate
+        finally:
+            self._resolved_pointer_candidates.pop(candidate, None)
+
+    @contextmanager
+    def resolved_descriptor_candidate(
+        self,
+        manifest_sha256: str,
+    ) -> Iterator[_ResolvedHeadPointerCandidate]:
+        generation = self._generations.inspect_root(manifest_sha256)
         candidate = _ResolvedHeadPointerCandidate()
         self._resolved_pointer_candidates[candidate] = generation
         try:
@@ -254,41 +169,8 @@ class MountedDatasetHeadStore:
             raise DatasetHeadError("Mounted Canonical Data Store is missing or unsafe") from error
 
 
-def _head_from_generation(
-    generation: MountedGeneration,
-    *,
-    prepared_at: datetime | None = None,
-) -> DatasetHead:
-    if prepared_at is None:
-        prepared_at_value = generation.preparation.get("prepared_at", "")
-    elif prepared_at.tzinfo is None:
-        raise DatasetHeadError("Dataset Head preparation time must include a timezone")
-    else:
-        prepared_at_value = prepared_at.astimezone(UTC).isoformat()
-    if not prepared_at_value:
-        raise DatasetHeadError("Dataset Head preparation metadata is missing")
-    return DatasetHead(
-        generation_manifest_sha256=generation.manifest_sha256,
-        data_identity=generation.data_identity,
-        dataset_coverage=dict(generation.dataset_coverage),
-        data_through_session=generation.data_through_session,
-        prepared_at=prepared_at_value,
-        generation=generation,
-    )
-
-
-def _pointer_from_head(head: DatasetHead) -> DatasetHeadPointer:
-    return DatasetHeadPointer(
-        generation_manifest_sha256=head.generation_manifest_sha256,
-        data_identity=head.data_identity,
-        dataset_coverage=dict(head.dataset_coverage),
-        data_through_session=head.data_through_session,
-        prepared_at=head.prepared_at,
-    )
-
-
 def _pointer_from_generation(
-    generation: MountedGenerationDescriptor,
+    generation: MountedFamilyGenerationDescriptor,
     *,
     prepared_at: datetime | None = None,
 ) -> DatasetHeadPointer:
@@ -303,10 +185,21 @@ def _pointer_from_generation(
     return DatasetHeadPointer(
         generation_manifest_sha256=generation.manifest_sha256,
         data_identity=generation.data_identity,
-        dataset_coverage=dict(generation.dataset_coverage),
+        dataset_coverage=_market_coverage(generation),
         data_through_session=generation.data_through_session,
         prepared_at=prepared_at_value,
     )
+
+
+def _market_coverage(
+    generation: MountedFamilyGenerationDescriptor,
+) -> dict[str, object]:
+    calendar = generation.families[0]
+    if calendar.family_id != "market.research_calendar":
+        raise DatasetHeadError("Dataset Head market Coverage is missing")
+    coverage = dict(calendar.dataset_coverage)
+    coverage.pop("kind", None)
+    return coverage
 
 
 def _pointer_from_manifest(manifest: dict[str, object]) -> DatasetHeadPointer:
@@ -347,7 +240,7 @@ def _require_sha256(value: str) -> None:
         raise ValueError("invalid sha256")
 
 
-def _head_projection(head: DatasetHead | DatasetHeadPointer) -> dict[str, object]:
+def _head_projection(head: DatasetHeadPointer) -> dict[str, object]:
     return {
         "format": _HEAD_FORMAT,
         "version": _HEAD_VERSION,
@@ -359,7 +252,7 @@ def _head_projection(head: DatasetHead | DatasetHeadPointer) -> dict[str, object
     }
 
 
-def _head_bytes(head: DatasetHead | DatasetHeadPointer) -> bytes:
+def _head_bytes(head: DatasetHeadPointer) -> bytes:
     content = canonical_json_bytes(_head_projection(head))
     if len(content) > HEAD_MANIFEST_MAX_BYTES:
         raise DatasetHeadError("Dataset Head manifest exceeds its byte bound")
@@ -455,7 +348,6 @@ def _replace_entry(root_fd: int, name: str, content: bytes) -> None:
 
 
 __all__ = (
-    "DatasetHead",
     "DatasetHeadConflict",
     "DatasetHeadError",
     "DatasetHeadPointer",

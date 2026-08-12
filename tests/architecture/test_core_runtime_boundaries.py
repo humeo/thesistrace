@@ -31,6 +31,8 @@ PRODUCT_SCHEMAS = {
     "daily_track": "daily_tracks",
     "publication": "publication",
 }
+
+
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
     for package in CORE_PACKAGES:
         for path in (ROOT / "src" / "thesistrace" / package).rglob("*.py"):
@@ -55,15 +57,23 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
         "_postgres": set(),
         "publication": {"_postgres"},
-        "research_kernel": set(),
-        "data": {"_postgres", "publication"},
-        "daily_track": {"_postgres", "data", "publication", "research_kernel"},
+        "research_series": set(),
+        "research_kernel": {"research_series"},
+        "data": {"_postgres", "publication", "research_series"},
+        "daily_track": {
+            "_postgres",
+            "data",
+            "publication",
+            "research_kernel",
+            "research_series",
+        },
         "research_run": {
             "_postgres",
             "daily_track",
             "data",
             "publication",
             "research_kernel",
+            "research_series",
         },
         "definition": {"_postgres", "data", "research_kernel", "research_run"},
         "fixture": {"data"},
@@ -76,6 +86,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "definition",
             "publication",
             "research_kernel",
+            "research_series",
             "research_run",
         },
     }
@@ -92,14 +103,11 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             dependencies.update(_internal_dependencies(path, tree) - {package})
         graph[package] = dependencies
         assert dependencies <= allowed_dependencies, (
-            f"{package} imports outward dependencies: "
-            f"{sorted(dependencies - allowed_dependencies)}"
+            f"{package} imports outward dependencies: {sorted(dependencies - allowed_dependencies)}"
         )
     assert set(graph) == set(allowed)
     assert all(
-        dependency in graph
-        for dependencies in graph.values()
-        for dependency in dependencies
+        dependency in graph for dependencies in graph.values() for dependency in dependencies
     )
     _assert_acyclic(graph)
 
@@ -187,12 +195,8 @@ def test_current_runtime_initializes_before_starting_long_running_processes() ->
     initialize_service = compose.split("  initialize:\n", maxsplit=1)[1].split(
         "  api:\n", maxsplit=1
     )[0]
-    api_service = compose.split("  api:\n", maxsplit=1)[1].split(
-        "  worker:\n", maxsplit=1
-    )[0]
-    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split(
-        "  web:\n", maxsplit=1
-    )[0]
+    api_service = compose.split("  api:\n", maxsplit=1)[1].split("  worker:\n", maxsplit=1)[0]
+    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split("  web:\n", maxsplit=1)[0]
 
     assert 'command: ["thesistrace-initialize"]' in initialize_service
     assert "condition: service_completed_successfully" in api_service
@@ -540,9 +544,7 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
 
 def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> None:
     definition_source = (ROOT / "src" / "thesistrace" / "definition" / "service.py").read_text()
-    definition_schema = (
-        ROOT / "src" / "thesistrace" / "definition" / "schema.sql"
-    ).read_text()
+    definition_schema = (ROOT / "src" / "thesistrace" / "definition" / "schema.sql").read_text()
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
     run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
 
@@ -776,7 +778,6 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
     assert not (package / "api.py").exists()
 
 
-
 def _string_literals(path: Path) -> str:
     tree = ast.parse(path.read_text())
     return "\n".join(
@@ -806,9 +807,7 @@ def _internal_dependencies(path: Path, tree: ast.AST) -> set[str]:
             elif node.module:
                 targets.append(node.module.split("."))
         dependencies.update(
-            target[1]
-            for target in targets
-            if len(target) > 1 and target[0] == "thesistrace"
+            target[1] for target in targets if len(target) > 1 and target[0] == "thesistrace"
         )
     return dependencies
 

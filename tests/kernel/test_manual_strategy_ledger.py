@@ -4,6 +4,7 @@ import copy
 from decimal import Decimal
 
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
+from series import aligned_market_data
 
 from thesistrace.research_kernel import RunInput, run
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
@@ -167,9 +168,7 @@ def test_manual_small_order_uses_minimum_commission_without_negative_cash() -> N
             SESSIONS[3]: {A: ("10", "200.2"), B: ("10", "199.8")},
         }
     )
-    matrix = _alpha_matrix(
-        {session: ((A, 2), (B, 1)) for session in SESSIONS}
-    )
+    matrix = _alpha_matrix({session: ((A, 2), (B, 1)) for session in SESSIONS})
 
     result = _run(canonical, matrix, holdings_count=2)
 
@@ -512,10 +511,9 @@ def test_manual_historical_universe_excludes_a_future_stock_and_changes_on_sched
     canonical["instruments"][1]["listed_from"] = SESSIONS[1]
 
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical, universe="manual"),
         expression=CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        universe_name="manual",
         neutralization="none",
     )
 
@@ -527,9 +525,7 @@ def test_manual_historical_universe_excludes_a_future_stock_and_changes_on_sched
         (SESSIONS[2], A, "sell", 999_600, 999_600),
         (SESSIONS[2], B, "buy", 499_845, 499_200),
     ]
-    assert _position_ledger(canonical, matrix)[SESSIONS[2]] == (
-        (B, 499_200, Decimal("499200")),
-    )
+    assert _position_ledger(canonical, matrix)[SESSIONS[2]] == ((B, 499_200, Decimal("499200")),)
     _, kernel_ledger = _kernel_ledger(canonical)
     assert kernel_ledger[1]["signal"]["selected_instrument_ids"] == [A]
     assert kernel_ledger[2]["signal"]["selected_instrument_ids"] == [B]
@@ -622,8 +618,7 @@ def _alpha_matrix(
         "checksum": "manual-alpha-v1",
         "value_store": {
             session: [
-                {"instrument_id": instrument_id, "value": value}
-                for instrument_id, value in rows
+                {"instrument_id": instrument_id, "value": value} for instrument_id, value in rows
             ]
             for session, rows in values.items()
         },
@@ -659,7 +654,7 @@ def _kernel_run(
 ):
     return run(
         RunInput(
-            canonical_data=canonical,
+            research_data=aligned_market_data(canonical, universe="manual"),
             alpha_expression=CLOSE_ADJUSTED,
             field_bindings=FIELD_BINDINGS,
             universe="manual",
@@ -706,18 +701,13 @@ def _set_alpha_closes(
 def _assert_ledger_reconciles(ledger: list[dict[str, object]]) -> None:
     for row in ledger:
         position_value = sum(
-            Decimal(str(position["adjusted_units"]))
-            * Decimal(str(position["last_adjusted_price"]))
+            Decimal(str(position["adjusted_units"])) * Decimal(str(position["last_adjusted_price"]))
             for position in row["positions"]
         )
         fill_cost = sum(Decimal(str(fill["cost"])) for fill in row["fills"])
         assert Decimal(str(row["net_cash"])) >= 0
-        assert Decimal(str(row["gross_cash"])) + position_value == Decimal(
-            str(row["gross_nav"])
-        )
-        assert Decimal(str(row["net_cash"])) + position_value == Decimal(
-            str(row["net_nav"])
-        )
+        assert Decimal(str(row["gross_cash"])) + position_value == Decimal(str(row["gross_nav"]))
+        assert Decimal(str(row["net_cash"])) + position_value == Decimal(str(row["net_nav"]))
         assert fill_cost == Decimal(str(row["transaction_cost_cny"]))
 
 
@@ -730,7 +720,7 @@ def _run(
     terminal_cutoff: bool = True,
 ) -> dict[str, object]:
     return run_strategy(
-        copy.deepcopy(canonical),
+        aligned_market_data(copy.deepcopy(canonical), universe="manual"),
         copy.deepcopy(matrix),
         _definition(
             holdings_count=holdings_count,

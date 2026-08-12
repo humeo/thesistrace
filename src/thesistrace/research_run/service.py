@@ -28,6 +28,7 @@ from thesistrace.publication import (
     lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.research_kernel.alpha import validate_alpha
 from thesistrace.research_kernel.kernel_run import (
     InsufficientCalculationWarmupError,
     KernelRunError,
@@ -51,6 +52,7 @@ from thesistrace.research_run.result import (
     read_result_bundle,
     result_publication_payloads,
 )
+from thesistrace.research_series import AlignedResearchData
 
 logger = logging.getLogger(__name__)
 ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -67,9 +69,7 @@ PERMANENT_FAILURE_PUBLIC_REASON = "Research execution failed."
 INSUFFICIENT_WARMUP_PUBLIC_REASON = (
     "Selected data does not contain the complete Calculation Warm-up."
 )
-SELECTED_DATA_INVALID_PUBLIC_REASON = (
-    "Current data cannot execute the requested Research Period."
-)
+SELECTED_DATA_INVALID_PUBLIC_REASON = "Current data cannot execute the requested Research Period."
 RETRYABLE_FAILURES = (
     INFRASTRUCTURE_FAILURE,
     RESOURCE_EXHAUSTED_FAILURE,
@@ -835,20 +835,36 @@ class ResearchRunService:
         assert self._publication is not None
         immutable_input = claim.immutable_input
         try:
-            generation = self._generation_store.open_generation(
-                claim.data_generation_id
-            )
+            admission = self._generation_store.open_admission(claim.data_generation_id)
         except GenerationStoreError as error:
             raise ResearchRunInputInvalid("selected Data Generation is invalid") from error
-        canonical = generation.canonical
+        calendar = list(admission.research_calendar)
         start_session, end_session = _selected_research_period(
             immutable_input,
-            canonical=canonical,
-            available_field_ids=frozenset(generation.field_availability),
+            research_sessions=calendar,
+            available_field_ids=frozenset(admission.generation.field_availability),
+        )
+        content = immutable_input.definition.get("content")
+        if not isinstance(content, Mapping) or not isinstance(content.get("alpha"), Mapping):
+            raise ResearchRunInputInvalid("ResearchRun Alpha is invalid")
+        parsed = validate_alpha(content["alpha"], field_bindings=immutable_input.field_bindings)
+        start_index = calendar.index(start_session)
+        warmup_start = start_index - parsed.effective_lookback
+        if warmup_start < 0:
+            raise ResearchRunInsufficientWarmup(
+                "insufficient Calculation Warm-up for selected Research Period"
+            )
+        calculation_sessions = calendar[warmup_start : calendar.index(end_session) + 1]
+        generation = self._generation_store.read_market_slice(
+            claim.data_generation_id,
+            sessions=calculation_sessions,
+            universe_name=str(content["universe"]),
+            neutralization=str(content["neutralization"]),
+            field_bindings=immutable_input.field_bindings,
         )
         kernel_input = _kernel_input(
             immutable_input,
-            canonical,
+            generation.research_data,
             research_start_session=start_session,
             research_end_session=end_session,
         )
@@ -1030,22 +1046,17 @@ class ResearchRunService:
 def _selected_research_period(
     immutable_input: ImmutableRunInput,
     *,
-    canonical: dict[str, object],
+    research_sessions: list[str],
     available_field_ids: frozenset[str],
 ) -> tuple[str, str]:
-    if canonical.get("schema_version") != "canonical-eod":
-        raise ResearchRunInputInvalid("selected Dataset Schema is incompatible")
-    calendar = canonical.get("research_calendar")
-    if not isinstance(calendar, list) or not calendar:
+    if not research_sessions:
         raise ResearchRunInputInvalid("selected Data Generation has no Research Sessions")
-    sessions = [str(session) for session in calendar]
+    sessions = [str(session) for session in research_sessions]
     requested_start = immutable_input.requested_start_date.isoformat()
     requested_end = immutable_input.requested_end_date.isoformat()
     if requested_start < sessions[0] or requested_end > sessions[-1]:
         raise ResearchRunInputInvalid("requested Research Period is outside Dataset Coverage")
-    selected = [
-        session for session in sessions if requested_start <= session <= requested_end
-    ]
+    selected = [session for session in sessions if requested_start <= session <= requested_end]
     if not selected:
         raise ResearchRunInputInvalid("requested dates contain no Research Session")
     missing_fields = set(immutable_input.field_bindings) - available_field_ids
@@ -1056,7 +1067,7 @@ def _selected_research_period(
 
 def _kernel_input(
     immutable_input: ImmutableRunInput,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
     *,
     research_start_session: str,
     research_end_session: str,
@@ -1071,7 +1082,7 @@ def _kernel_input(
     strategy = immutable_input.strategy
     costs = immutable_input.costs
     return RunInput(
-        canonical_data=canonical,
+        research_data=research_data,
         alpha_expression=dict(alpha),
         field_bindings=immutable_input.field_bindings,
         universe=str(content["universe"]),
@@ -1093,9 +1104,7 @@ def _result_provenance(claim: _ExecutionClaim) -> dict[str, object]:
     return {
         "schema_version": "research-result-v1",
         "research_run_id": claim.run_id,
-        "immutable_input_sha256": hashlib.sha256(
-            canonical_json_bytes(value)
-        ).hexdigest(),
+        "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
         "data_generation_id": claim.data_generation_id,
         "data_through_session": claim.data_through_session,
         "calculation_contracts": {

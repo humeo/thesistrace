@@ -1,5 +1,6 @@
 import pytest
 from contracts import FIELD_BINDINGS, PCT_CHANGE_20
+from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel import KernelState, RunInput, RunOutput, run
@@ -31,26 +32,29 @@ def accepted_calculation_case() -> dict[str, object]:
             "transfer_fee_rate": "0.00001",
         },
     }
-    matrix = evaluate_alpha_matrix(
+    research_data = aligned_market_data(
         canonical,
+        field_bindings=FIELD_BINDINGS,
+        universe="top300",
+        neutralization="none",
+    )
+    matrix = evaluate_alpha_matrix(
+        research_data,
         expression=PCT_CHANGE_20,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     selected = set(research_sessions)
-    matrix["sessions"] = [
-        row for row in matrix["sessions"] if str(row["session"]) in selected
-    ]
+    matrix["sessions"] = [row for row in matrix["sessions"] if str(row["session"]) in selected]
     matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
     labels = build_forward_labels(
-        canonical,
+        research_data,
         matrix,
         signal_sessions=research_sessions,
     )
     factor = evaluate_factor(labels)
     strategy = run_strategy(
-        canonical,
+        research_data,
         matrix,
         definition,
         origin_session=research_sessions[0],
@@ -74,6 +78,7 @@ def accepted_calculation_case() -> dict[str, object]:
     return {
         **artifacts,
         "canonical": canonical,
+        "research_data": research_data,
         "definition": definition,
     }
 
@@ -83,6 +88,7 @@ def accepted_kernel_run(
     accepted_calculation_case: dict[str, object],
 ) -> RunOutput:
     canonical = accepted_calculation_case["canonical"]
+    research_data = accepted_calculation_case["research_data"]
     definition = accepted_calculation_case["definition"]
     assert isinstance(canonical, dict)
     assert isinstance(definition, dict)
@@ -94,7 +100,7 @@ def accepted_kernel_run(
     assert isinstance(costs, dict)
     return run(
         RunInput(
-            canonical_data=canonical,
+            research_data=research_data,
             alpha_expression=alpha["expression"],
             field_bindings=FIELD_BINDINGS,
             universe=str(definition["universe"]),

@@ -14,6 +14,7 @@ from pathlib import Path
 from time import monotonic
 
 import pytest
+from canonical_store import open_complete_refresh_basis
 
 import thesistrace.data.refresh as refresh_module
 from thesistrace._postgres import PostgresDatabase
@@ -116,10 +117,15 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         assert terminal["status"] == "succeeded"
         assert terminal["outcome"] == "published"
         assert terminal["last_refresh_at"] == FIRST_REFRESH_AT.isoformat()
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 != original_manifest
-        assert head.generation.canonical == candidate
+        assert (
+            open_complete_refresh_basis(
+                MountedGenerationStore(tmp_path), head.generation_manifest_sha256
+            )
+            == candidate
+        )
         assert head.prepared_at == FIRST_PREPARED_AT.isoformat()
         assert len(source.plans) == 1
         plan = source.plans[0]
@@ -172,9 +178,7 @@ def test_refresh_reports_private_phase_timings(
             ("publication", "completed"),
         ]
         assert [
-            event["elapsed_seconds"]
-            for event in phase_events
-            if event["status"] == "completed"
+            event["elapsed_seconds"] for event in phase_events if event["status"] == "completed"
         ] == [1.0] * 5
     finally:
         database.close()
@@ -213,10 +217,9 @@ def test_refresh_submission_reads_only_head_and_root_manifest(
         database.close()
 
 
-def test_refresh_candidate_manifest_graph_is_validated_once(
+def test_refresh_publishes_a_physically_valid_family_candidate(
     core_settings: CoreSettings,
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = _database(core_settings)
     try:
@@ -224,29 +227,18 @@ def test_refresh_candidate_manifest_graph_is_validated_once(
         current_manifest = _establish_head(database, tmp_path, current)
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        inspected: list[str] = []
-        original_inspect = MountedGenerationStore.inspect_generation
-
-        def recording_inspect(
-            self: MountedGenerationStore,
-            manifest_sha256: str,
-        ) -> object:
-            inspected.append(manifest_sha256)
-            return original_inspect(self, manifest_sha256)
-
-        monkeypatch.setattr(
-            MountedGenerationStore,
-            "inspect_generation",
-            recording_inspect,
-        )
         refresh = DataRefreshService(database, tmp_path)
         refresh.submit(idempotency_key="single-candidate-validation", as_of=AS_OF)
 
         assert refresh.process_next(RecordingRefreshSource(candidate)) is True
 
-        candidate_manifests = [value for value in inspected if value != current_manifest]
-        assert len(candidate_manifests) == 1
-        assert inspected.count(candidate_manifests[0]) == 1
+        published = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert published is not None
+        assert published.generation_manifest_sha256 != current_manifest
+        descriptor = MountedGenerationStore(tmp_path).validate_generation(
+            published.generation_manifest_sha256
+        )
+        assert descriptor.data_through_session == candidate["research_calendar"][-1]
     finally:
         database.close()
 
@@ -275,7 +267,7 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         assert terminal.status == "succeeded"
         assert terminal.outcome == "no_change"
         assert terminal.last_refresh_at == SECOND_REFRESH_AT.isoformat()
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
@@ -334,7 +326,7 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         assert terminal.status == "failed"
         assert terminal.failure_code == "INVALID_CANONICAL_DATA"
         assert terminal.last_refresh_at is None
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         overview = DatasetOverviewService(database, tmp_path).overview()
@@ -392,7 +384,7 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         assert terminal["status"] == "succeeded"
         assert terminal["outcome"] == "no_change"
         assert terminal["last_refresh_at"] is not None
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at is not None
@@ -434,10 +426,15 @@ def test_concurrent_workers_publish_one_authoritative_refresh(
         terminal = first.inspect("concurrent-workers")
         assert terminal.status == "succeeded"
         assert terminal.attempt_count == 1
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 != original
-        assert head.generation.canonical == candidate
+        assert (
+            open_complete_refresh_basis(
+                MountedGenerationStore(tmp_path), head.generation_manifest_sha256
+            )
+            == candidate
+        )
     finally:
         release.set()
         database.close()
@@ -508,7 +505,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         assert terminal.failure_code == "RETRY_EXHAUSTED"
         assert terminal.last_failure_code == "SOURCE_UNAVAILABLE"
         assert terminal.attempt_count == 2
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
@@ -568,14 +565,14 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
             assert recovered.outcome == "no_change"
             assert recovered.attempt_count == 2
             assert recovered.last_failure_code is None
-            recovered_freshness = DatasetOverviewService(
-                database, tmp_path
-            ).overview().last_refresh_at
+            recovered_freshness = (
+                DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+            )
 
             resume_old_worker.set()
             assert old_future.result(timeout=10) is True
 
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert replacement.inspect("lost-worker") == recovered
@@ -596,7 +593,7 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
         snapshot = _tushare_snapshot(_tushare_sessions(20))
         _lineage, current = normalize_tushare_snapshot(snapshot)
         manifest = _establish_head(database, tmp_path, current)
-        prior_canonical = MountedGenerationStore(tmp_path).open_generation(manifest).canonical
+        prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
         prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
         malformed = copy.deepcopy(snapshot)
         malformed["daily"] = {"not": "a source table"}
@@ -604,20 +601,18 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
         refresh.submit(idempotency_key="failure-merge", as_of=CORRECTION_AS_OF)
 
         with pytest.raises(DataRefreshError) as failure:
-            refresh.process_next(
-                TushareDataSource(provider=ReplayRefreshProvider(malformed))
-            )
+            refresh.process_next(TushareDataSource(provider=ReplayRefreshProvider(malformed)))
 
         assert failure.value.code == "SOURCE_INVALID_SOURCE_DATA"
         terminal = refresh.inspect("failure-merge")
         assert terminal.status == "failed"
         assert terminal.failure_code == "SOURCE_INVALID_SOURCE_DATA"
         assert terminal.last_failure_code == "SOURCE_INVALID_SOURCE_DATA"
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert (
-            MountedGenerationStore(tmp_path).open_generation(manifest).canonical
+            open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
             == prior_canonical
         )
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
@@ -636,7 +631,7 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
         snapshot = _tushare_snapshot(_tushare_sessions(20))
         _lineage, current = normalize_tushare_snapshot(snapshot)
         manifest = _establish_head(database, tmp_path, current)
-        prior_canonical = MountedGenerationStore(tmp_path).open_generation(manifest).canonical
+        prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
         prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
         corrected = copy.deepcopy(snapshot)
         daily = corrected["daily"]
@@ -651,9 +646,7 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
         with localcontext() as context:
             context.traps[Inexact] = True
             with pytest.raises(DataRefreshError) as failure:
-                refresh.process_next(
-                    TushareDataSource(provider=ReplayRefreshProvider(corrected))
-                )
+                refresh.process_next(TushareDataSource(provider=ReplayRefreshProvider(corrected)))
 
         assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
         terminal = refresh.inspect("failure-derived-recomputation")
@@ -661,11 +654,11 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
         assert terminal.failure_code == "RETRY_EXHAUSTED"
         assert terminal.last_failure_code == "REFRESH_INFRASTRUCTURE_FAILURE"
         assert terminal.attempt_count == 1
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert (
-            MountedGenerationStore(tmp_path).open_generation(manifest).canonical
+            open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
             == prior_canonical
         )
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
@@ -703,9 +696,7 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
             source_name="recording-refresh-source",
             source_lineage={"fixture": "refresh-v1"},
         )
-        candidate_objects = sorted(
-            (preview_root / "objects" / "sha256").glob("*/*.parquet")
-        )
+        candidate_objects = sorted((preview_root / "objects" / "sha256").glob("*/*.parquet"))
         blocked_candidate_object = next(
             (
                 tmp_path / path.relative_to(preview_root)
@@ -719,27 +710,29 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
         blocked_candidate_object.write_bytes(b"candidate write fault barrier")
         refresh = DataRefreshService(database, tmp_path, max_attempts=1)
         refresh.submit(idempotency_key="failure-generation-write", as_of=AS_OF)
-        assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
+        assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(refresh.process_next, BlockingSource(candidate))
             assert source_entered.wait(timeout=10)
-            assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
+            assert (
+                open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
+            )
             release_source.set()
             with pytest.raises(DataRefreshError) as failure:
                 future.result(timeout=10)
         assert failure.value.code == "REFRESH_INFRASTRUCTURE_FAILURE"
-        assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
+        assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
 
         terminal = refresh.inspect("failure-generation-write")
         assert terminal.status == "failed"
         assert terminal.failure_code == "RETRY_EXHAUSTED"
         assert terminal.last_failure_code == "REFRESH_INFRASTRUCTURE_FAILURE"
         assert terminal.attempt_count == 1
-        head = DatasetLifecycle(database, tmp_path).current_head()
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        assert MountedGenerationStore(tmp_path).open_generation(manifest).canonical == current
+        assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
             prior_refresh_at
         )
@@ -804,7 +797,7 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
                     """
                 )
 
-        moved = DatasetLifecycle(database, tmp_path).current_head()
+        moved = DatasetLifecycle(database, tmp_path).current_pointer()
         assert moved is not None
         assert moved.generation_manifest_sha256 != original
         pending = refresh.inspect("ambiguous-cas")
@@ -873,10 +866,10 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
                     """
                 )
 
-        moved = DatasetLifecycle(database, tmp_path).current_head()
+        moved = DatasetLifecycle(database, tmp_path).current_pointer()
         assert moved is not None
         assert moved.generation_manifest_sha256 != original
-        assert MountedGenerationStore(tmp_path).open_generation(original).canonical == current
+        assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), original) == current
         assert refresh.inspect("completion-crash").status == "running"
         assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
             prior_refresh_at
@@ -932,12 +925,10 @@ def _tushare_snapshot(sessions: list[str]) -> dict[str, object]:
     ]
     return {
         "calendar_sse": [
-            {"exchange": "SSE", "cal_date": session, "is_open": "1"}
-            for session in sessions
+            {"exchange": "SSE", "cal_date": session, "is_open": "1"} for session in sessions
         ],
         "calendar_szse": [
-            {"exchange": "SZSE", "cal_date": session, "is_open": "1"}
-            for session in sessions
+            {"exchange": "SZSE", "cal_date": session, "is_open": "1"} for session in sessions
         ],
         "stock_basic": [
             {

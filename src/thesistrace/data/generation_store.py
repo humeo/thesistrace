@@ -47,20 +47,24 @@ from thesistrace.data.generation_validation import (
     GenerationValidationError,
     validate_canonical_generation,
 )
+from thesistrace.data.market_series import (
+    MarketSeriesError,
+    align_market_research_data,
+    market_field_columns,
+)
 from thesistrace.publication.serialization import (
     ParquetContractError,
     canonical_json_bytes,
     canonicalize_parquet_rows,
     parquet_bytes,
 )
+from thesistrace.research_series import AlignedResearchData
 
-_GENERATION_FORMAT = "thesistrace-canonical-generation"
-_FAMILY_GENERATION_CANDIDATE_FORMAT = "thesistrace-family-generation-candidate"
+_FAMILY_GENERATION_FORMAT = "thesistrace-family-generation"
 _FAMILY_MANIFEST_FORMAT = "thesistrace-dataset-family"
 _TABLE_MANIFEST_FORMAT = "thesistrace-canonical-table"
 _MANIFEST_VERSION = 1
 _UNIVERSE_NAMES = UNIVERSE_NAMES
-_TABLE_SPEC_BY_NAME = {spec.name: spec for spec in _TABLE_SPECS}
 _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME = {spec.name: spec for spec in MARKET_CANDIDATE_TABLE_SPECS}
 
 
@@ -69,36 +73,21 @@ class GenerationStoreError(RuntimeError):
 
 
 @dataclass(frozen=True)
-class MountedGeneration:
-    manifest_sha256: str
-    data_identity: str
-    dataset_coverage: dict[str, object]
-    data_through_session: str
-    field_availability: tuple[str, ...]
-    preparation: dict[str, str]
-    canonical: dict[str, object]
-
-
-@dataclass(frozen=True)
-class MountedGenerationDescriptor:
-    manifest_sha256: str
-    data_identity: str
-    dataset_coverage: dict[str, object]
-    data_through_session: str
-    field_availability: tuple[str, ...]
-    preparation: dict[str, str]
-
-
-@dataclass(frozen=True)
 class MountedGenerationAdmission:
-    generation: MountedGenerationDescriptor
+    generation: MountedFamilyGenerationDescriptor
     research_calendar: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class MountedRefreshBase:
-    generation: MountedGenerationDescriptor
+    generation: MountedFamilyGenerationDescriptor
     canonical: dict[str, object]
+
+
+@dataclass(frozen=True)
+class MountedMarketSeries:
+    generation: MountedFamilyGenerationDescriptor
+    research_data: AlignedResearchData
 
 
 @dataclass(frozen=True, order=True)
@@ -113,60 +102,6 @@ class MountedGenerationStore:
         self._files = AddressedFileStore(self._root)
 
     def materialize(
-        self,
-        canonical: Mapping[str, object],
-        *,
-        prepared_at: datetime,
-        source_name: str,
-        source_lineage: Mapping[str, object],
-    ) -> MountedGeneration:
-        normalized = _normalize_canonical(canonical)
-        _validate_generation(normalized)
-        calendar = normalized["research_calendar"]
-        assert isinstance(calendar, list)
-        table_entries: list[dict[str, object]] = []
-        for spec in _TABLE_SPECS:
-            rows = _table_rows(normalized, spec.name)
-            table_manifest = self._materialize_table(spec, rows, calendar)
-            table_entries.append(table_manifest)
-        field_availability = tuple(
-            sorted(str(row["field_id"]) for row in normalized["field_catalog"])
-        )
-        coverage = {
-            "start": str(calendar[0]),
-            "end": str(calendar[-1]),
-            "session_count": len(calendar),
-        }
-        identity = {
-            "schema_contract": "canonical-eod",
-            "dataset_coverage": coverage,
-            "data_through_session": str(calendar[-1]),
-            "field_availability": list(field_availability),
-            "tables": table_entries,
-        }
-        data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
-        preparation = _preparation(prepared_at, source_name, source_lineage)
-        root_manifest = {
-            "format": _GENERATION_FORMAT,
-            "version": _MANIFEST_VERSION,
-            "data_identity": data_identity,
-            **identity,
-            "preparation": preparation,
-        }
-        root_bytes = _bounded_manifest_bytes(root_manifest)
-        root_sha256 = hashlib.sha256(root_bytes).hexdigest()
-        self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
-        return MountedGeneration(
-            manifest_sha256=root_sha256,
-            data_identity=data_identity,
-            dataset_coverage=coverage,
-            data_through_session=str(calendar[-1]),
-            field_availability=field_availability,
-            preparation=preparation,
-            canonical=normalized,
-        )
-
-    def materialize_market_candidate(
         self,
         canonical: Mapping[str, object],
         *,
@@ -201,13 +136,14 @@ class MountedGenerationStore:
         identity = {
             "schema_contract": "canonical-research",
             "data_through_session": str(calendar[-1]),
+            "research_sessions": [str(session) for session in calendar],
             "field_availability": list(field_availability),
             "families": family_references,
         }
         data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
         preparation = _preparation(prepared_at, source_name, source_lineage)
         root_manifest = {
-            "format": _FAMILY_GENERATION_CANDIDATE_FORMAT,
+            "format": _FAMILY_GENERATION_FORMAT,
             "version": _MANIFEST_VERSION,
             "data_identity": data_identity,
             **identity,
@@ -218,18 +154,18 @@ class MountedGenerationStore:
         self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
         return _family_generation_descriptor_from_root(root_sha256, root_manifest)
 
-    def inspect_market_candidate(
+    def inspect_root(
         self,
         manifest_sha256: str,
     ) -> MountedFamilyGenerationDescriptor:
-        root = self._read_market_candidate_root(manifest_sha256)
+        root = self._read_family_generation_root(manifest_sha256)
         return _family_generation_descriptor_from_root(manifest_sha256, root)
 
-    def validate_market_candidate(
+    def validate_generation(
         self,
         manifest_sha256: str,
     ) -> MountedFamilyGenerationDescriptor:
-        root = self._read_market_candidate_root(manifest_sha256)
+        root = self._read_family_generation_root(manifest_sha256)
         references = root["families"]
         assert isinstance(references, list)
         candidate_tables: dict[str, list[dict[str, object]]] = {}
@@ -261,75 +197,125 @@ class MountedGenerationStore:
         _validate_candidate_projection(descriptor, canonical)
         return descriptor
 
-    def open_generation(self, manifest_sha256: str) -> MountedGeneration:
-        root = self._read_generation_manifest(manifest_sha256)
-        tables = root["tables"]
-        assert isinstance(tables, list)
-        table_rows: dict[str, list[dict[str, object]]] = {}
-        calendar: list[str] | None = None
-        for entry, spec in zip(tables, _TABLE_SPECS, strict=True):
-            if not isinstance(entry, Mapping):
-                raise GenerationStoreError("Generation table reference is incompatible")
-            table_rows[spec.name] = self._open_table(spec, entry, calendar)
-            if spec.name == "research_calendar":
-                calendar = [str(row["session"]) for row in table_rows[spec.name]]
-        canonical = _canonical_from_rows(table_rows)
-        _validate_generation(canonical)
-        identity = {
-            "schema_contract": root["schema_contract"],
-            "dataset_coverage": root["dataset_coverage"],
-            "data_through_session": root["data_through_session"],
-            "field_availability": root["field_availability"],
-            "tables": tables,
-        }
-        expected_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
-        if root["data_identity"] != expected_identity:
-            raise GenerationStoreError("Generation data identity is invalid")
-        _validate_root_projection(root, canonical)
-        preparation = root["preparation"]
-        if not isinstance(preparation, dict):
-            raise GenerationStoreError("Generation preparation metadata is incompatible")
-        return MountedGeneration(
-            manifest_sha256=manifest_sha256,
-            data_identity=expected_identity,
-            dataset_coverage=dict(root["dataset_coverage"]),
-            data_through_session=str(root["data_through_session"]),
-            field_availability=tuple(str(value) for value in root["field_availability"]),
-            preparation={str(key): str(value) for key, value in preparation.items()},
-            canonical=canonical,
+    def read_market_slice(
+        self,
+        manifest_sha256: str,
+        *,
+        sessions: list[str],
+        universe_name: str,
+        neutralization: str,
+        field_bindings: Mapping[str, str],
+    ) -> MountedMarketSeries:
+        if not sessions or sessions != sorted(set(sessions)):
+            raise GenerationStoreError("Market Series sessions are invalid")
+        if universe_name not in _UNIVERSE_NAMES:
+            raise GenerationStoreError("Market Series Universe is invalid")
+        if neutralization not in {"none", "industry"}:
+            raise GenerationStoreError("Market Series Neutralization is invalid")
+        try:
+            requested_columns = market_field_columns(field_bindings)
+        except MarketSeriesError as error:
+            raise GenerationStoreError(str(error)) from error
+        root = self._read_family_generation_root(manifest_sha256)
+        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        full_calendar = list(descriptor.research_sessions)
+        if any(session not in full_calendar for session in sessions):
+            raise GenerationStoreError("Market Series sessions are outside Coverage")
+        selected = set(sessions)
+        universe_spec, universe_reference = self._family_table_reference(
+            root,
+            "equity.liquidity_universe",
+            "liquidity_universes",
         )
-
-    def inspect_root(self, manifest_sha256: str) -> MountedGenerationDescriptor:
-        root = self._read_generation_manifest(manifest_sha256)
-        return _descriptor_from_root(manifest_sha256, root)
-
-    def inspect_generation(self, manifest_sha256: str) -> MountedGenerationDescriptor:
-        root = self._read_generation_manifest(manifest_sha256)
-        tables = root["tables"]
-        assert isinstance(tables, list)
-        for reference, spec in zip(tables, _TABLE_SPECS, strict=True):
-            if not isinstance(reference, Mapping):
-                raise GenerationStoreError("Generation table reference is incompatible")
-            manifest = self._read_table_manifest(spec, reference)
-            objects = manifest["objects"]
-            assert isinstance(objects, list)
-            for ordinal, object_ref in enumerate(objects):
-                _validate_object_reference(object_ref, ordinal)
-        return _descriptor_from_root(manifest_sha256, root)
+        universe_rows = [
+            row
+            for row in self._open_table_sessions(
+                universe_spec,
+                universe_reference,
+                selected_sessions=selected,
+            )
+            if row["universe"] == universe_name
+        ]
+        if [str(row["session"]) for row in universe_rows] != sessions:
+            raise GenerationStoreError("Market Series Universe is incomplete")
+        instrument_ids = frozenset(
+            str(instrument_id) for row in universe_rows for instrument_id in row["instrument_ids"]
+        )
+        tables: dict[str, list[dict[str, object]]] = {
+            "research_calendar": [{"session": session} for session in sessions],
+            "liquidity_universes": universe_rows,
+            "base_pool": [],
+            "industry_membership": [],
+        }
+        required_families = {
+            "market.instrument_identity",
+            "equity.eod_price",
+            "equity.trading_state",
+            "equity.price_limit",
+        }
+        if neutralization == "industry":
+            required_families.add("equity.industry_membership")
+        for family in descriptor.families:
+            if family.family_id not in required_families:
+                continue
+            for table_name in family.table_names:
+                spec, reference = self._family_table_reference(root, family.family_id, table_name)
+                if spec.session_field is not None:
+                    if not instrument_ids:
+                        tables[table_name] = []
+                        continue
+                    columns = None
+                    if table_name == "eod_prices":
+                        columns = {
+                            "session_date",
+                            "instrument_id",
+                            "open_raw",
+                            "open_adj",
+                            *requested_columns,
+                        }
+                    rows = self._open_table_sessions(
+                        spec,
+                        reference,
+                        selected_sessions=selected,
+                        columns=columns,
+                        instrument_ids=instrument_ids,
+                    )
+                else:
+                    columns = (
+                        {"instrument_id", "board", "listed_to"}
+                        if table_name == "instruments"
+                        else {"instrument_id", "active_from", "active_to", "sw2021_l1"}
+                    )
+                    rows = self._open_table_instruments(
+                        spec,
+                        reference,
+                        instrument_ids=instrument_ids,
+                        columns=columns,
+                    )
+                tables[table_name] = rows
+        try:
+            research_data = align_market_research_data(
+                sessions=sessions,
+                instruments=tables["instruments"],
+                eod_prices=tables["eod_prices"],
+                universe_rows=tables["liquidity_universes"],
+                trading_states=tables["trading_states"],
+                price_limits=tables["price_limits"],
+                industry_membership=tables["industry_membership"],
+                field_bindings=field_bindings,
+                neutralization=neutralization,
+            )
+        except MarketSeriesError as error:
+            raise GenerationStoreError(str(error)) from error
+        return MountedMarketSeries(generation=descriptor, research_data=research_data)
 
     def open_admission(self, manifest_sha256: str) -> MountedGenerationAdmission:
-        root = self._read_generation_manifest(manifest_sha256)
-        descriptor = _descriptor_from_root(manifest_sha256, root)
-        references = root["tables"]
-        assert isinstance(references, list)
-        calendar_spec = _TABLE_SPECS[0]
-        calendar_reference = references[0]
-        assert calendar_spec.name == "research_calendar"
-        if not isinstance(calendar_reference, Mapping):
-            raise GenerationStoreError("Generation table reference is incompatible")
-        rows = self._open_table(calendar_spec, calendar_reference, None)
-        calendar = tuple(str(row["session"]) for row in rows)
-        if not calendar or descriptor.dataset_coverage != {
+        root = self._read_family_generation_root(manifest_sha256)
+        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        calendar = descriptor.research_sessions
+        calendar_coverage = descriptor.families[0].dataset_coverage
+        if not calendar or calendar_coverage != {
+            "kind": "research-session-range",
             "start": calendar[0],
             "end": calendar[-1],
             "session_count": len(calendar),
@@ -349,37 +335,41 @@ class MountedGenerationStore:
     ) -> MountedRefreshBase:
         if overlap_session_count <= 0 or universe_lookback_session_count < 0:
             raise ValueError("Refresh window policy is invalid")
-        descriptor = self.inspect_generation(manifest_sha256)
-        root = self._read_generation_manifest(manifest_sha256)
-        references = root["tables"]
-        assert isinstance(references, list)
-        calendar_spec = _TABLE_SPECS[0]
-        calendar_reference = references[0]
-        assert isinstance(calendar_reference, Mapping)
+        root = self._read_family_generation_root(manifest_sha256)
+        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        calendar_spec, calendar_reference = self._family_table_reference(
+            root,
+            "market.research_calendar",
+            "research_calendar",
+        )
         calendar_rows = self._open_table(calendar_spec, calendar_reference, None)
         full_calendar = [str(row["session"]) for row in calendar_rows]
         window_count = overlap_session_count + universe_lookback_session_count
         window_start = full_calendar[max(0, len(full_calendar) - window_count)]
-        table_rows: dict[str, list[dict[str, object]]] = {
+        candidate_tables: dict[str, list[dict[str, object]]] = {
             "research_calendar": [
                 row for row in calendar_rows if str(row["session"]) >= window_start
             ]
         }
-        window_calendar = [str(row["session"]) for row in table_rows["research_calendar"]]
-        for reference, spec in zip(references[1:], _TABLE_SPECS[1:], strict=True):
-            if not isinstance(reference, Mapping):
-                raise GenerationStoreError("Generation table reference is incompatible")
-            if spec.session_field is None:
-                table_rows[spec.name] = self._open_table(spec, reference, full_calendar)
-            else:
-                table_rows[spec.name] = self._open_table_window(
-                    spec,
-                    reference,
-                    start_session=window_start,
+        for family_spec in MARKET_FAMILY_SPECS[1:]:
+            for table_name in family_spec.table_names:
+                spec, reference = self._family_table_reference(
+                    root,
+                    family_spec.family_id,
+                    table_name,
                 )
-        canonical = _canonical_from_rows(table_rows)
-        _validate_generation(canonical)
-        if canonical["research_calendar"] != window_calendar:
+                candidate_tables[table_name] = (
+                    self._open_table(spec, reference, full_calendar)
+                    if spec.session_field is None
+                    else self._open_table_window(
+                        spec,
+                        reference,
+                        start_session=window_start,
+                    )
+                )
+        canonical = _validate_candidate_semantics(candidate_tables)
+        expected_calendar = [str(row["session"]) for row in candidate_tables["research_calendar"]]
+        if canonical["research_calendar"] != expected_calendar:
             raise GenerationStoreError("Generation refresh window is invalid")
         return MountedRefreshBase(generation=descriptor, canonical=canonical)
 
@@ -392,19 +382,20 @@ class MountedGenerationStore:
         prepared_at: datetime,
         source_name: str,
         source_lineage: Mapping[str, object],
-    ) -> MountedGenerationDescriptor:
+    ) -> MountedFamilyGenerationDescriptor:
         normalized = _normalize_canonical(replacement_canonical)
         _validate_generation(normalized)
         replacement_calendar = [str(value) for value in normalized["research_calendar"]]
         if replace_from_session not in replacement_calendar:
             raise GenerationStoreError("Refresh replacement boundary is outside Coverage")
-        predecessor_root = self._read_generation_manifest(predecessor_manifest_sha256)
-        predecessor_tables = predecessor_root["tables"]
-        assert isinstance(predecessor_tables, list)
-        calendar_reference = predecessor_tables[0]
-        assert isinstance(calendar_reference, Mapping)
+        predecessor_root = self._read_family_generation_root(predecessor_manifest_sha256)
+        calendar_spec, calendar_reference = self._family_table_reference(
+            predecessor_root,
+            "market.research_calendar",
+            "research_calendar",
+        )
         predecessor_calendar_rows = self._open_table(
-            _TABLE_SPECS[0],
+            calendar_spec,
             calendar_reference,
             None,
         )
@@ -422,44 +413,51 @@ class MountedGenerationStore:
         if not new_calendar or new_calendar != sorted(set(new_calendar)):
             raise GenerationStoreError("Refresh Research Calendar is invalid")
 
-        table_entries: list[dict[str, object]] = []
-        for reference, spec in zip(predecessor_tables, _TABLE_SPECS, strict=True):
-            if not isinstance(reference, Mapping):
-                raise GenerationStoreError("Generation table reference is incompatible")
-            rows = _table_rows(normalized, spec.name)
-            if spec.session_field is None:
-                table_entries.append(self._materialize_table(spec, rows, new_calendar))
-                continue
-            table_entries.append(
-                self._materialize_refresh_table(
-                    spec,
-                    reference,
-                    replacement_rows=rows,
-                    replace_from_session=replace_from_session,
-                    rewrite_start_session=rewrite_start_session,
-                    new_calendar=new_calendar,
+        table_references: dict[str, dict[str, object]] = {}
+        for family_spec in MARKET_FAMILY_SPECS:
+            for table_name in family_spec.table_names:
+                spec, predecessor_reference = self._family_table_reference(
+                    predecessor_root,
+                    family_spec.family_id,
+                    table_name,
                 )
-            )
+                rows = _table_rows(normalized, table_name)
+                table_references[table_name] = (
+                    self._materialize_table(spec, rows, new_calendar)
+                    if spec.session_field is None
+                    else self._materialize_refresh_table(
+                        spec,
+                        predecessor_reference,
+                        replacement_rows=rows,
+                        replace_from_session=replace_from_session,
+                        rewrite_start_session=rewrite_start_session,
+                        new_calendar=new_calendar,
+                    )
+                )
 
+        family_references = [
+            self._materialize_market_family(
+                family_spec,
+                table_references=table_references,
+                canonical=normalized,
+                calendar=new_calendar,
+            )
+            for family_spec in MARKET_FAMILY_SPECS
+        ]
         field_availability = tuple(
             sorted(str(row["field_id"]) for row in normalized["field_catalog"])
         )
-        coverage = {
-            "start": new_calendar[0],
-            "end": new_calendar[-1],
-            "session_count": len(new_calendar),
-        }
         identity = {
-            "schema_contract": "canonical-eod",
-            "dataset_coverage": coverage,
+            "schema_contract": "canonical-research",
             "data_through_session": new_calendar[-1],
+            "research_sessions": list(new_calendar),
             "field_availability": list(field_availability),
-            "tables": table_entries,
+            "families": family_references,
         }
         data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
         preparation = _preparation(prepared_at, source_name, source_lineage)
         root_manifest = {
-            "format": _GENERATION_FORMAT,
+            "format": _FAMILY_GENERATION_FORMAT,
             "version": _MANIFEST_VERSION,
             "data_identity": data_identity,
             **identity,
@@ -468,33 +466,63 @@ class MountedGenerationStore:
         root_bytes = _bounded_manifest_bytes(root_manifest)
         root_sha256 = hashlib.sha256(root_bytes).hexdigest()
         self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
-        return MountedGenerationDescriptor(
-            manifest_sha256=root_sha256,
-            data_identity=data_identity,
-            dataset_coverage=coverage,
-            data_through_session=new_calendar[-1],
-            field_availability=field_availability,
-            preparation=preparation,
+        return _family_generation_descriptor_from_root(root_sha256, root_manifest)
+
+    def _family_table_reference(
+        self,
+        root: Mapping[str, object],
+        family_id: str,
+        table_name: str,
+    ) -> tuple[_TableSpec, Mapping[str, object]]:
+        references = root["families"]
+        assert isinstance(references, list)
+        family_index = next(
+            (
+                index
+                for index, spec in enumerate(MARKET_FAMILY_SPECS)
+                if spec.family_id == family_id
+            ),
+            None,
         )
+        if family_index is None:
+            raise GenerationStoreError("Dataset Family is unavailable")
+        reference = references[family_index]
+        if not isinstance(reference, Mapping):
+            raise GenerationStoreError("Dataset Family reference is incompatible")
+        family = self._read_family_manifest(MARKET_FAMILY_SPECS[family_index], reference)
+        table_references = family["tables"]
+        assert isinstance(table_references, list)
+        table_index = MARKET_FAMILY_SPECS[family_index].table_names.index(table_name)
+        table_reference = table_references[table_index]
+        if not isinstance(table_reference, Mapping):
+            raise GenerationStoreError("Dataset Family table reference is incompatible")
+        return _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[table_name], table_reference
 
     def referenced_files(self, manifest_sha256: str) -> frozenset[GenerationFileRef]:
-        self.inspect_generation(manifest_sha256)
-        root = self._read_manifest(manifest_sha256)
+        self.inspect_root(manifest_sha256)
+        root = self._read_family_generation_root(manifest_sha256)
         references = {GenerationFileRef("manifest", manifest_sha256)}
-        tables = root["tables"]
-        assert isinstance(tables, list)
-        for table in tables:
-            assert isinstance(table, Mapping)
-            table_sha256 = str(table["manifest_sha256"])
-            references.add(GenerationFileRef("manifest", table_sha256))
-            table_manifest = self._read_manifest(table_sha256)
-            objects = table_manifest["objects"]
-            assert isinstance(objects, list)
-            references.update(
-                GenerationFileRef("object", str(object_ref["sha256"]))
-                for object_ref in objects
-                if isinstance(object_ref, Mapping)
-            )
+        families = root["families"]
+        assert isinstance(families, list)
+        for family in families:
+            assert isinstance(family, Mapping)
+            family_sha256 = str(family["manifest_sha256"])
+            references.add(GenerationFileRef("manifest", family_sha256))
+            family_manifest = self._read_manifest(family_sha256)
+            tables = family_manifest["tables"]
+            assert isinstance(tables, list)
+            for table in tables:
+                assert isinstance(table, Mapping)
+                table_sha256 = str(table["manifest_sha256"])
+                references.add(GenerationFileRef("manifest", table_sha256))
+                table_manifest = self._read_manifest(table_sha256)
+                objects = table_manifest["objects"]
+                assert isinstance(objects, list)
+                references.update(
+                    GenerationFileRef("object", str(object_ref["sha256"]))
+                    for object_ref in objects
+                    if isinstance(object_ref, Mapping)
+                )
         return frozenset(references)
 
     def inventory(self) -> frozenset[GenerationFileRef]:
@@ -520,43 +548,10 @@ class MountedGenerationStore:
         except AddressedFileError as error:
             raise GenerationStoreError("Generation file deletion failed or is unsafe") from error
 
-    def _read_generation_manifest(self, manifest_sha256: str) -> dict[str, object]:
-        root = self._read_manifest(manifest_sha256)
-        if root.get("format") != _GENERATION_FORMAT or root.get("version") != _MANIFEST_VERSION:
-            raise GenerationStoreError("Generation manifest is incompatible")
-        if set(root) != {
-            "format",
-            "version",
-            "data_identity",
-            "schema_contract",
-            "dataset_coverage",
-            "data_through_session",
-            "field_availability",
-            "tables",
-            "preparation",
-        }:
-            raise GenerationStoreError("Generation manifest schema is incompatible")
-        tables = root["tables"]
-        if not isinstance(tables, list) or [
-            entry.get("name") for entry in tables if isinstance(entry, Mapping)
-        ] != [spec.name for spec in _TABLE_SPECS]:
-            raise GenerationStoreError("Generation table manifest set is incompatible")
-        identity = {
-            "schema_contract": root["schema_contract"],
-            "dataset_coverage": root["dataset_coverage"],
-            "data_through_session": root["data_through_session"],
-            "field_availability": root["field_availability"],
-            "tables": tables,
-        }
-        if root["data_identity"] != hashlib.sha256(canonical_json_bytes(identity)).hexdigest():
-            raise GenerationStoreError("Generation data identity is invalid")
-        _descriptor_from_root(manifest_sha256, root)
-        return root
-
-    def _read_market_candidate_root(self, manifest_sha256: str) -> dict[str, object]:
+    def _read_family_generation_root(self, manifest_sha256: str) -> dict[str, object]:
         root = self._read_manifest(manifest_sha256)
         if (
-            root.get("format") != _FAMILY_GENERATION_CANDIDATE_FORMAT
+            root.get("format") != _FAMILY_GENERATION_FORMAT
             or root.get("version") != _MANIFEST_VERSION
         ):
             raise GenerationStoreError("Family Generation candidate is incompatible")
@@ -566,6 +561,7 @@ class MountedGenerationStore:
             "data_identity",
             "schema_contract",
             "data_through_session",
+            "research_sessions",
             "field_availability",
             "families",
             "preparation",
@@ -579,6 +575,7 @@ class MountedGenerationStore:
         identity = {
             "schema_contract": root["schema_contract"],
             "data_through_session": root["data_through_session"],
+            "research_sessions": root["research_sessions"],
             "field_availability": root["field_availability"],
             "families": families,
         }
@@ -717,6 +714,127 @@ class MountedGenerationStore:
             return canonicalize_parquet_rows(rows, spec.contract)
         except ParquetContractError as error:
             raise GenerationStoreError("Generation refresh window is incompatible") from error
+
+    def _open_table_sessions(
+        self,
+        spec: _TableSpec,
+        reference: Mapping[str, object],
+        *,
+        selected_sessions: set[str],
+        columns: set[str] | None = None,
+        instrument_ids: frozenset[str] | None = None,
+    ) -> list[dict[str, object]]:
+        if spec.session_field is None:
+            raise ValueError("Selected-session read requires a session table")
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
+        first_session = min(selected_sessions)
+        last_session = max(selected_sessions)
+        rows: list[dict[str, object]] = []
+        for ordinal, object_ref in enumerate(objects):
+            _validate_object_reference(object_ref, ordinal)
+            assert isinstance(object_ref, Mapping)
+            first_key = object_ref["first_sort_key"]
+            last_key = object_ref["last_sort_key"]
+            if first_key is None or last_key is None:
+                continue
+            if not isinstance(first_key, list) or not isinstance(last_key, list):
+                raise GenerationStoreError("Generation table object boundary is invalid")
+            if str(last_key[0]) < first_session or str(first_key[0]) > last_session:
+                continue
+            partition = self._open_partition_projection(
+                spec,
+                object_ref,
+                ordinal,
+                columns=columns,
+                instrument_ids=instrument_ids,
+            )
+            rows.extend(
+                row
+                for row in partition
+                if str(row[spec.session_field]) in selected_sessions
+                and (instrument_ids is None or str(row.get("instrument_id", "")) in instrument_ids)
+            )
+        if columns is not None:
+            return sorted(rows, key=lambda row: tuple(row[key] for key in spec.contract.sort_keys))
+        try:
+            return canonicalize_parquet_rows(rows, spec.contract)
+        except ParquetContractError as error:
+            raise GenerationStoreError("Market Series rows are incompatible") from error
+
+    def _open_table_instruments(
+        self,
+        spec: _TableSpec,
+        reference: Mapping[str, object],
+        *,
+        instrument_ids: frozenset[str],
+        columns: set[str],
+    ) -> list[dict[str, object]]:
+        if not spec.contract.sort_keys or spec.contract.sort_keys[0] != "instrument_id":
+            raise GenerationStoreError("Instrument projection contract is invalid")
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
+        rows: list[dict[str, object]] = []
+        for ordinal, object_ref in enumerate(objects):
+            _validate_object_reference(object_ref, ordinal)
+            assert isinstance(object_ref, Mapping)
+            first_key = object_ref["first_sort_key"]
+            last_key = object_ref["last_sort_key"]
+            if first_key is None or last_key is None:
+                continue
+            if not isinstance(first_key, list) or not isinstance(last_key, list):
+                raise GenerationStoreError("Generation table object boundary is invalid")
+            first_instrument = str(first_key[0])
+            last_instrument = str(last_key[0])
+            if not any(
+                first_instrument <= instrument_id <= last_instrument
+                for instrument_id in instrument_ids
+            ):
+                continue
+            rows.extend(
+                self._open_partition_projection(
+                    spec,
+                    object_ref,
+                    ordinal,
+                    columns=columns,
+                    instrument_ids=instrument_ids,
+                )
+            )
+        return sorted(rows, key=lambda row: tuple(row[key] for key in spec.contract.sort_keys))
+
+    def _open_partition_projection(
+        self,
+        spec: _TableSpec,
+        object_ref: object,
+        ordinal: int,
+        *,
+        columns: set[str] | None,
+        instrument_ids: frozenset[str] | None,
+    ) -> list[dict[str, object]]:
+        _validate_object_reference(object_ref, ordinal)
+        assert isinstance(object_ref, Mapping)
+        sha256 = str(object_ref["sha256"])
+        content = self._read_addressed(
+            self._object_path(sha256),
+            sha256,
+            expected_byte_count=_required_byte_count(object_ref["byte_count"], "Generation object"),
+            max_byte_count=GENERATION_OBJECT_MAX_BYTES,
+        )
+        try:
+            table = pq.read_table(
+                pa.BufferReader(content),
+                columns=None if columns is None else sorted(columns),
+                filters=(
+                    None
+                    if instrument_ids is None
+                    else [("instrument_id", "in", sorted(instrument_ids))]
+                ),
+            )
+        except (ArrowException, TypeError, ValueError) as error:
+            raise GenerationStoreError("Generation object projection is incompatible") from error
+        return table.to_pylist()
 
     def _materialize_refresh_table(
         self,
@@ -1026,49 +1144,6 @@ def _inventory_sha256(root: Path, directory: str, suffix: str) -> tuple[str, ...
     return tuple(sha256s)
 
 
-def _descriptor_from_root(
-    manifest_sha256: str,
-    root: Mapping[str, object],
-) -> MountedGenerationDescriptor:
-    _require_sha256(manifest_sha256)
-    data_identity = str(root["data_identity"])
-    _require_sha256(data_identity)
-    coverage = root["dataset_coverage"]
-    fields = root["field_availability"]
-    preparation = root["preparation"]
-    if (
-        not isinstance(coverage, Mapping)
-        or set(coverage) != {"start", "end", "session_count"}
-        or not isinstance(coverage["session_count"], int)
-        or isinstance(coverage["session_count"], bool)
-        or int(coverage["session_count"]) <= 0
-        or not isinstance(fields, list)
-        or any(not isinstance(value, str) for value in fields)
-        or not isinstance(preparation, Mapping)
-    ):
-        raise GenerationStoreError("Generation root projection is incompatible")
-    try:
-        start = date.fromisoformat(str(coverage["start"]))
-        end = date.fromisoformat(str(coverage["end"]))
-        prepared_at = datetime.fromisoformat(str(preparation["prepared_at"]))
-    except (KeyError, ValueError) as error:
-        raise GenerationStoreError("Generation root projection is incompatible") from error
-    if (
-        start > end
-        or str(root["data_through_session"]) != end.isoformat()
-        or prepared_at.tzinfo is None
-    ):
-        raise GenerationStoreError("Generation root projection is incompatible")
-    return MountedGenerationDescriptor(
-        manifest_sha256=manifest_sha256,
-        data_identity=data_identity,
-        dataset_coverage=dict(coverage),
-        data_through_session=end.isoformat(),
-        field_availability=tuple(str(value) for value in fields),
-        preparation={str(key): str(value) for key, value in preparation.items()},
-    )
-
-
 def _family_generation_descriptor_from_root(
     manifest_sha256: str,
     root: Mapping[str, object],
@@ -1082,6 +1157,21 @@ def _family_generation_descriptor_from_root(
         data_through_session = date.fromisoformat(str(root["data_through_session"])).isoformat()
     except (KeyError, TypeError, ValueError) as error:
         raise GenerationStoreError("Family Generation data-through session is invalid") from error
+    research_sessions = root.get("research_sessions")
+    if (
+        not isinstance(research_sessions, list)
+        or not research_sessions
+        or not all(isinstance(value, str) for value in research_sessions)
+        or research_sessions != sorted(set(research_sessions))
+        or research_sessions[-1] != data_through_session
+    ):
+        raise GenerationStoreError("Family Generation Research Sessions are invalid")
+    try:
+        normalized_sessions = tuple(
+            date.fromisoformat(value).isoformat() for value in research_sessions
+        )
+    except ValueError as error:
+        raise GenerationStoreError("Family Generation Research Sessions are invalid") from error
     field_availability = root.get("field_availability")
     if (
         not isinstance(field_availability, list)
@@ -1114,11 +1204,19 @@ def _family_generation_descriptor_from_root(
         )
     except FamilyManifestError as error:
         raise GenerationStoreError(str(error)) from error
+    if families[0].dataset_coverage != {
+        "kind": "research-session-range",
+        "start": normalized_sessions[0],
+        "end": normalized_sessions[-1],
+        "session_count": len(normalized_sessions),
+    }:
+        raise GenerationStoreError("Family Generation Research Sessions are incompatible")
     return MountedFamilyGenerationDescriptor(
         manifest_sha256=manifest_sha256,
         data_identity=str(data_identity),
         schema_contract="canonical-research",
         data_through_session=data_through_session,
+        research_sessions=normalized_sessions,
         field_availability=tuple(field_availability),
         preparation=preparation,
         families=tuple(families),
@@ -1262,22 +1360,22 @@ def _validate_candidate_semantics(
             {
                 "session": position[0],
                 "instrument_id": position[1],
-                "open_raw": _decimal_text(row["open_raw"]),
-                "high_raw": _decimal_text(row["high_raw"]),
-                "low_raw": _decimal_text(row["low_raw"]),
-                "close_raw": _decimal_text(row["close_raw"]),
-                "pre_close_raw": _decimal_text(row["pre_close_reference_raw"]),
-                "change_raw": _decimal_text(row["price_change_raw"]),
+                "open_raw": _decimal_text(row["open_raw"], 4),
+                "high_raw": _decimal_text(row["high_raw"], 4),
+                "low_raw": _decimal_text(row["low_raw"], 4),
+                "close_raw": _decimal_text(row["close_raw"], 4),
+                "pre_close_raw": _decimal_text(row["pre_close_reference_raw"], 4),
+                "change_raw": _decimal_text(row["price_change_raw"], 4),
                 "pct_change_raw": _decimal_text(
-                    Decimal(str(row["pct_change_ratio"])) * Decimal(100)
+                    Decimal(str(row["pct_change_ratio"])) * Decimal(100), 6
                 ),
                 "volume_shares": str(row["volume_shares"]),
-                "turnover_cny": _decimal_text(row["turnover_amount_cny"]),
-                "adjustment_factor": _decimal_text(factor),
-                "open_adj": _decimal_text(row["open_adj"]),
-                "high_adj": _decimal_text(row["high_adj"]),
-                "low_adj": _decimal_text(row["low_adj"]),
-                "close_adj": _decimal_text(row["close_adj"]),
+                "turnover_cny": _decimal_text(row["turnover_amount_cny"], 2),
+                "adjustment_factor": _decimal_text(factor, 6),
+                "open_adj": _decimal_text(row["open_adj"], 8),
+                "high_adj": _decimal_text(row["high_adj"], 8),
+                "low_adj": _decimal_text(row["low_adj"], 8),
+                "close_adj": _decimal_text(row["close_adj"], 8),
                 "trading_state": str(state),
             }
         )
@@ -1303,6 +1401,7 @@ def _validate_candidate_projection(
     actual_fields = tuple(sorted(str(row["field_id"]) for row in field_catalog))
     if (
         descriptor.data_through_session != str(calendar[-1])
+        or descriptor.research_sessions != tuple(str(session) for session in calendar)
         or descriptor.field_availability != actual_fields
     ):
         raise GenerationStoreError("Family Generation root projection is incompatible")
@@ -1319,8 +1418,9 @@ def _validate_candidate_projection(
             raise GenerationStoreError("Dataset Family Coverage projection is incompatible")
 
 
-def _decimal_text(value: object) -> str:
-    return format(Decimal(str(value)), "f")
+def _decimal_text(value: object, scale: int) -> str:
+    quantum = Decimal(1).scaleb(-scale)
+    return format(Decimal(str(value)).quantize(quantum), "f")
 
 
 def _table_rows(canonical: Mapping[str, object], table: str) -> list[dict[str, object]]:
@@ -1491,36 +1591,6 @@ def _require_sha256(value: object) -> None:
         raise GenerationStoreError("Generation identity is incompatible")
 
 
-def _validate_root_projection(root: Mapping[str, object], canonical: Mapping[str, object]) -> None:
-    calendar = canonical["research_calendar"]
-    fields = canonical["field_catalog"]
-    assert isinstance(calendar, list)
-    assert isinstance(fields, list)
-    expected_coverage = {
-        "start": calendar[0],
-        "end": calendar[-1],
-        "session_count": len(calendar),
-    }
-    expected_fields = sorted(str(row["field_id"]) for row in fields)
-    preparation = root["preparation"]
-    if (
-        root["schema_contract"] != "canonical-eod"
-        or root["dataset_coverage"] != expected_coverage
-        or root["data_through_session"] != calendar[-1]
-        or root["field_availability"] != expected_fields
-        or not isinstance(preparation, Mapping)
-        or set(preparation) != {"prepared_at", "source_name", "source_lineage_sha256"}
-    ):
-        raise GenerationStoreError("Generation manifest projection is incompatible")
-    try:
-        prepared_at = datetime.fromisoformat(str(preparation["prepared_at"]))
-        _require_sha256(str(preparation["source_lineage_sha256"]))
-    except ValueError as error:
-        raise GenerationStoreError("Generation preparation metadata is incompatible") from error
-    if prepared_at.tzinfo is None or not str(preparation["source_name"]):
-        raise GenerationStoreError("Generation preparation metadata is incompatible")
-
-
 def _validate_generation(canonical: Mapping[str, object]) -> None:
     try:
         validate_canonical_generation(canonical)
@@ -1541,7 +1611,6 @@ __all__ = (
     "GenerationFileRef",
     "MountedDatasetFamilyDescriptor",
     "MountedFamilyGenerationDescriptor",
-    "MountedGeneration",
     "MountedGenerationAdmission",
     "MountedGenerationStore",
 )

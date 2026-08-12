@@ -125,6 +125,7 @@ class MountedFamilyGenerationDescriptor:
     data_identity: str
     schema_contract: str
     data_through_session: str
+    research_sessions: tuple[str, ...]
     field_availability: tuple[str, ...]
     preparation: dict[str, str]
     families: tuple[MountedDatasetFamilyDescriptor, ...]

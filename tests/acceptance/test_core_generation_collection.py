@@ -76,15 +76,19 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
         assert ordinary_worker.returncode == 0, ordinary_worker.stdout + ordinary_worker.stderr
         with TestClient(create_app(settings)) as ordinary_restart:
             assert ordinary_restart.get("/api/data").json()["readiness"] is True
-        assert MountedGenerationStore(tmp_path).open_generation(retired).manifest_sha256 == retired
+        assert (
+            MountedGenerationStore(tmp_path).validate_generation(retired).manifest_sha256 == retired
+        )
         outcome = _run_collection(settings, "collection-acceptance")
 
         assert outcome["status"] == "succeeded"
         assert int(outcome["deleted_file_count"]) > 0
         assert outcome["remaining_file_count"] == 0
         with pytest.raises(GenerationStoreError, match="missing"):
-            MountedGenerationStore(tmp_path).open_generation(retired)
-        assert MountedGenerationStore(tmp_path).open_generation(current).manifest_sha256 == current
+            MountedGenerationStore(tmp_path).validate_generation(retired)
+        assert (
+            MountedGenerationStore(tmp_path).validate_generation(current).manifest_sha256 == current
+        )
         assert client.get(f"/api/research-runs/{run_id}").json() == before_run
         assert client.get(f"/api/daily-tracks/{track_id}").json() == before_track
         assert client.post("/api/data/collect").status_code == 404

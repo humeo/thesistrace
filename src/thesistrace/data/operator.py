@@ -14,7 +14,7 @@ from threading import Event, Thread
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.canonical_mapping import liquidity_universes
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
-from thesistrace.data.head_store import DatasetHead, DatasetHeadConflict
+from thesistrace.data.head_store import DatasetHeadConflict, DatasetHeadPointer
 from thesistrace.data.lifecycle import (
     DatasetLifecycle,
     collection_is_active,
@@ -148,7 +148,7 @@ class DataOperator:
         candidate_live = False
         try:
             with self._maintain_claim(key, owner_token) as heartbeat:
-                current_head = self._lifecycle.current_head()
+                current_head = self._lifecycle.current_pointer()
                 prior_manifest = (
                     None if claim.row is None else claim.row.get("generation_manifest_sha256")
                 )
@@ -410,7 +410,7 @@ class DataOperator:
             raise DataOperatorError(str(row["failure_code"]))
         manifest = row["generation_manifest_sha256"]
         if row["status"] == "running" and manifest:
-            head = self._lifecycle.current_head()
+            head = self._lifecycle.current_pointer()
             if head is not None and head.generation_manifest_sha256 == manifest:
                 outcome = _outcome(head)
                 self._lifecycle.release_candidate(
@@ -531,7 +531,7 @@ def _operation_id(idempotency_key: str, owner_token: str) -> str:
     return f"bootstrap:{hashlib.sha256(identity).hexdigest()[:32]}"
 
 
-def _outcome(head: DatasetHead) -> BootstrapOutcome:
+def _outcome(head: DatasetHeadPointer) -> BootstrapOutcome:
     return BootstrapOutcome(
         status="succeeded",
         generation_manifest_sha256=str(head.generation_manifest_sha256),

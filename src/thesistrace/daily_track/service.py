@@ -52,9 +52,11 @@ from thesistrace.research_kernel import (
     first_divergence,
 )
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
-from thesistrace.research_kernel.canonical_state import (
-    canonical_sessions,
-    slice_canonical_sessions,
+from thesistrace.research_series import (
+    AlignedResearchData,
+    research_data_identity,
+    research_sessions,
+    slice_research_sessions,
 )
 
 logger = logging.getLogger(__name__)
@@ -365,9 +367,7 @@ class DailyTrackService:
                 (track_id,),
             ).fetchone()
             if session_progression is None:
-                raise DailyTrackRetryUnavailable(
-                    "DailyTrack has no blocked session progression"
-                )
+                raise DailyTrackRetryUnavailable("DailyTrack has no blocked session progression")
             progression_id = str(session_progression["id"])
             blocked = transaction.execute(
                 """
@@ -492,9 +492,7 @@ class DailyTrackService:
                     (track_id,),
                 )
                 if current_attempts and self._dataset_lifecycle is None:
-                    raise RuntimeError(
-                        "current-data DailyTrack stop is not configured"
-                    )
+                    raise RuntimeError("current-data DailyTrack stop is not configured")
                 for attempt in current_attempts:
                     assert self._dataset_lifecycle is not None
                     self._dataset_lifecycle.release_pin_in_transaction(
@@ -581,18 +579,16 @@ class DailyTrackService:
             seed_result = self._read_result_bundle(
                 self._publication.read(
                     PublishedRef(
-                        manifest_sha256=(
-                            origin.verified_result.result_manifest_sha256
-                        ),
+                        manifest_sha256=(origin.verified_result.result_manifest_sha256),
                         kind=origin.verified_result.kind,
                         provenance=_seed_result_provenance(origin),
                     )
                 )
             )
-            head = self._dataset_lifecycle.current_head()
-            if head is None:
+            admission = self._dataset_lifecycle.current_admission()
+            if admission is None:
                 raise RuntimeError("Dataset Head is not ready")
-            calendar = canonical_sessions(head.generation.canonical, "Dataset Head")
+            calendar = list(admission.research_calendar)
             current_session = snapshot.track.current_checkpoint_session.isoformat()
             current_index = calendar.index(current_session)
             factor_value = _mapping_value(
@@ -611,9 +607,7 @@ class DailyTrackService:
                 str(item["session"]): dict(item) for item in seed_observations
             }
             projected_strategy_summary: Mapping[str, object] = {
-                name: value
-                for name, value in strategy_summary.items()
-                if name != "benchmark"
+                name: value for name, value in strategy_summary.items() if name != "benchmark"
             }
             for checkpoint in snapshot.checkpoints[1:]:
                 value = _read_publication_json(
@@ -645,9 +639,7 @@ class DailyTrackService:
                     strategy_state.get("retained_delta"),
                     "Checkpoint Strategy observations",
                 ):
-                    observations_by_session[str(observation["session"])] = dict(
-                        observation
-                    )
+                    observations_by_session[str(observation["session"])] = dict(observation)
             factor = _public_factor(factor_value)
             universe = _origin_universe(origin)
             recent_strategy_sessions = sorted(observations_by_session)[-504:]
@@ -659,9 +651,7 @@ class DailyTrackService:
                         "seed_run_id": origin.seed_run_id,
                         "definition_id": origin.definition_id,
                         "definition_revision": origin.definition_revision,
-                        "result_checksum_sha256": (
-                            origin.verified_result.result_checksum_sha256
-                        ),
+                        "result_checksum_sha256": (origin.verified_result.result_checksum_sha256),
                         "strategy_session": origin.initial_strategy_state.session,
                         "terminal_account": {
                             name: getattr(origin.initial_strategy_state, name)
@@ -680,7 +670,7 @@ class DailyTrackService:
                         },
                     },
                     "strategy_session": current_session,
-                    "data_through_session": head.data_through_session,
+                    "data_through_session": admission.generation.data_through_session,
                     "lag_sessions": len(calendar) - current_index - 1,
                     "blocked_reason": row["blocked_reason"],
                     "factor": factor,
@@ -691,8 +681,7 @@ class DailyTrackService:
                             "methodology": "selected_universe_equal_weight",
                         },
                         "observations": [
-                            observations_by_session[session]
-                            for session in recent_strategy_sessions
+                            observations_by_session[session] for session in recent_strategy_sessions
                         ],
                     },
                 }
@@ -726,11 +715,21 @@ class DailyTrackService:
             raise KeyError(track_id)
         origin = TrackingOrigin.model_validate(row["origin"])
         snapshot = self._session_coordinates.load(track_id)
-        head = self._dataset_lifecycle.current_head()
+        head = self._dataset_lifecycle.current_admission()
         if head is None:
             raise RuntimeError("Dataset Head is not ready")
-        canonical = head.generation.canonical
-        calendar = canonical_sessions(canonical, "Dataset Head")
+        calendar = list(head.research_calendar)
+        generation = self._generation_store.read_market_slice(
+            head.generation.manifest_sha256,
+            sessions=calendar,
+            universe_name=_origin_universe(origin),
+            neutralization=_origin_neutralization(origin),
+            field_bindings={
+                str(key): str(value)
+                for key, value in origin.immutable_input["field_bindings"].items()
+            },
+        )
+        research_data = generation.research_data
         checkpoints = snapshot.checkpoints
         if not checkpoints or checkpoints[0].progression_id is not None:
             raise DailyTrackEquivalenceMismatch(
@@ -756,9 +755,7 @@ class DailyTrackService:
         )
         origin_session = snapshot.track.origin_session.isoformat()
         if origin_session not in calendar:
-            raise DailyTrackEquivalenceMismatch(
-                "EQUIVALENCE_MISMATCH at $.tracking_origin.session"
-            )
+            raise DailyTrackEquivalenceMismatch("EQUIVALENCE_MISMATCH at $.tracking_origin.session")
 
         progressions = {
             progression.id: progression
@@ -776,9 +773,7 @@ class DailyTrackService:
                 raise DailyTrackEquivalenceMismatch(
                     f"EQUIVALENCE_MISMATCH at {coordinate}.progression"
                 )
-            target_sessions = tuple(
-                session.isoformat() for session in progression.target_sessions
-            )
+            target_sessions = tuple(session.isoformat() for session in progression.target_sessions)
             expected_start = calendar.index(predecessor_session) + 1
             expected_end = calendar.index(checkpoint.boundary_session.isoformat()) + 1
             if tuple(calendar[expected_start:expected_end]) != target_sessions:
@@ -787,10 +782,8 @@ class DailyTrackService:
                 )
             if (
                 checkpoint.predecessor_manifest_sha256 != predecessor_manifest
-                or progression.predecessor_checkpoint_manifest_sha256
-                != predecessor_manifest
-                or progression.checkpoint_manifest_sha256
-                != checkpoint.manifest_sha256
+                or progression.predecessor_checkpoint_manifest_sha256 != predecessor_manifest
+                or progression.checkpoint_manifest_sha256 != checkpoint.manifest_sha256
             ):
                 raise DailyTrackEquivalenceMismatch(
                     f"EQUIVALENCE_MISMATCH at {coordinate}.predecessor"
@@ -807,8 +800,8 @@ class DailyTrackService:
             boundary_index = calendar.index(checkpoint.boundary_session.isoformat())
             state = restore_tracking_checkpoint(
                 value,
-                canonical=slice_canonical_sessions(
-                    canonical,
+                research_data=slice_research_sessions(
+                    research_data,
                     calendar[: boundary_index + 1],
                 ),
             )
@@ -817,9 +810,7 @@ class DailyTrackService:
                 str(checkpoint.terminal_strategy_state["session"]),
                 f"{coordinate}.terminal_strategy_state.session",
             )
-            evidence_sha256s.append(
-                hashlib.sha256(equivalence_bytes(value)).hexdigest()
-            )
+            evidence_sha256s.append(hashlib.sha256(equivalence_bytes(value)).hexdigest())
             session_sequence.extend(target_sessions)
             predecessor_manifest = checkpoint.manifest_sha256
             predecessor_session = checkpoint.boundary_session.isoformat()
@@ -830,9 +821,7 @@ class DailyTrackService:
                 "EQUIVALENCE_MISMATCH at $.tracking_head.checkpoint"
             )
         if predecessor_session != head_session:
-            raise DailyTrackEquivalenceMismatch(
-                "EQUIVALENCE_MISMATCH at $.tracking_head.session"
-            )
+            raise DailyTrackEquivalenceMismatch("EQUIVALENCE_MISMATCH at $.tracking_head.session")
         final_evidence = (
             evidence_sha256s[-1]
             if evidence_sha256s
@@ -891,9 +880,7 @@ class DailyTrackService:
                     lease_seconds=self._lease_seconds,
                 )
                 pin = pinned.pin
-                admission = self._generation_store.open_admission(
-                    pinned.descriptor.manifest_sha256
-                )
+                admission = self._generation_store.open_admission(pinned.descriptor.manifest_sha256)
                 if admission.generation != pinned.descriptor:
                     raise RuntimeError("Pinned Data Generation metadata changed")
                 generation = pinned.descriptor
@@ -902,9 +889,7 @@ class DailyTrackService:
                 try:
                     current_index = calendar.index(current_session)
                 except ValueError as error:
-                    raise RuntimeError(
-                        "DailyTrack Checkpoint is outside current data"
-                    ) from error
+                    raise RuntimeError("DailyTrack Checkpoint is outside current data") from error
                 target_sessions = tuple(calendar[current_index + 1 :])
                 if not target_sessions:
                     self._dataset_lifecycle.release_pin_in_transaction(
@@ -941,22 +926,14 @@ class DailyTrackService:
                         transaction,
                         progression_id=progression_id,
                         track_id=str(row["id"]),
-                        expected_checkpoint_manifest_sha256=str(
-                            row["manifest_sha256"]
-                        ),
-                        generation_sessions=tuple(
-                            _session_date(value) for value in calendar
-                        ),
-                        target_sessions=tuple(
-                            _session_date(value) for value in target_sessions
-                        ),
+                        expected_checkpoint_manifest_sha256=str(row["manifest_sha256"]),
+                        generation_sessions=tuple(_session_date(value) for value in calendar),
+                        target_sessions=tuple(_session_date(value) for value in target_sessions),
                         data_generation_id=generation.manifest_sha256,
                         provenance=progression_provenance,
                     )
                 else:
-                    if existing["predecessor_checkpoint_manifest_sha256"] != row[
-                        "manifest_sha256"
-                    ]:
+                    if existing["predecessor_checkpoint_manifest_sha256"] != row["manifest_sha256"]:
                         raise DailyTrackFenced
                     progression_id = str(existing["id"])
                     ordinal = int(existing["latest_ordinal"]) + 1
@@ -1172,14 +1149,28 @@ class DailyTrackService:
     ) -> tuple[PreparedPublication, dict[str, object], KernelState]:
         assert self._publication is not None
         assert self._generation_store is not None
-        generation = self._generation_store.open_generation(claim.data_generation_id)
-        if generation.data_through_session != claim.data_through_session:
+        admission = self._generation_store.open_admission(claim.data_generation_id)
+        if admission.generation.data_through_session != claim.data_through_session:
             raise RuntimeError("Pinned Data Generation metadata changed")
-        canonical = generation.canonical
-        calendar = canonical_sessions(canonical, "Data Generation")
+        full_calendar = list(admission.research_calendar)
+        current_full_index = full_calendar.index(claim.current_session)
+        target_end_index = full_calendar.index(claim.target_sessions[-1])
+        selected_sessions = full_calendar[max(0, current_full_index - 503) : target_end_index + 1]
+        generation = self._generation_store.read_market_slice(
+            claim.data_generation_id,
+            sessions=selected_sessions,
+            universe_name=_origin_universe(claim.origin),
+            neutralization=_origin_neutralization(claim.origin),
+            field_bindings={
+                str(key): str(value)
+                for key, value in claim.origin.immutable_input["field_bindings"].items()
+            },
+        )
+        research_data = generation.research_data
+        calendar = research_sessions(research_data)
         current_index = calendar.index(claim.current_session)
-        prior_canonical = slice_canonical_sessions(
-            canonical,
+        prior_research_data = slice_research_sessions(
+            research_data,
             calendar[: current_index + 1],
         )
         predecessor = _read_publication_json(
@@ -1191,26 +1182,24 @@ class DailyTrackService:
             ),
             payload_name="checkpoint",
         )
-        if predecessor.get("schema_version") == (
-            "daily-track-activation-checkpoint-v1"
-        ):
+        if predecessor.get("schema_version") == ("daily-track-activation-checkpoint-v1"):
             terminal = _mapping_value(
                 predecessor.get("terminal_strategy_state"),
                 "Activation Terminal Strategy State",
             )
-            prior = restore_tracking_origin(claim.origin, terminal, prior_canonical)
+            prior = restore_tracking_origin(claim.origin, terminal, prior_research_data)
         else:
-            prior = _state_from_payload(predecessor, prior_canonical)
+            prior = _state_from_payload(predecessor, prior_research_data)
         continuation = self._current_continuation(
             claim,
             predecessor,
             prior,
-            prior_canonical,
+            prior_research_data,
         )
         state = self._advance_kernel(
             AdvanceInput(
                 prior_state=prior,
-                target_canonical_data=canonical,
+                target_research_data=research_data,
                 appended_sessions=list(claim.target_sessions),
                 continuation=continuation,
                 calculation_scope="forward_tracking",
@@ -1249,15 +1238,16 @@ class DailyTrackService:
         claim: _SessionProgressionClaim,
         predecessor: Mapping[str, object],
         prior: KernelState,
-        prior_canonical: dict[str, object],
+        prior_research_data: AlignedResearchData,
     ) -> Mapping[str, object]:
-        if self._working_cache is not None and predecessor.get(
-            "schema_version"
-        ) != "daily-track-activation-checkpoint-v1":
+        if (
+            self._working_cache is not None
+            and predecessor.get("schema_version") != "daily-track-activation-checkpoint-v1"
+        ):
             checkpoint = KernelStateCheckpoint.model_validate(predecessor)
             cached = self._working_cache.load(
                 track_id=claim.track_id,
-                basis_sha256=_continuation_basis_sha256(prior, prior_canonical),
+                basis_sha256=_continuation_basis_sha256(prior, prior_research_data),
                 head_manifest_sha256=claim.predecessor_manifest_sha256,
                 fence=claim.fence - 1,
                 continuation_sha256=checkpoint.continuation_sha256,
@@ -1268,14 +1258,11 @@ class DailyTrackService:
                 return cached
         elif self._working_cache is not None:
             self._working_cache.delete(claim.track_id)
-        rebuild_sessions = canonical_sessions(
-            prior_canonical,
-            "Tracking prior data",
-        )[-504:]
+        rebuild_sessions = research_sessions(prior_research_data)[-504:]
         return advance_continuation(
-            run_input=prior.run_input_with_canonical(prior_canonical),
+            run_input=prior.run_input_with_research_data(prior_research_data),
             prior_continuation=empty_continuation(),
-            target_canonical=prior_canonical,
+            target_research_data=prior_research_data,
             appended_sessions=rebuild_sessions,
         )
 
@@ -1306,9 +1293,7 @@ class DailyTrackService:
             if track != {
                 "status": "active",
                 "execution_fence": claim.fence,
-                "current_checkpoint_manifest_sha256": (
-                    claim.predecessor_manifest_sha256
-                ),
+                "current_checkpoint_manifest_sha256": (claim.predecessor_manifest_sha256),
             }:
                 raise DailyTrackFenced
             published = self._publication.record(transaction, prepared)
@@ -1341,7 +1326,7 @@ class DailyTrackService:
                 track_id=claim.track_id,
                 basis_sha256=_continuation_basis_sha256(
                     state,
-                    state.canonical_snapshot(),
+                    state.research_data_snapshot(),
                 ),
                 head_manifest_sha256=published.manifest_sha256,
                 fence=claim.fence,
@@ -1541,6 +1526,18 @@ def _origin_universe(origin: TrackingOrigin) -> str:
     return universe
 
 
+def _origin_neutralization(origin: TrackingOrigin) -> str:
+    definition = _mapping_value(
+        origin.immutable_input.get("definition"),
+        "Tracking Definition",
+    )
+    content = _mapping_value(definition.get("content"), "Tracking Definition content")
+    neutralization = content.get("neutralization")
+    if neutralization not in {"none", "industry"}:
+        raise RuntimeError("Tracking Neutralization is invalid")
+    return str(neutralization)
+
+
 def _public_factor(value: Mapping[str, object]) -> dict[str, object]:
     horizons = _mapping_value(value.get("horizons"), "Factor horizons")
     if set(horizons) != {"1", "5", "20"}:
@@ -1599,17 +1596,17 @@ def _assert_equivalent(actual: object, expected: object, coordinate: str) -> Non
 
 def _continuation_basis_sha256(
     state: KernelState,
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
 ) -> str:
-    run_input = state.run_input_with_canonical(canonical)
+    run_input = state.run_input_with_research_data(research_data)
     expression = validate_normalized_alpha(
         run_input.alpha_expression_snapshot(),
         field_bindings=run_input.field_bindings_snapshot(),
     )
-    sessions = canonical_sessions(canonical, "Working Cache canonical basis")
+    sessions = research_sessions(research_data)
     dependency_sessions = sessions[-(504 + expression.effective_lookback) :]
-    dependency = slice_canonical_sessions(canonical, dependency_sessions)
-    return hashlib.sha256(canonical_json_bytes(dependency)).hexdigest()
+    dependency = slice_research_sessions(research_data, dependency_sessions)
+    return hashlib.sha256(canonical_json_bytes(research_data_identity(dependency))).hexdigest()
 
 
 def _state_payload(
@@ -1627,10 +1624,10 @@ def _state_payload(
 
 def _state_from_payload(
     value: Mapping[str, object],
-    canonical: dict[str, object],
+    research_data: AlignedResearchData,
 ) -> KernelState:
     checkpoint = KernelStateCheckpoint.model_validate(value)
     return restore_tracking_checkpoint(
         checkpoint.model_dump(mode="json"),
-        canonical=canonical,
+        research_data=research_data,
     )

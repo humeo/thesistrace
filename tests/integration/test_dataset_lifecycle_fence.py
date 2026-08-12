@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from canonical_store import open_complete_refresh_basis
 from psycopg.errors import CheckViolation, RaiseException
 
 from thesistrace._postgres import PostgresDatabase
@@ -38,7 +39,7 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
         )
         lifecycle = DatasetLifecycle(database, tmp_path)
 
-        assert lifecycle.current_head() is None
+        assert lifecycle.current_pointer() is None
         lifecycle.protect_candidate(
             operation_id="bootstrap-first",
             generation_manifest_sha256=first,
@@ -90,7 +91,7 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
             "generation_manifest_sha256": second,
             "status": "released",
         }
-        assert generations.open_generation(first).canonical == build_minimal_canonical_fixture(
+        assert open_complete_refresh_basis(generations, first) == build_minimal_canonical_fixture(
             price_offset=1
         )
 
@@ -137,13 +138,14 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
 
         assert selected in {second, third}
         selected_offset = 2 if selected == second else 3
-        assert generations.open_generation(selected).canonical == build_minimal_canonical_fixture(
-            price_offset=selected_offset
-        )
-        assert lifecycle.current_head().generation_manifest_sha256 == third
-        assert lifecycle.current_head().generation.canonical == build_minimal_canonical_fixture(
-            price_offset=3
-        )
+        assert open_complete_refresh_basis(
+            generations, selected
+        ) == build_minimal_canonical_fixture(price_offset=selected_offset)
+        assert lifecycle.current_pointer().generation_manifest_sha256 == third
+        assert open_complete_refresh_basis(
+            generations,
+            lifecycle.current_pointer().generation_manifest_sha256,
+        ) == build_minimal_canonical_fixture(price_offset=3)
         assert {pin.owner_id for pin in lifecycle.active_pins()} == {
             "run-attempt-1",
             "track-attempt-1",
@@ -153,7 +155,7 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
         reopened_database.open()
         try:
             reopened = DatasetLifecycle(reopened_database, tmp_path)
-            assert reopened.current_head().generation_manifest_sha256 == third
+            assert reopened.current_pointer().generation_manifest_sha256 == third
             assert {pin.generation_manifest_sha256 for pin in reopened.active_pins()} == {
                 first,
                 selected,
@@ -206,7 +208,8 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
                     """
                 )
         assert (
-            DatasetLifecycle(database, tmp_path).current_head().generation_manifest_sha256 == fourth
+            DatasetLifecycle(database, tmp_path).current_pointer().generation_manifest_sha256
+            == fourth
         )
         assert _candidate_state(database, "refresh-fourth") == {
             "generation_manifest_sha256": fourth,
@@ -233,7 +236,7 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
                 operation_id="refresh-fifth",
             )
         monkeypatch.setattr(os, "rename", original_rename)
-        assert lifecycle.current_head().generation_manifest_sha256 == fourth
+        assert lifecycle.current_pointer().generation_manifest_sha256 == fourth
         assert not tuple(tmp_path.glob(".head-candidate-*"))
         assert _candidate_state(database, "refresh-fifth") == {
             "generation_manifest_sha256": fifth,

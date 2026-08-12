@@ -2,6 +2,7 @@ import math
 
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, PCT_CHANGE_20
+from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
@@ -11,20 +12,24 @@ from thesistrace.research_kernel.factor import (
     evaluate_factor,
     factor_day,
 )
+from thesistrace.research_series import (
+    AlignedResearchData,
+    ExecutionPrice,
+    InstrumentProfile,
+)
 
 
 def test_forward_labels_use_next_open_timing_and_explicit_period_limits() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=CLOSE_ADJUSTED,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     signal_sessions = [str(session) for session in canonical["research_calendar"]]
     labels = build_forward_labels(
-        canonical,
+        aligned_market_data(canonical),
         matrix,
         signal_sessions=signal_sessions,
     )
@@ -86,28 +91,6 @@ def test_factor_day_handles_small_samples_constants_ties_and_missing() -> None:
 
 def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
     sessions = [f"2026-07-0{day}" for day in range(1, 6)]
-    canonical = {
-        "research_calendar": sessions,
-        "instruments": [
-            {"instrument_id": "equity:X.SH", "listed_to": "2026-07-03"},
-            {"instrument_id": "equity:Y.SH", "listed_to": ""},
-        ],
-        "prices": [
-            {
-                "session": "2026-07-02",
-                "instrument_id": instrument_id,
-                "open_adj": "10",
-            }
-            for instrument_id in ("equity:X.SH", "equity:Y.SH")
-        ],
-        "trading_states": [
-            {
-                "session": "2026-07-03",
-                "instrument_id": "equity:Y.SH",
-                "state": "full_session_suspension",
-            }
-        ],
-    }
     matrix = {
         "checksum": "alpha",
         "sessions": [
@@ -126,7 +109,23 @@ def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
         ],
     }
 
-    labels = build_forward_labels(canonical, matrix, signal_sessions=sessions)
+    research_data = AlignedResearchData(
+        sessions=tuple(sessions),
+        instruments={
+            "equity:X.SH": InstrumentProfile(board="main", listed_to="2026-07-03"),
+            "equity:Y.SH": InstrumentProfile(board="main", listed_to=""),
+        },
+        fields={},
+        universe_members={session: ("equity:X.SH", "equity:Y.SH") for session in sessions},
+        industries={},
+        execution_prices={
+            ("2026-07-02", instrument_id): ExecutionPrice(raw_open="10", adjusted_open="10")
+            for instrument_id in ("equity:X.SH", "equity:Y.SH")
+        },
+        trading_states={("2026-07-03", "equity:Y.SH"): "full_session_suspension"},
+        price_limits={},
+    )
+    labels = build_forward_labels(research_data, matrix, signal_sessions=sessions)
     first = labels["horizons"]["1"]["sessions"][0]
 
     assert first["samples"] == [{"instrument_id": "equity:X.SH", "alpha": 1.0, "label": -1.0}]
@@ -153,7 +152,18 @@ def test_unexplained_label_open_is_a_hard_data_failure() -> None:
 
     with pytest.raises(FactorDataError, match="unexplained Label entry Open"):
         build_forward_labels(
-            canonical,
+            AlignedResearchData(
+                sessions=tuple(canonical["research_calendar"]),
+                instruments={"equity:X.SH": InstrumentProfile(board="main", listed_to="")},
+                fields={},
+                universe_members={
+                    session: ("equity:X.SH",) for session in canonical["research_calendar"]
+                },
+                industries={},
+                execution_prices={},
+                trading_states={},
+                price_limits={},
+            ),
             matrix,
             signal_sessions=canonical["research_calendar"],
         )
@@ -162,15 +172,14 @@ def test_unexplained_label_open_is_a_hard_data_failure() -> None:
 def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
-        canonical,
+        aligned_market_data(canonical),
         expression=PCT_CHANGE_20,
         field_bindings=FIELD_BINDINGS,
-        universe_name="top300",
         neutralization="none",
     )
     signal_sessions = [str(item["session"]) for item in matrix["sessions"]]
     labels = build_forward_labels(
-        canonical,
+        aligned_market_data(canonical),
         matrix,
         signal_sessions=signal_sessions,
     )

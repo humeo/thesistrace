@@ -3,6 +3,7 @@ from decimal import Decimal
 from thesistrace.research_kernel.factor import factor_day
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes, canonical_decimal
 from thesistrace.research_kernel.strategy import equal_weight_benchmark_return
+from thesistrace.research_series import ExecutionPrice, InstrumentProfile
 
 EXPECTED_CHECKSUMS = {
     "alpha": "f01531eccc3d83f1965aaabf807515fc4905288b678be90e16e96c571533bcd9",
@@ -158,19 +159,19 @@ def test_independent_edge_fixture_freezes_numeric_missing_order_and_benchmark() 
         "s0",
         "s1",
         "s2",
-        {"s0": ["equity:B.SH", "equity:A.SH", "equity:C.SH"]},
+        {"s0": ("equity:B.SH", "equity:A.SH", "equity:C.SH")},
         {
-            ("s1", "equity:A.SH"): {"open_adj": "20"},
-            ("s2", "equity:A.SH"): {"open_adj": "20"},
-            ("s1", "equity:B.SH"): {"open_adj": "10"},
-            ("s2", "equity:B.SH"): {"open_adj": "11"},
-            ("s1", "equity:C.SH"): {"open_adj": "4"},
+            ("s1", "equity:A.SH"): ExecutionPrice("20", "20"),
+            ("s2", "equity:A.SH"): ExecutionPrice("20", "20"),
+            ("s1", "equity:B.SH"): ExecutionPrice("10", "10"),
+            ("s2", "equity:B.SH"): ExecutionPrice("11", "11"),
+            ("s1", "equity:C.SH"): ExecutionPrice("4", "4"),
         },
         {},
         {
-            "equity:A.SH": {"listed_to": ""},
-            "equity:B.SH": {"listed_to": ""},
-            "equity:C.SH": {"listed_to": "s2"},
+            "equity:A.SH": InstrumentProfile("main", ""),
+            "equity:B.SH": InstrumentProfile("main", ""),
+            "equity:C.SH": InstrumentProfile("main", "s2"),
         },
     ) == Decimal("-0.3")
 

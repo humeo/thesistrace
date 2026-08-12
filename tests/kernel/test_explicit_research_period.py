@@ -3,6 +3,7 @@ from datetime import date, timedelta
 
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, literal, operation
+from series import aligned_market_data
 
 from thesistrace.research_kernel import (
     AdvanceInput,
@@ -14,10 +15,14 @@ from thesistrace.research_kernel import (
     continuation_snapshot,
     run,
 )
-from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.result import build_result_payload, result_publication_payloads
+from thesistrace.research_series import (
+    AlignedResearchData,
+    research_data_identity,
+    slice_research_sessions,
+)
 
 SESSIONS = (
     "2024-01-02",
@@ -257,8 +262,8 @@ def test_explicit_period_advance_matches_batch_across_irregular_chunks(
         actual = advance(
             AdvanceInput(
                 prior_state=actual,
-                target_canonical_data=slice_canonical_sessions(
-                    complete,
+                target_research_data=slice_research_sessions(
+                    _research_data(complete),
                     list(SESSIONS[: SESSIONS.index(boundary) + 1]),
                 ),
                 appended_sessions=[SESSIONS[index] for index in chunk],
@@ -273,7 +278,7 @@ def test_explicit_period_advance_matches_batch_across_irregular_chunks(
         first_divergence(actual_evidence, expected_evidence)
     )
     assert (
-        actual.run_input_with_canonical(actual.canonical_snapshot()).research_end_session
+        actual.run_input_with_research_data(actual.research_data_snapshot()).research_end_session
         == SESSIONS[-1]
     )
 
@@ -301,7 +306,7 @@ def test_explicit_period_advance_rebuilds_the_same_bounded_continuation() -> Non
     actual = advance(
         AdvanceInput(
             prior_state=seed,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete),
             appended_sessions=list(SESSIONS[3:]),
             continuation=continuation_snapshot(seed),
             calculation_scope="research_period",
@@ -341,13 +346,14 @@ def test_bounded_continuation_preserves_full_explicit_period_results(
             end=sessions[-1],
         )
     ).track_state
-    seed_canonical = slice_canonical_sessions(
-        complete,
+    complete_research_data = _research_data(complete)
+    seed_research_data = slice_research_sessions(
+        complete_research_data,
         sessions[:seed_session_count],
     )
     actual = run(
         _run_input(
-            seed_canonical,
+            seed_research_data,
             expression=CLOSE_ADJUSTED,
             start=sessions[0],
             end=sessions[seed_session_count - 1],
@@ -362,8 +368,8 @@ def test_bounded_continuation_preserves_full_explicit_period_results(
         actual = advance(
             AdvanceInput(
                 prior_state=compact_prior,
-                target_canonical_data=slice_canonical_sessions(
-                    complete,
+                target_research_data=slice_research_sessions(
+                    complete_research_data,
                     sessions[:cursor],
                 ),
                 appended_sessions=appended,
@@ -389,7 +395,7 @@ def _retained_evidence(state: KernelState) -> dict[str, object]:
         "origin_session": state.origin_session,
         "session_count": state.session_count,
         "boundary_session": state.boundary_session,
-        "canonical": state.canonical_snapshot(),
+        "research_data": research_data_identity(state.research_data_snapshot()),
         "output": state.output_snapshot(),
         "strategy_resume": state.strategy_resume_snapshot(),
     }
@@ -405,7 +411,7 @@ def _compact_for_continuation(
     for horizon in output["factor_evaluation"]["horizons"].values():
         horizon["daily"] = []
     compact = KernelState(
-        run_input=state.run_input_with_canonical(state.canonical_snapshot()),
+        run_input=state.run_input_with_research_data(state.research_data_snapshot()),
         output=output,
         strategy_resume=state.strategy_resume_snapshot(),
         origin_session=state.origin_session,
@@ -415,14 +421,14 @@ def _compact_for_continuation(
 
 
 def _run_input(
-    canonical: dict[str, object],
+    canonical: dict[str, object] | AlignedResearchData,
     *,
     expression: dict[str, object],
     start: str | None,
     end: str | None,
 ) -> RunInput:
     return RunInput(
-        canonical_data=canonical,
+        research_data=(_research_data(canonical) if isinstance(canonical, dict) else canonical),
         alpha_expression=expression,
         field_bindings=FIELD_BINDINGS,
         universe="manual",
@@ -436,6 +442,15 @@ def _run_input(
         transfer_fee_rate="0.00001",
         research_start_session=start,
         research_end_session=end,
+    )
+
+
+def _research_data(canonical: dict[str, object]) -> AlignedResearchData:
+    return aligned_market_data(
+        canonical,
+        field_bindings=FIELD_BINDINGS,
+        universe="manual",
+        neutralization="none",
     )
 
 

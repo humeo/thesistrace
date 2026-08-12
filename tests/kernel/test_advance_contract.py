@@ -3,6 +3,7 @@ from decimal import Decimal
 
 import pytest
 from fixture_sessions import append_fixture_session
+from series import aligned_market_data
 
 from thesistrace.daily_track.checkpoint import (
     project_tracking_checkpoint,
@@ -19,8 +20,8 @@ from thesistrace.research_kernel import (
     empty_continuation,
     run,
 )
-from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
+from thesistrace.research_series import AlignedResearchData, slice_research_sessions
 
 FIELD_BINDINGS = {
     "price.open.adjusted": "open_adj",
@@ -45,7 +46,7 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     prior_output = prior.output_snapshot()
     advance_input = AdvanceInput(
         prior_state=prior,
-        target_canonical_data=complete,
+        target_research_data=_research_data(complete, definition),
         appended_sessions=list(appended["research_calendar"]),
         continuation=continuation_snapshot(prior),
         calculation_scope="research_period",
@@ -64,19 +65,14 @@ def test_kernel_advance_matches_the_characterized_state_at_the_same_boundary(
     assert result.boundary_session == complete["research_calendar"][-1]
     assert prior.output_snapshot() == prior_output
     assert prior.session_count == len(canonical["research_calendar"])
-    assert [item["session"] for item in output["alpha_matrix"]["sessions"]] == (
-        expected_sessions
-    )
-    assert [item["session"] for item in output["strategy_backtest"]["daily"]] == (
-        expected_sessions
-    )
+    assert [item["session"] for item in output["alpha_matrix"]["sessions"]] == (expected_sessions)
+    assert [item["session"] for item in output["strategy_backtest"]["daily"]] == (expected_sessions)
     for horizon in ("1", "5", "20"):
         assert [
             item["session"] for item in output["forward_labels"]["horizons"][horizon]["sessions"]
         ] == expected_sessions
         assert [
-            item["session"]
-            for item in output["factor_evaluation"]["horizons"][horizon]["daily"]
+            item["session"] for item in output["factor_evaluation"]["horizons"][horizon]["daily"]
         ] == expected_sessions
     bounded = continuation_snapshot(result)
     assert len(bounded["pending_alpha"]) <= 21
@@ -92,14 +88,16 @@ def test_kernel_advance_rejects_static_contract_replacement(
     assert isinstance(definition, dict)
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
-    complete["field_catalog"] = [{"field_id": "replacement"}]
+    target = _research_data(complete, definition)
+    target.fields.pop("price.close.adjusted")
+    target.fields["replacement"] = {}
     prior = accepted_kernel_state
 
-    with pytest.raises(ValueError, match="cannot replace pinned static table"):
+    with pytest.raises(ValueError, match="Field set does not match"):
         advance(
             AdvanceInput(
                 prior_state=prior,
-                target_canonical_data=complete,
+                target_research_data=target,
                 appended_sessions=list(appended["research_calendar"]),
                 continuation=continuation_snapshot(prior),
                 calculation_scope="research_period",
@@ -123,7 +121,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     ):
         AdvanceInput(
             prior_state=prior,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="forward_tracking",
@@ -131,7 +129,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     expected = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -155,7 +153,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
         rejections=resume["rejections"],
     )
     compact_prior = KernelState(
-        run_input=prior.run_input_with_canonical(prior.canonical_snapshot()),
+        run_input=prior.run_input_with_research_data(prior.research_data_snapshot()),
         output=compact_output,
         strategy_resume={
             "daily": resume_daily[-504:],
@@ -169,7 +167,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     actual = advance(
         AdvanceInput(
             prior_state=compact_prior,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation,
             calculation_scope="research_period",
@@ -193,14 +191,13 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
     with pytest.raises(TypeError, match="continuation"):
         AdvanceInput(
             prior_state=compact_prior,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             calculation_scope="research_period",
         )
 
 
-def test_compact_advance_retains_exact_latest_504_factor_sessions(
-) -> None:
+def test_compact_advance_retains_exact_latest_504_factor_sessions() -> None:
     _, canonical = build_fixture(session_count=525)
     definition = {
         "alpha": {"expression": {"field_id": "price.close.adjusted"}},
@@ -220,11 +217,11 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions(
     }
     definition["alpha"] = {"expression": {"field_id": "price.close.adjusted"}}
     calendar = list(canonical["research_calendar"])
-    seed_canonical = slice_canonical_sessions(canonical, calendar[:21])
-    target_canonical = slice_canonical_sessions(canonical, calendar)
+    complete_research_data = _research_data(canonical, definition)
+    seed_research_data = slice_research_sessions(complete_research_data, calendar[:21])
     explicit_seed = run(
         _run_input(
-            seed_canonical,
+            seed_research_data,
             definition,
             research_start_session=calendar[0],
             research_end_session=calendar[20],
@@ -232,7 +229,7 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions(
     ).track_state
     seed = KernelState(
         run_input=_run_input(
-            seed_canonical,
+            seed_research_data,
             definition,
             tracking_continuation=True,
         ),
@@ -247,7 +244,7 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions(
     ):
         AdvanceInput(
             prior_state=seed,
-            target_canonical_data=target_canonical,
+            target_research_data=complete_research_data,
             appended_sessions=calendar[21:],
             continuation=continuation_snapshot(seed),
             calculation_scope="research_period",
@@ -256,7 +253,7 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions(
     advanced = advance(
         AdvanceInput(
             prior_state=seed,
-            target_canonical_data=target_canonical,
+            target_research_data=complete_research_data,
             appended_sessions=calendar[21:],
             continuation=continuation_snapshot(seed),
             calculation_scope="forward_tracking",
@@ -282,7 +279,7 @@ def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
     expected = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -290,9 +287,9 @@ def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
     )
 
     rebuilt = advance_continuation(
-        run_input=prior.run_input_with_canonical(complete),
+        run_input=prior.run_input_with_research_data(_research_data(complete, definition)),
         prior_continuation=continuation_snapshot(prior),
-        target_canonical=complete,
+        target_research_data=_research_data(complete, definition),
         appended_sessions=list(appended["research_calendar"]),
     )
 
@@ -320,13 +317,13 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
     )
     corrected_price["close_adj"] = float(corrected_price["close_adj"]) * 1.25
     prior = accepted_kernel_state
-    prior_canonical = prior.canonical_snapshot()
+    prior_research_data = prior.research_data_snapshot()
     appended_sessions = list(appended["research_calendar"])
 
     uncorrected_ordinary = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_data=uncorrected,
+            target_research_data=_research_data(uncorrected, definition),
             appended_sessions=appended_sessions,
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -335,23 +332,23 @@ def test_ordinary_advance_and_rebuild_share_historical_correction_semantics(
     ordinary = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_data=corrected,
+            target_research_data=_research_data(corrected, definition),
             appended_sessions=appended_sessions,
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
         )
     )
     rebuilt = advance_continuation(
-        run_input=prior.run_input_with_canonical(corrected),
+        run_input=prior.run_input_with_research_data(_research_data(corrected, definition)),
         prior_continuation=continuation_snapshot(prior),
-        target_canonical=corrected,
+        target_research_data=_research_data(corrected, definition),
         appended_sessions=appended_sessions,
     )
 
     assert continuation_snapshot(ordinary) != continuation_snapshot(uncorrected_ordinary)
     assert ordinary.strategy_resume_snapshot() != uncorrected_ordinary.strategy_resume_snapshot()
     assert rebuilt == continuation_snapshot(ordinary)
-    assert prior.canonical_snapshot() == prior_canonical
+    assert prior.research_data_snapshot() == prior_research_data
 
 
 def test_kernel_rebuild_warms_from_empty_with_explicit_dependency_sessions(
@@ -367,9 +364,9 @@ def test_kernel_rebuild_warms_from_empty_with_explicit_dependency_sessions(
     origin_index = calendar.index(state.origin_session)
 
     rebuilt = advance_continuation(
-        run_input=state.run_input_with_canonical(canonical),
+        run_input=state.run_input_with_research_data(_research_data(canonical, definition)),
         prior_continuation=empty_continuation(),
-        target_canonical=canonical,
+        target_research_data=_research_data(canonical, definition),
         appended_sessions=calendar[origin_index:],
     )
 
@@ -393,7 +390,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     advanced = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
@@ -432,13 +429,16 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     assert terminal["positions"] == advanced.output_snapshot()["strategy_backtest"]["positions"]
     assert terminal["continuation_positions"] == advanced.strategy_resume_snapshot()["positions"]
     assert terminal["positions"] != terminal["continuation_positions"]
-    restored = restore_tracking_checkpoint(checkpoint, canonical=complete)
+    restored = restore_tracking_checkpoint(
+        checkpoint,
+        research_data=_research_data(complete, definition),
+    )
 
     complete_next, appended_next = append_fixture_session(complete)
     expected = advance(
         AdvanceInput(
             prior_state=advanced,
-            target_canonical_data=complete_next,
+            target_research_data=_research_data(complete_next, definition),
             appended_sessions=list(appended_next["research_calendar"]),
             continuation=continuation_snapshot(advanced),
             calculation_scope="research_period",
@@ -447,7 +447,7 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     actual = advance(
         AdvanceInput(
             prior_state=restored,
-            target_canonical_data=complete_next,
+            target_research_data=_research_data(complete_next, definition),
             appended_sessions=list(appended_next["research_calendar"]),
             continuation=continuation_snapshot(advanced),
             calculation_scope="forward_tracking",
@@ -475,7 +475,7 @@ def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state
     assert isinstance(canonical, dict)
     complete, appended = append_fixture_session(canonical)
     prior = accepted_kernel_state
-    prior_canonical = prior.canonical_snapshot()
+    prior_research_data = prior.research_data_snapshot()
     instruments = copy.deepcopy(canonical["instruments"])
     assert isinstance(instruments, list)
     instruments.append(
@@ -494,15 +494,15 @@ def test_kernel_advance_accepts_new_reference_facts_without_mutating_prior_state
     result = advance(
         AdvanceInput(
             prior_state=prior,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(prior),
             calculation_scope="research_period",
         )
     )
 
-    assert result.canonical_snapshot()["instruments"] == instruments
-    assert prior.canonical_snapshot() == prior_canonical
+    assert "equity:688999.SH" not in result.research_data_snapshot().instruments
+    assert prior.research_data_snapshot() == prior_research_data
 
 
 def test_track_seed_is_the_seed_run_terminal_strategy_state(
@@ -526,7 +526,7 @@ def test_track_seed_is_the_seed_run_terminal_strategy_state(
     advanced = advance(
         AdvanceInput(
             prior_state=result.track_state,
-            target_canonical_data=complete,
+            target_research_data=_research_data(complete, definition),
             appended_sessions=list(appended["research_calendar"]),
             continuation=continuation_snapshot(result.track_state),
             calculation_scope="research_period",
@@ -551,12 +551,17 @@ def _run_input(
     alpha = definition["alpha"]
     strategy = definition["strategy"]
     costs = definition["costs"]
-    assert isinstance(canonical, dict)
+    if isinstance(canonical, AlignedResearchData):
+        research_data = canonical
+        calendar = list(research_data.sessions)
+    else:
+        assert isinstance(canonical, dict)
+        research_data = _research_data(canonical, definition)
+        calendar = canonical["research_calendar"]
+        assert isinstance(calendar, list)
     assert isinstance(alpha, dict)
     assert isinstance(strategy, dict)
     assert isinstance(costs, dict)
-    calendar = canonical["research_calendar"]
-    assert isinstance(calendar, list)
     if (
         research_start_session is None
         and research_end_session is None
@@ -565,7 +570,7 @@ def _run_input(
         research_start_session = str(calendar[20])
         research_end_session = str(calendar[-1])
     return RunInput(
-        canonical_data=canonical,
+        research_data=research_data,
         alpha_expression=alpha["expression"],
         field_bindings=FIELD_BINDINGS,
         universe=str(definition["universe"]),
@@ -579,6 +584,18 @@ def _run_input(
         transfer_fee_rate=str(costs["transfer_fee_rate"]),
         research_start_session=research_start_session,
         research_end_session=research_end_session,
+    )
+
+
+def _research_data(
+    canonical: dict[str, object],
+    definition: dict[str, object],
+) -> AlignedResearchData:
+    return aligned_market_data(
+        canonical,
+        field_bindings=FIELD_BINDINGS,
+        universe=str(definition["universe"]),
+        neutralization=str(definition["neutralization"]),
     )
 
 

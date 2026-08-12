@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from canonical_store import open_complete_refresh_basis
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import (
@@ -83,10 +84,10 @@ def test_collection_retains_every_live_root_and_shared_object_then_converges(
         assert first.deleted_file_count > 0
         assert first.remaining_file_count == 0
         for retained in (run_pinned, track_pinned, current, candidate):
-            assert store.open_generation(retained).manifest_sha256 == retained
+            assert store.validate_generation(retained).manifest_sha256 == retained
         _assert_generation_missing(store, retired)
         _assert_generation_missing(store, shared_retired)
-        assert store.open_generation(current).canonical == build_minimal_canonical_fixture(
+        assert open_complete_refresh_basis(store, current) == build_minimal_canonical_fixture(
             price_offset=3
         )
 
@@ -109,7 +110,7 @@ def test_collection_retains_every_live_root_and_shared_object_then_converges(
         assert no_change.target_file_count == 0
         assert no_change.deleted_file_count == 0
         assert no_change.remaining_file_count == 0
-        assert store.open_generation(current).manifest_sha256 == current
+        assert store.validate_generation(current).manifest_sha256 == current
         _assert_generation_missing(store, run_pinned)
         _assert_generation_missing(store, track_pinned)
         _assert_generation_missing(store, candidate)
@@ -141,7 +142,7 @@ def test_invalid_retained_generation_aborts_before_any_deletion(
             )
 
         assert rejected.value.code == "COLLECTION_ROOTS_INVALID"
-        assert store.open_generation(retired).manifest_sha256 == retired
+        assert store.validate_generation(retired).manifest_sha256 == retired
         with database.transaction() as transaction:
             assert transaction.execute(
                 "SELECT count(*) AS count FROM data.collection_targets"
@@ -196,7 +197,7 @@ def test_failed_deletion_records_progress_and_retry_does_not_widen_plan(
         assert resumed.status == "succeeded"
         assert resumed.remaining_file_count == 0
         _assert_generation_missing(store, retired)
-        assert store.open_generation(new_orphan).manifest_sha256 == new_orphan
+        assert store.validate_generation(new_orphan).manifest_sha256 == new_orphan
         DataGarbageCollector(database, tmp_path).collect(idempotency_key="collect-later-orphan")
         _assert_generation_missing(store, new_orphan)
     finally:
@@ -276,8 +277,8 @@ def test_collection_uses_the_same_fence_as_pin_release_and_head_move(
             executor.shutdown(wait=True)
 
         assert selected in {head, next_head}
-        assert store.open_generation(selected).manifest_sha256 == selected
-        assert lifecycle.current_head().generation_manifest_sha256 == next_head
+        assert store.validate_generation(selected).manifest_sha256 == selected
+        assert lifecycle.current_pointer().generation_manifest_sha256 == next_head
     finally:
         _clear_collection_state(database)
         database.close()
@@ -475,7 +476,7 @@ def test_materialized_refresh_candidate_is_never_planned_before_registration(
                 )
             assert rejected.value.code == "COLLECTION_DATA_WORK_ACTIVE"
             assert materialized
-            assert store.open_generation(materialized[0]).manifest_sha256 == materialized[0]
+            assert store.validate_generation(materialized[0]).manifest_sha256 == materialized[0]
             with database.transaction() as transaction:
                 assert transaction.execute(
                     """
@@ -485,7 +486,7 @@ def test_materialized_refresh_candidate_is_never_planned_before_registration(
                 ).fetchone() == {"count": 0}
             continue_refresh.set()
             assert processing.result(timeout=20) is True
-        assert lifecycle.current_head().generation_manifest_sha256 == materialized[0]
+        assert lifecycle.current_pointer().generation_manifest_sha256 == materialized[0]
     finally:
         continue_refresh.set()
         database.close()
@@ -534,7 +535,7 @@ def _move_head(
 
 def _assert_generation_missing(store: MountedGenerationStore, manifest: str) -> None:
     with pytest.raises(GenerationStoreError, match="missing"):
-        store.open_generation(manifest)
+        store.validate_generation(manifest)
 
 
 def _clear_collection_state(database: PostgresDatabase) -> None:

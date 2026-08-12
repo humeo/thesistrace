@@ -11,14 +11,10 @@ from psycopg.errors import UniqueViolation
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data.generation_store import (
+    MountedFamilyGenerationDescriptor,
     MountedGenerationAdmission,
-    MountedGenerationDescriptor,
 )
-from thesistrace.data.head_store import (
-    DatasetHead,
-    DatasetHeadPointer,
-    MountedDatasetHeadStore,
-)
+from thesistrace.data.head_store import DatasetHeadPointer, MountedDatasetHeadStore
 
 _LIFECYCLE_LOCK = "thesistrace-mounted-data-lifecycle"
 CURRENT_DATA_CUTOVER_LOCK = "thesistrace-current-data-cutover"
@@ -66,7 +62,7 @@ class GenerationPin:
 @dataclass(frozen=True)
 class PinnedGeneration:
     pin: GenerationPin
-    descriptor: MountedGenerationDescriptor
+    descriptor: MountedFamilyGenerationDescriptor
 
 
 @dataclass(frozen=True)
@@ -82,27 +78,6 @@ class DatasetLifecycle:
     def __init__(self, database: PostgresDatabase, mount_root: Path | str) -> None:
         self._database = database
         self._heads = MountedDatasetHeadStore(mount_root)
-
-    def current_head(self) -> DatasetHead | None:
-        for _ in range(4):
-            with self._database.transaction() as transaction:
-                lock_data_lifecycle(transaction)
-                pointer = self._heads.current_pointer()
-            if pointer is None:
-                return None
-            try:
-                resolved = self._heads.resolve(pointer)
-            except RuntimeError:
-                with self._database.transaction() as transaction:
-                    lock_data_lifecycle(transaction)
-                    if self._heads.current_pointer() == pointer:
-                        raise
-                continue
-            with self._database.transaction() as transaction:
-                lock_data_lifecycle(transaction)
-                if self._heads.current_pointer() == pointer:
-                    return resolved
-        raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
 
     def current_pointer(self) -> DatasetHeadPointer | None:
         for _ in range(4):
@@ -159,7 +134,7 @@ class DatasetLifecycle:
             lease_seconds=lease_seconds,
         )
         try:
-            self._heads.open_generation(generation_manifest_sha256)
+            self._heads.validate_generation(generation_manifest_sha256)
         except RuntimeError:
             self.release_candidate(operation_id=operation_id)
             raise
@@ -223,9 +198,7 @@ class DatasetLifecycle:
             generation_manifest_sha256=generation_manifest_sha256,
             lease_seconds=lease_seconds,
         )
-        with self._heads.resolved_pointer_candidate(
-            generation_manifest_sha256
-        ) as resolved:
+        with self._heads.resolved_pointer_candidate(generation_manifest_sha256) as resolved:
             yield ProtectedRefreshCandidate(
                 operation_id=operation_id,
                 generation_manifest_sha256=generation_manifest_sha256,
@@ -258,9 +231,7 @@ class DatasetLifecycle:
             }:
                 raise DataLifecycleError("Head candidate is not protected by live work")
             head = self._heads.compare_and_swap_pointer_resolved(
-                expected_generation_manifest_sha256=(
-                    expected_generation_manifest_sha256
-                ),
+                expected_generation_manifest_sha256=(expected_generation_manifest_sha256),
                 candidate=candidate.resolved_candidate,  # type: ignore[arg-type]
                 prepared_at=prepared_at,
             )
@@ -281,8 +252,12 @@ class DatasetLifecycle:
         candidate_generation_manifest_sha256: str,
         operation_id: str,
         prepared_at: datetime | None = None,
-    ) -> DatasetHead:
-        with self._heads.resolved_candidate(candidate_generation_manifest_sha256) as resolved:
+    ) -> DatasetHeadPointer:
+        # protect_candidate already decoded and validated every immutable object.
+        # Re-resolve only the content-addressed descriptor at publication time.
+        with self._heads.resolved_descriptor_candidate(
+            candidate_generation_manifest_sha256
+        ) as resolved:
             with self._database.transaction() as transaction:
                 lock_data_lifecycle(transaction)
                 candidate = transaction.execute(
@@ -301,7 +276,7 @@ class DatasetLifecycle:
                     "status": "live",
                 }:
                     raise DataLifecycleError("Head candidate is not protected by live work")
-                head = self._heads.compare_and_swap_resolved(
+                head = self._heads.compare_and_swap_pointer_resolved(
                     expected_generation_manifest_sha256=expected_generation_manifest_sha256,
                     candidate=resolved,
                     prepared_at=prepared_at,

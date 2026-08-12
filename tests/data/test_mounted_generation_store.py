@@ -22,21 +22,17 @@ from thesistrace.data.generation_store import (
     MountedFamilyGenerationDescriptor,
     MountedGenerationStore,
 )
-from thesistrace.publication.serialization import (
-    ParquetWriterContract,
-    canonical_json_bytes,
-    parquet_bytes,
-)
+from thesistrace.publication.serialization import canonical_json_bytes
 
 
-def test_market_family_candidate_reopens_from_descriptors_without_publishing_head(
+def test_family_generation_reopens_from_descriptors_without_publishing_head(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     canonical = _canonical()
     store = MountedGenerationStore(tmp_path)
 
-    candidate = store.materialize_market_candidate(
+    candidate = store.materialize(
         canonical,
         prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
         source_name="deterministic-test",
@@ -52,8 +48,8 @@ def test_market_family_candidate_reopens_from_descriptors_without_publishing_hea
             "thesistrace.data.generation_store.pq.read_table",
             reject_parquet_read,
         )
-        reopened = reopened_store.inspect_market_candidate(candidate.manifest_sha256)
-    validated = reopened_store.validate_market_candidate(candidate.manifest_sha256)
+        reopened = reopened_store.inspect_root(candidate.manifest_sha256)
+    validated = reopened_store.validate_generation(candidate.manifest_sha256)
 
     assert isinstance(reopened, MountedFamilyGenerationDescriptor)
     assert reopened == candidate
@@ -93,7 +89,7 @@ def test_market_family_candidate_reopens_from_descriptors_without_publishing_hea
     assert not (tmp_path / "HEAD.json").exists()
 
     root = _manifest(tmp_path, candidate.manifest_sha256)
-    assert root["format"] == "thesistrace-family-generation-candidate"
+    assert root["format"] == "thesistrace-family-generation"
     assert "dataset_coverage" not in root
     for family_reference in root["families"]:
         assert family_reference["dataset_coverage"]
@@ -145,7 +141,7 @@ def test_market_family_candidate_reopens_from_descriptors_without_publishing_hea
     )["logical_type"].startswith("decimal128")
 
 
-def test_market_family_candidate_reuses_manifests_and_objects_for_reordered_content(
+def test_family_generation_reuses_manifests_and_objects_for_reordered_content(
     tmp_path: Path,
 ) -> None:
     canonical = _canonical()
@@ -171,21 +167,220 @@ def test_market_family_candidate_reuses_manifests_and_objects_for_reordered_cont
         "source_lineage": {"snapshot": "fixed"},
     }
 
-    first = store.materialize_market_candidate(canonical, **preparation)
+    first = store.materialize(canonical, **preparation)
     first_inventory = store.inventory()
-    second = store.materialize_market_candidate(reordered, **preparation)
+    second = store.materialize(reordered, **preparation)
 
     assert second == first
     assert store.inventory() == first_inventory
 
 
+def test_market_slice_skips_unrequested_families_and_session_partitions(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical(GENERATION_SESSION_PARTITION_COUNT * 3)
+    for rows in canonical["liquidity_universes"].values():
+        for row in rows:
+            row["instrument_ids"] = ["equity:A.SH"]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    root = _manifest(tmp_path, generation.manifest_sha256)
+    eod_family = next(
+        family for family in root["families"] if family["family_id"] == "equity.eod_price"
+    )
+    eod_manifest = _manifest(tmp_path, eod_family["manifest_sha256"])
+    eod_table = _manifest(tmp_path, eod_manifest["tables"][0]["manifest_sha256"])
+    _object_path(tmp_path, eod_table["objects"][0]["sha256"]).write_bytes(b"unrequested")
+    factor_family = next(
+        family for family in root["families"] if family["family_id"] == "equity.adjustment_factor"
+    )
+    factor_manifest = _manifest(tmp_path, factor_family["manifest_sha256"])
+    factor_table = _manifest(tmp_path, factor_manifest["tables"][0]["manifest_sha256"])
+    for object_reference in factor_table["objects"]:
+        _object_path(tmp_path, object_reference["sha256"]).write_bytes(b"unrequested")
+    sessions = canonical["research_calendar"][-2:]
+    market = store.read_market_slice(
+        generation.manifest_sha256,
+        sessions=sessions,
+        universe_name="top300",
+        neutralization="none",
+        field_bindings={"price.close.adjusted": "close_adj"},
+    )
+
+    assert list(market.research_data.sessions) == sessions
+    assert list(market.research_data.instruments) == ["equity:A.SH"]
+    assert set(market.research_data.fields) == {"price.close.adjusted"}
+    assert set(market.research_data.fields["price.close.adjusted"]) == {
+        (session, "equity:A.SH") for session in sessions
+    }
+
+
+def test_market_slice_rejects_a_corrupt_selected_session_partition(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical(GENERATION_SESSION_PARTITION_COUNT * 3)
+    for rows in canonical["liquidity_universes"].values():
+        for row in rows:
+            row["instrument_ids"] = ["equity:A.SH"]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    root = _manifest(tmp_path, generation.manifest_sha256)
+    eod_family = next(
+        family for family in root["families"] if family["family_id"] == "equity.eod_price"
+    )
+    eod_manifest = _manifest(tmp_path, eod_family["manifest_sha256"])
+    eod_table = _manifest(tmp_path, eod_manifest["tables"][0]["manifest_sha256"])
+    selected_object = eod_table["objects"][-1]
+    _object_path(tmp_path, selected_object["sha256"]).write_bytes(b"corrupt-selected")
+
+    with pytest.raises(GenerationStoreError, match="byte count|checksum"):
+        store.read_market_slice(
+            generation.manifest_sha256,
+            sessions=canonical["research_calendar"][-2:],
+            universe_name="top300",
+            neutralization="none",
+            field_bindings={"price.close.adjusted": "close_adj"},
+        )
+
+
+def test_market_slice_projects_only_required_auxiliary_and_field_columns(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    projected_columns: list[tuple[str, ...] | None] = []
+    original_read_table = pq.read_table
+
+    def recording_read_table(*args: object, **kwargs: object) -> pa.Table:
+        columns = kwargs.get("columns")
+        projected_columns.append(None if columns is None else tuple(columns))
+        return original_read_table(*args, **kwargs)
+
+    monkeypatch.setattr(pq, "read_table", recording_read_table)
+
+    store.read_market_slice(
+        generation.manifest_sha256,
+        sessions=_canonical()["research_calendar"][-2:],
+        universe_name="top300",
+        neutralization="industry",
+        field_bindings={"price.close.adjusted": "close_adj"},
+    )
+
+    assert tuple(sorted(("instrument_id", "board", "listed_to"))) in projected_columns
+    assert (
+        tuple(sorted(("instrument_id", "active_from", "active_to", "sw2021_l1")))
+        in projected_columns
+    )
+    assert (
+        tuple(sorted(("session_date", "instrument_id", "open_raw", "open_adj", "close_adj")))
+        in projected_columns
+    )
+
+
+def test_admission_reads_only_root_and_family_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generation = MountedGenerationStore(tmp_path).materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="test",
+        source_lineage={"fixture": "admission"},
+    )
+
+    def reject_parquet(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("admission opened Parquet")
+
+    monkeypatch.setattr("thesistrace.data.generation_store.pq.read_table", reject_parquet)
+
+    admission = MountedGenerationStore(tmp_path).open_admission(generation.manifest_sha256)
+
+    assert admission.research_calendar == tuple(_canonical()["research_calendar"])
+
+
+@pytest.mark.parametrize(
+    ("sessions", "universe", "neutralization", "field_bindings", "message"),
+    [
+        ([], "top300", "none", {"price.close.adjusted": "close_adj"}, "sessions"),
+        (
+            ["2026-08-05", "2026-08-04"],
+            "top300",
+            "none",
+            {"price.close.adjusted": "close_adj"},
+            "sessions",
+        ),
+        (
+            ["2026-08-04"],
+            "unknown",
+            "none",
+            {"price.close.adjusted": "close_adj"},
+            "Universe",
+        ),
+        (
+            ["2026-08-04"],
+            "top300",
+            "market",
+            {"price.close.adjusted": "close_adj"},
+            "Neutralization",
+        ),
+        (
+            ["2026-08-04"],
+            "top300",
+            "none",
+            {"price.close.adjusted": "unknown"},
+            "binding",
+        ),
+    ],
+)
+def test_market_slice_rejects_invalid_explicit_selection(
+    tmp_path: Path,
+    sessions: list[str],
+    universe: str,
+    neutralization: str,
+    field_bindings: dict[str, str],
+    message: str,
+) -> None:
+    generation = MountedGenerationStore(tmp_path).materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, tzinfo=UTC),
+        source_name="test",
+        source_lineage={"fixture": "selection"},
+    )
+
+    with pytest.raises(GenerationStoreError, match=message):
+        MountedGenerationStore(tmp_path).read_market_slice(
+            generation.manifest_sha256,
+            sessions=sessions,
+            universe_name=universe,
+            neutralization=neutralization,
+            field_bindings=field_bindings,
+        )
+
+
 @pytest.mark.parametrize("damage", ["missing", "corrupt", "mismatched"])
-def test_market_family_candidate_rejects_invalid_family_descriptors(
+def test_family_generation_rejects_invalid_family_descriptors(
     tmp_path: Path,
     damage: str,
 ) -> None:
     store = MountedGenerationStore(tmp_path)
-    candidate = store.materialize_market_candidate(
+    candidate = store.materialize(
         _canonical(),
         prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
         source_name="deterministic-test",
@@ -211,6 +406,7 @@ def test_market_family_candidate_rejects_invalid_family_descriptors(
         identity = {
             "schema_contract": root["schema_contract"],
             "data_through_session": root["data_through_session"],
+            "research_sessions": root["research_sessions"],
             "field_availability": root["field_availability"],
             "families": root["families"],
         }
@@ -225,6 +421,7 @@ def test_market_family_candidate_rejects_invalid_family_descriptors(
             data_identity=root["data_identity"],
             schema_contract=root["schema_contract"],
             data_through_session=root["data_through_session"],
+            research_sessions=tuple(root["research_sessions"]),
             field_availability=tuple(root["field_availability"]),
             preparation=root["preparation"],
             families=candidate.families,
@@ -234,12 +431,12 @@ def test_market_family_candidate_rejects_invalid_family_descriptors(
         GenerationStoreError,
         match="missing|checksum|byte count|incompatible",
     ):
-        store.validate_market_candidate(candidate.manifest_sha256)
+        store.validate_generation(candidate.manifest_sha256)
 
 
-def test_market_family_candidate_rejects_missing_physical_object(tmp_path: Path) -> None:
+def test_family_generation_rejects_missing_physical_object(tmp_path: Path) -> None:
     store = MountedGenerationStore(tmp_path)
-    candidate = store.materialize_market_candidate(
+    candidate = store.materialize(
         _canonical(),
         prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
         source_name="deterministic-test",
@@ -258,12 +455,12 @@ def test_market_family_candidate_rejects_missing_physical_object(tmp_path: Path)
     replacement_sha256 = _write_candidate_root(tmp_path, root)
 
     with pytest.raises(GenerationStoreError, match="missing"):
-        store.validate_market_candidate(replacement_sha256)
+        store.validate_generation(replacement_sha256)
 
 
-def test_market_family_candidate_rejects_wrong_physical_schema(tmp_path: Path) -> None:
+def test_family_generation_rejects_wrong_physical_schema(tmp_path: Path) -> None:
     store = MountedGenerationStore(tmp_path)
-    candidate = store.materialize_market_candidate(
+    candidate = store.materialize(
         _canonical(),
         prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
         source_name="deterministic-test",
@@ -292,14 +489,14 @@ def test_market_family_candidate_rejects_wrong_physical_schema(tmp_path: Path) -
     replacement_sha256 = _write_candidate_root(tmp_path, root)
 
     with pytest.raises(GenerationStoreError, match="schema is incompatible"):
-        store.validate_market_candidate(replacement_sha256)
+        store.validate_generation(replacement_sha256)
 
 
-def test_market_family_candidate_rejects_self_consistent_shorter_family_coverage(
+def test_family_generation_rejects_self_consistent_shorter_family_coverage(
     tmp_path: Path,
 ) -> None:
     store = MountedGenerationStore(tmp_path)
-    candidate = store.materialize_market_candidate(
+    candidate = store.materialize(
         _canonical(),
         prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
         source_name="deterministic-test",
@@ -322,14 +519,14 @@ def test_market_family_candidate_rejects_self_consistent_shorter_family_coverage
     replacement_sha256 = _write_candidate_root(tmp_path, root)
 
     with pytest.raises(GenerationStoreError, match="not synchronized"):
-        store.validate_market_candidate(replacement_sha256)
+        store.validate_generation(replacement_sha256)
 
 
-def test_market_family_candidate_rejects_incomplete_preparation_metadata(
+def test_family_generation_rejects_incomplete_preparation_metadata(
     tmp_path: Path,
 ) -> None:
     store = MountedGenerationStore(tmp_path)
-    candidate = store.materialize_market_candidate(
+    candidate = store.materialize(
         _canonical(),
         prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
         source_name="deterministic-test",
@@ -340,16 +537,16 @@ def test_market_family_candidate_rejects_incomplete_preparation_metadata(
     replacement_sha256 = _write_candidate_root(tmp_path, root)
 
     with pytest.raises(GenerationStoreError, match="preparation"):
-        store.inspect_market_candidate(replacement_sha256)
+        store.inspect_root(replacement_sha256)
 
 
-def test_market_family_candidate_rejects_coverage_not_backed_by_physical_data(
+def test_family_generation_rejects_coverage_not_backed_by_physical_data(
     tmp_path: Path,
 ) -> None:
     canonical = _canonical()
     canonical["field_catalog"] = canonical["field_catalog"][:1]
     store = MountedGenerationStore(tmp_path)
-    candidate = store.materialize_market_candidate(
+    candidate = store.materialize(
         canonical,
         prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
         source_name="deterministic-test",
@@ -374,7 +571,7 @@ def test_market_family_candidate_rejects_coverage_not_backed_by_physical_data(
     replacement_sha256 = _write_candidate_root(tmp_path, root)
 
     with pytest.raises(GenerationStoreError, match="root projection|Coverage projection"):
-        store.validate_market_candidate(replacement_sha256)
+        store.validate_generation(replacement_sha256)
 
 
 def test_materialized_generation_reopens_every_canonical_table_after_restart(
@@ -389,11 +586,12 @@ def test_materialized_generation_reopens_every_canonical_table_after_restart(
         source_name="deterministic-test",
         source_lineage={"snapshot": "fixed"},
     )
-    reopened = MountedGenerationStore(tmp_path).open_generation(materialized.manifest_sha256)
+    reopened = MountedGenerationStore(tmp_path).validate_generation(materialized.manifest_sha256)
 
     assert reopened.manifest_sha256 == materialized.manifest_sha256
     assert reopened.data_identity == materialized.data_identity
-    assert reopened.dataset_coverage == {
+    assert reopened.families[0].dataset_coverage == {
+        "kind": "research-session-range",
         "start": canonical["research_calendar"][0],
         "end": canonical["research_calendar"][-1],
         "session_count": len(canonical["research_calendar"]),
@@ -410,13 +608,20 @@ def test_materialized_generation_reopens_every_canonical_table_after_restart(
         ).hexdigest(),
         "source_name": "deterministic-test",
     }
-    assert reopened.canonical == canonical
+    assert _open_all(MountedGenerationStore(tmp_path), materialized.manifest_sha256) == canonical
 
     root = _manifest(tmp_path, materialized.manifest_sha256)
     assert len(canonical_json_bytes(root)) <= GENERATION_MANIFEST_MAX_BYTES
-    assert root["schema_contract"] == "canonical-eod"
-    assert "st_designations" not in {table["name"] for table in root["tables"]}
-    price_table = next(table for table in root["tables"] if table["name"] == "prices")
+    assert root["schema_contract"] == "canonical-research"
+    assert "dataset_coverage" not in root
+    assert "st_designations" not in {
+        table_name for family in root["families"] for table_name in family["table_names"]
+    }
+    price_family = next(
+        family for family in root["families"] if family["family_id"] == "equity.eod_price"
+    )
+    price_family_manifest = _manifest(tmp_path, price_family["manifest_sha256"])
+    price_table = price_family_manifest["tables"][0]
     price_manifest = _manifest(tmp_path, price_table["manifest_sha256"])
     assert len(canonical_json_bytes(price_manifest)) <= GENERATION_MANIFEST_MAX_BYTES
     assert len(price_manifest["objects"]) == 2
@@ -458,10 +663,7 @@ def test_reordered_source_rows_reuse_identical_physical_data_objects(tmp_path: P
     assert second.data_identity == first.data_identity
     assert second.manifest_sha256 == first.manifest_sha256
     assert sorted(path.name for path in (tmp_path / "objects").rglob("*.parquet")) == object_names
-    assert (
-        MountedGenerationStore(tmp_path).open_generation(second.manifest_sha256).canonical
-        == canonical
-    )
+    assert _open_all(MountedGenerationStore(tmp_path), second.manifest_sha256) == canonical
 
 
 @pytest.mark.parametrize("session_count", (22, 4_000))
@@ -496,15 +698,58 @@ def test_refresh_window_and_rewritten_partition_count_do_not_grow_with_history(
     assert len(refresh_base.canonical["research_calendar"]) <= 39
     current_root = _manifest(tmp_path, current.manifest_sha256)
     candidate_root = _manifest(tmp_path, candidate.manifest_sha256)
-    current_prices = _table_object_sha256s(tmp_path, current_root, "prices")
-    candidate_prices = _table_object_sha256s(tmp_path, candidate_root, "prices")
+    current_prices = _family_table_object_sha256s(
+        tmp_path, current_root, "equity.eod_price", "eod_prices"
+    )
+    candidate_prices = _family_table_object_sha256s(
+        tmp_path, candidate_root, "equity.eod_price", "eod_prices"
+    )
     assert len(set(candidate_prices) - set(current_prices)) == 1
     assert candidate_prices[:-1] == current_prices[:-1]
 
-    reopened = store.open_generation(candidate.manifest_sha256)
+    reopened = _open_all(store, candidate.manifest_sha256)
     expected = copy.deepcopy(canonical)
     expected["prices"][-1]["turnover_cny"] = "999999.00"
-    assert reopened.canonical == expected
+    assert reopened == expected
+
+
+def test_refresh_does_not_open_immutable_partitions_before_its_window(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical(GENERATION_SESSION_PARTITION_COUNT * 3)
+    store = MountedGenerationStore(tmp_path)
+    current = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "current"},
+    )
+    current_root = _manifest(tmp_path, current.manifest_sha256)
+    first_price_object = _family_table_object_sha256s(
+        tmp_path,
+        current_root,
+        "equity.eod_price",
+        "eod_prices",
+    )[0]
+    immutable_path = _object_path(tmp_path, first_price_object)
+    immutable_bytes = immutable_path.read_bytes()
+    immutable_path.write_bytes(b"outside-refresh-window")
+
+    refresh_base = store.open_refresh_base(current.manifest_sha256)
+    replacement = copy.deepcopy(refresh_base.canonical)
+    replacement["prices"][-1]["turnover_cny"] = "999999.00"
+    replace_from_session = str(replacement["research_calendar"][-20])
+    candidate = store.materialize_refresh(
+        predecessor_manifest_sha256=current.manifest_sha256,
+        replacement_canonical=replacement,
+        replace_from_session=replace_from_session,
+        prepared_at=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "refresh"},
+    )
+
+    immutable_path.write_bytes(immutable_bytes)
+    assert store.validate_generation(candidate.manifest_sha256) == candidate
 
 
 def test_reference_inventory_does_not_reopen_parquet_objects(
@@ -541,16 +786,18 @@ def test_admission_projection_opens_only_root_metadata_and_research_calendar(
         source_lineage={"snapshot": "fixed"},
     )
     root = _manifest(tmp_path, generation.manifest_sha256)
-    price_reference = next(
-        reference for reference in root["tables"] if reference["name"] == "prices"
+    price_family = next(
+        reference for reference in root["families"] if reference["family_id"] == "equity.eod_price"
     )
-    price_manifest = _manifest(tmp_path, price_reference["manifest_sha256"])
+    price_family_manifest = _manifest(tmp_path, price_family["manifest_sha256"])
+    price_manifest = _manifest(tmp_path, price_family_manifest["tables"][0]["manifest_sha256"])
     _object_path(tmp_path, price_manifest["objects"][0]["sha256"]).unlink()
 
     admission = MountedGenerationStore(tmp_path).open_admission(generation.manifest_sha256)
 
     assert admission.generation.manifest_sha256 == generation.manifest_sha256
-    assert admission.generation.dataset_coverage == {
+    assert admission.generation.families[0].dataset_coverage == {
+        "kind": "research-session-range",
         "start": canonical["research_calendar"][0],
         "end": canonical["research_calendar"][-1],
         "session_count": len(canonical["research_calendar"]),
@@ -561,7 +808,7 @@ def test_admission_projection_opens_only_root_metadata_and_research_calendar(
     )
     assert admission.research_calendar == tuple(canonical["research_calendar"])
     with pytest.raises(GenerationStoreError, match="missing"):
-        MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
+        MountedGenerationStore(tmp_path).validate_generation(generation.manifest_sha256)
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
@@ -577,7 +824,8 @@ def test_missing_or_corrupt_object_is_never_reopened_as_a_generation(
         source_lineage={"snapshot": "fixed"},
     )
     root = _manifest(tmp_path, generation.manifest_sha256)
-    table = _manifest(tmp_path, root["tables"][0]["manifest_sha256"])
+    family = _manifest(tmp_path, root["families"][0]["manifest_sha256"])
+    table = _manifest(tmp_path, family["tables"][0]["manifest_sha256"])
     object_sha256 = table["objects"][0]["sha256"]
     object_path = _object_path(tmp_path, object_sha256)
     if damage == "missing":
@@ -586,7 +834,7 @@ def test_missing_or_corrupt_object_is_never_reopened_as_a_generation(
         object_path.write_bytes(b"corrupt")
 
     with pytest.raises(GenerationStoreError, match="missing|checksum|byte count"):
-        MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
+        MountedGenerationStore(tmp_path).validate_generation(generation.manifest_sha256)
 
     if damage == "corrupt":
         with pytest.raises(GenerationStoreError, match="immutable"):
@@ -608,7 +856,7 @@ def test_partial_or_incompatible_manifest_is_rejected(tmp_path: Path) -> None:
     )
     _manifest_path(tmp_path, generation.manifest_sha256).write_bytes(b'{"format":')
     with pytest.raises(GenerationStoreError, match="checksum"):
-        store.open_generation(generation.manifest_sha256)
+        store.validate_generation(generation.manifest_sha256)
 
     incompatible = canonical_json_bytes(
         {"format": "thesistrace-canonical-generation", "version": 2}
@@ -618,60 +866,7 @@ def test_partial_or_incompatible_manifest_is_rejected(tmp_path: Path) -> None:
     incompatible_path.parent.mkdir(parents=True, exist_ok=True)
     incompatible_path.write_bytes(incompatible)
     with pytest.raises(GenerationStoreError, match="incompatible"):
-        store.open_generation(incompatible_sha256)
-
-
-def test_incompatible_parquet_schema_is_rejected_even_with_consistent_hashes(
-    tmp_path: Path,
-) -> None:
-    store = MountedGenerationStore(tmp_path)
-    generation = store.materialize(
-        _canonical(),
-        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
-        source_name="deterministic-test",
-        source_lineage={"snapshot": "fixed"},
-    )
-    root = _manifest(tmp_path, generation.manifest_sha256)
-    table_ref = root["tables"][0]
-    table = _manifest(tmp_path, table_ref["manifest_sha256"])
-    wrong_contract = ParquetWriterContract(
-        name="incompatible-generation-test",
-        version=1,
-        schema=pa.schema([pa.field("session", pa.int64(), nullable=False)]),
-        sort_keys=("session",),
-    )
-    wrong_rows = [{"session": index} for index in range(GENERATION_SESSION_PARTITION_COUNT)]
-    wrong_object = parquet_bytes(wrong_rows, wrong_contract)
-    wrong_object_sha256 = hashlib.sha256(wrong_object).hexdigest()
-    wrong_object_path = _object_path(tmp_path, wrong_object_sha256)
-    wrong_object_path.parent.mkdir(parents=True, exist_ok=True)
-    wrong_object_path.write_bytes(wrong_object)
-    table["objects"][0].update(
-        {
-            "sha256": wrong_object_sha256,
-            "byte_count": len(wrong_object),
-            "row_count": len(wrong_rows),
-            "first_sort_key": [0],
-            "last_sort_key": [GENERATION_SESSION_PARTITION_COUNT - 1],
-        }
-    )
-    table_sha256, table_bytes = _write_manifest(tmp_path, table)
-    table_ref.update({"manifest_sha256": table_sha256, "manifest_byte_count": len(table_bytes)})
-    identity = {
-        key: root[key]
-        for key in (
-            "schema_contract",
-            "dataset_coverage",
-            "data_through_session",
-            "field_availability",
-            "tables",
-        )
-    }
-    root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
-    root_sha256, _ = _write_manifest(tmp_path, root)
-
-    with pytest.raises(GenerationStoreError, match="schema is incompatible"):
-        store.open_generation(root_sha256)
+        store.validate_generation(incompatible_sha256)
 
 
 def test_inconsistent_adjusted_price_derivation_is_rejected(tmp_path: Path) -> None:
@@ -711,7 +906,7 @@ def test_oversized_or_symlinked_addressed_files_are_rejected_before_parsing(
     with oversized.open("wb") as stream:
         stream.truncate(GENERATION_MANIFEST_MAX_BYTES + 1)
     with pytest.raises(GenerationStoreError, match="byte bound"):
-        MountedGenerationStore(tmp_path).open_generation(oversized_sha256)
+        MountedGenerationStore(tmp_path).validate_generation(oversized_sha256)
 
     store = MountedGenerationStore(tmp_path)
     generation = store.materialize(
@@ -721,14 +916,15 @@ def test_oversized_or_symlinked_addressed_files_are_rejected_before_parsing(
         source_lineage={"snapshot": "fixed"},
     )
     root = _manifest(tmp_path, generation.manifest_sha256)
-    table = _manifest(tmp_path, root["tables"][0]["manifest_sha256"])
+    family = _manifest(tmp_path, root["families"][0]["manifest_sha256"])
+    table = _manifest(tmp_path, family["tables"][0]["manifest_sha256"])
     object_path = _object_path(tmp_path, table["objects"][0]["sha256"])
     external = tmp_path / "external.parquet"
     external.write_bytes(object_path.read_bytes())
     object_path.unlink()
     object_path.symlink_to(external)
     with pytest.raises(GenerationStoreError, match="unsafe"):
-        store.open_generation(generation.manifest_sha256)
+        store.validate_generation(generation.manifest_sha256)
 
 
 def test_parent_directory_symlink_cannot_escape_the_mount(tmp_path: Path) -> None:
@@ -756,13 +952,14 @@ def test_fifo_object_is_rejected_without_blocking(tmp_path: Path) -> None:
         source_lineage={"snapshot": "fixed"},
     )
     root = _manifest(tmp_path, generation.manifest_sha256)
-    table = _manifest(tmp_path, root["tables"][0]["manifest_sha256"])
+    family = _manifest(tmp_path, root["families"][0]["manifest_sha256"])
+    table = _manifest(tmp_path, family["tables"][0]["manifest_sha256"])
     object_path = _object_path(tmp_path, table["objects"][0]["sha256"])
     object_path.unlink()
     os.mkfifo(object_path)
 
     with pytest.raises(GenerationStoreError, match="regular file"):
-        store.open_generation(generation.manifest_sha256)
+        store.validate_generation(generation.manifest_sha256)
 
 
 def test_concurrent_materializers_publish_one_identical_generation(
@@ -800,9 +997,7 @@ def test_concurrent_materializers_publish_one_identical_generation(
     assert len(set(outcomes)) == 1
     assert len(competing_threads) == 8
     manifest_sha256, _ = outcomes[0]
-    assert (
-        MountedGenerationStore(tmp_path).open_generation(manifest_sha256).canonical == _canonical()
-    )
+    assert _open_all(MountedGenerationStore(tmp_path), manifest_sha256) == _canonical()
 
 
 def test_directory_sync_failure_never_exposes_a_complete_generation(
@@ -937,6 +1132,14 @@ def test_addressed_file_deletion_is_idempotent_and_cannot_follow_a_symlink(
     assert external.read_bytes() == b"must remain"
 
 
+def _open_all(store: MountedGenerationStore, manifest_sha256: str) -> dict[str, object]:
+    return store.open_refresh_base(
+        manifest_sha256,
+        overlap_session_count=100_000,
+        universe_lookback_session_count=99_999,
+    ).canonical
+
+
 def _canonical(
     session_count: int = GENERATION_SESSION_PARTITION_COUNT + 1,
 ) -> dict[str, object]:
@@ -993,7 +1196,7 @@ def _canonical(
                     "change_raw": "0.5000",
                     "pct_change_raw": "5.000000",
                     "volume_shares": "10000",
-                    "turnover_cny": str(raw * 10000),
+                    "turnover_cny": f"{raw * 10000}.00",
                     "adjustment_factor": "1.000000",
                     "open_adj": f"{raw}.00000000",
                     "high_adj": f"{raw + 1}.00000000",
@@ -1081,6 +1284,19 @@ def _table_object_sha256s(
     return [str(reference["sha256"]) for reference in table_manifest["objects"]]
 
 
+def _family_table_object_sha256s(
+    root: Path,
+    generation: dict[str, object],
+    family_id: str,
+    table_name: str,
+) -> list[str]:
+    family_reference = next(
+        reference for reference in generation["families"] if reference["family_id"] == family_id
+    )
+    family_manifest = _manifest(root, family_reference["manifest_sha256"])
+    return _table_object_sha256s(root, family_manifest, table_name)
+
+
 def _manifest_path(root: Path, sha256: str) -> Path:
     return root / "manifests" / "sha256" / sha256[:2] / f"{sha256}.json"
 
@@ -1114,6 +1330,7 @@ def _write_candidate_root(storage_root: Path, root: dict[str, object]) -> str:
     identity = {
         "schema_contract": root["schema_contract"],
         "data_through_session": root["data_through_session"],
+        "research_sessions": root["research_sessions"],
         "field_availability": root["field_availability"],
         "families": root["families"],
     }
