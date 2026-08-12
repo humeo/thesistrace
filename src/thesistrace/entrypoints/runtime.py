@@ -16,7 +16,7 @@ from thesistrace.data import (
     DatasetLifecycle,
     DatasetOverviewService,
     MountedGenerationStore,
-    authorable_fields,
+    alpha_field_catalog,
 )
 from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.schema import verify_core_schema
@@ -142,7 +142,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             data_overview=data_overview,
             definitions=DefinitionService(
                 database,
-                authorable_fields=authorable_fields,
+                alpha_fields=alpha_field_catalog,
                 operator_catalog=operator_catalog,
                 validate_alpha=validate_normalized_alpha,
                 current_dataset=dataset_admission.current,

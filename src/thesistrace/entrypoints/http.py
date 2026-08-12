@@ -31,6 +31,7 @@ from thesistrace.definition import (
     DefinitionRunOutcome,
     DefinitionSaveCommand,
 )
+from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
 from thesistrace.research_run import (
     ResearchRunCancelCommand,
@@ -57,6 +58,7 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             yield
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
+    install_alpha_http(app)
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:

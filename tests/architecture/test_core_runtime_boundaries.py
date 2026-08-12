@@ -54,6 +54,7 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
         "_postgres": set(),
+        "alpha_language": {"data", "research_kernel"},
         "publication": {"_postgres"},
         "research_kernel": set(),
         "data": {"_postgres", "publication"},
@@ -70,6 +71,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "adapters": {"data", "fixture"},
         "entrypoints": {
             "_postgres",
+            "alpha_language",
             "adapters",
             "daily_track",
             "data",
@@ -313,6 +315,8 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
 
 def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() -> None:
     assert _http_routes() == {
+        ("get", "/api/alpha/catalog"),
+        ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),
         ("get", "/api/definitions"),
         ("get", "/api/definitions/authoring-options"),

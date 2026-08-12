@@ -10,9 +10,9 @@ from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.data import (
-    AuthorableField,
     DatasetAdmissionSnapshot,
-    authorable_field_bindings,
+    FieldDefinition,
+    alpha_identifier_by_field_id,
 )
 from thesistrace.definition.models import (
     AuthorableFieldOption,
@@ -76,20 +76,18 @@ class DefinitionService:
         self,
         database: PostgresDatabase,
         *,
-        authorable_fields: Callable[[], tuple[AuthorableField, ...]],
+        alpha_fields: Callable[[], tuple[FieldDefinition, ...]],
         operator_catalog: Callable[[], dict[str, object]],
         validate_alpha: Callable[..., object],
         current_dataset: CurrentDataset,
-        admit_run: Callable[
-            [PostgresTransaction, ImmutableRunInput], ResearchRunSummary
-        ],
+        admit_run: Callable[[PostgresTransaction, ImmutableRunInput], ResearchRunSummary],
     ) -> None:
         self._database = database
-        self._authorable_fields = authorable_fields
+        self._alpha_fields = alpha_fields
         self._operator_catalog = operator_catalog
         self._validate_alpha = validate_alpha
         self._current_dataset = current_dataset
-        self._field_bindings = authorable_field_bindings()
+        self._alpha_identifier_by_field_id = alpha_identifier_by_field_id()
         self._admit_run = admit_run
 
     def authoring_options(self) -> DefinitionAuthoringOptions:
@@ -101,10 +99,10 @@ class DefinitionService:
             fields=[
                 AuthorableFieldOption(
                     field_id=field.field_id,
-                    definition=field.definition,
+                    definition=field.description,
                     unit=field.unit,
                 )
-                for field in self._authorable_fields()
+                for field in self._alpha_fields()
             ],
             operators=[OperatorOption.model_validate(item) for item in raw_operators],
             universes=["top300", "top1000", "top2000", "top3000"],
@@ -331,7 +329,7 @@ class DefinitionService:
                 definition_revision=saved_revision,
                 content=content,
                 field_bindings={
-                    field_id: self._field_bindings[field_id]
+                    field_id: self._alpha_identifier_by_field_id[field_id]
                     for field_id in parsed_alpha.field_ids
                 },
                 operator_catalog=self._operator_catalog(),
@@ -364,16 +362,25 @@ class DefinitionService:
 
     def _validate_structure(self, command: DefinitionSaveCommand) -> None:
         if command.alpha is not None:
-            self._validate_alpha(command.alpha, field_bindings=self._field_bindings)
+            self._validate_alpha(
+                command.alpha,
+                field_bindings=self._alpha_identifier_by_field_id,
+            )
 
     def _validate_run_structure(self, command: DefinitionRunCommand) -> None:
         if command.alpha is not None:
-            self._validate_alpha(command.alpha, field_bindings=self._field_bindings)
+            self._validate_alpha(
+                command.alpha,
+                field_bindings=self._alpha_identifier_by_field_id,
+            )
 
     def _parsed_alpha(self, content: dict[str, object]) -> ParsedAlpha:
         alpha = content["alpha"]
         assert isinstance(alpha, Mapping)
-        parsed = self._validate_alpha(alpha, field_bindings=self._field_bindings)
+        parsed = self._validate_alpha(
+            alpha,
+            field_bindings=self._alpha_identifier_by_field_id,
+        )
         assert isinstance(parsed, ParsedAlpha)
         return parsed
 

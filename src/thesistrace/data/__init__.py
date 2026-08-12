@@ -5,9 +5,11 @@ from thesistrace.data.collection import (
     DataGarbageCollector,
 )
 from thesistrace.data.fields import (
-    AuthorableField,
-    authorable_field_bindings,
-    authorable_fields,
+    AlphaFieldCapability,
+    FieldDefinition,
+    alpha_field_catalog,
+    alpha_identifier_by_field_id,
+    field_definitions,
 )
 from thesistrace.data.generation_store import (
     GenerationStoreError,
@@ -46,7 +48,7 @@ from thesistrace.data.source import (
 )
 
 __all__ = [
-    "AuthorableField",
+    "AlphaFieldCapability",
     "BootstrapCollectionPlan",
     "BootstrapDataSource",
     "BootstrapOutcome",
@@ -74,6 +76,7 @@ __all__ = [
     "DatasetLifecycle",
     "DataSource",
     "DataSourceError",
+    "FieldDefinition",
     "GenerationStoreError",
     "GenerationPin",
     "MountedDatasetHeadStore",
@@ -82,8 +85,9 @@ __all__ = [
     "MountedGenerationStore",
     "PinnedGeneration",
     "RefreshOutcome",
-    "authorable_fields",
-    "authorable_field_bindings",
+    "alpha_field_catalog",
+    "alpha_identifier_by_field_id",
     "bootstrap_collection_plan",
+    "field_definitions",
     "refresh_collection_plan",
 ]
