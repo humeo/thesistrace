@@ -97,6 +97,14 @@ class HistoricalInstrumentIdentity:
 
 
 @dataclass(frozen=True, order=True)
+class HistoricalInstrumentLifecycle:
+    instrument_id: str
+    ts_code: str
+    listed_from: str
+    listed_to: str
+
+
+@dataclass(frozen=True, order=True)
 class GenerationFileRef:
     kind: str
     sha256: str
@@ -207,6 +215,15 @@ class MountedGenerationStore:
         self,
         manifest_sha256: str,
     ) -> tuple[HistoricalInstrumentIdentity, ...]:
+        return tuple(
+            HistoricalInstrumentIdentity(item.instrument_id, item.ts_code)
+            for item in self.read_historical_ordinary_a_share_lifecycles(manifest_sha256)
+        )
+
+    def read_historical_ordinary_a_share_lifecycles(
+        self,
+        manifest_sha256: str,
+    ) -> tuple[HistoricalInstrumentLifecycle, ...]:
         root = self._read_family_generation_root(manifest_sha256)
         spec, reference = self._family_table_reference(
             root,
@@ -222,9 +239,11 @@ class MountedGenerationStore:
             [str(session) for session in research_sessions],
         )
         identities = tuple(
-            HistoricalInstrumentIdentity(
+            HistoricalInstrumentLifecycle(
                 instrument_id=str(row["instrument_id"]),
                 ts_code=str(row["ts_code"]),
+                listed_from=str(row["listed_from"]),
+                listed_to=str(row["listed_to"]),
             )
             for row in rows
             if row["asset_type"] == "ordinary_a_share"

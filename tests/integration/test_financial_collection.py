@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -23,7 +23,17 @@ from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 COLLECTED_AT = datetime(2026, 8, 13, 5, tzinfo=UTC)
-FIELDS = ("ts_code", "ann_date", "end_date", "report_type", "revenue")
+FIELDS = (
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "end_type",
+    "revenue",
+    "update_flag",
+)
 
 
 class StatementSource:
@@ -48,8 +58,8 @@ class StatementSource:
         return RawSourceResponse(
             FIELDS,
             (
-                (ts_code, "20260425", "20260331", "1", None),
-                (ts_code, "20260425", "20260331", "1", None),
+                (ts_code, "20260425", "", "20260331", "1", "1", "1", None, "0"),
+                (ts_code, "20260425", "", "20260331", "1", "1", "1", None, "0"),
             ),
         )
 
@@ -94,24 +104,48 @@ def test_collection_uses_historical_identities_and_reuses_raw_evidence(
         assert checkpoints[0].batch_sha256 is not None
         batch = service.read_batch(checkpoints[0].batch_sha256)
         assert batch["returned_fields"] == list(FIELDS)
-        assert batch["items"][0][-1] is None
+        assert batch["items"][0][-2] is None
         assert batch["items"][0] == batch["items"][1]
         assert batch["collected_at"] == COLLECTED_AT.isoformat()
         assert batch["row_count"] == 2
         assert batch["source_date_extent"] == ["20260425", "20260425"]
         assert all("token" not in repr(event).lower() for event in progress)
+        snapshot = service.completed_snapshot("financial-bootstrap")
+        assert snapshot.idempotency_key == "financial-bootstrap"
+        assert snapshot.generation_manifest_sha256 == manifest
+        assert snapshot.contract == _contract()
+        assert snapshot.target_count == 6
+        assert (
+            tuple(item.first_observed_at for item in snapshot.shards)
+            == (COLLECTED_AT.isoformat(),) * 6
+        )
 
-        replayed = service.collect(
+        later_service = FinancialCollectionService(
+            database,
+            tmp_path,
+            source,
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+        replayed = later_service.collect(
             idempotency_key="financial-bootstrap-exact-replay",
             generation_manifest_sha256=manifest,
             contract=_contract(capability_sha256="b" * 64),
         )
         replayed_checkpoints = service.inspect("financial-bootstrap-exact-replay")
+        replayed_snapshot = later_service.completed_snapshot("financial-bootstrap-exact-replay")
         assert replayed.status == "succeeded"
         assert len(source.requests) == 12
         assert {item.batch_sha256 for item in replayed_checkpoints} == {
             item.batch_sha256 for item in checkpoints
         }
+        assert (
+            tuple(item.collected_at for item in replayed_snapshot.shards)
+            == ((COLLECTED_AT + timedelta(days=1)).isoformat(),) * 6
+        )
+        assert (
+            tuple(item.first_observed_at for item in replayed_snapshot.shards)
+            == (COLLECTED_AT.isoformat(),) * 6
+        )
         assert len(tuple((tmp_path / "financial" / "raw").rglob("*.json"))) == 6
         assert MountedGenerationStore(tmp_path).inspect_root(manifest).manifest_sha256 == manifest
         assert not (tmp_path / "HEAD.json").exists()
@@ -170,7 +204,19 @@ def test_collection_preserves_rows_without_a_usable_publication_date(
             self.requests.append((endpoint, str(params["ts_code"]), "complete-history"))
             return RawSourceResponse(
                 FIELDS,
-                ((str(params["ts_code"]), None, None, "1", 12),),
+                (
+                    (
+                        str(params["ts_code"]),
+                        None,
+                        None,
+                        "20260331",
+                        "1",
+                        "1",
+                        "1",
+                        12,
+                        "0",
+                    ),
+                ),
             )
 
     database = _database(core_settings)
@@ -311,7 +357,20 @@ def test_partial_endpoint_failure_keeps_evidence_but_never_completes(
         (
             RawSourceResponse(
                 FIELDS,
-                tuple(("000001.SZ", "20260425", "20260331", "1", 1) for _ in range(10)),
+                tuple(
+                    (
+                        "000001.SZ",
+                        "20260425",
+                        "",
+                        "20260331",
+                        "1",
+                        "1",
+                        "1",
+                        1,
+                        "0",
+                    )
+                    for _ in range(10)
+                ),
             ),
             "SUSPECTED_TRUNCATION",
         ),
@@ -319,7 +378,19 @@ def test_partial_endpoint_failure_keeps_evidence_but_never_completes(
         (
             RawSourceResponse(
                 FIELDS,
-                (("000001.SZ", "20261399", "20260331", "1", 1),),
+                (
+                    (
+                        "000001.SZ",
+                        "20261399",
+                        "",
+                        "20260331",
+                        "1",
+                        "1",
+                        "1",
+                        1,
+                        "0",
+                    ),
+                ),
             ),
             "MALFORMED_FIELDS",
         ),

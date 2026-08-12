@@ -113,6 +113,7 @@ CREATE TABLE data.financial_collection_operations (
     fingerprint text NOT NULL,
     generation_manifest_sha256 text NOT NULL,
     capability_sha256 text NOT NULL,
+    contract_descriptor jsonb NOT NULL,
     status text NOT NULL,
     target_count integer NOT NULL,
     completed_count integer DEFAULT 0 NOT NULL,

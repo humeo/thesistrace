@@ -20,6 +20,16 @@ from thesistrace.publication.serialization import canonical_json_bytes
 FINANCIAL_ENDPOINTS = ("income", "balancesheet", "cashflow")
 FINANCIAL_SOURCE_CONTRACT_VERSION = "tushare-financial-ordinary-v1"
 FINANCIAL_HISTORY_FLOOR = "19900101"
+_REQUIRED_FINANCIAL_FIELDS = {
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "end_type",
+    "update_flag",
+}
 
 
 class FinancialRawSource(Protocol):
@@ -272,6 +282,45 @@ class FinancialCollectionContract:
         }
 
     @classmethod
+    def from_descriptor(cls, value: object) -> FinancialCollectionContract:
+        if not isinstance(value, Mapping) or set(value) != {
+            "capability_sha256",
+            "endpoint_fields",
+            "suspected_truncation_row_counts",
+            "shards",
+        }:
+            raise ValueError("financial collection contract is invalid")
+        try:
+            endpoint_fields = tuple(
+                (str(item[0]), tuple(str(field) for field in item[1]))
+                for item in value["endpoint_fields"]
+            )
+            truncation = tuple(
+                (str(item[0]), None if item[1] is None else int(item[1]))
+                for item in value["suspected_truncation_row_counts"]
+            )
+            shards = tuple(
+                FinancialDateShard(
+                    name=str(item["name"]),
+                    start_date=item["start_date"],
+                    end_date=item["end_date"],
+                )
+                for item in value["shards"]
+            )
+            contract = cls(
+                capability_sha256=str(value["capability_sha256"]),
+                endpoint_fields=endpoint_fields,
+                suspected_truncation_row_counts=truncation,
+                shards=shards,
+            )
+            _validate_collection_contract(contract)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("financial collection contract is invalid") from error
+        if contract.descriptor() != value:
+            raise ValueError("financial collection contract is invalid")
+        return contract
+
+    @classmethod
     def from_capability(
         cls,
         report: FinancialCapabilityReport,
@@ -356,6 +405,17 @@ class FinancialShardCheckpoint:
     status: str
     batch_sha256: str | None
     collected_at: str | None
+    first_observed_at: str | None = None
+
+
+@dataclass(frozen=True)
+class CompletedFinancialCollection:
+    idempotency_key: str
+    generation_manifest_sha256: str
+    contract: FinancialCollectionContract
+    finished_at: str
+    target_count: int
+    shards: tuple[FinancialShardCheckpoint, ...]
 
 
 class RawFinancialBatchStore:
@@ -559,6 +619,62 @@ class FinancialCollectionService:
         batch["collected_at"] = row["first_collected_at"].isoformat()
         return batch
 
+    def completed_snapshot(self, idempotency_key: str) -> CompletedFinancialCollection:
+        with self._database.transaction() as transaction:
+            operation = transaction.execute(
+                """
+                SELECT generation_manifest_sha256, capability_sha256, status,
+                       contract_descriptor, target_count, completed_count, finished_at
+                FROM data.financial_collection_operations
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            rows = transaction.execute(
+                """
+                SELECT shard.ordinal, shard.endpoint, shard.instrument_id, shard.ts_code,
+                       shard.shard_name, shard.status, shard.batch_sha256,
+                       shard.collected_at, batch.first_collected_at AS first_observed_at
+                FROM data.financial_collection_shards AS shard
+                LEFT JOIN data.financial_raw_batches AS batch
+                  ON batch.batch_sha256 = shard.batch_sha256
+                WHERE shard.idempotency_key = %s
+                ORDER BY shard.ordinal
+                """,
+                (idempotency_key,),
+            ).fetchall()
+        if operation is None:
+            raise FinancialCollectionError("COLLECTION_NOT_FOUND")
+        target_count = int(operation["target_count"])
+        shards = tuple(_checkpoint(row) for row in rows)
+        try:
+            contract = FinancialCollectionContract.from_descriptor(operation["contract_descriptor"])
+        except ValueError as error:
+            raise FinancialCollectionError("COLLECTION_CONTRACT_INVALID") from error
+        if (
+            operation["status"] != "succeeded"
+            or operation["finished_at"] is None
+            or int(operation["completed_count"]) != target_count
+            or len(shards) != target_count
+            or tuple(item.ordinal for item in shards) != tuple(range(target_count))
+            or any(
+                item.status != "completed"
+                or item.batch_sha256 is None
+                or item.collected_at is None
+                or item.first_observed_at is None
+                for item in shards
+            )
+        ):
+            raise FinancialCollectionError("COLLECTION_INCOMPLETE")
+        return CompletedFinancialCollection(
+            idempotency_key=idempotency_key,
+            generation_manifest_sha256=str(operation["generation_manifest_sha256"]),
+            contract=contract,
+            finished_at=operation["finished_at"].isoformat(),
+            target_count=target_count,
+            shards=shards,
+        )
+
     def _initialize_operation(
         self,
         *,
@@ -583,14 +699,15 @@ class FinancialCollectionService:
                     """
                     INSERT INTO data.financial_collection_operations (
                         idempotency_key, fingerprint, generation_manifest_sha256,
-                        capability_sha256, status, target_count
-                    ) VALUES (%s, %s, %s, %s, 'running', %s)
+                        capability_sha256, contract_descriptor, status, target_count
+                    ) VALUES (%s, %s, %s, %s, %s, 'running', %s)
                     """,
                     (
                         idempotency_key,
                         fingerprint,
                         generation_manifest_sha256,
                         contract.capability_sha256,
+                        Jsonb(contract.descriptor()),
                         target_count,
                     ),
                 )
@@ -1007,23 +1124,37 @@ def _validate_collection_request(
         character not in "0123456789abcdef" for character in generation_manifest_sha256
     ):
         raise FinancialCollectionError("INVALID_GENERATION")
+    try:
+        _validate_collection_contract(contract)
+    except ValueError as error:
+        raise FinancialCollectionError("INVALID_FINANCIAL_CONTRACT") from error
+
+
+def _validate_collection_contract(contract: FinancialCollectionContract) -> None:
     if (
         len(contract.capability_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in contract.capability_sha256)
         or tuple(endpoint for endpoint, _fields in contract.endpoint_fields) != FINANCIAL_ENDPOINTS
         or any(
-            not fields or len(set(fields)) != len(fields)
+            not fields
+            or len(set(fields)) != len(fields)
+            or not _REQUIRED_FINANCIAL_FIELDS.issubset(fields)
             for _endpoint, fields in contract.endpoint_fields
         )
         or tuple(endpoint for endpoint, _count in contract.suspected_truncation_row_counts)
         != FINANCIAL_ENDPOINTS
         or not contract.shards
+        or len({shard.name for shard in contract.shards}) != len(contract.shards)
     ):
-        raise FinancialCollectionError("INVALID_FINANCIAL_CONTRACT")
+        raise ValueError("financial collection contract is invalid")
 
 
 def _checkpoint(row: Mapping[str, object]) -> FinancialShardCheckpoint:
     collected_at = row["collected_at"]
     if collected_at is not None and not isinstance(collected_at, datetime):
+        raise FinancialCollectionError("SHARD_CHECKPOINT_INVALID")
+    first_observed_at = row.get("first_observed_at")
+    if first_observed_at is not None and not isinstance(first_observed_at, datetime):
         raise FinancialCollectionError("SHARD_CHECKPOINT_INVALID")
     return FinancialShardCheckpoint(
         ordinal=int(str(row["ordinal"])),
@@ -1034,6 +1165,7 @@ def _checkpoint(row: Mapping[str, object]) -> FinancialShardCheckpoint:
         status=str(row["status"]),
         batch_sha256=None if row["batch_sha256"] is None else str(row["batch_sha256"]),
         collected_at=None if collected_at is None else collected_at.isoformat(),
+        first_observed_at=(None if first_observed_at is None else first_observed_at.isoformat()),
     )
 
 
@@ -1155,6 +1287,7 @@ def _effective_source_publication_date(
 
 
 __all__ = (
+    "CompletedFinancialCollection",
     "FINANCIAL_ENDPOINTS",
     "FINANCIAL_SOURCE_CONTRACT_VERSION",
     "FinancialCapabilityReport",
