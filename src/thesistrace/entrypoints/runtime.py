@@ -21,6 +21,7 @@ from thesistrace.data import (
 from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
+from thesistrace.research_folder import ResearchFolderService
 from thesistrace.research_kernel import operator_catalog
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_run import ResearchRunService
@@ -94,6 +95,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService
+    research_folders: ResearchFolderService
     definitions: DefinitionService
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
@@ -140,6 +142,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
+            research_folders=ResearchFolderService(database),
             definitions=DefinitionService(
                 database,
                 alpha_fields=alpha_field_catalog,

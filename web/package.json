@@ -7,10 +7,15 @@
     "dev": "vite --host 0.0.0.0",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test:shell": "vitest run src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/definitions/DefinitionsPage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx",
+    "test:shell": "vitest run src/shell/AppShell.test.tsx src/data/DataPage.test.tsx src/research/ResearchWorkspacePage.test.tsx src/research-runs/ResearchRunsPage.test.tsx src/daily-tracks/DailyTracksPage.test.tsx",
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.8",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },

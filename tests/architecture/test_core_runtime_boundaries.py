@@ -16,6 +16,7 @@ CORE_PACKAGES = (
     "definition",
     "entrypoints",
     "publication",
+    "research_folder",
     "research_run",
 )
 FORBIDDEN_IMPORTS = (
@@ -30,7 +31,10 @@ PRODUCT_SCHEMAS = {
     "research_run": "research_runs",
     "daily_track": "daily_tracks",
     "publication": "publication",
+    "research_folder": "research_folders",
 }
+
+
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
     for package in CORE_PACKAGES:
         for path in (ROOT / "src" / "thesistrace" / package).rglob("*.py"):
@@ -58,6 +62,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "publication": {"_postgres"},
         "research_kernel": set(),
         "data": {"_postgres", "publication"},
+        "research_folder": {"_postgres"},
         "daily_track": {"_postgres", "data", "publication", "research_kernel"},
         "research_run": {
             "_postgres",
@@ -77,6 +82,7 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "data",
             "definition",
             "publication",
+            "research_folder",
             "research_kernel",
             "research_run",
         },
@@ -136,6 +142,7 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "publication.manifests",
             "publication.manifest_objects",
         ),
+        "research_folder": ("research_folders.folders",),
     }
 
     for module, owned_schema in PRODUCT_SCHEMAS.items():
@@ -240,6 +247,7 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
         "research_runs.",
         "daily_tracks.",
         "publication.",
+        "research_folders.",
     ):
         assert product_schema not in postgres_source
 
@@ -268,7 +276,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     resource_routes = source.partition("] as const;")[0]
     for route in (
         'path: "/data"',
-        'path: "/definitions"',
+        'path: "/research"',
         'path: "/research-runs"',
         'path: "/daily-tracks"',
     ):
@@ -318,6 +326,7 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("get", "/api/alpha/catalog"),
         ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),
+        ("get", "/api/research-folders"),
         ("get", "/api/definitions"),
         ("get", "/api/definitions/authoring-options"),
         ("get", "/api/definitions/{definition_id}"),

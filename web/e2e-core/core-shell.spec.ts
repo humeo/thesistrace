@@ -1,14 +1,12 @@
-import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Page, type TestInfo } from "@playwright/test";
 
-test("current data supports one visible ResearchRun and DailyTrack journey", async ({ page }, testInfo) => {
+test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const responses: string[] = [];
   const externalRequests: string[] = [];
   page.on("request", (request) => {
     const hostname = new URL(request.url()).hostname;
-    if (hostname !== "127.0.0.1" && hostname !== "localhost") {
-      externalRequests.push(request.url());
-    }
+    if (hostname !== "127.0.0.1" && hostname !== "localhost") externalRequests.push(request.url());
   });
   page.on("response", (response) => {
     if (response.url().includes("/api/")) {
@@ -20,94 +18,85 @@ test("current data supports one visible ResearchRun and DailyTrack journey", asy
     await page.goto("/data");
     await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
     await expect(page.getByText("Ready for research")).toBeVisible();
-    await expect(page.getByText("2026-08-03")).toBeVisible();
-    await expect(page.getByText("2026-08-11")).toHaveCount(2);
-    await expect(page.getByRole("button", { name: "Refresh ↻" })).toBeVisible();
-    await expectForbiddenProductInternalsToBeAbsent(page);
 
-    await page.getByRole("link", { name: "Definitions" }).click();
-    await page.getByRole("button", { name: "New Definition" }).click();
-    await expect(
-      page.getByText("Both dates are required to run; incomplete drafts can still be saved."),
-    ).toBeVisible();
-    await page.getByLabel("Definition name").fill("Browser Current Data Alpha");
-    await page.getByLabel("Research start date").fill("2026-08-05");
-    await page.getByLabel("Research end date").fill("2026-08-03");
-    await page.getByRole("button", { name: "Add Alpha" }).click();
-    await page.getByLabel("Alpha field 1").selectOption("price.close.adjusted");
-    await page.getByLabel("Alpha field 2").selectOption("price.close.adjusted");
-    await page.getByLabel("Universe").selectOption("top300");
-    await page.getByLabel("Neutralization").selectOption("none");
-    await page.getByLabel("Holdings count").fill("1");
-    await page.getByLabel("Rebalance interval").fill("1");
+    await page.getByRole("link", { name: "New Research", exact: true }).click();
+    await expect(page).toHaveURL(/\/research$/);
+    await expect(page.getByRole("heading", { name: "Research", exact: true })).toBeVisible();
+    await expect(page.getByText("Default Folder")).toBeVisible();
+    await expect(page.getByLabel("Research name")).toHaveValue("");
+    await expect(page.locator(".cm-content")).toHaveText("");
+    await expectRemovedAuthoringControlsToBeAbsent(page);
 
-    await expect(page.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
-    await expect(
-      page.getByText("Research end date must not precede start date"),
-    ).toBeVisible();
-    const rejectedRuns = await page.request.get("/api/research-runs");
-    expect(rejectedRuns.ok()).toBeTruthy();
-    expect((await rejectedRuns.json()).items).toHaveLength(0);
-
+    await page.getByLabel("Research name").fill("Browser Mean Research");
+    const editor = page.locator(".cm-content");
+    await editor.click();
+    await page.keyboard.type("ts_");
+    await page.keyboard.press("Control+Space");
+    const meanCompletion = page.getByRole("option", { name: /ts_mean/ });
+    await expect(meanCompletion).toBeVisible();
+    await expect(page.locator(".cm-completionInfo")).toContainText("Complete-window rolling");
+    await page.keyboard.press("Escape");
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.keyboard.type("unknown_field");
+    await expect(page.getByRole("list", { name: "Formula diagnostics" })).toBeVisible();
+    await expect(page.locator(".cm-lintRange-error")).toHaveCount(1);
+    await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    await page.keyboard.type("ts_mean(close_adj, 2)");
+    await expect(page.getByText("Valid formula", { exact: true })).toBeVisible();
+    await page.getByLabel("Hypothesis").fill("Short rolling mean retains signal.");
     await page.getByLabel("Research start date").fill("2026-08-03");
     await page.getByLabel("Research end date").fill("2026-08-05");
-    await page.getByRole("button", { name: "Run", exact: true }).click();
-    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/, {
-      timeout: 30_000,
-    });
-    await expect(
-      page.locator(".research-run-facts p").filter({ hasText: "Status" }),
-    ).toContainText("succeeded", { timeout: 30_000 });
-    await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Daily Observations" })).toBeVisible();
-    await expect(page.getByRole("table", { name: "Daily Observations" }).locator("tbody tr"))
-      .toHaveCount(3);
-    await expect(page.getByRole("heading", { name: "Terminal Strategy State" }))
-      .toBeVisible();
-    await expect(page.getByText("2026-08-05").first()).toBeVisible();
-    const terminalSection = page.getByRole("region", { name: "Terminal Strategy State" });
-    const terminalNav = await metricValue(terminalSection, "Net NAV");
-    const terminalCash = await metricValue(terminalSection, "Net cash");
-    await expectForbiddenProductInternalsToBeAbsent(page);
+    await page.getByLabel("Universe").selectOption("top300");
+    await page.getByLabel("Neutralization").selectOption("none");
+    await page.getByLabel("Holdings count").fill("10");
+    await page.getByLabel("Rebalance sessions").fill("2");
 
-    await page.getByRole("button", { name: "Start Tracking" }).click();
-    await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/, {
-      timeout: 30_000,
+    const browserKeys = await page.evaluate(() => Object.keys(localStorage));
+    expect(browserKeys).toEqual(["thesistrace.research-draft.folder_default"]);
+    const retainedDraft = await page.evaluate(() => JSON.parse(
+      localStorage.getItem("thesistrace.research-draft.folder_default") ?? "null",
+    ));
+    expect(retainedDraft).toMatchObject({
+      name: "Browser Mean Research",
+      formula: "ts_mean(close_adj, 2)",
+      universe: "top300",
+      neutralization: "none",
+      holdingsCount: "10",
+      rebalanceEverySessions: "2",
+      lastAdmittedBaseline: null,
     });
-    await expect(page.getByRole("heading", { name: "Tracking Origin" })).toBeVisible();
-    await expect(page.getByText(`Origin net NAV ${terminalNav}`, { exact: true })).toBeVisible();
-    await expect(page.getByText(`Origin net cash ${terminalCash}`, { exact: true })).toBeVisible();
 
-    await expect.poll(
-      async () => {
-        await page.getByRole("button", { name: "Refresh", exact: true }).click();
-        return await page.locator(".research-run-facts").first().innerText();
-      },
-      { timeout: 30_000, intervals: [100, 250, 500, 1_000] },
-    ).toContain("Up to date");
-    await expect(page.getByText("Strategy session 2026-08-11", { exact: true })).toBeVisible();
-    await expectForbiddenProductInternalsToBeAbsent(page);
+    await page.reload();
+    await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
+    await expect(page.locator(".cm-content")).toHaveText("ts_mean(close_adj, 2)");
+    await expect(page.getByLabel("Hypothesis")).toHaveValue("Short rolling mean retains signal.");
+    await expect(page.getByLabel("Universe")).toHaveValue("top300");
+
+    page.once("dialog", async (dialog) => dialog.dismiss());
+    const workspaceNew = page.locator(".research-workspace-header").getByRole("button", { name: "New Research" });
+    await workspaceNew.click();
+    await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
+    page.once("dialog", async (dialog) => dialog.accept());
+    await workspaceNew.click();
+    await expect(page.getByLabel("Research name")).toHaveValue("");
+    await expect(page.locator(".cm-content")).toHaveText("");
+    expect(await page.evaluate(() => localStorage.getItem("thesistrace.research-draft.folder_default"))).toBeNull();
+
+    const folderRead = await page.request.get("/api/research-folders");
+    expect(folderRead.ok()).toBeTruthy();
+    expect((await folderRead.json()).items).toMatchObject([
+      { id: "folder_default", name: "Default", is_default: true },
+    ]);
+    expect(responses.some((entry) => entry.includes("/api/definitions"))).toBe(false);
     expect(externalRequests, "browser journey must remain local-only").toEqual([]);
   } finally {
     await attachResponses(testInfo, responses);
-    await testInfo.attach("external-requests.json", {
-      body: Buffer.from(`${JSON.stringify(externalRequests, null, 2)}\n`, "utf8"),
-      contentType: "application/json",
-    });
   }
 });
 
-async function metricValue(scope: Locator, label: string): Promise<string> {
-  const metric = scope.locator(".result-metric").filter({ hasText: label });
-  return (await metric.locator("strong").innerText()).trim();
-}
-
-async function expectForbiddenProductInternalsToBeAbsent(page: Page): Promise<void> {
+async function expectRemovedAuthoringControlsToBeAbsent(page: Page): Promise<void> {
   const body = await page.locator("body").innerText();
-  expect(body).not.toMatch(
-    /Update data|Dataset Release|Data Generation|operator attempt|manifest location|checkpoint manifest|pin fence/i,
-  );
+  expect(body).not.toMatch(/\bDefinitions\b|\bRevision\b|\bSave\b|\bRefresh\b|\bAdd Alpha\b/);
 }
 
 async function attachResponses(testInfo: TestInfo, responses: string[]): Promise<void> {

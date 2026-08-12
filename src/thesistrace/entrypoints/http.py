@@ -33,6 +33,7 @@ from thesistrace.definition import (
 )
 from thesistrace.entrypoints.alpha_http import install_alpha_http
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings, open_core_runtime
+from thesistrace.research_folder import ResearchFolderList
 from thesistrace.research_run import (
     ResearchRunCancelCommand,
     ResearchRunCancelConflict,
@@ -67,6 +68,10 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
     @app.get("/api/data", response_model=DataOverview)
     def data_overview(request: Request) -> DataOverview:
         return _runtime(request).data_overview.overview()
+
+    @app.get("/api/research-folders", response_model=ResearchFolderList)
+    def list_research_folders(request: Request) -> ResearchFolderList:
+        return _runtime(request).research_folders.list()
 
     @app.post("/api/definitions/run", response_model=DefinitionRunOutcome)
     def run_new_definition(

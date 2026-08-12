@@ -12,6 +12,7 @@ from thesistrace._postgres import (
 CORE_SCHEMAS = (
     "publication",
     "data",
+    "research_folders",
     "definitions",
     "research_runs",
     "daily_tracks",
@@ -20,6 +21,7 @@ _SCHEMA_PACKAGES = {
     "definitions": "definition",
     "research_runs": "research_run",
     "daily_tracks": "daily_track",
+    "research_folders": "research_folder",
 }
 
 CORE_SCHEMA_DEFINITIONS = tuple(

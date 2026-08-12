@@ -22,6 +22,7 @@ def drop_product_schemas(settings: CoreSettings) -> None:
                 "daily_tracks",
                 "research_runs",
                 "definitions",
+                "research_folders",
                 "publication",
                 "data",
             ):
