@@ -22,9 +22,9 @@ limit. Validation composes historical offsets through the complete expression
 and rejects a result above 252. For example:
 
 ```text
-ts_mean($close_adj, 252)                  # valid: offset 251
-lag($close_adj, 252)                      # valid: offset 252
-ts_mean(pct_change($close_adj, 5), 250)  # invalid: offset 254
+ts_mean(close_adj, 252)                  # valid: offset 251
+lag(close_adj, 252)                      # valid: offset 252
+ts_mean(pct_change(close_adj, 5), 250)  # invalid: offset 254
 ```
 
 This literal contract keeps frozen Alpha Expressions portable and makes their
