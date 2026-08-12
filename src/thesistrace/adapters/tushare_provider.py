@@ -21,6 +21,7 @@ from thesistrace.data.canonical_mapping import (
     liquidity_universes,
     research_sessions_after,
 )
+from thesistrace.data.source import RawSourceError, RawSourceResponse
 
 SOURCE_CONTRACT_VERSION = "tushare-v2"
 _BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-foundation"
@@ -58,7 +59,7 @@ class HttpTushareTransport:
         self._client.close()
 
 
-class TushareSourceError(RuntimeError):
+class TushareSourceError(RawSourceError):
     def __init__(
         self,
         reason_code: str,
@@ -282,9 +283,7 @@ class TushareAdapter:
         if not shared_open:
             raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
 
-        self._progress(
-            {"event": "collection_phase", "phase": "market_facts", "status": "started"}
-        )
+        self._progress({"event": "collection_phase", "phase": "market_facts", "status": "started"})
         market_facts = self._collect_market_facts(shared_open)
         self._progress(
             {
@@ -298,9 +297,7 @@ class TushareAdapter:
             }
         )
 
-        self._progress(
-            {"event": "collection_phase", "phase": "industry", "status": "started"}
-        )
+        self._progress({"event": "collection_phase", "phase": "industry", "status": "started"})
         industry_classification = self.query_paginated(
             "index_classify",
             params={"src": "SW2021"},
@@ -552,6 +549,16 @@ class TushareAdapter:
         params: Mapping[str, object],
         fields: Sequence[str],
     ) -> list[dict[str, object]]:
+        response = self.query_raw(api_name, params=params, fields=fields)
+        return [dict(zip(response.fields, row, strict=True)) for row in response.items]
+
+    def query_raw(
+        self,
+        api_name: str,
+        *,
+        params: Mapping[str, object],
+        fields: Sequence[str],
+    ) -> RawSourceResponse:
         payload = {
             "api_name": api_name,
             "token": self._token,
@@ -576,7 +583,10 @@ class TushareAdapter:
             raise TushareSourceError("INVALID_RESPONSE", source_code=0, api_name=api_name)
         if any(not isinstance(row, list) or len(row) != len(response_fields) for row in items):
             raise TushareSourceError("INVALID_RESPONSE", source_code=0, api_name=api_name)
-        return [dict(zip(response_fields, row, strict=True)) for row in items]
+        return RawSourceResponse(
+            fields=tuple(response_fields),
+            items=tuple(tuple(row) for row in items),
+        )
 
     def query_paginated(
         self,
@@ -719,11 +729,7 @@ def _load_bootstrap_checkpoint(
         not isinstance(foundation, dict)
         or set(foundation) != expected_tables
         or any(not isinstance(foundation[name], list) for name in expected_tables)
-        or any(
-            not isinstance(row, dict)
-            for name in expected_tables
-            for row in foundation[name]
-        )
+        or any(not isinstance(row, dict) for name in expected_tables for row in foundation[name])
     ):
         raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
     return foundation
@@ -1285,9 +1291,7 @@ def normalize_industries(
             "sw2021_l3": str(row.get("l3_code", "")),
         }
         for row in rows
-        if row.get("ts_code")
-        and str(row["ts_code"]) in allowed_codes
-        and row.get("in_date")
+        if row.get("ts_code") and str(row["ts_code"]) in allowed_codes and row.get("in_date")
     ]
     intervals.sort(key=lambda item: (item["instrument_id"], item["active_from"]))
     previous: dict[str, str] = {}

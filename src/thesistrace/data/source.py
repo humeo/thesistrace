@@ -22,6 +22,16 @@ class DataSourceError(RuntimeError):
         self.detail_code = detail_code
 
 
+class RawSourceError(RuntimeError):
+    """Marker for explicit failures reported by an external raw-source adapter."""
+
+
+@dataclass(frozen=True)
+class RawSourceResponse:
+    fields: tuple[str, ...]
+    items: tuple[tuple[object, ...], ...]
+
+
 @dataclass(frozen=True)
 class CollectionPlan:
     kind: str

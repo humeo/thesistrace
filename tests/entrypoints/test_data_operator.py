@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from thesistrace.adapters.tushare_provider import TushareSourceError
-from thesistrace.data import DataOperatorError, DataSourceError
+from thesistrace.data import DataOperatorError, DataSourceError, FinancialCollectionError
 from thesistrace.entrypoints import data_operator
 
 
@@ -19,6 +19,32 @@ def test_bootstrap_cli_exposes_an_explicit_start_date(
 
     assert exit_status.value.code == 0
     assert "--start-date START_DATE" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        (
+            "probe-financial",
+            ("--reference-instrument", "--comparison-shard"),
+        ),
+        (
+            "collect-financial",
+            ("--generation-manifest-sha256", "--capability-report", "--date-shard"),
+        ),
+    ],
+)
+def test_private_financial_operator_exposes_explicit_contract_inputs(
+    capsys: pytest.CaptureFixture[str],
+    command: str,
+    expected: tuple[str, ...],
+) -> None:
+    with pytest.raises(SystemExit) as exit_status:
+        data_operator.main([command, "--help"])
+
+    assert exit_status.value.code == 0
+    output = capsys.readouterr().out
+    assert all(item in output for item in expected)
 
 
 def test_bootstrap_cli_passes_the_explicit_start_date_to_the_operator(
@@ -111,5 +137,34 @@ def test_data_operator_cli_preserves_tushare_failure_diagnostic(
             "reason_code": "UPSTREAM_RATE_LIMITED",
             "source_code": 40203,
             "api_name": "adj_factor",
+        },
+    }
+
+
+def test_financial_operator_failure_identifies_only_the_failed_shard(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def fail(_arguments: list[str] | None = None) -> None:
+        raise FinancialCollectionError(
+            "UPSTREAM_RATE_LIMITED",
+            endpoint="cashflow",
+            instrument="000001.SZ",
+            shard="complete-history",
+        )
+
+    monkeypatch.setattr(data_operator, "_run", fail)
+
+    with pytest.raises(SystemExit) as failure:
+        data_operator.main(["collect-financial"])
+
+    assert failure.value.code == 2
+    assert json.loads(capsys.readouterr().err) == {
+        "status": "failed",
+        "code": "UPSTREAM_RATE_LIMITED",
+        "error": {
+            "endpoint": "cashflow",
+            "instrument": "000001.SZ",
+            "shard": "complete-history",
         },
     }

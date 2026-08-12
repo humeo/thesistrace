@@ -894,6 +894,42 @@ def test_tushare_rejects_responses_missing_requested_fields() -> None:
     assert failure.value.reason_code == "INVALID_RESPONSE"
 
 
+def test_tushare_raw_query_preserves_source_field_and_row_order() -> None:
+    class FinancialTransport:
+        def post(self, payload: dict[str, object]) -> dict[str, object]:
+            assert payload["api_name"] == "income"
+            assert payload["fields"] == "ts_code,ann_date,revenue"
+            return {
+                "code": 0,
+                "msg": "",
+                "data": {
+                    "fields": ["ann_date", "ts_code", "revenue"],
+                    "items": [
+                        ["20260425", "000001.SZ", None],
+                        ["20260425", "000001.SZ", 35277000000],
+                    ],
+                },
+            }
+
+    provider = TushareAdapter(
+        token="recorded-token",
+        transport=FinancialTransport(),
+        throttle_seconds=0,
+    )
+
+    response = provider.query_raw(
+        "income",
+        params={"ts_code": "000001.SZ"},
+        fields=("ts_code", "ann_date", "revenue"),
+    )
+
+    assert response.fields == ("ann_date", "ts_code", "revenue")
+    assert response.items == (
+        ("20260425", "000001.SZ", None),
+        ("20260425", "000001.SZ", 35277000000),
+    )
+
+
 def test_tushare_provider_preflight_checks_every_contract_without_exposing_token() -> None:
     transport = RecordingTransport()
     provider = TushareAdapter(

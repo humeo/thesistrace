@@ -105,6 +105,81 @@ INSERT INTO data.current_dataset_state (singleton) VALUES (1);
 
 
 --
+-- Name: financial_collection_operations; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_collection_operations (
+    idempotency_key text NOT NULL,
+    fingerprint text NOT NULL,
+    generation_manifest_sha256 text NOT NULL,
+    capability_sha256 text NOT NULL,
+    status text NOT NULL,
+    target_count integer NOT NULL,
+    completed_count integer DEFAULT 0 NOT NULL,
+    failure_code text,
+    failure_endpoint text,
+    failure_instrument text,
+    failure_shard text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    CONSTRAINT financial_collection_operations_counts_check CHECK ((target_count >= 0) AND (completed_count >= 0) AND (completed_count <= target_count)),
+    CONSTRAINT financial_collection_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_collection_operations_generation_check CHECK ((generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_collection_operations_capability_check CHECK ((capability_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_collection_operations_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
+    CONSTRAINT financial_collection_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text]))),
+    CONSTRAINT financial_collection_operations_state_check CHECK ((((status = 'running'::text) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = 'succeeded'::text) AND (completed_count = target_count) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (failure_code IS NOT NULL) AND (failure_endpoint IS NOT NULL) AND (failure_instrument IS NOT NULL) AND (failure_shard IS NOT NULL) AND (finished_at IS NOT NULL))))
+);
+
+
+--
+-- Name: financial_raw_batches; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_raw_batches (
+    batch_sha256 text NOT NULL,
+    payload_sha256 text NOT NULL,
+    endpoint text NOT NULL,
+    parameters jsonb NOT NULL,
+    returned_fields jsonb NOT NULL,
+    row_count integer NOT NULL,
+    source_date_start text,
+    source_date_end text,
+    byte_count integer NOT NULL,
+    first_collected_at timestamp with time zone NOT NULL,
+    CONSTRAINT financial_raw_batches_batch_check CHECK ((batch_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_raw_batches_payload_check CHECK ((payload_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_raw_batches_endpoint_check CHECK ((endpoint = ANY (ARRAY['income'::text, 'balancesheet'::text, 'cashflow'::text]))),
+    CONSTRAINT financial_raw_batches_counts_check CHECK ((row_count >= 0) AND (byte_count > 0)),
+    CONSTRAINT financial_raw_batches_extent_check CHECK (((source_date_start IS NULL) = (source_date_end IS NULL)))
+);
+
+
+--
+-- Name: financial_collection_shards; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_collection_shards (
+    idempotency_key text NOT NULL,
+    ordinal integer NOT NULL,
+    endpoint text NOT NULL,
+    instrument_id text NOT NULL,
+    ts_code text NOT NULL,
+    shard_name text NOT NULL,
+    parameters jsonb NOT NULL,
+    status text NOT NULL,
+    batch_sha256 text,
+    collected_at timestamp with time zone,
+    CONSTRAINT financial_collection_shards_ordinal_check CHECK ((ordinal >= 0)),
+    CONSTRAINT financial_collection_shards_endpoint_check CHECK ((endpoint = ANY (ARRAY['income'::text, 'balancesheet'::text, 'cashflow'::text]))),
+    CONSTRAINT financial_collection_shards_identity_check CHECK ((instrument_id <> ''::text) AND (ts_code <> ''::text) AND (shard_name <> ''::text)),
+    CONSTRAINT financial_collection_shards_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'completed'::text]))),
+    CONSTRAINT financial_collection_shards_state_check CHECK ((((status = 'pending'::text) AND (batch_sha256 IS NULL) AND (collected_at IS NULL)) OR ((status = 'completed'::text) AND (batch_sha256 IS NOT NULL) AND (collected_at IS NOT NULL))))
+);
+
+
+--
 -- Name: generation_candidates; Type: TABLE; Schema: data; Owner: -
 --
 
@@ -237,6 +312,22 @@ ALTER TABLE ONLY data.generation_candidates
     ADD CONSTRAINT generation_candidates_pkey PRIMARY KEY (operation_id);
 
 
+ALTER TABLE ONLY data.financial_collection_operations
+    ADD CONSTRAINT financial_collection_operations_pkey PRIMARY KEY (idempotency_key);
+
+
+ALTER TABLE ONLY data.financial_raw_batches
+    ADD CONSTRAINT financial_raw_batches_pkey PRIMARY KEY (batch_sha256);
+
+
+ALTER TABLE ONLY data.financial_collection_shards
+    ADD CONSTRAINT financial_collection_shards_pkey PRIMARY KEY (idempotency_key, ordinal);
+
+
+ALTER TABLE ONLY data.financial_collection_shards
+    ADD CONSTRAINT financial_collection_shards_identity_key UNIQUE (idempotency_key, endpoint, instrument_id, shard_name);
+
+
 --
 -- Name: generation_pins generation_pins_owner_kind_owner_id_key; Type: CONSTRAINT; Schema: data; Owner: -
 --
@@ -296,3 +387,11 @@ ALTER TABLE ONLY data.collection_roots
 
 ALTER TABLE ONLY data.collection_targets
     ADD CONSTRAINT collection_targets_idempotency_key_fkey FOREIGN KEY (idempotency_key) REFERENCES data.collection_operations(idempotency_key) ON DELETE CASCADE;
+
+
+ALTER TABLE ONLY data.financial_collection_shards
+    ADD CONSTRAINT financial_collection_shards_operation_fkey FOREIGN KEY (idempotency_key) REFERENCES data.financial_collection_operations(idempotency_key) ON DELETE CASCADE;
+
+
+ALTER TABLE ONLY data.financial_collection_shards
+    ADD CONSTRAINT financial_collection_shards_batch_fkey FOREIGN KEY (batch_sha256) REFERENCES data.financial_raw_batches(batch_sha256);

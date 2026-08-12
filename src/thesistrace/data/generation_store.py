@@ -91,6 +91,12 @@ class MountedMarketSeries:
 
 
 @dataclass(frozen=True, order=True)
+class HistoricalInstrumentIdentity:
+    instrument_id: str
+    ts_code: str
+
+
+@dataclass(frozen=True, order=True)
 class GenerationFileRef:
     kind: str
     sha256: str
@@ -196,6 +202,36 @@ class MountedGenerationStore:
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
         _validate_candidate_projection(descriptor, canonical)
         return descriptor
+
+    def read_historical_ordinary_a_share_identities(
+        self,
+        manifest_sha256: str,
+    ) -> tuple[HistoricalInstrumentIdentity, ...]:
+        root = self._read_family_generation_root(manifest_sha256)
+        spec, reference = self._family_table_reference(
+            root,
+            "market.instrument_identity",
+            "instruments",
+        )
+        research_sessions = root["research_sessions"]
+        if not isinstance(research_sessions, list):
+            raise GenerationStoreError("Research Session projection is incompatible")
+        rows = self._open_table(
+            spec,
+            reference,
+            [str(session) for session in research_sessions],
+        )
+        identities = tuple(
+            HistoricalInstrumentIdentity(
+                instrument_id=str(row["instrument_id"]),
+                ts_code=str(row["ts_code"]),
+            )
+            for row in rows
+            if row["asset_type"] == "ordinary_a_share"
+        )
+        if not identities:
+            raise GenerationStoreError("Historical ordinary A-share identity set is empty")
+        return identities
 
     def read_market_slice(
         self,

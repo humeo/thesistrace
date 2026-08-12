@@ -4,7 +4,9 @@ import argparse
 import json
 import logging
 import os
+import stat
 import sys
+from collections.abc import Mapping
 from datetime import date, datetime
 from pathlib import Path
 from typing import NoReturn
@@ -27,7 +29,14 @@ from thesistrace.data import (
     DataRefreshError,
     DataRefreshService,
     DataSourceError,
+    FinancialCapabilityReport,
+    FinancialCollectionContract,
+    FinancialCollectionError,
+    FinancialCollectionOutcome,
+    FinancialCollectionService,
+    FinancialDateShard,
     RefreshOutcome,
+    probe_financial_capability,
 )
 from thesistrace.entrypoints.schema import verify_core_schema
 
@@ -44,6 +53,8 @@ def main(arguments: list[str] | None = None) -> None:
         DataRefreshError,
     ) as error:
         _failure(error.code, diagnostic=_failure_diagnostic(error))
+    except FinancialCollectionError as error:
+        _failure(error.code, diagnostic=error.diagnostic())
     except Exception:
         _failure("OPERATOR_FAILURE")
     payload = outcome if isinstance(outcome, dict) else outcome.__dict__
@@ -53,7 +64,11 @@ def main(arguments: list[str] | None = None) -> None:
 def _run(
     arguments: list[str] | None = None,
 ) -> (
-    BootstrapOutcome | CollectionOutcome | RefreshOutcome | dict[str, str]
+    BootstrapOutcome
+    | CollectionOutcome
+    | FinancialCollectionOutcome
+    | RefreshOutcome
+    | dict[str, object]
 ):
     parser = argparse.ArgumentParser(description="ThesisTrace private Data Operator")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -71,6 +86,19 @@ def _run(
     work.add_argument("--replay", type=Path)
     collect = subcommands.add_parser("collect")
     collect.add_argument("--idempotency-key", required=True)
+    financial_probe = subcommands.add_parser("probe-financial")
+    financial_probe.add_argument("--reference-instrument", required=True)
+    financial_probe.add_argument(
+        "--comparison-shard",
+        action="append",
+        required=True,
+        metavar="NAME:START:END",
+    )
+    financial_collect = subcommands.add_parser("collect-financial")
+    financial_collect.add_argument("--idempotency-key", required=True)
+    financial_collect.add_argument("--generation-manifest-sha256", required=True)
+    financial_collect.add_argument("--capability-report", type=Path, required=True)
+    financial_collect.add_argument("--date-shard", action="append", metavar="NAME:START:END")
     parsed = parser.parse_args(arguments)
 
     transport: HttpTushareTransport | None = None
@@ -92,7 +120,8 @@ def _run(
             return DataGarbageCollector(database, mount_root).collect(
                 idempotency_key=parsed.idempotency_key
             )
-        replay = parsed.replay
+        replay = getattr(parsed, "replay", None)
+        rate_limit_events: dict[str, list[float]] = {}
         live_provider: TushareAdapter | None = None
         if replay is not None:
             provider = ReplayTushareProvider(replay)
@@ -100,10 +129,19 @@ def _run(
             transport = HttpTushareTransport(
                 endpoint=os.environ.get("THESISTRACE_TUSHARE_ENDPOINT", "https://api.tushare.pro")
             )
+
+            def financial_progress(event: dict[str, object]) -> None:
+                if event.get("event") == "rate_limited":
+                    api_name = str(event.get("api_name", ""))
+                    retry_seconds = event.get("retry_in_seconds")
+                    if isinstance(retry_seconds, (int, float)):
+                        rate_limit_events.setdefault(api_name, []).append(float(retry_seconds))
+                _progress(event)
+
             live_provider = TushareAdapter(
                 token=_environment("THESISTRACE_TUSHARE_TOKEN"),
                 transport=transport,
-                progress=_progress,
+                progress=financial_progress,
                 bootstrap_checkpoint=(
                     mount_root / ".operator" / "tushare-bootstrap-foundation.json"
                     if parsed.command == "bootstrap"
@@ -111,6 +149,41 @@ def _run(
                 ),
             )
             provider = live_provider
+        if parsed.command == "probe-financial":
+            if live_provider is None:
+                raise FinancialCollectionError("LIVE_FINANCIAL_PROBE_REQUIRED")
+            report = probe_financial_capability(
+                live_provider,
+                reference_instrument=parsed.reference_instrument,
+                comparison_shards=tuple(
+                    _parse_financial_shard(value) for value in parsed.comparison_shard
+                ),
+                observed_rate_limit_events=rate_limit_events,
+            )
+            return report.descriptor()
+        if parsed.command == "collect-financial":
+            if live_provider is None:
+                raise FinancialCollectionError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
+            report = _load_financial_capability(parsed.capability_report)
+            date_shards = (
+                None
+                if parsed.date_shard is None
+                else tuple(_parse_financial_shard(value) for value in parsed.date_shard)
+            )
+            contract = FinancialCollectionContract.from_capability(
+                report,
+                date_shards=date_shards,
+            )
+            return FinancialCollectionService(
+                database,
+                mount_root,
+                live_provider,
+                progress=_progress,
+            ).collect(
+                idempotency_key=parsed.idempotency_key,
+                generation_manifest_sha256=parsed.generation_manifest_sha256,
+                contract=contract,
+            )
         source = TushareDataSource(provider=provider, progress=_progress)
         if parsed.command == "bootstrap":
             outcome = DataOperator(
@@ -153,7 +226,7 @@ def _run(
             transport.close()
 
 
-def _failure(code: str, *, diagnostic: dict[str, object] | None = None) -> NoReturn:
+def _failure(code: str, *, diagnostic: Mapping[str, object] | None = None) -> NoReturn:
     payload: dict[str, object] = {"status": "failed", "code": code}
     if diagnostic is not None:
         payload["error"] = diagnostic
@@ -195,6 +268,41 @@ def _environment(name: str) -> str:
     if not value:
         raise RuntimeError(f"missing Data Operator configuration: {name}")
     return value
+
+
+def _parse_financial_shard(value: str) -> FinancialDateShard:
+    parts = value.split(":")
+    if len(parts) != 3:
+        raise FinancialCollectionError("INVALID_FINANCIAL_DATE_SHARD")
+    try:
+        return FinancialDateShard(parts[0], parts[1], parts[2])
+    except ValueError as error:
+        raise FinancialCollectionError("INVALID_FINANCIAL_DATE_SHARD") from error
+
+
+def _load_financial_capability(path: Path) -> FinancialCapabilityReport:
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1024 * 1024:
+                raise ValueError
+            content = bytearray()
+            while chunk := os.read(descriptor, min(64 * 1024, 1024 * 1024 + 1 - len(content))):
+                content.extend(chunk)
+                if len(content) > 1024 * 1024:
+                    raise ValueError
+            if len(content) != metadata.st_size:
+                raise ValueError
+        finally:
+            os.close(descriptor)
+        value = json.loads(content)
+        if not isinstance(value, dict):
+            raise ValueError
+        return FinancialCapabilityReport.from_descriptor(value)
+    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError) as error:
+        raise FinancialCollectionError("INVALID_FINANCIAL_CAPABILITY_REPORT") from error
 
 
 if __name__ == "__main__":

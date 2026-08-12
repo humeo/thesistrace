@@ -9,6 +9,15 @@ from thesistrace.data.fields import (
     authorable_field_bindings,
     authorable_fields,
 )
+from thesistrace.data.financial_collection import (
+    FinancialCapabilityReport,
+    FinancialCollectionContract,
+    FinancialCollectionError,
+    FinancialCollectionOutcome,
+    FinancialCollectionService,
+    FinancialDateShard,
+    probe_financial_capability,
+)
 from thesistrace.data.generation_store import (
     GenerationStoreError,
     MountedDatasetFamilyDescriptor,
@@ -72,6 +81,12 @@ __all__ = [
     "DatasetLifecycle",
     "DataSource",
     "DataSourceError",
+    "FinancialCapabilityReport",
+    "FinancialCollectionContract",
+    "FinancialCollectionError",
+    "FinancialCollectionOutcome",
+    "FinancialCollectionService",
+    "FinancialDateShard",
     "GenerationStoreError",
     "GenerationPin",
     "MountedDatasetHeadStore",
@@ -84,4 +99,5 @@ __all__ = [
     "authorable_field_bindings",
     "bootstrap_collection_plan",
     "refresh_collection_plan",
+    "probe_financial_capability",
 ]
