@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import {
+  useResearchAsDraft,
+  type FrozenResearchAuthorableInput,
+} from "../research/draft";
+
 type CorrelationSummary = {
   mean: number | null;
   sample_deviation: number | null;
@@ -107,10 +112,7 @@ export type ResearchRun = {
   start_date: string;
   end_date: string;
   formula_summary: string;
-  input?: {
-    formula: string;
-    hypothesis: string | null;
-  };
+  input?: FrozenResearchAuthorableInput;
   failure_reason?: string;
   result?: ResearchResult;
 };
@@ -385,6 +387,9 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             run={run}
           />
         )}
+        {folders.length > 0 && run.input !== undefined && isTerminalResearch(run.status) ? (
+          <UseAsDraftPanel folders={folders} input={run.input} sourceFolderId={run.folder_id} />
+        ) : null}
         {run.status === "failed" && run.failure_reason ? (
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
         ) : null}
@@ -417,6 +422,61 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       )}
       {items?.length === 0 ? <p>No Research Runs yet.</p> : null}
       <ResearchRunHistory items={items ?? []} />
+    </section>
+  );
+}
+
+export function isTerminalResearch(status: ResearchRun["status"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+export function UseAsDraftPanel({
+  folders,
+  input,
+  sourceFolderId,
+  storage = window.localStorage,
+  confirmDiscard = (message) => window.confirm(message),
+  navigate = (path) => window.location.assign(path),
+}: {
+  folders: ResearchFolderOption[];
+  input: FrozenResearchAuthorableInput;
+  sourceFolderId: string;
+  storage?: Pick<Storage, "getItem" | "setItem">;
+  confirmDiscard?: (message: string) => boolean;
+  navigate?: (path: string) => void;
+}) {
+  const [targetFolderId, setTargetFolderId] = useState(sourceFolderId);
+  const [error, setError] = useState<string | null>(null);
+
+  function useAsDraft(): void {
+    setError(null);
+    try {
+      if (!useResearchAsDraft(storage, targetFolderId, input, confirmDiscard)) return;
+      navigate(targetFolderId === "folder_default"
+        ? "/research"
+        : `/research?folder=${encodeURIComponent(targetFolderId)}`);
+    } catch {
+      setError("This Research could not be copied into the browser Draft.");
+    }
+  }
+
+  return (
+    <section aria-label="Reuse Research" className="research-use-as-draft">
+      <h2>Reuse</h2>
+      <p>Copy the frozen research inputs into a browser Draft to inspect or edit them.</p>
+      <label>Target Folder
+        <select
+          aria-label="Target Folder"
+          onChange={(event) => setTargetFolderId(event.target.value)}
+          value={targetFolderId}
+        >
+          {folders.map((folder) => (
+            <option key={folder.id} value={folder.id}>{folder.name}</option>
+          ))}
+        </select>
+      </label>
+      <button onClick={useAsDraft}>Use as Draft</button>
+      {error !== null ? <p role="alert">{error}</p> : null}
     </section>
   );
 }

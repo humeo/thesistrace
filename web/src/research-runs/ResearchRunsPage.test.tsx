@@ -6,6 +6,8 @@ import {
   ResearchOrganizationPanel,
   ResearchRunHistory,
   TerminalStrategyStateView,
+  UseAsDraftPanel,
+  isTerminalResearch,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
 
@@ -125,5 +127,40 @@ describe("ResearchOrganizationPanel", () => {
     expect(markup).toContain("Signals");
     expect(markup).toContain("Update organization");
     expect(markup).not.toMatch(/Draft|Rerun|Revision/);
+  });
+});
+
+describe("UseAsDraftPanel", () => {
+  it("is available for every terminal Research state only", () => {
+    expect(isTerminalResearch("succeeded")).toBe(true);
+    expect(isTerminalResearch("failed")).toBe(true);
+    expect(isTerminalResearch("cancelled")).toBe(true);
+    expect(isTerminalResearch("queued")).toBe(false);
+    expect(isTerminalResearch("running")).toBe(false);
+  });
+
+  it("offers explicit local reuse without a Rerun action", () => {
+    const markup = renderToStaticMarkup(
+      <UseAsDraftPanel
+        folders={[{ id: "folder_default", name: "Default", is_default: true }]}
+        input={{
+          formula: "close_adj",
+          hypothesis: null,
+          start_date: "2026-08-01",
+          end_date: "2026-08-05",
+          universe: "top300",
+          neutralization: "none",
+          holdings_count: 10,
+          rebalance_every_sessions: 2,
+        }}
+        confirmDiscard={() => true}
+        navigate={() => undefined}
+        sourceFolderId="folder_default"
+        storage={{ getItem: () => null, setItem: () => undefined }}
+      />,
+    );
+    expect(markup).toContain("Use as Draft");
+    expect(markup).toContain("Target Folder");
+    expect(markup).not.toMatch(/Rerun|Run now/);
   });
 });

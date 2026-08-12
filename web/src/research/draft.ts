@@ -35,6 +35,17 @@ export type ResearchRunAdmissionCommand = {
   rebalance_every_sessions: number;
 };
 
+export type FrozenResearchAuthorableInput = {
+  formula: string;
+  hypothesis: string | null;
+  start_date: string;
+  end_date: string;
+  universe: string;
+  neutralization: string;
+  holdings_count: number;
+  rebalance_every_sessions: number;
+};
+
 export type ResearchDraft = ResearchInputs & {
   editor: EditorState;
   lastAdmittedBaseline: ResearchInputs | null;
@@ -175,6 +186,56 @@ export function hasUnexecutedChanges(draft: ResearchDraft): boolean {
     return Object.values(current).some((value) => value !== "");
   }
   return JSON.stringify(current) !== JSON.stringify(draft.lastAdmittedBaseline);
+}
+
+export function useResearchAsDraft(
+  storage: Pick<Storage, "getItem" | "setItem">,
+  folderId: string,
+  input: FrozenResearchAuthorableInput,
+  confirmDiscard: (message: string) => boolean,
+): boolean {
+  const current = loadResearchDraft(storage, folderId);
+  const nextInputs: ResearchInputs = {
+    ...researchInputs(current),
+    formula: input.formula,
+    hypothesis: input.hypothesis ?? "",
+    startDate: input.start_date,
+    endDate: input.end_date,
+    universe: input.universe,
+    neutralization: input.neutralization,
+    holdingsCount: String(input.holdings_count),
+    rebalanceEverySessions: String(input.rebalance_every_sessions),
+  };
+  if (
+    wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
+    !confirmDiscard("Use this Research as Draft and discard unexecuted browser changes?")
+  ) return false;
+  persistResearchDraft(storage, folderId, {
+    ...current,
+    ...nextInputs,
+    editor: { anchor: input.formula.length, head: input.formula.length },
+    pendingAdmission: null,
+  });
+  return true;
+}
+
+function wouldOverwriteUnexecutedAuthorableValue(
+  draft: ResearchDraft,
+  next: ResearchInputs,
+): boolean {
+  const current = researchInputs(draft);
+  const baseline = draft.lastAdmittedBaseline ?? researchInputs(emptyResearchDraft());
+  const copiedKeys = [
+    "formula",
+    "hypothesis",
+    "startDate",
+    "endDate",
+    "universe",
+    "neutralization",
+    "holdingsCount",
+    "rebalanceEverySessions",
+  ] as const;
+  return copiedKeys.some((key) => current[key] !== baseline[key] && current[key] !== next[key]);
 }
 
 function readDraft(value: unknown): ResearchDraft | null {

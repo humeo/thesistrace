@@ -11,6 +11,7 @@ import {
   loadResearchDraft,
   persistResearchDraft,
   researchDraftKey,
+  useResearchAsDraft,
 } from "./draft";
 import { ResearchDraftWorkspace } from "./ResearchWorkspacePage";
 import { ResearchFolderNavigation } from "./ResearchWorkspacePage";
@@ -41,6 +42,79 @@ const catalog = {
 const data = { readiness: true, dataset_coverage: { start: "2025-01-01", end: "2026-08-12" }, data_through_session: "2026-08-12", last_refresh_at: "2026-08-13T00:00:00Z" };
 
 describe("browser Research Draft", () => {
+  it("copies frozen authorable values into only the chosen Folder Draft", () => {
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, "folder_target", {
+      ...emptyResearchDraft(),
+      name: "Keep prospective name",
+      formula: "volume_shares",
+      lastAdmittedBaseline: {
+        ...emptyResearchDraft(),
+        name: "Keep prospective name",
+        formula: "volume_shares",
+      },
+    });
+    persistResearchDraft(storage, "folder_other", {
+      ...emptyResearchDraft(),
+      formula: "open_adj",
+    });
+    const otherBefore = storage.getItem(researchDraftKey("folder_other"));
+
+    const confirmDiscard = vi.fn(() => false);
+    const copied = useResearchAsDraft(storage, "folder_target", {
+      formula: "ts_mean(close_adj, 20)",
+      hypothesis: "Frozen hypothesis",
+      start_date: "2026-08-03",
+      end_date: "2026-08-05",
+      universe: "top1000",
+      neutralization: "industry",
+      holdings_count: 25,
+      rebalance_every_sessions: 5,
+    }, confirmDiscard);
+
+    expect(copied).toBe(true);
+    expect(confirmDiscard).not.toHaveBeenCalled();
+    expect(loadResearchDraft(storage, "folder_target")).toMatchObject({
+      name: "Keep prospective name",
+      formula: "ts_mean(close_adj, 20)",
+      hypothesis: "Frozen hypothesis",
+      startDate: "2026-08-03",
+      endDate: "2026-08-05",
+      universe: "top1000",
+      neutralization: "industry",
+      holdingsCount: "25",
+      rebalanceEverySessions: "5",
+      editor: { anchor: 22, head: 22 },
+      pendingAdmission: null,
+    });
+    expect(storage.getItem(researchDraftKey("folder_other"))).toBe(otherBefore);
+  });
+
+  it("requires confirmation only before overwriting unexecuted local values", () => {
+    const storage = new MemoryStorage();
+    const target = {
+      ...emptyResearchDraft(),
+      formula: "volume_shares",
+    };
+    persistResearchDraft(storage, "folder_target", target);
+    const confirmDiscard = vi.fn(() => false);
+
+    const copied = useResearchAsDraft(storage, "folder_target", {
+      formula: "close_adj",
+      hypothesis: null,
+      start_date: "2026-08-03",
+      end_date: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      holdings_count: 10,
+      rebalance_every_sessions: 2,
+    }, confirmDiscard);
+
+    expect(copied).toBe(false);
+    expect(confirmDiscard).toHaveBeenCalledOnce();
+    expect(loadResearchDraft(storage, "folder_target")).toEqual(target);
+  });
+
   it("reuses one request ID for the same pending snapshot and preserves later edits on acceptance", () => {
     const initial = {
       ...emptyResearchDraft(),

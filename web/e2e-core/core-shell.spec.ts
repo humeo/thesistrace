@@ -296,6 +296,46 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Filter by Folder")).toBeVisible();
     expect(folderRequestCount).toBe(2);
     await page.unroute("**/api/research-folders");
+
+    await page.goto(`/research?folder=${customFolderId}`);
+    await expect(page.locator(".cm-content")).toHaveText("close_adj");
+    await page.getByLabel("Research name").fill("Target Local Name");
+    await page.goto(`/research-runs/${defaultRunId}`);
+    await expect(page.getByRole("button", { name: "Use as Draft" })).toBeVisible();
+    const sourceBeforeReuseResponse = await page.request.get(`/api/research-runs/${defaultRunId}`);
+    const sourceBeforeReuse = await sourceBeforeReuseResponse.json();
+    const historyBeforeReuse = await page.request.get("/api/research-runs");
+    const historyCountBeforeReuse = ((await historyBeforeReuse.json()).items as unknown[]).length;
+    await page.getByLabel("Target Folder").selectOption(customFolderId);
+    await page.getByRole("button", { name: "Use as Draft" }).click();
+    await expect(page).toHaveURL(new RegExp(`/research\\?folder=${customFolderId}$`));
+    await expect(page.getByLabel("Research name")).toHaveValue("Target Local Name");
+    await expect(page.locator(".cm-content")).toHaveText("ts_mean(close_adj, 2)");
+    await expect(page.getByLabel("Hypothesis")).toHaveValue("Browser Run acceptance.");
+    await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-04");
+    await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
+    await expect(page.getByLabel("Universe")).toHaveValue("top300");
+    await expect(page.getByLabel("Neutralization")).toHaveValue("none");
+    await expect(page.getByLabel("Holdings count")).toHaveValue("10");
+    await expect(page.getByLabel("Rebalance sessions")).toHaveValue("2");
+    const historyAfterCopy = await page.request.get("/api/research-runs");
+    expect(((await historyAfterCopy.json()).items as unknown[])).toHaveLength(historyCountBeforeReuse);
+
+    await replaceFormula(page, "ts_mean(close_adj, 2) + 1");
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    const reusedRunId = page.url().split("/").at(-1);
+    expect(reusedRunId).not.toBe(defaultRunId);
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    const reusedDetail = await page.request.get(`/api/research-runs/${reusedRunId}`);
+    expect(await reusedDetail.json()).toMatchObject({
+      id: reusedRunId,
+      folder_id: customFolderId,
+      name: "Target Local Name",
+      input: { formula: "ts_mean(close_adj, 2) + 1" },
+    });
+    const sourceAfterReuse = await page.request.get(`/api/research-runs/${defaultRunId}`);
+    expect(await sourceAfterReuse.json()).toEqual(sourceBeforeReuse);
     await expectRemovedAuthoringControlsToBeAbsent(page);
   } finally {
     await attachResponses(testInfo, responses);
@@ -327,7 +367,7 @@ async function replaceFormula(page: Page, formula: string): Promise<void> {
 
 async function expectRemovedAuthoringControlsToBeAbsent(page: Page): Promise<void> {
   const body = await page.locator("body").innerText();
-  expect(body).not.toMatch(/\bDefinitions\b|\bRevision\b|\bSave\b|\bRefresh\b|\bAdd Alpha\b/);
+  expect(body).not.toMatch(/\bDefinitions\b|\bRevision\b|\bSave\b|\bRefresh\b|\bRerun\b|\bAdd Alpha\b/);
 }
 
 async function attachResponses(testInfo: TestInfo, responses: string[]): Promise<void> {
