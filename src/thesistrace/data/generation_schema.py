@@ -45,6 +45,11 @@ def _contract(
 
 _STRING = pa.string()
 _STRING_LIST = pa.list_(pa.field("item", pa.string(), nullable=False))
+_PRICE_DECIMAL = pa.decimal128(24, 4)
+_ADJUSTED_PRICE_DECIMAL = pa.decimal128(32, 8)
+_RATIO_DECIMAL = pa.decimal128(20, 8)
+_TURNOVER_DECIMAL = pa.decimal128(28, 2)
+_ADJUSTMENT_DECIMAL = pa.decimal128(20, 6)
 TABLE_SPECS = (
     TableSpec(
         "research_calendar",
@@ -183,12 +188,56 @@ TABLE_SPECS = (
     ),
 )
 
+MARKET_CANDIDATE_TABLE_SPECS = (
+    *(spec for spec in TABLE_SPECS if spec.name != "prices"),
+    TableSpec(
+        "eod_prices",
+        _contract(
+            "eod-prices",
+            (
+                ("session_date", pa.date32()),
+                ("instrument_id", _STRING),
+                ("open_raw", _PRICE_DECIMAL),
+                ("high_raw", _PRICE_DECIMAL),
+                ("low_raw", _PRICE_DECIMAL),
+                ("close_raw", _PRICE_DECIMAL),
+                ("pre_close_reference_raw", _PRICE_DECIMAL),
+                ("price_change_raw", _PRICE_DECIMAL),
+                ("pct_change_ratio", _RATIO_DECIMAL),
+                ("volume_shares", pa.int64()),
+                ("turnover_amount_cny", _TURNOVER_DECIMAL),
+                ("adjustment_scale", _ADJUSTMENT_DECIMAL),
+                ("open_adj", _ADJUSTED_PRICE_DECIMAL),
+                ("high_adj", _ADJUSTED_PRICE_DECIMAL),
+                ("low_adj", _ADJUSTED_PRICE_DECIMAL),
+                ("close_adj", _ADJUSTED_PRICE_DECIMAL),
+            ),
+            ("session_date", "instrument_id"),
+        ),
+        "session_date",
+    ),
+    TableSpec(
+        "adjustment_factors",
+        _contract(
+            "adjustment-factors",
+            (
+                ("session_date", pa.date32()),
+                ("instrument_id", _STRING),
+                ("source_adjustment_factor", _ADJUSTMENT_DECIMAL),
+            ),
+            ("session_date", "instrument_id"),
+        ),
+        "session_date",
+    ),
+)
+
 
 __all__ = (
     "GENERATION_MANIFEST_MAX_BYTES",
     "GENERATION_OBJECT_MAX_BYTES",
     "GENERATION_ROW_PARTITION_COUNT",
     "GENERATION_SESSION_PARTITION_COUNT",
+    "MARKET_CANDIDATE_TABLE_SPECS",
     "TABLE_SPECS",
     "TableSpec",
 )

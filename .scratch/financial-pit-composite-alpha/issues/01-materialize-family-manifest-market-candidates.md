@@ -10,29 +10,29 @@ small enough to execute safely.
 
 **Blocked by:** None — can start immediately.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] A deterministic current-market fixture can be materialized as one root
+- [x] A deterministic current-market fixture can be materialized as one root
   descriptor with explicit family Manifest references and family-specific
   Dataset Coverage.
-- [ ] Reopening the candidate after process restart reproduces the same
+- [x] Reopening the candidate after process restart reproduces the same
   descriptors, Dataset Schemas, Coverage declarations, field availability, and
   content identities.
-- [ ] Root inspection returns the metadata required by admission and Data
+- [x] Root inspection returns the metadata required by admission and Data
   Overview without opening any Parquet Physical Data Object.
-- [ ] Identical source content reuses identical family Manifests and Physical
+- [x] Identical source content reuses identical family Manifests and Physical
   Data Objects rather than rewriting equivalent bytes.
-- [ ] Reordered but semantically identical input produces the same canonical
+- [x] Reordered but semantically identical input produces the same canonical
   content identities.
-- [ ] Missing, corrupt, mismatched, or incompletely synchronized family
+- [x] Missing, corrupt, mismatched, or incompletely synchronized family
   descriptors fail validation and never appear as a complete candidate.
-- [ ] Family Coverage is not collapsed into one universal date range at the
+- [x] Family Coverage is not collapsed into one universal date range at the
   root.
-- [ ] Candidate creation and validation use real immutable filesystem objects
+- [x] Candidate creation and validation use real immutable filesystem objects
   and deterministic fixtures.
-- [ ] Building the candidate does not move the current Dataset Head and does
+- [x] Building the candidate does not move the current Dataset Head and does
   not introduce a runtime fallback or compatibility reader.
-- [ ] Existing active market ResearchRun and DailyTrack behavior remains
+- [x] Existing active market ResearchRun and DailyTrack behavior remains
   unchanged while this candidate-only path is introduced.
 
 ## Comments
@@ -40,3 +40,14 @@ small enough to execute safely.
 - Parent: Point-in-Time Financial Data and Composite Alpha.
 - This is the one explicit prefactor ticket; Ticket 02 performs the runtime
   hard cut.
+- Implemented a candidate-only root-to-Family Manifest graph with explicit
+  market Family schemas, family-owned Coverage, validation summaries, and
+  canonical `equity.eod_price` / `equity.adjustment_factor` /
+  `equity.trading_state` boundaries. The active flat Head/runtime is unchanged.
+- Validation decodes every Physical Data Object, verifies schema, canonical
+  bytes, boundaries, partitions, row counts, current canonical invariants, and
+  recomputed root/Family projections. Inspection remains descriptor-only.
+- Verification: focused mounted-generation suite `30 passed`; repository gate
+  `314 passed` with one existing warning; frontend typecheck and `9 passed`.
+- Standards and Spec reviews were run independently. All findings were fixed
+  and both final re-reviews reported no remaining actionable findings.

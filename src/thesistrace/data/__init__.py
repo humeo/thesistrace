@@ -11,6 +11,8 @@ from thesistrace.data.fields import (
 )
 from thesistrace.data.generation_store import (
     GenerationStoreError,
+    MountedDatasetFamilyDescriptor,
+    MountedFamilyGenerationDescriptor,
     MountedGeneration,
     MountedGenerationDescriptor,
     MountedGenerationStore,
@@ -77,6 +79,8 @@ __all__ = [
     "GenerationStoreError",
     "GenerationPin",
     "MountedDatasetHeadStore",
+    "MountedDatasetFamilyDescriptor",
+    "MountedFamilyGenerationDescriptor",
     "MountedGeneration",
     "MountedGenerationDescriptor",
     "MountedGenerationStore",
