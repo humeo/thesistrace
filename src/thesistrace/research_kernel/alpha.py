@@ -12,6 +12,7 @@ from thesistrace.research_kernel.alpha_expression import (
 )
 from thesistrace.research_kernel.numeric import canonical_binary64_bytes
 from thesistrace.research_kernel.series_plan import (
+    CompiledAlphaLike,
     build_series_execution_plan,
     evaluate_series_execution_matrix,
     evaluate_series_execution_plan,
@@ -63,13 +64,11 @@ def evaluate_parsed_series(
 def evaluate_alpha_matrix(
     canonical: dict[str, object],
     *,
-    expression: AlphaExpression,
-    field_bindings: Mapping[str, str],
+    compiled_alpha: CompiledAlphaLike,
     universe_name: str,
     neutralization: str,
     read_field_series: FieldSeriesReader,
 ) -> dict[str, object]:
-    parsed = validate_alpha(expression, field_bindings=field_bindings)
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization must be none or industry")
     calendar = [str(item) for item in canonical["research_calendar"]]
@@ -82,11 +81,11 @@ def evaluate_alpha_matrix(
     prices_by_position = {
         (str(row["session"]), str(row["instrument_id"])): row for row in canonical["prices"]
     }
-    plan = build_series_execution_plan(parsed)
+    plan = build_series_execution_plan(compiled_alpha)
 
     def inputs_for_instrument(instrument_id: str) -> dict[str, list[float | None]]:
         inputs: dict[str, list[float | None]] = {}
-        for field_id in parsed.field_ids:
+        for field_id in plan.field_names:
             inputs[field_id] = list(
                 read_field_series(
                     field_id,
@@ -138,8 +137,8 @@ def evaluate_alpha_matrix(
             {"session": session, "values": rows, "coverage_loss": dict(sorted(coverage.items()))}
         )
     return {
-        "expression": expression,
-        "effective_lookback": parsed.effective_lookback,
+        "expression": dict(compiled_alpha.expression),
+        "effective_lookback": compiled_alpha.effective_lookback,
         "neutralization": neutralization,
         "sessions": session_results,
         "checksum": alpha_matrix_checksum(session_results),

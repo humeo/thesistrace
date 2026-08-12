@@ -16,8 +16,10 @@ from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError
 from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
 from thesistrace.data import (
+    DatasetAdmissionSnapshot,
     DatasetLifecycle,
     GenerationStoreError,
     MountedGenerationStore,
@@ -33,19 +35,27 @@ from thesistrace.publication import (
     lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_folder import DEFAULT_FOLDER_ID
+from thesistrace.research_kernel.alpha_expression import (
+    MAX_ALPHA_RUN_ESTIMATED_WORK,
+    estimate_alpha_run_work,
+)
 from thesistrace.research_kernel.kernel_run import (
     InsufficientCalculationWarmupError,
     KernelRunError,
     RunInput,
 )
 from thesistrace.research_kernel.kernel_run import run as run_kernel
+from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run.models import (
+    AlphaAdmissionFacts,
+    DataAdmissionFacts,
     ImmutableRunInput,
+    ResearchRunAdmissionCommand,
+    ResearchRunAdmissionIssue,
+    ResearchRunAuthorableInput,
     ResearchRunCancelCommand,
     ResearchRunDetail,
     ResearchRunList,
-    ResearchRunRerunCommand,
     ResearchRunResult,
     ResearchRunSummary,
     StartTrackingCommand,
@@ -82,6 +92,8 @@ RETRYABLE_FAILURES = (
     WORKER_LOST_FAILURE,
 )
 Progress = Callable[[str, str], None]
+CompileFormula = Callable[[str], CompiledAlpha]
+CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
 ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
@@ -93,10 +105,6 @@ class ResearchRunFenced(RuntimeError):
 
 
 class ResearchRunCancelConflict(RuntimeError):
-    pass
-
-
-class ResearchRunRerunConflict(RuntimeError):
     pass
 
 
@@ -122,6 +130,32 @@ class ResearchRunInsufficientWarmup(ValueError):
 
 class ResearchRunInputInvalid(ValueError):
     pass
+
+
+class ResearchRunAdmissionConflict(RuntimeError):
+    pass
+
+
+class ResearchRunAdmissionRejected(ValueError):
+    def __init__(self, issues: list[ResearchRunAdmissionIssue]) -> None:
+        super().__init__("ResearchRun admission rejected")
+        self.issues = issues
+
+
+FIXED_STRATEGY_KIND = "long_only_top_n_equal_weight"
+FIXED_INITIAL_CASH_CNY = "10000000"
+FIXED_EXECUTION = "next_open_full_fill"
+FIXED_COSTS = {
+    "commission_rate_all_in": "0.0003",
+    "commission_min_cny": "5",
+    "stamp_duty_sell_rate": "0.0005",
+    "transfer_fee_rate": "0.00001",
+}
+SEMANTIC_VERSIONS = {
+    "factor": "factor-v1",
+    "strategy": "strategy-v1",
+    "kernel": "kernel-v1",
+}
 
 
 @dataclass(frozen=True)
@@ -155,6 +189,8 @@ class ResearchRunService:
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         activate_track: ActivateTrack | None = None,
+        compile_formula: CompileFormula | None = None,
+        current_dataset: CurrentDataset | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -166,34 +202,100 @@ class ResearchRunService:
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._activate_track = activate_track
+        self._compile_formula = compile_formula
+        self._current_dataset = current_dataset
 
     def admit(
         self,
-        transaction: PostgresTransaction,
-        immutable_input: ImmutableRunInput,
+        command: ResearchRunAdmissionCommand,
     ) -> ResearchRunSummary:
-        """Admit one Run in the caller's transaction without committing it."""
-        definition = immutable_input.definition
+        if self._compile_formula is None or self._current_dataset is None:
+            raise RuntimeError("ResearchRun admission dependencies are not configured")
+        fingerprint = _admission_fingerprint(command)
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.admit:{command.request_id}",),
+            ).fetchone()
+            receipt = _admission_receipt(transaction, command.request_id)
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise ResearchRunAdmissionConflict(
+                        "ResearchRun request_id conflicts"
+                    )
+                return _summary(receipt)
+        try:
+            compiled = self._compile_formula(command.formula)
+        except FormulaCompilationError as error:
+            raise ResearchRunAdmissionRejected(
+                [
+                    ResearchRunAdmissionIssue(
+                        code=diagnostic.code,
+                        field="formula",
+                        message=diagnostic.message,
+                        range=diagnostic.range,
+                        details=diagnostic.details,
+                    )
+                    for diagnostic in error.diagnostics
+                ]
+            ) from error
+        snapshot = self._current_dataset()
+        immutable_input = _admitted_input(command, compiled, snapshot)
         run_id = f"run_{uuid4().hex[:20]}"
-        row = transaction.execute(
-            """
-            INSERT INTO research_runs.runs (
-                id, folder_id, definition_id, definition_revision,
-                requested_start_date, requested_end_date, status, immutable_input
-            ) VALUES (%s, %s, %s, %s, %s, %s, 'queued', %s)
-            RETURNING id, status, definition_id, definition_revision,
-                      requested_start_date, requested_end_date, rerun_of_id
-            """,
-            (
-                run_id,
-                DEFAULT_FOLDER_ID,
-                str(definition["id"]),
-                int(definition["revision"]),
-                immutable_input.requested_start_date,
-                immutable_input.requested_end_date,
-                Jsonb(immutable_input.model_dump(mode="json")),
-            ),
-        ).fetchone()
+        submitted_name = (command.name or "").strip()
+        name = submitted_name or f"Research {run_id[-8:].upper()}"
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.admit:{command.request_id}",),
+            ).fetchone()
+            receipt = _admission_receipt(transaction, command.request_id)
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise ResearchRunAdmissionConflict(
+                        "ResearchRun request_id conflicts"
+                    )
+                return _summary(receipt)
+            folder = transaction.execute(
+                "SELECT id FROM research_folders.folders WHERE id = %s FOR KEY SHARE",
+                (command.folder_id,),
+            ).fetchone()
+            if folder is None:
+                raise ResearchRunAdmissionRejected(
+                    [
+                        ResearchRunAdmissionIssue(
+                            code="FOLDER_NOT_FOUND",
+                            field="folder_id",
+                            message="Research Folder does not exist",
+                        )
+                    ]
+                )
+            row = transaction.execute(
+                """
+                INSERT INTO research_runs.runs (
+                    id, folder_id, name, requested_start_date,
+                    requested_end_date, status, immutable_input
+                ) VALUES (%s, %s, %s, %s, %s, 'queued', %s)
+                RETURNING id, name, folder_id, status, requested_start_date,
+                          requested_end_date, created_at, immutable_input, failure_reason
+                """,
+                (
+                    run_id,
+                    command.folder_id,
+                    name,
+                    immutable_input.requested_start_date,
+                    immutable_input.requested_end_date,
+                    Jsonb(immutable_input.model_dump(mode="json")),
+                ),
+            ).fetchone()
+            transaction.execute(
+                """
+                INSERT INTO research_runs.admission_requests (
+                    request_id, request_fingerprint, run_id
+                ) VALUES (%s, %s, %s)
+                """,
+                (command.request_id, fingerprint, run_id),
+            )
         assert row is not None
         return _summary(row)
 
@@ -226,9 +328,9 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date,
-                       rerun_of_id, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       failure_reason
                 FROM research_runs.runs
                 ORDER BY created_at DESC, id
                 """
@@ -239,9 +341,9 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date,
-                       rerun_of_id, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -278,9 +380,9 @@ class ResearchRunService:
 
             row = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date,
-                       rerun_of_id, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 FOR UPDATE
@@ -315,9 +417,9 @@ class ResearchRunService:
                         execution_fence = execution_fence + 1,
                         failure_reason = NULL, updated_at = now()
                     WHERE id = %s AND status IN ('queued', 'running')
-                    RETURNING id, status, definition_id, definition_revision,
+                    RETURNING id, name, folder_id, status,
                               requested_start_date, requested_end_date,
-                              rerun_of_id, failure_reason
+                              created_at, immutable_input, failure_reason
                     """,
                     (run_id,),
                 ).fetchone()
@@ -335,71 +437,6 @@ class ResearchRunService:
                     request_id,
                     fingerprint,
                     run_id,
-                    Jsonb(outcome.model_dump(mode="json")),
-                ),
-            )
-        return outcome
-
-    def rerun(
-        self,
-        run_id: str,
-        command: ResearchRunRerunCommand,
-    ) -> ResearchRunSummary | None:
-        request_id = command.request_id.strip()
-        if not request_id:
-            raise ValueError("ResearchRun Rerun request_id is required")
-        fingerprint = _rerun_fingerprint(run_id)
-        with self._database.transaction() as transaction:
-            transaction.execute(
-                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
-                (f"research_runs.rerun:{request_id}",),
-            ).fetchone()
-            receipt = transaction.execute(
-                """
-                SELECT request_fingerprint, outcome
-                FROM research_runs.rerun_receipts
-                WHERE request_id = %s
-                """,
-                (request_id,),
-            ).fetchone()
-            if receipt is not None:
-                if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunRerunConflict("ResearchRun Rerun request_id conflicts")
-                return ResearchRunSummary.model_validate(receipt["outcome"])
-
-            rerun_id = f"run_{uuid4().hex[:20]}"
-            row = transaction.execute(
-                """
-                INSERT INTO research_runs.runs (
-                    id, folder_id, definition_id, definition_revision,
-                    requested_start_date, requested_end_date,
-                    status, immutable_input, rerun_of_id
-                )
-                SELECT %s, folder_id, definition_id, definition_revision,
-                       requested_start_date, requested_end_date,
-                       'queued', immutable_input, id
-                FROM research_runs.runs
-                WHERE id = %s
-                RETURNING id, status, definition_id, definition_revision,
-                          requested_start_date, requested_end_date, rerun_of_id
-                """,
-                (rerun_id, run_id),
-            ).fetchone()
-            if row is None:
-                return None
-            outcome = _summary(row)
-            transaction.execute(
-                """
-                INSERT INTO research_runs.rerun_receipts (
-                    request_id, request_fingerprint, source_run_id,
-                    rerun_id, outcome
-                ) VALUES (%s, %s, %s, %s, %s)
-                """,
-                (
-                    request_id,
-                    fingerprint,
-                    run_id,
-                    rerun_id,
                     Jsonb(outcome.model_dump(mode="json")),
                 ),
             )
@@ -439,8 +476,9 @@ class ResearchRunService:
                     return DailyTrackSummary.model_validate(receipt["outcome"])
                 row = transaction.execute(
                     """
-                    SELECT id, status, definition_id, definition_revision,
-                           requested_start_date, requested_end_date, immutable_input,
+                    SELECT id, name, folder_id, status,
+                           requested_start_date, requested_end_date, created_at,
+                           immutable_input,
                            result_manifest_sha256, result_provenance
                     FROM research_runs.runs
                     WHERE id = %s
@@ -504,10 +542,9 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date,
-                       rerun_of_id, result_manifest_sha256,
-                       result_provenance, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       result_manifest_sha256, result_provenance, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -516,8 +553,12 @@ class ResearchRunService:
         if row is None:
             return None
         summary = _summary(row)
+        authorable_input = _authorable_input(row)
         if summary.status != "succeeded":
-            return ResearchRunDetail(**summary.model_dump())
+            return ResearchRunDetail(
+                **summary.model_dump(),
+                input=authorable_input,
+            )
         manifest_sha256 = row.get("result_manifest_sha256")
         provenance = row.get("result_provenance")
         if (
@@ -542,7 +583,11 @@ class ResearchRunService:
                 extra={"run_id": run_id, "error_type": type(error).__name__},
             )
             raise ResearchRunResultUnavailable from error
-        return ResearchRunDetail(**summary.model_dump(), result=result)
+        return ResearchRunDetail(
+            **summary.model_dump(),
+            input=authorable_input,
+            result=result,
+        )
 
     def _tracking_origin(
         self,
@@ -592,8 +637,6 @@ class ResearchRunService:
             raise ResearchRunTrackingUnavailable
         return TrackingOrigin(
             seed_run_id=str(row["id"]),
-            definition_id=str(row["definition_id"]),
-            definition_revision=int(row["definition_revision"]),
             immutable_input=immutable_input.model_dump(mode="json"),
             seed_data_generation_id=data_generation_id,
             seed_data_through_session=data_through_session,
@@ -865,13 +908,10 @@ class ResearchRunService:
             raise ResearchRunInsufficientWarmup(str(error)) from error
         except KernelRunError as error:
             raise ResearchRunInputInvalid(str(error)) from error
-        definition_content = immutable_input.definition.get("content")
-        if not isinstance(definition_content, Mapping):
-            raise ResearchRunInputInvalid("ResearchRun Definition content is invalid")
         result = build_result_payload(
             output,
             rebalance_interval=int(immutable_input.strategy["rebalance_every_sessions"]),
-            universe=str(definition_content["universe"]),
+            universe=immutable_input.universe,
         )
         provenance = _result_provenance(claim)
         prepared = self._publication.prepare(
@@ -1034,6 +1074,146 @@ class ResearchRunService:
             )
 
 
+def _admission_receipt(
+    transaction: PostgresTransaction,
+    request_id: str,
+) -> dict[str, object] | None:
+    return transaction.execute(
+        """
+        SELECT request.request_fingerprint,
+               run.id, run.name, run.folder_id, run.status,
+               run.requested_start_date, run.requested_end_date,
+               run.created_at, run.immutable_input, run.failure_reason
+        FROM research_runs.admission_requests AS request
+        JOIN research_runs.runs AS run ON run.id = request.run_id
+        WHERE request.request_id = %s
+        """,
+        (request_id,),
+    ).fetchone()
+
+
+def _admitted_input(
+    command: ResearchRunAdmissionCommand,
+    compiled: CompiledAlpha,
+    snapshot: DatasetAdmissionSnapshot | None,
+) -> ImmutableRunInput:
+    if snapshot is None:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="DATA_NOT_READY",
+                    field="data",
+                    message="Current Dataset is not ready",
+                )
+            ]
+        )
+    if command.start_date < snapshot.coverage_start or command.end_date > snapshot.coverage_end:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="RESEARCH_PERIOD_OUTSIDE_COVERAGE",
+                    field="start_date",
+                    message="Requested Research Dates must be inside current Dataset Coverage",
+                )
+            ]
+        )
+    sessions = snapshot.research_period(command.start_date, command.end_date)
+    if not sessions:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="RESEARCH_PERIOD_HAS_NO_SESSIONS",
+                    field="start_date",
+                    message="Requested Research Dates contain no Research Session",
+                )
+            ]
+        )
+    field_ids = frozenset(compiled.field_ids_by_identifier.values())
+    if not field_ids <= snapshot.available_field_ids:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="FIELD_UNAVAILABLE_IN_CURRENT_DATA",
+                    field="formula",
+                    message="Alpha field is unavailable in current Data",
+                )
+            ]
+        )
+    calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
+        start=sessions[0],
+        end=sessions[-1],
+        lookback=compiled.effective_lookback,
+        universe=command.universe,
+    )
+    estimated_run_work = estimate_alpha_run_work(
+        compiled.estimated_work,
+        research_session_count=calculation_session_count,
+        universe_instrument_count=universe_instrument_count,
+    )
+    if estimated_run_work > MAX_ALPHA_RUN_ESTIMATED_WORK:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="ALPHA_RUN_WORK_EXCEEDS_LIMIT",
+                    field="formula",
+                    message=(
+                        "Alpha Formula, Research Dates, and Universe exceed the Run work budget"
+                    ),
+                )
+            ]
+        )
+    return ImmutableRunInput(
+        formula_source=command.formula,
+        alpha_expression=compiled.expression,
+        hypothesis=command.hypothesis,
+        requested_start_date=command.start_date,
+        requested_end_date=command.end_date,
+        field_bindings={
+            field_id: identifier
+            for identifier, field_id in compiled.field_ids_by_identifier.items()
+        },
+        universe=command.universe,
+        neutralization=command.neutralization,
+        strategy={
+            "kind": FIXED_STRATEGY_KIND,
+            "holdings_count": command.holdings_count,
+            "rebalance_every_sessions": command.rebalance_every_sessions,
+            "initial_cash_cny": FIXED_INITIAL_CASH_CNY,
+            "execution": FIXED_EXECUTION,
+        },
+        costs=FIXED_COSTS,
+        risk_free_rate="0",
+        numeric_execution_contract=NUMERIC_CONTRACT_ID,
+        semantic_versions=SEMANTIC_VERSIONS,
+        alpha_admission=AlphaAdmissionFacts(
+            effective_lookback=compiled.effective_lookback,
+            node_count=compiled.node_count,
+            depth=compiled.depth,
+            formula_work=compiled.estimated_work,
+            estimated_run_work=estimated_run_work,
+        ),
+        data_admission=DataAdmissionFacts(
+            generation_manifest_sha256=snapshot.generation_manifest_sha256,
+            data_through_session=snapshot.data_through_session,
+            coverage_start=snapshot.coverage_start,
+            coverage_end=snapshot.coverage_end,
+            first_research_session=sessions[0],
+            last_research_session=sessions[-1],
+            calculation_session_count=calculation_session_count,
+            universe_instrument_count=universe_instrument_count,
+        ),
+    )
+
+
+def _admission_fingerprint(command: ResearchRunAdmissionCommand) -> str:
+    value = {
+        "action": "research-runs.admit/v1",
+        "command": command.model_dump(mode="json", exclude={"request_id"}),
+    }
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
 def _selected_research_period(
     immutable_input: ImmutableRunInput,
     *,
@@ -1068,22 +1248,16 @@ def _kernel_input(
     research_start_session: str,
     research_end_session: str,
 ) -> RunInput:
-    definition = immutable_input.definition
-    content = definition.get("content")
-    if not isinstance(content, Mapping):
-        raise ResearchRunInputInvalid("ResearchRun Definition content is invalid")
-    alpha = content.get("alpha")
-    if not isinstance(alpha, Mapping):
-        raise ResearchRunInputInvalid("ResearchRun Alpha is invalid")
     strategy = immutable_input.strategy
     costs = immutable_input.costs
     return RunInput(
         canonical_data=canonical,
-        alpha_expression=dict(alpha),
+        alpha_expression=immutable_input.alpha_expression,
         field_bindings=immutable_input.field_bindings,
+        effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
         read_field_series=read_alpha_field_series,
-        universe=str(content["universe"]),
-        neutralization=str(content["neutralization"]),
+        universe=immutable_input.universe,
+        neutralization=immutable_input.neutralization,
         holdings_count=int(strategy["holdings_count"]),
         rebalance_interval=int(strategy["rebalance_every_sessions"]),
         initial_cash_cny=str(strategy["initial_cash_cny"]),
@@ -1167,12 +1341,6 @@ def _cancel_fingerprint(run_id: str) -> str:
     return hashlib.sha256(serialized).hexdigest()
 
 
-def _rerun_fingerprint(run_id: str) -> str:
-    value = {"action": "research-runs.rerun/v1", "run_id": run_id}
-    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(serialized).hexdigest()
-
-
 def _start_tracking_fingerprint(run_id: str) -> str:
     # Keep the original wire fingerprint stable while receipt ownership moves
     # from DailyTracks to ResearchRuns.
@@ -1183,22 +1351,43 @@ def _start_tracking_fingerprint(run_id: str) -> str:
 
 def _summary(row: object) -> ResearchRunSummary:
     assert isinstance(row, dict)
-    summary = {
-        name: row[name]
-        for name in (
-            "id",
-            "status",
-            "definition_id",
-            "definition_revision",
-            "requested_start_date",
-            "requested_end_date",
-        )
-    }
-    summary["start_date"] = summary.pop("requested_start_date")
-    summary["end_date"] = summary.pop("requested_end_date")
-    summary["rerun_of_id"] = row.get("rerun_of_id")
-    summary["failure_reason"] = row.get("failure_reason")
-    return ResearchRunSummary.model_validate(summary)
+    immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+    compact_formula = " ".join(immutable_input.formula_source.split())
+    formula_summary = (
+        compact_formula
+        if len(compact_formula) <= 120
+        else f"{compact_formula[:117]}..."
+    )
+    return ResearchRunSummary.model_validate(
+        {
+            "id": row["id"],
+            "status": row["status"],
+            "name": row["name"],
+            "folder_id": row["folder_id"],
+            "created_at": row["created_at"],
+            "start_date": row["requested_start_date"],
+            "end_date": row["requested_end_date"],
+            "formula_summary": formula_summary,
+            "failure_reason": row.get("failure_reason"),
+        }
+    )
+
+
+def _authorable_input(row: object) -> ResearchRunAuthorableInput:
+    assert isinstance(row, dict)
+    immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+    return ResearchRunAuthorableInput(
+        formula=immutable_input.formula_source,
+        hypothesis=immutable_input.hypothesis,
+        start_date=immutable_input.requested_start_date,
+        end_date=immutable_input.requested_end_date,
+        universe=immutable_input.universe,
+        neutralization=immutable_input.neutralization,
+        holdings_count=int(immutable_input.strategy["holdings_count"]),
+        rebalance_every_sessions=int(
+            immutable_input.strategy["rebalance_every_sessions"]
+        ),
+    )
 
 
 def _public_result(

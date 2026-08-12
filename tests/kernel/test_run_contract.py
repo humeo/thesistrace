@@ -5,6 +5,7 @@ import pytest
 
 from thesistrace.data import read_alpha_field_series
 from thesistrace.research_kernel import KernelRunError, KernelState, RunInput, RunOutput, run
+from thesistrace.research_kernel.alpha import validate_alpha
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.result import build_result_payload
 
@@ -126,6 +127,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
             canonical_data=accepted_calculation_case["canonical"],
             alpha_expression="pct_change($close_adj, 20)",  # type: ignore[arg-type]
             field_bindings=FIELD_BINDINGS,
+            effective_alpha_lookback=20,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             holdings_count=int(strategy["holdings_count"]),
@@ -173,10 +175,12 @@ def _run_input(
     assert isinstance(costs, dict)
     calendar = canonical["research_calendar"]
     assert isinstance(calendar, list)
+    compiled_alpha = validate_alpha(alpha["expression"], field_bindings=FIELD_BINDINGS)
     return RunInput(
         canonical_data=canonical,
-        alpha_expression=alpha["expression"],
+        alpha_expression=compiled_alpha.expression,
         field_bindings=FIELD_BINDINGS,
+        effective_alpha_lookback=compiled_alpha.effective_lookback,
         universe=str(definition["universe"]),
         neutralization=str(definition["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),

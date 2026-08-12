@@ -48,29 +48,13 @@ CREATE TABLE research_runs.cancel_receipts (
 
 
 --
--- Name: rerun_receipts; Type: TABLE; Schema: research_runs; Owner: -
---
-
-CREATE TABLE research_runs.rerun_receipts (
-    request_id text NOT NULL,
-    request_fingerprint text NOT NULL,
-    source_run_id text NOT NULL,
-    rerun_id text NOT NULL,
-    outcome jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT rerun_receipts_outcome_check CHECK ((jsonb_typeof(outcome) = 'object'::text))
-);
-
-
---
 -- Name: runs; Type: TABLE; Schema: research_runs; Owner: -
 --
 
 CREATE TABLE research_runs.runs (
     id text NOT NULL,
     folder_id text NOT NULL,
-    definition_id text NOT NULL,
-    definition_revision integer NOT NULL,
+    name text NOT NULL,
     requested_start_date date NOT NULL,
     requested_end_date date NOT NULL,
     status text NOT NULL,
@@ -81,13 +65,20 @@ CREATE TABLE research_runs.runs (
     result_manifest_sha256 text,
     result_provenance jsonb,
     failure_reason text,
-    rerun_of_id text,
     CONSTRAINT runs_check CHECK ((requested_start_date <= requested_end_date)),
-    CONSTRAINT runs_definition_revision_check CHECK ((definition_revision > 0)),
+    CONSTRAINT runs_name_check CHECK (name = btrim(name) AND name <> ''),
     CONSTRAINT runs_execution_fence_check CHECK ((execution_fence >= 0)),
     CONSTRAINT runs_immutable_input_check CHECK ((jsonb_typeof(immutable_input) = 'object'::text)),
     CONSTRAINT runs_result_provenance_check CHECK (((result_provenance IS NULL) OR (jsonb_typeof(result_provenance) = 'object'::text))),
     CONSTRAINT runs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
+);
+
+
+CREATE TABLE research_runs.admission_requests (
+    request_id text NOT NULL,
+    request_fingerprint text NOT NULL,
+    run_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -138,12 +129,11 @@ ALTER TABLE ONLY research_runs.cancel_receipts
     ADD CONSTRAINT cancel_receipts_pkey PRIMARY KEY (request_id);
 
 
---
--- Name: rerun_receipts rerun_receipts_pkey; Type: CONSTRAINT; Schema: research_runs; Owner: -
---
+ALTER TABLE ONLY research_runs.admission_requests
+    ADD CONSTRAINT admission_requests_pkey PRIMARY KEY (request_id);
 
-ALTER TABLE ONLY research_runs.rerun_receipts
-    ADD CONSTRAINT rerun_receipts_pkey PRIMARY KEY (request_id);
+ALTER TABLE ONLY research_runs.admission_requests
+    ADD CONSTRAINT admission_requests_run_id_key UNIQUE (run_id);
 
 
 --
@@ -190,25 +180,5 @@ ALTER TABLE ONLY research_runs.attempts
     ADD CONSTRAINT attempts_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id);
 
 
---
--- Name: rerun_receipts rerun_receipts_rerun_id_fkey; Type: FK CONSTRAINT; Schema: research_runs; Owner: -
---
-
-ALTER TABLE ONLY research_runs.rerun_receipts
-    ADD CONSTRAINT rerun_receipts_rerun_id_fkey FOREIGN KEY (rerun_id) REFERENCES research_runs.runs(id);
-
-
---
--- Name: rerun_receipts rerun_receipts_source_run_id_fkey; Type: FK CONSTRAINT; Schema: research_runs; Owner: -
---
-
-ALTER TABLE ONLY research_runs.rerun_receipts
-    ADD CONSTRAINT rerun_receipts_source_run_id_fkey FOREIGN KEY (source_run_id) REFERENCES research_runs.runs(id);
-
-
---
--- Name: runs runs_rerun_of_id_fkey; Type: FK CONSTRAINT; Schema: research_runs; Owner: -
---
-
-ALTER TABLE ONLY research_runs.runs
-    ADD CONSTRAINT runs_rerun_of_id_fkey FOREIGN KEY (rerun_of_id) REFERENCES research_runs.runs(id);
+ALTER TABLE ONLY research_runs.admission_requests
+    ADD CONSTRAINT admission_requests_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id);

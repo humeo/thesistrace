@@ -13,7 +13,6 @@ CORE_PACKAGES = (
     "_postgres",
     "data",
     "daily_track",
-    "definition",
     "entrypoints",
     "publication",
     "research_folder",
@@ -27,7 +26,6 @@ FORBIDDEN_IMPORTS = (
 )
 PRODUCT_SCHEMAS = {
     "data": "data",
-    "definition": "definitions",
     "research_run": "research_runs",
     "daily_track": "daily_tracks",
     "publication": "publication",
@@ -67,13 +65,13 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "daily_track": {"_postgres", "data", "publication", "research_kernel"},
         "research_run": {
             "_postgres",
+            "alpha_language",
             "daily_track",
             "data",
             "publication",
             "research_folder",
             "research_kernel",
         },
-        "definition": {"_postgres", "data", "research_kernel", "research_run"},
         "fixture": {"data"},
         "adapters": {"data", "fixture"},
         "entrypoints": {
@@ -82,7 +80,6 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             "adapters",
             "daily_track",
             "data",
-            "definition",
             "publication",
             "research_folder",
             "research_kernel",
@@ -123,12 +120,11 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "data.generation_candidates",
             "data.generation_pins",
         ),
-        "definition": ("definitions.records", "definitions.run_receipts"),
         "research_run": (
             "research_runs.runs",
+            "research_runs.admission_requests",
             "research_runs.attempts",
             "research_runs.cancel_receipts",
-            "research_runs.rerun_receipts",
             "research_runs.start_tracking_receipts",
         ),
         "daily_track": (
@@ -336,17 +332,10 @@ def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() ->
         ("post", "/api/research-folders"),
         ("patch", "/api/research-folders/{folder_id}"),
         ("delete", "/api/research-folders/{folder_id}"),
-        ("get", "/api/definitions"),
-        ("get", "/api/definitions/authoring-options"),
-        ("get", "/api/definitions/{definition_id}"),
-        ("post", "/api/definitions"),
-        ("put", "/api/definitions/{definition_id}"),
-        ("post", "/api/definitions/run"),
-        ("post", "/api/definitions/{definition_id}/run"),
         ("get", "/api/research-runs"),
+        ("post", "/api/research-runs"),
         ("get", "/api/research-runs/{run_id}"),
         ("post", "/api/research-runs/{run_id}/cancel"),
-        ("post", "/api/research-runs/{run_id}/rerun"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),
         ("get", "/api/daily-tracks"),
         ("get", "/api/daily-tracks/{track_id}"),
@@ -560,19 +549,18 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
         assert product_schema not in schema
 
 
-def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> None:
-    definition_source = (ROOT / "src" / "thesistrace" / "definition" / "service.py").read_text()
-    definition_schema = (
-        ROOT / "src" / "thesistrace" / "definition" / "schema.sql"
-    ).read_text()
+def test_research_run_keeps_direct_admission_behind_one_atomic_sql_seam() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
     run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
 
     assert "def admit(" in run_source
     assert ".commit(" not in run_source
     assert "CREATE TABLE research_runs.runs" in run_schema
-    assert "research_runs." not in definition_source
-    assert "research_runs." not in definition_schema
+    assert "CREATE TABLE research_runs.admission_requests" in run_schema
+    assert "ResearchRunAdmissionCommand" in run_source
+    assert "compile_formula(command.formula)" in run_source
+    assert not list((ROOT / "src" / "thesistrace" / "definition").glob("*.py"))
+    assert not (ROOT / "src" / "thesistrace" / "definition" / "schema.sql").exists()
     assert "definitions." not in run_source
     assert "definitions." not in run_schema
 
@@ -626,9 +614,9 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "def cancel(" in run_source
     assert "CREATE TABLE research_runs.cancel_receipts" in run_schema
     assert "execution_fence = execution_fence + 1" in run_source
-    assert "def rerun(" in run_source
-    assert "CREATE TABLE research_runs.rerun_receipts" in run_schema
-    assert "immutable_input, rerun_of_id" in run_source
+    assert "def rerun(" not in run_source
+    assert "rerun_receipts" not in run_schema
+    assert "compile_formula" not in run_source[run_source.index("    def process_next(") :]
     assert "self._publication.record(" in run_source
     assert "runtime.research_runs.process_next()" in worker_source
     for removed in ("outbox", "dispatch", "global job", "temporal"):
@@ -796,6 +784,8 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
         assert not (package / removed).exists()
 
     assert not (package / "api.py").exists()
+    assert not list((package / "definition").glob("*.py"))
+    assert not (package / "definition" / "schema.sql").exists()
 
 
 

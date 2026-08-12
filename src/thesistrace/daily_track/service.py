@@ -51,7 +51,6 @@ from thesistrace.research_kernel import (
     equivalence_bytes,
     first_divergence,
 )
-from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.canonical_state import (
     canonical_sessions,
     slice_canonical_sessions,
@@ -657,8 +656,6 @@ class DailyTrackService:
                     "status": row["status"],
                     "origin": {
                         "seed_run_id": origin.seed_run_id,
-                        "definition_id": origin.definition_id,
-                        "definition_revision": origin.definition_revision,
                         "result_checksum_sha256": (
                             origin.verified_result.result_checksum_sha256
                         ),
@@ -1503,8 +1500,6 @@ def _summary(row: object) -> DailyTrackSummary:
         id=str(row["id"]),
         status=row["status"],
         seed_run_id=origin.seed_run_id,
-        definition_id=origin.definition_id,
-        definition_revision=origin.definition_revision,
         result_checksum_sha256=verified_result.result_checksum_sha256,
         origin_session=origin.initial_strategy_state.session,
         strategy_session=str(row["current_strategy_session"]),
@@ -1530,12 +1525,7 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
 
 
 def _origin_universe(origin: TrackingOrigin) -> str:
-    definition = _mapping_value(
-        origin.immutable_input.get("definition"),
-        "Tracking Definition",
-    )
-    content = _mapping_value(definition.get("content"), "Tracking Definition content")
-    universe = content.get("universe")
+    universe = origin.immutable_input.get("universe")
     if not isinstance(universe, str) or not universe:
         raise RuntimeError("Tracking Universe is invalid")
     return universe
@@ -1602,12 +1592,10 @@ def _continuation_basis_sha256(
     canonical: dict[str, object],
 ) -> str:
     run_input = state.run_input_with_canonical(canonical)
-    expression = validate_normalized_alpha(
-        run_input.alpha_expression_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
-    )
     sessions = canonical_sessions(canonical, "Working Cache canonical basis")
-    dependency_sessions = sessions[-(504 + expression.effective_lookback) :]
+    dependency_sessions = sessions[
+        -(504 + run_input.compiled_alpha_snapshot().effective_lookback) :
+    ]
     dependency = slice_canonical_sessions(canonical, dependency_sessions)
     return hashlib.sha256(canonical_json_bytes(dependency)).hexdigest()
 

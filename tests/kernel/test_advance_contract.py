@@ -20,6 +20,7 @@ from thesistrace.research_kernel import (
     empty_continuation,
     run,
 )
+from thesistrace.research_kernel.alpha import validate_alpha
 from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 
@@ -565,10 +566,12 @@ def _run_input(
     ):
         research_start_session = str(calendar[20])
         research_end_session = str(calendar[-1])
+    compiled_alpha = validate_alpha(alpha["expression"], field_bindings=FIELD_BINDINGS)
     return RunInput(
         canonical_data=canonical,
-        alpha_expression=alpha["expression"],
+        alpha_expression=compiled_alpha.expression,
         field_bindings=FIELD_BINDINGS,
+        effective_alpha_lookback=compiled_alpha.effective_lookback,
         universe=str(definition["universe"]),
         neutralization=str(definition["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),

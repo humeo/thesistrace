@@ -97,10 +97,10 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
                 transaction.execute(
                     """
                     INSERT INTO research_runs.runs (
-                        id, folder_id, definition_id, definition_revision,
+                        id, folder_id, name,
                         requested_start_date, requested_end_date, status, immutable_input
                     ) VALUES (
-                        'run_folder_guard', %s, 'def_guard', 1,
+                        'run_folder_guard', %s, 'Folder guard',
                         DATE '2026-08-03', DATE '2026-08-04', 'succeeded', '{}'::jsonb
                     )
                     """,

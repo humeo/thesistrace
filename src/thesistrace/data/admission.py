@@ -14,6 +14,8 @@ type UniverseInstrumentCounter = Callable[[str, date, date], int]
 
 @dataclass(frozen=True)
 class DatasetAdmissionSnapshot:
+    generation_manifest_sha256: str
+    data_through_session: date
     coverage_start: date
     coverage_end: date
     research_sessions: tuple[date, ...]
@@ -59,6 +61,10 @@ class DatasetAdmissionService:
             return None
         sessions = tuple(date.fromisoformat(value) for value in admission.research_calendar)
         return DatasetAdmissionSnapshot(
+            generation_manifest_sha256=admission.generation.manifest_sha256,
+            data_through_session=date.fromisoformat(
+                admission.generation.data_through_session
+            ),
             coverage_start=sessions[0],
             coverage_end=sessions[-1],
             research_sessions=sessions,

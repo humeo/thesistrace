@@ -58,25 +58,23 @@ def _before_restart(
     accepted = _request_json(
         api_origin,
         "POST",
-        "/api/definitions/run",
+        "/api/research-runs",
         {
             "request_id": "production-image-smoke-run",
+            "folder_id": "folder_default",
             "name": "Production Image Smoke Alpha",
             "hypothesis": "Prepared mounted data remains executable offline.",
             "start_date": "2026-08-03",
             "end_date": "2026-08-05",
-            "alpha": {
-                "operator_id": "negate",
-                "operands": [{"field_id": "price.close.adjusted"}],
-            },
+            "formula": "-close_adj",
             "universe": "top300",
             "neutralization": "none",
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         },
     )
-    assert accepted["outcome"] == "accepted"
-    run_id = str(accepted["run"]["id"])
+    assert accepted["status"] == "queued"
+    run_id = str(accepted["id"])
     detail = _wait_for_run(api_origin, run_id)
     durable = _durable_result(settings, run_id)
     return {

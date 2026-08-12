@@ -7,8 +7,6 @@ describe("TrackingOriginView", () => {
   it("shows the exact historical account from which tracking continues", () => {
     const origin: DailyTrackDetail["origin"] = {
       seed_run_id: "run_seed",
-      definition_id: "definition_daily",
-      definition_revision: 3,
       result_checksum_sha256: "a".repeat(64),
       strategy_session: "2026-08-05",
       terminal_account: {

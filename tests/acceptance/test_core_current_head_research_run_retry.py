@@ -323,88 +323,20 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
         assert len(_attempts(settings, run_id)) == 2
 
 
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_rerun_preserves_the_question_and_executes_on_current_data(
-    tmp_path: Path,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    head_a = _publish_head(settings, price_offset=0)
-
-    with TestClient(create_app(settings)) as client:
-        runtime = client.app.state.core_runtime
-        source_id = _admit_run(client, request_id="rerun-source")
-        source_worker = _run_worker_once(settings)
-        assert source_worker.returncode == 0, source_worker.stdout + source_worker.stderr
-        source_before = client.get(f"/api/research-runs/{source_id}").json()
-        source_stored_before = _stored_run(settings, source_id)
-        source_input = source_stored_before["immutable_input"]
-        assert source_stored_before["result_provenance"]["data_generation_id"] == head_a
-
-        edited = client.put(
-            f"/api/definitions/{source_before['definition_id']}",
-            json={
-                "expected_revision": source_before["definition_revision"],
-                "name": "Edited after source Run",
-                "holdings_count": 2,
-            },
-        )
-        assert edited.status_code == 200
-        head_b = _publish_head(settings, price_offset=11, expected_manifest=head_a)
-
-        command = {"request_id": "rerun-current-data"}
-        accepted = client.post(f"/api/research-runs/{source_id}/rerun", json=command)
-        assert accepted.status_code == 202
-        rerun = accepted.json()
-        assert rerun["status"] == "queued"
-        assert rerun["rerun_of_id"] == source_id
-        assert rerun["start_date"] == SESSIONS[0]
-        assert rerun["end_date"] == SESSIONS[-1]
-        rerun_stored = _stored_run(settings, rerun["id"])
-        assert canonical_json_bytes(rerun_stored["immutable_input"]) == canonical_json_bytes(
-            source_input
-        )
-
-        replay = client.post(f"/api/research-runs/{source_id}/rerun", json=command)
-        assert replay.status_code == 202
-        assert replay.json() == rerun
-        conflict = client.post(
-            f"/api/research-runs/{rerun['id']}/rerun",
-            json=command,
-        )
-        assert conflict.status_code == 409
-
-        rerun_worker = _run_worker_once(settings)
-        assert rerun_worker.returncode == 0, rerun_worker.stdout + rerun_worker.stderr
-        completed = client.get(f"/api/research-runs/{rerun['id']}").json()
-        assert completed["status"] == "succeeded"
-        assert completed["rerun_of_id"] == source_id
-        completed_stored = _stored_run(settings, rerun["id"])
-        assert completed_stored["result_provenance"]["data_generation_id"] == head_b
-        assert canonical_json_bytes(_read_result(runtime, completed_stored)) == (
-            canonical_json_bytes(_reference_result(settings, head_b))
-        )
-        assert client.get(f"/api/research-runs/{source_id}").json() == source_before
-        assert _stored_run(settings, source_id) == source_stored_before
-
-
 def _admit_run(client: TestClient, *, request_id: str) -> str:
-    response = client.post("/api/definitions/run", json=_run_command(request_id))
-    assert response.status_code == 200
-    return str(response.json()["run"]["id"])
+    response = client.post("/api/research-runs", json=_run_command(request_id))
+    assert response.status_code == 202
+    return str(response.json()["id"])
 
 
 def _run_command(request_id: str) -> dict[str, object]:
     return {
         "request_id": request_id,
+        "folder_id": "folder_default",
         "name": "Same research question on current data",
         "start_date": SESSIONS[0],
         "end_date": SESSIONS[-1],
-        "alpha": {"field_id": "price.close.adjusted"},
+        "formula": "close_adj",
         "universe": "top300",
         "neutralization": "none",
         "holdings_count": 1,
@@ -473,8 +405,9 @@ def _reference_result(settings: CoreSettings, generation_id: str) -> dict[str, o
     output = run(
         RunInput(
             canonical_data=canonical,
-            alpha_expression={"field_id": "price.close.adjusted"},
+            alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
             field_bindings={"price.close.adjusted": "close_adj"},
+            effective_alpha_lookback=0,
             universe="top300",
             neutralization="none",
             holdings_count=1,

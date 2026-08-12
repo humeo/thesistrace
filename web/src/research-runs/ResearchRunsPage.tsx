@@ -101,11 +101,16 @@ type ResearchResult = {
 type ResearchRun = {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  definition_id: string;
-  definition_revision: number;
+  name: string;
+  folder_id: string;
+  created_at: string;
   start_date: string;
   end_date: string;
-  rerun_of_id?: string;
+  formula_summary: string;
+  input?: {
+    formula: string;
+    hypothesis: string | null;
+  };
   failure_reason?: string;
   result?: ResearchResult;
 };
@@ -123,16 +128,12 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
-  const [rerunning, setRerunning] = useState(false);
   const [startingTracking, setStartingTracking] = useState(false);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
   const cancelGeneration = useRef(0);
   const cancelController = useRef<AbortController | null>(null);
   const cancelRequest = useRef<{ runId: string; requestId: string } | null>(null);
-  const rerunGeneration = useRef(0);
-  const rerunController = useRef<AbortController | null>(null);
-  const rerunRequest = useRef<{ runId: string; requestId: string } | null>(null);
   const trackingGeneration = useRef(0);
   const trackingController = useRef<AbortController | null>(null);
   const trackingRequest = useRef<{ runId: string; requestId: string } | null>(null);
@@ -187,10 +188,6 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     cancelController.current?.abort();
     cancelController.current = null;
     cancelRequest.current = null;
-    rerunGeneration.current += 1;
-    rerunController.current?.abort();
-    rerunController.current = null;
-    rerunRequest.current = null;
     trackingGeneration.current += 1;
     trackingController.current?.abort();
     trackingController.current = null;
@@ -236,46 +233,6 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       if (generation === cancelGeneration.current) {
         cancelController.current = null;
         setCanceling(false);
-      }
-    }
-  }
-
-  async function rerunSelected() {
-    if (run === null || !["succeeded", "failed", "cancelled"].includes(run.status)) return;
-    const targetRun = run;
-    const generation = ++rerunGeneration.current;
-    loadGeneration.current += 1;
-    setLoadState(null);
-    rerunController.current?.abort();
-    const controller = new AbortController();
-    rerunController.current = controller;
-    setRerunning(true);
-    setError(null);
-    const pending = rerunRequest.current;
-    const requestId = pending?.runId === targetRun.id
-      ? pending.requestId
-      : `rerun_${crypto.randomUUID()}`;
-    rerunRequest.current = { runId: targetRun.id, requestId };
-    try {
-      const response = await fetch(`/api/research-runs/${targetRun.id}/rerun`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ request_id: requestId }),
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("ResearchRun rerun failed");
-      const nextRun = (await response.json()) as ResearchRun;
-      if (generation !== rerunGeneration.current) return;
-      rerunRequest.current = null;
-      window.location.assign(`/research-runs/${nextRun.id}`);
-    } catch (reason: unknown) {
-      if (reason instanceof DOMException && reason.name === "AbortError") return;
-      if (generation !== rerunGeneration.current) return;
-      setError("ResearchRun rerun failed");
-    } finally {
-      if (generation === rerunGeneration.current) {
-        rerunController.current = null;
-        setRerunning(false);
       }
     }
   }
@@ -361,24 +318,16 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
                 {canceling ? "Cancelling…" : "Cancel"}
               </button>
             ) : null}
-            {["succeeded", "failed", "cancelled"].includes(run.status) ? (
-              <button
-                disabled={rerunning || startingTracking}
-                onClick={() => void rerunSelected()}
-              >
-                {rerunning ? "Rerunning on current data…" : "Rerun on current data"}
-              </button>
-            ) : null}
             {run.status === "succeeded" ? (
               <button
-                disabled={rerunning || startingTracking}
+                disabled={startingTracking}
                 onClick={() => void startTracking()}
               >
                 {startingTracking ? "Starting Tracking…" : "Start Tracking"}
               </button>
             ) : null}
             <button
-              disabled={loadState !== null || canceling || rerunning || startingTracking}
+              disabled={loadState !== null || canceling || startingTracking}
               onClick={refresh}
             >
               Refresh
@@ -390,19 +339,9 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         ) : null}
         <div className="research-run-facts">
           <p><strong>Status</strong> {run.status}</p>
-          <p>
-            <strong>Definition</strong>{" "}
-            <a href={`/definitions/${run.definition_id}`}>
-              Revision {run.definition_revision}
-            </a>
-          </p>
+          <p><strong>Name</strong> {run.name}</p>
+          <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
-          {run.rerun_of_id ? (
-            <p>
-              <strong>Rerun of</strong>{" "}
-              <a href={`/research-runs/${run.rerun_of_id}`}>{run.rerun_of_id}</a>
-            </p>
-          ) : null}
         </div>
         {run.status === "failed" && run.failure_reason ? (
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
@@ -420,7 +359,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       <ol aria-label="Research Runs">
         {items?.map((item) => (
           <li key={item.id}>
-            <a href={`/research-runs/${item.id}`}>{item.id}</a>
+            <a href={`/research-runs/${item.id}`}>{item.name}</a>
             <span> · {item.status} · {item.start_date} to {item.end_date}</span>
           </li>
         ))}

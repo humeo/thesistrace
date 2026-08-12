@@ -10,7 +10,6 @@ from decimal import Decimal
 
 from thesistrace.daily_track.models import TrackingOrigin
 from thesistrace.data import read_alpha_field_series
-from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.canonical_state import canonical_sessions
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
 from thesistrace.research_kernel.kernel_run import KernelRunError, KernelState, RunInput
@@ -46,6 +45,7 @@ def project_tracking_checkpoint(
         "run_input": {
             "alpha_expression": run_input.alpha_expression_snapshot(),
             "field_bindings": run_input.field_bindings_snapshot(),
+            "effective_alpha_lookback": run_input.compiled_alpha_snapshot().effective_lookback,
             "universe": run_input.universe,
             "neutralization": run_input.neutralization,
             "holdings_count": run_input.holdings_count,
@@ -87,6 +87,7 @@ def restore_tracking_checkpoint(
             str(key): str(item)
             for key, item in _mapping(contract.get("field_bindings"), "field bindings").items()
         },
+        effective_alpha_lookback=int(contract["effective_alpha_lookback"]),
         read_field_series=read_alpha_field_series,
         universe=str(contract["universe"]),
         neutralization=str(contract["neutralization"]),
@@ -174,10 +175,6 @@ def restore_tracking_origin(
     """Build the first forward-only Kernel state without replaying the seed Run."""
     terminal = TerminalStrategyStateValue.model_validate(terminal_value)
     run_input = _origin_run_input(origin, canonical)
-    parsed_alpha = validate_normalized_alpha(
-        run_input.alpha_expression_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
-    )
     metric_state = terminal.metric_state.model_dump(mode="json", exclude_unset=True)
     last_daily = terminal.last_daily_observation.model_dump(mode="json")
     positions = [item.model_dump(mode="json") for item in terminal.positions]
@@ -200,7 +197,7 @@ def restore_tracking_origin(
         output={
             "alpha_matrix": {
                 "expression": run_input.alpha_expression_snapshot(),
-                "effective_lookback": parsed_alpha.effective_lookback,
+                "effective_lookback": run_input.compiled_alpha_snapshot().effective_lookback,
                 "neutralization": run_input.neutralization,
                 "sessions": [],
             },
@@ -281,9 +278,8 @@ def _origin_run_input(
     canonical: dict[str, object],
 ) -> RunInput:
     immutable_input = origin.immutable_input
-    definition = _mapping(immutable_input.get("definition"), "Tracking Definition")
-    content = _mapping(definition.get("content"), "Tracking Definition content")
-    alpha = _mapping(content.get("alpha"), "Tracking Alpha")
+    alpha = _mapping(immutable_input.get("alpha_expression"), "Tracking Alpha")
+    admission = _mapping(immutable_input.get("alpha_admission"), "Tracking Alpha admission")
     strategy = _mapping(immutable_input.get("strategy"), "Tracking Strategy")
     costs = _mapping(immutable_input.get("costs"), "Tracking Costs")
     field_bindings = _mapping(
@@ -294,9 +290,10 @@ def _origin_run_input(
         canonical_data=canonical,
         alpha_expression=dict(alpha),
         field_bindings={str(key): str(value) for key, value in field_bindings.items()},
+        effective_alpha_lookback=int(admission["effective_lookback"]),
         read_field_series=read_alpha_field_series,
-        universe=str(content["universe"]),
-        neutralization=str(content["neutralization"]),
+        universe=str(immutable_input["universe"]),
+        neutralization=str(immutable_input["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),
         rebalance_interval=int(strategy["rebalance_every_sessions"]),
         initial_cash_cny=str(strategy["initial_cash_cny"]),

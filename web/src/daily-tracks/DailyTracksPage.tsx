@@ -10,8 +10,6 @@ type DailyTrackSummary = {
   id: string;
   status: "active" | "blocked" | "stopped";
   seed_run_id: string;
-  definition_id: string;
-  definition_revision: number;
   result_checksum_sha256: string;
   origin_session: string;
   strategy_session: string;
@@ -22,8 +20,6 @@ export type DailyTrackDetail = {
   status: "active" | "blocked" | "stopped";
   origin: {
     seed_run_id: string;
-    definition_id: string;
-    definition_revision: number;
     result_checksum_sha256: string;
     strategy_session: string;
     terminal_account: TerminalStrategyState;
@@ -247,12 +243,6 @@ export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origi
         <p>
           <strong>Seed ResearchRun</strong>{" "}
           <a href={`/research-runs/${origin.seed_run_id}`}>{origin.seed_run_id}</a>
-        </p>
-        <p>
-          <strong>Definition</strong>{" "}
-          <a href={`/definitions/${origin.definition_id}`}>
-            Revision {origin.definition_revision}
-          </a>
         </p>
         <p><strong>Origin strategy session</strong> {origin.strategy_session}</p>
         <p><strong>Origin net NAV</strong> {origin.terminal_account.net_nav}</p>

@@ -5,7 +5,7 @@ from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, PCT_CHANGE_20
 
 from thesistrace.data import read_alpha_field_series
 from thesistrace.fixture import build_fixture
-from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.factor import (
     FactorDataError,
     build_forward_labels,
@@ -18,8 +18,7 @@ def test_forward_labels_use_next_open_timing_and_explicit_period_limits() -> Non
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         universe_name="top300",
         neutralization="none",
         read_field_series=read_alpha_field_series,
@@ -165,8 +164,7 @@ def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression=PCT_CHANGE_20,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(PCT_CHANGE_20, field_bindings=FIELD_BINDINGS),
         universe_name="top300",
         neutralization="none",
         read_field_series=read_alpha_field_series,

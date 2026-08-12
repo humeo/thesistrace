@@ -249,8 +249,7 @@ def advance_continuation(
     )
     evaluated = evaluate_alpha_matrix(
         window,
-        expression=run_input.alpha_expression_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
         read_field_series=run_input.field_series_reader,
@@ -392,8 +391,7 @@ def _advance_alpha(
     window = slice_canonical_sessions(canonical, calendar[window_start:])
     evaluated = evaluate_alpha_matrix(
         window,
-        expression=run_input.alpha_expression_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
         read_field_series=run_input.field_series_reader,
@@ -606,8 +604,7 @@ def _rebuild_explicit_alpha(
 ) -> dict[str, object]:
     evaluated = evaluate_alpha_matrix(
         canonical,
-        expression=run_input.alpha_expression_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
         universe_name=run_input.universe,
         neutralization=run_input.neutralization,
         read_field_series=run_input.field_series_reader,

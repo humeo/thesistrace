@@ -10,20 +10,17 @@ from tempfile import TemporaryDirectory
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.alpha_language import alpha_language
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.data import (
     DatasetAdmissionService,
     DatasetLifecycle,
     DatasetOverviewService,
     MountedGenerationStore,
-    alpha_field_catalog,
 )
-from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
 from thesistrace.research_folder import ResearchFolderService
-from thesistrace.research_kernel import operator_catalog
-from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.result import read_result_bundle
 
@@ -96,7 +93,6 @@ class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService
     research_folders: ResearchFolderService
-    definitions: DefinitionService
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
     daily_track_sessions: SessionCoordinateRepository
@@ -138,19 +134,13 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             generation_store=generation_store,
             publication=publication,
             activate_track=daily_tracks.activate,
+            compile_formula=alpha_language.compile,
+            current_dataset=dataset_admission.current,
         )
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
             research_folders=ResearchFolderService(database),
-            definitions=DefinitionService(
-                database,
-                alpha_fields=alpha_field_catalog,
-                operator_catalog=operator_catalog,
-                validate_alpha=validate_normalized_alpha,
-                current_dataset=dataset_admission.current,
-                admit_run=research_runs.admit,
-            ),
             research_runs=research_runs,
             daily_tracks=daily_tracks,
             daily_track_sessions=SessionCoordinateRepository(database),

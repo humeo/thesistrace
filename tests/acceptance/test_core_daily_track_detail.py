@@ -42,15 +42,15 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command(
                 "daily-track-504-run",
                 start_date=seed_sessions[0],
                 end_date=seed_sessions[-1],
             ),
         )
-        assert accepted.status_code == 200
-        run_id = accepted.json()["run"]["id"]
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
@@ -186,10 +186,11 @@ def _run_command(
 ) -> dict[str, object]:
     return {
         "request_id": request_id,
+        "folder_id": "folder_default",
         "name": "DailyTrack latest 504",
         "start_date": start_date,
         "end_date": end_date,
-        "alpha": {"field_id": "price.close.adjusted"},
+        "formula": "close_adj",
         "universe": "top300",
         "neutralization": "none",
         "holdings_count": 1,

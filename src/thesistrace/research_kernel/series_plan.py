@@ -21,6 +21,13 @@ class CompiledAlphaLike(Protocol):
 
 
 @dataclass(frozen=True)
+class ExecutableAlpha:
+    expression: Mapping[str, object]
+    field_ids_by_identifier: dict[str, str]
+    effective_lookback: int
+
+
+@dataclass(frozen=True)
 class SeriesPlanNode:
     kind: PlanNodeKind
     identifier: str

@@ -110,8 +110,10 @@ def test_alpha_matrix_evaluates_only_the_selected_universe_union() -> None:
 
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression={"field_id": "price.close.adjusted"},
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(
+            {"field_id": "price.close.adjusted"},
+            field_bindings=FIELD_BINDINGS,
+        ),
         universe_name="top300",
         neutralization="none",
         read_field_series=reader,
@@ -271,8 +273,7 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
     normalized = operation("pct_change", field("price.close.adjusted"), literal(20))
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression=normalized,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(normalized, field_bindings=FIELD_BINDINGS),
         universe_name="top300",
         neutralization="none",
         read_field_series=read_alpha_field_series,

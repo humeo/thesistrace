@@ -16,6 +16,7 @@ from thesistrace.research_kernel import (
     continuation_snapshot,
     run,
 )
+from thesistrace.research_kernel.alpha import validate_alpha
 from thesistrace.research_kernel.canonical_state import slice_canonical_sessions
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 from thesistrace.research_kernel.serialization import canonical_json_bytes
@@ -471,10 +472,12 @@ def _run_input(
     start: str | None,
     end: str | None,
 ) -> RunInput:
+    compiled_alpha = validate_alpha(expression, field_bindings=FIELD_BINDINGS)
     return RunInput(
         canonical_data=canonical,
-        alpha_expression=expression,
+        alpha_expression=compiled_alpha.expression,
         field_bindings=FIELD_BINDINGS,
+        effective_alpha_lookback=compiled_alpha.effective_lookback,
         universe="manual",
         neutralization="none",
         holdings_count=1,

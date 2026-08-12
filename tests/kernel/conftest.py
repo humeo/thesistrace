@@ -4,7 +4,11 @@ from contracts import FIELD_BINDINGS, PCT_CHANGE_20
 from thesistrace.data import read_alpha_field_series
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel import KernelState, RunInput, RunOutput, run
-from thesistrace.research_kernel.alpha import alpha_matrix_checksum, evaluate_alpha_matrix
+from thesistrace.research_kernel.alpha import (
+    alpha_matrix_checksum,
+    evaluate_alpha_matrix,
+    validate_alpha,
+)
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.strategy import run_strategy
 
@@ -32,10 +36,10 @@ def accepted_calculation_case() -> dict[str, object]:
             "transfer_fee_rate": "0.00001",
         },
     }
+    compiled_alpha = validate_alpha(PCT_CHANGE_20, field_bindings=FIELD_BINDINGS)
     matrix = evaluate_alpha_matrix(
         canonical,
-        expression=PCT_CHANGE_20,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=compiled_alpha,
         universe_name="top300",
         neutralization="none",
         read_field_series=read_alpha_field_series,
@@ -94,11 +98,13 @@ def accepted_kernel_run(
     assert isinstance(alpha, dict)
     assert isinstance(strategy, dict)
     assert isinstance(costs, dict)
+    compiled_alpha = validate_alpha(alpha["expression"], field_bindings=FIELD_BINDINGS)
     return run(
         RunInput(
             canonical_data=canonical,
-            alpha_expression=alpha["expression"],
+            alpha_expression=compiled_alpha.expression,
             field_bindings=FIELD_BINDINGS,
+            effective_alpha_lookback=compiled_alpha.effective_lookback,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             holdings_count=int(strategy["holdings_count"]),

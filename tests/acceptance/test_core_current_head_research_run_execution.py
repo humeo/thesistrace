@@ -68,11 +68,11 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-start-head"),
         )
-        assert accepted.status_code == 200
-        run_id = accepted.json()["run"]["id"]
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
         head_b = _publish_head(
             settings,
             sessions=sessions,
@@ -90,10 +90,13 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
         assert set(public_run) == {
             "id",
             "status",
-            "definition_id",
-            "definition_revision",
+            "name",
+            "folder_id",
+            "created_at",
             "start_date",
             "end_date",
+            "formula_summary",
+            "input",
             "result",
         }
         assert set(public_run["result"]) == {
@@ -146,8 +149,6 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
             "id": track["id"],
             "status": "active",
             "seed_run_id": run_id,
-            "definition_id": public_run["definition_id"],
-            "definition_revision": public_run["definition_revision"],
             "result_checksum_sha256": track["result_checksum_sha256"],
             "origin_session": sessions[-1],
             "strategy_session": sessions[-1],
@@ -380,11 +381,11 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         run_ids: list[str] = []
         for index in range(11):
             accepted = client.post(
-                "/api/definitions/run",
+                "/api/research-runs",
                 json=_run_command(f"current-track-capacity-{index}"),
             )
-            assert accepted.status_code == 200
-            run_ids.append(str(accepted.json()["run"]["id"]))
+            assert accepted.status_code == 202
+            run_ids.append(str(accepted.json()["id"]))
         # Keep one real Worker process boundary; the remaining capacity seeds still
         # execute through the production service, Kernel, PostgreSQL, and RustFS.
         completed = _run_worker_once(settings)
@@ -497,11 +498,11 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("tracking-live-owner"),
         )
-        assert accepted.status_code == 200
-        run_id = str(accepted.json()["run"]["id"])
+        assert accepted.status_code == 202
+        run_id = str(accepted.json()["id"])
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         tracking = client.post(
@@ -584,11 +585,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         tracks: list[dict[str, object]] = []
         for index in range(2):
             accepted = client.post(
-                "/api/definitions/run",
+                "/api/research-runs",
                 json=_run_command(f"track-recovery-seed-{index}"),
             )
-            assert accepted.status_code == 200
-            run_id = accepted.json()["run"]["id"]
+            assert accepted.status_code == 202
+            run_id = accepted.json()["id"]
             completed = _run_worker_once(settings)
             assert completed.returncode == 0, completed.stdout + completed.stderr
             tracking = client.post(
@@ -807,11 +808,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         cache_run_ids: list[str] = []
         for index in range(2):
             accepted = restarted.post(
-                "/api/definitions/run",
+                "/api/research-runs",
                 json=_run_command(f"track-recovery-cache-seed-{index}"),
             )
-            assert accepted.status_code == 200
-            cache_run_ids.append(str(accepted.json()["run"]["id"]))
+            assert accepted.status_code == 202
+            cache_run_ids.append(str(accepted.json()["id"]))
         for _run_id in cache_run_ids:
             completed = _run_worker_once(settings)
             assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -958,11 +959,11 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("forward-only-seed-run", alpha=alpha),
         )
-        assert accepted.status_code == 200
-        run_id = str(accepted.json()["run"]["id"])
+        assert accepted.status_code == 202
+        run_id = str(accepted.json()["id"])
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         tracking = client.post(
@@ -1102,10 +1103,10 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-pinned-head"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
 
         def barrier(stage: str, _run_id: str) -> None:
@@ -1175,11 +1176,11 @@ def test_claim_commits_before_generation_parquet_is_opened(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("claim-before-generation-open"),
         )
-        assert accepted.status_code == 200
-        run_id = accepted.json()["run"]["id"]
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         original_open_generation = MountedGenerationStore.open_generation
 
@@ -1242,7 +1243,7 @@ def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> N
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command(
                 "attempt-insufficient-warmup",
                 alpha={
@@ -1254,23 +1255,20 @@ def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> N
                 },
             ),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
 
         assert client.app.state.core_runtime.research_runs.process_next() is True
         assert client.app.state.core_runtime.research_runs.process_next() is False
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
-        assert detail == {
-            "id": run_id,
-            "status": "failed",
-            "definition_id": detail["definition_id"],
-            "definition_revision": 1,
-            "start_date": sessions[0],
-            "end_date": sessions[-1],
-            "failure_reason": (
-                "Selected data does not contain the complete Calculation Warm-up."
-            ),
-        }
+        assert detail["id"] == run_id
+        assert detail["status"] == "failed"
+        assert detail["start_date"] == sessions[0]
+        assert detail["end_date"] == sessions[-1]
+        assert detail["failure_reason"] == (
+            "Selected data does not contain the complete Calculation Warm-up."
+        )
+        assert detail["input"]["formula"] == "ts_mean(close_adj, 2)"
         stored = _stored_execution(settings, run_id)
         assert stored["attempt_count"] == 1
         assert stored["attempt_failure_reason"] == "InsufficientCalculationWarmup"
@@ -1296,14 +1294,14 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command(
                 f"attempt-short-{session_count}",
                 start_date=sessions[0],
                 end_date=sessions[-1],
             ),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
 
         assert runtime.research_runs.process_next() is True
@@ -1354,10 +1352,10 @@ def test_attempt_revalidates_the_selected_generation(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command(f"attempt-revalidate-{incompatibility}"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         replacement_sessions = sessions[1:] if incompatibility == "coverage" else sessions
         _publish_head(
             settings,
@@ -1405,10 +1403,10 @@ def test_publication_failure_is_atomic_and_releases_the_generation_pin(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command(f"attempt-publication-failure-{failure_stage}"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         manifest_count = _publication_manifest_count(settings)
         _install_publication_rejection(settings, failure_stage=failure_stage)
@@ -1443,10 +1441,10 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-denied-rustfs-write"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         denied_s3 = boto3.client(
             "s3",
@@ -1495,10 +1493,10 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-result-read-failure"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         assert runtime.research_runs.process_next() is True
 
@@ -1549,15 +1547,35 @@ def _run_command(
 ) -> dict[str, object]:
     return {
         "request_id": request_id,
+        "folder_id": "folder_default",
         "name": "Attempt-scoped current data",
         "start_date": start_date,
         "end_date": end_date,
-        "alpha": alpha or {"field_id": "price.close.adjusted"},
+        "formula": _formula(alpha or {"field_id": "price.close.adjusted"}),
         "universe": "top300",
         "neutralization": "none",
         "holdings_count": 1,
         "rebalance_every_sessions": 1,
     }
+
+
+def _formula(node: dict[str, object]) -> str:
+    if set(node) == {"field_id"}:
+        return {"price.close.adjusted": "close_adj"}[str(node["field_id"])]
+    if set(node) == {"literal"}:
+        return str(node["literal"])
+    operator = str(node["operator_id"])
+    operands = node["operands"]
+    assert isinstance(operands, list)
+    rendered = [_formula(operand) for operand in operands if isinstance(operand, dict)]
+    if operator in {"add", "subtract", "multiply", "divide"}:
+        symbol = {"add": "+", "subtract": "-", "multiply": "*", "divide": "/"}[
+            operator
+        ]
+        return f"({rendered[0]} {symbol} {rendered[1]})"
+    if operator == "negate":
+        return f"-({rendered[0]})"
+    return f"{operator}({', '.join(rendered)})"
 
 
 def _canonical(
@@ -1943,8 +1961,9 @@ def _kernel_input(
 ) -> RunInput:
     return RunInput(
         canonical_data=canonical,
-        alpha_expression={"field_id": "price.close.adjusted"},
+        alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
         field_bindings={"price.close.adjusted": "close_adj"},
+        effective_alpha_lookback=0,
         universe="top300",
         neutralization="none",
         holdings_count=1,
