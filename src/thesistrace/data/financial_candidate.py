@@ -621,6 +621,106 @@ class FinancialCandidateStore:
         )
         return tuple(self._open_table(endpoint, fields[endpoint], reference, sessions))
 
+    def read_financial_rows(
+        self,
+        manifest_sha256: str,
+        endpoint: str,
+        source_columns: tuple[str, ...],
+        sessions: tuple[str, ...],
+        instrument_ids: frozenset[str],
+    ) -> tuple[dict[str, object], ...]:
+        if endpoint not in FINANCIAL_ENDPOINTS:
+            raise FinancialCandidateError("FINANCIAL_ENDPOINT_INVALID")
+        manifest = self._read_family(manifest_sha256)
+        descriptor = self._descriptor(manifest_sha256, manifest)
+        through_session = sessions[-1] if sessions else ""
+        if not sessions or not all(
+            descriptor.coverage_start <= session <= descriptor.observation_through_session
+            for session in sessions
+        ):
+            raise FinancialCandidateError("FINANCIAL_SERIES_COVERAGE_INVALID")
+        try:
+            market = self._market.inspect_root(str(manifest["source_generation_manifest_sha256"]))
+        except GenerationStoreError as error:
+            raise FinancialCandidateError("MARKET_GENERATION_INVALID") from error
+        if sessions != tuple(sorted(set(sessions))) or any(
+            session not in market.research_sessions for session in sessions
+        ):
+            raise FinancialCandidateError("FINANCIAL_SERIES_SESSION_INVALID")
+        reference = next(
+            (
+                item
+                for item in manifest["tables"]
+                if isinstance(item, Mapping) and item.get("name") == _ENDPOINT_TABLES[endpoint]
+            ),
+            None,
+        )
+        if not isinstance(reference, Mapping):
+            raise FinancialCandidateError("FINANCIAL_TABLE_NOT_FOUND")
+        table_manifest_sha256 = str(reference.get("manifest_sha256"))
+        table_manifest = self._read_json(
+            self._manifest_path(table_manifest_sha256),
+            table_manifest_sha256,
+            int(reference.get("manifest_byte_count", -1)),
+        )
+        source_fields_value = table_manifest.get("source_fields")
+        if not isinstance(source_fields_value, list) or not all(
+            isinstance(value, str) and value for value in source_fields_value
+        ):
+            raise FinancialCandidateError("FINANCIAL_TABLE_MANIFEST_INVALID")
+        source_fields = tuple(source_fields_value)
+        contract = _table_contract(_ENDPOINT_TABLES[endpoint], source_fields)
+        if (
+            table_manifest.get("format") != _TABLE_FORMAT
+            or table_manifest.get("version") != _VERSION
+            or table_manifest.get("table") != _ENDPOINT_TABLES[endpoint]
+            or table_manifest.get("source_endpoint") != endpoint
+            or table_manifest.get("writer_contract") != contract.descriptor()
+            or not source_columns
+            or len(set(source_columns)) != len(source_columns)
+            or not set(source_columns).issubset(contract.schema.names)
+        ):
+            raise FinancialCandidateError("FINANCIAL_SERIES_PROJECTION_INVALID")
+        objects = table_manifest.get("objects")
+        if (
+            not isinstance(objects, list)
+            or table_manifest.get("object_count", len(objects)) != len(objects)
+            or reference.get("object_count") != len(objects)
+        ):
+            raise FinancialCandidateError("FINANCIAL_TABLE_MANIFEST_INVALID")
+        expected_schema = pa.schema([contract.schema.field(name) for name in source_columns])
+        rows: list[dict[str, object]] = []
+        for ordinal, object_ref in enumerate(objects):
+            if not isinstance(object_ref, Mapping) or object_ref.get("ordinal") != ordinal:
+                raise FinancialCandidateError("FINANCIAL_OBJECT_REFERENCE_INVALID")
+            first_sort_key = object_ref.get("first_sort_key")
+            if (
+                isinstance(first_sort_key, list)
+                and first_sort_key
+                and str(first_sort_key[0])
+                and str(first_sort_key[0]) > through_session
+            ):
+                continue
+            content = self._read(
+                self._object_path(str(object_ref.get("sha256"))),
+                str(object_ref.get("sha256")),
+                int(object_ref.get("byte_count", -1)),
+                GENERATION_OBJECT_MAX_BYTES,
+            )
+            try:
+                table = pq.read_table(pa.BufferReader(content), columns=list(source_columns))
+            except (ArrowException, TypeError, ValueError) as error:
+                raise FinancialCandidateError("FINANCIAL_OBJECT_INVALID") from error
+            if table.schema != expected_schema or table.num_rows != object_ref.get("row_count"):
+                raise FinancialCandidateError("FINANCIAL_OBJECT_SCHEMA_INVALID")
+            rows.extend(
+                row
+                for row in table.to_pylist()
+                if str(row["instrument_id"]) in instrument_ids
+                and str(row["effective_available_session"]) <= through_session
+            )
+        return tuple(rows)
+
     def quarantined_row_count(self, manifest_sha256: str) -> int:
         manifest = self._read_family(manifest_sha256)
         quarantine = manifest["quarantine"]

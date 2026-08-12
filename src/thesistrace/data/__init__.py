@@ -5,6 +5,8 @@ from thesistrace.data.collection import (
     DataGarbageCollector,
 )
 from thesistrace.data.fields import (
+    FINANCIAL_FIELDS,
+    MARKET_FIELDS,
     AuthorableField,
     authorable_field_bindings,
     authorable_fields,
@@ -32,6 +34,7 @@ from thesistrace.data.financial_refresh import (
     FinancialRefreshOutcome,
     FinancialRefreshService,
 )
+from thesistrace.data.financial_series import FinancialSeriesError, FinancialSeriesResolver
 from thesistrace.data.generation_store import (
     GenerationStoreError,
     MountedDatasetFamilyDescriptor,
@@ -69,6 +72,8 @@ from thesistrace.data.source import (
 
 __all__ = [
     "AuthorableField",
+    "FINANCIAL_FIELDS",
+    "MARKET_FIELDS",
     "BootstrapCollectionPlan",
     "BootstrapDataSource",
     "BootstrapOutcome",
@@ -109,6 +114,8 @@ __all__ = [
     "FinancialRefreshOutcome",
     "FinancialRefreshError",
     "FinancialRefreshService",
+    "FinancialSeriesError",
+    "FinancialSeriesResolver",
     "FinancialSourceObservation",
     "FinancialVersionProjector",
     "GenerationStoreError",

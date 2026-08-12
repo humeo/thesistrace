@@ -240,6 +240,42 @@ def test_materializes_sparse_versioned_financial_family_without_publishing(tmp_p
     assert not (tmp_path / "HEAD.json").exists()
 
 
+def test_financial_series_read_projects_requested_columns_and_instruments(
+    tmp_path: Path,
+) -> None:
+    store, candidate, _repeated, _snapshot = _materialized_candidate(tmp_path)
+
+    rows = store.read_financial_rows(
+        candidate.manifest_sha256,
+        "income",
+        ("instrument_id", "effective_available_session", "revenue"),
+        ("2010-01-04", "2010-04-21", "2026-08-13"),
+        frozenset({"equity:000001.SZ"}),
+    )
+
+    assert rows
+    assert all(
+        set(row) == {"instrument_id", "effective_available_session", "revenue"} for row in rows
+    )
+    assert {row["instrument_id"] for row in rows} == {"equity:000001.SZ"}
+    with pytest.raises(FinancialCandidateError, match="FINANCIAL_SERIES_SESSION_INVALID"):
+        store.read_financial_rows(
+            candidate.manifest_sha256,
+            "income",
+            ("instrument_id", "effective_available_session", "revenue"),
+            ("2010-01-05",),
+            frozenset({"equity:000001.SZ"}),
+        )
+    with pytest.raises(FinancialCandidateError, match="FINANCIAL_SERIES_COVERAGE_INVALID"):
+        store.read_financial_rows(
+            candidate.manifest_sha256,
+            "income",
+            ("instrument_id", "effective_available_session", "revenue"),
+            ("2009-04-27", "2010-01-04"),
+            frozenset({"equity:000001.SZ"}),
+        )
+
+
 def test_revalidation_rejects_self_consistent_false_coverage(tmp_path: Path) -> None:
     store, candidate, _repeated, _snapshot = _materialized_candidate(tmp_path)
     path = (
