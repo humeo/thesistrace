@@ -21,19 +21,17 @@ observations. Alpha and Universe Membership produced after signal session `t`
 first affect orders at the `t+1` open, and the resulting holding interval runs
 from the `t+1` open to the `t+2` open.
 
-At the first Research Window session `R1`, V1 records an all-cash post-trade
+At the first Research Period session `R1`, V1 records an all-cash post-trade
 baseline without executing an order. The first signal forms after `R1` closes
 and first deploys at the `R2` open. Consequently, the `R1`-to-`R2` Net Return
 contains initial-deployment costs but no prior holding return; Gross Return is
-zero. Warm-up Alpha Values never create Strategy orders. ADR-0079 defines this
-start boundary.
+zero. Warm-up Alpha Values never create Strategy orders.
 
 The corresponding Strategy Benchmark return uses Universe Membership from
 signal session `t` and the same `t+1`-open to `t+2`-open Adjusted Research Price
 coordinate. Factor Evaluation, Strategy holdings, and Benchmark therefore do
 not mix open-to-open and close-to-close return conventions.
 
-The final Research Window open completes the last possible holding interval and
+The final Research Period open completes the last possible holding interval and
 records Terminal Valuation without a Rebalance or forced liquidation. A
-scheduled signal whose execution would occur at that final open is not used,
-as defined by ADR-0080.
+scheduled signal whose execution would occur at that final open is not used.

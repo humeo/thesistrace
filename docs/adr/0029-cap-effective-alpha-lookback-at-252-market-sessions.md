@@ -21,7 +21,7 @@ when Run is requested. The current Definition is still saved, but no immutable
 input or ResearchRun is created; Save by itself remains allowed. The runtime
 neither expands the requested data range nor truncates the calculation.
 
-Dataset Publication makes the 252 sessions immediately before the 504-session
-Research Window available as calculation-only warm-up data under ADR-0068.
-Warm-up outputs do not appear in Factor Evaluation or Strategy Backtest
-results.
+The runtime derives Calculation Warm-up from the expression's effective
+lookback and loads it from the Attempt's pinned Data Generation. It never
+requires a fixed 252-session prefix or a fixed Research Period length. Warm-up
+outputs do not appear in Factor Evaluation or Strategy Backtest results.

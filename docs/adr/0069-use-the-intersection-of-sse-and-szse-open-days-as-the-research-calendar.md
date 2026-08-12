@@ -9,8 +9,8 @@ Exchange and Shenzhen Stock Exchange are open according to their Tushare
 exchange calendars. The Research Calendar is the ordered intersection of those
 open dates and is not configurable in a Research Definition.
 
-Every session-counted V1 rule uses this one calendar, including Research Input
-History, Research Window, Effective Alpha Lookback, Liquidity Observation
+Every session-counted V1 rule uses this one calendar, including Research Period,
+Calculation Warm-up, Effective Alpha Lookback, Liquidity Observation
 Window, Forward Return Label horizons, Rebalance Interval, and 252-session
 annualization.
 

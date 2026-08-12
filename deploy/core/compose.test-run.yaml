@@ -26,7 +26,7 @@ services:
     ports:
       - 127.0.0.1::9000
 
-  migrate:
+  initialize:
     environment: *test-environment
 
   api:

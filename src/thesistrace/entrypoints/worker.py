@@ -14,10 +14,7 @@ logger = logging.getLogger(__name__)
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the canonical ThesisTrace Core worker")
     parser.add_argument("--once", action="store_true")
-    parser.add_argument("--healthcheck", action="store_true")
     arguments = parser.parse_args()
-    if arguments.healthcheck:
-        return
     from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 
     settings = CoreSettings.from_environment()

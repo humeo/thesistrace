@@ -18,6 +18,6 @@ The return becomes known at the latter open. It never applies membership before
 that membership is available. ADR-0053 defines benchmark treatment of confirmed
 suspensions, and ADR-0055 defines the shared open-time NAV sequence.
 
-ADR-0079 normalizes Benchmark NAV to 1 at the first Research Window open and
-keeps it flat through the initial-deployment open. Its first market return is
-the holding interval from the second to the third Research Window open.
+Benchmark NAV is normalized to 1 at the first Research Period open and remains
+flat through the initial-deployment open. Its first market return is the first
+complete holding interval inside the selected Research Period.

@@ -16,7 +16,7 @@ from time import monotonic
 import boto3
 import pytest
 from botocore.config import Config
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
@@ -34,8 +34,8 @@ from thesistrace.daily_track.checkpoint import (
     terminal_strategy_state,
 )
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.research_kernel import (
@@ -62,7 +62,7 @@ from thesistrace.research_run.result import build_result_payload, read_result_bu
 def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     head_a = _publish_head(settings, sessions=sessions, price_offset=0)
 
@@ -369,7 +369,7 @@ def test_attempt_uses_the_head_current_when_execution_starts(tmp_path: Path) -> 
 def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     _publish_head(
         settings,
         sessions=("2026-08-03", "2026-08-04", "2026-08-05"),
@@ -489,7 +489,7 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
     entered_kernel = Event()
@@ -576,7 +576,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
 
@@ -935,7 +935,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     seed_sessions = (
         "2026-07-31",
         "2026-08-03",
@@ -1093,7 +1093,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
 def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     head_a = _publish_head(settings, sessions=sessions, price_offset=0)
     canonical_a = MountedGenerationStore(settings.data_mount).open_generation(head_a).canonical
@@ -1159,10 +1159,84 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_claim_commits_before_generation_parquet_is_opened(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+    generation_opened = Event()
+    allow_generation_open = Event()
+    opened_generations: list[str] = []
+    worker_errors: list[BaseException] = []
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/definitions/run",
+            json=_run_command("claim-before-generation-open"),
+        )
+        assert accepted.status_code == 200
+        run_id = accepted.json()["run"]["id"]
+        runtime = client.app.state.core_runtime
+        original_open_generation = MountedGenerationStore.open_generation
+
+        def blocking_open_generation(
+            store: MountedGenerationStore,
+            manifest_sha256: str,
+        ):
+            opened_generations.append(manifest_sha256)
+            generation_opened.set()
+            if not allow_generation_open.wait(timeout=10):
+                raise AssertionError("Generation open was not released by the test")
+            return original_open_generation(store, manifest_sha256)
+
+        monkeypatch.setattr(
+            MountedGenerationStore,
+            "open_generation",
+            blocking_open_generation,
+        )
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+        )
+
+        def process_one() -> None:
+            try:
+                processor.process_next()
+            except BaseException as error:  # pragma: no cover - asserted below
+                worker_errors.append(error)
+
+        worker = Thread(target=process_one)
+        worker.start()
+        try:
+            assert generation_opened.wait(timeout=5)
+            status_during_generation_open = client.get(
+                f"/api/research-runs/{run_id}"
+            ).json()["status"]
+        finally:
+            allow_generation_open.set()
+            worker.join(timeout=15)
+
+        assert not worker.is_alive()
+        assert worker_errors == []
+        assert status_during_generation_open == "running"
+        assert len(opened_generations) == 1
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     _publish_head(settings, sessions=sessions, price_offset=0)
 
@@ -1216,7 +1290,7 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04")[:session_count]
     _publish_head(settings, sessions=sessions, price_offset=0)
 
@@ -1274,7 +1348,7 @@ def test_attempt_revalidates_the_selected_generation(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     head_a = _publish_head(settings, sessions=sessions, price_offset=0)
 
@@ -1325,7 +1399,7 @@ def test_publication_failure_is_atomic_and_releases_the_generation_pin(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     _publish_head(settings, sessions=sessions, price_offset=0)
 
@@ -1363,7 +1437,7 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     _publish_head(settings, sessions=sessions, price_offset=0)
 
@@ -1415,7 +1489,7 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
 def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     _publish_head(settings, sessions=sessions, price_offset=0)
 

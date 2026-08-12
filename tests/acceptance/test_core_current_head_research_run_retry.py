@@ -13,7 +13,7 @@ from threading import Event
 from uuid import uuid4
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 from psycopg import Connection, connect
@@ -21,8 +21,8 @@ from psycopg.conninfo import make_conninfo
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -136,7 +136,7 @@ class _BlockedWorker:
 def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     head_a = _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as first_process:
@@ -201,7 +201,7 @@ def test_worker_loss_retry_recomputes_on_the_then_current_head(tmp_path: Path) -
 def test_recovered_winner_fences_a_stale_prepared_attempt(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     head_a = _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
@@ -244,7 +244,7 @@ def test_worker_loss_retry_exhaustion_is_bounded_and_restart_stable(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
@@ -287,7 +287,7 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
@@ -328,7 +328,7 @@ def test_rerun_preserves_the_question_and_executes_on_current_data(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     head_a = _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:

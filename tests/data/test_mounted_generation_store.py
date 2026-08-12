@@ -179,6 +179,43 @@ def test_reference_inventory_does_not_reopen_parquet_objects(
     assert GenerationFileRef("manifest", generation.manifest_sha256) in references
 
 
+def test_admission_projection_opens_only_root_metadata_and_research_calendar(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    root = _manifest(tmp_path, generation.manifest_sha256)
+    price_reference = next(
+        reference for reference in root["tables"] if reference["name"] == "prices"
+    )
+    price_manifest = _manifest(tmp_path, price_reference["manifest_sha256"])
+    _object_path(tmp_path, price_manifest["objects"][0]["sha256"]).unlink()
+
+    admission = MountedGenerationStore(tmp_path).open_admission(
+        generation.manifest_sha256
+    )
+
+    assert admission.generation.manifest_sha256 == generation.manifest_sha256
+    assert admission.generation.dataset_coverage == {
+        "start": canonical["research_calendar"][0],
+        "end": canonical["research_calendar"][-1],
+        "session_count": len(canonical["research_calendar"]),
+    }
+    assert admission.generation.field_availability == (
+        "market.turnover.cny",
+        "price.close.adjusted",
+    )
+    assert admission.research_calendar == tuple(canonical["research_calendar"])
+    with pytest.raises(GenerationStoreError, match="missing"):
+        MountedGenerationStore(tmp_path).open_generation(generation.manifest_sha256)
+
+
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
 def test_missing_or_corrupt_object_is_never_reopened_as_a_generation(
     tmp_path: Path,

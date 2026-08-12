@@ -12,5 +12,5 @@ next completed Shanghai or Shenzhen market session.
 
 The conservative next-session rule prevents a historical end-of-day research
 from using a disclosure that may have been published after that date's close.
-Dataset Publication records both the source publication value and the derived
+The Data module records both the source publication value and the derived
 availability session so the decision remains reproducible.

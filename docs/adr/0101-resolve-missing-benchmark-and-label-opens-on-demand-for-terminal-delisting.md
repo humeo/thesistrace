@@ -8,7 +8,7 @@ Factor Evaluation and Strategy Benchmark do not scan every instrument for
 terminal delisting on every Research Session. A valid required daily Open uses
 the ordinary path without a status lookup. Only a missing required Open
 triggers a lookup against the locally indexed suspension and
-terminal-delisting evidence in the pinned Dataset Release; neither subsystem
+terminal-delisting evidence in the Attempt-pinned Data Generation; neither subsystem
 calls Tushare during ResearchRun.
 
 For a Strategy Benchmark member with a valid starting Adjusted Research Price:

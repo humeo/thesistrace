@@ -69,6 +69,12 @@ class MountedGenerationDescriptor:
 
 
 @dataclass(frozen=True)
+class MountedGenerationAdmission:
+    generation: MountedGenerationDescriptor
+    research_calendar: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class MountedRefreshBase:
     generation: MountedGenerationDescriptor
     canonical: dict[str, object]
@@ -194,6 +200,29 @@ class MountedGenerationStore:
             for ordinal, object_ref in enumerate(objects):
                 _validate_object_reference(object_ref, ordinal)
         return _descriptor_from_root(manifest_sha256, root)
+
+    def open_admission(self, manifest_sha256: str) -> MountedGenerationAdmission:
+        root = self._read_generation_manifest(manifest_sha256)
+        descriptor = _descriptor_from_root(manifest_sha256, root)
+        references = root["tables"]
+        assert isinstance(references, list)
+        calendar_spec = _TABLE_SPECS[0]
+        calendar_reference = references[0]
+        assert calendar_spec.name == "research_calendar"
+        if not isinstance(calendar_reference, Mapping):
+            raise GenerationStoreError("Generation table reference is incompatible")
+        rows = self._open_table(calendar_spec, calendar_reference, None)
+        calendar = tuple(str(row["session"]) for row in rows)
+        if not calendar or descriptor.dataset_coverage != {
+            "start": calendar[0],
+            "end": calendar[-1],
+            "session_count": len(calendar),
+        }:
+            raise GenerationStoreError("Generation admission projection is incompatible")
+        return MountedGenerationAdmission(
+            generation=descriptor,
+            research_calendar=calendar,
+        )
 
     def open_refresh_base(
         self,
@@ -1029,5 +1058,6 @@ __all__ = (
     "GenerationStoreError",
     "GenerationFileRef",
     "MountedGeneration",
+    "MountedGenerationAdmission",
     "MountedGenerationStore",
 )

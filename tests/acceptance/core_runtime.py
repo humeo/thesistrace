@@ -2,13 +2,13 @@ from fastapi import FastAPI
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.http import create_app as create_core_app
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.schema import initialize_core
 
 
-def create_migrated_test_app(settings: CoreSettings | None = None) -> FastAPI:
+def create_initialized_test_app(settings: CoreSettings | None = None) -> FastAPI:
     selected_settings = settings or CoreSettings.from_environment()
-    migrate_core(selected_settings.database_url)
+    initialize_core(selected_settings.database_url)
     return create_core_app(selected_settings)
 
 
@@ -18,6 +18,7 @@ def drop_product_schemas(settings: CoreSettings) -> None:
     try:
         with database.transaction() as transaction:
             for schema in (
+                "thesistrace_meta",
                 "daily_tracks",
                 "research_runs",
                 "definitions",

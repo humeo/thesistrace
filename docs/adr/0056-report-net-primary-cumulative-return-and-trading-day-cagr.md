@@ -19,10 +19,10 @@ Annualized Return =
 ```
 
 `return_interval_count` is the number of consecutive post-trade open-to-open
-Strategy return intervals in the reported Research Window. Annualized Return is
+Strategy return intervals in the reported Research Period. Annualized Return is
 therefore a compound annual growth rate on a 252-market-session convention, not
 an arithmetic daily mean multiplied by 252.
 
 The starting NAV is the common CNY 10,000,000 all-cash baseline at the first
-Research Window open. It precedes initial deployment, so the ending-to-starting
+Research Period open. It precedes initial deployment, so the ending-to-starting
 ratio includes every reported Transaction Cost.

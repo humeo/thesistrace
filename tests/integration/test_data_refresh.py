@@ -31,8 +31,8 @@ from thesistrace.data import (
 )
 from thesistrace.data.head_store import MountedDatasetHeadStore
 from thesistrace.data.source import DataSourceError
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 AS_OF = datetime(2026, 9, 7, 9, tzinfo=UTC)
@@ -1020,7 +1020,7 @@ def _establish_head(
 
 
 def _database(settings: CoreSettings) -> PostgresDatabase:
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     return database

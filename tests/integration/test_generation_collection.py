@@ -20,8 +20,8 @@ from thesistrace.data import (
 )
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.source import CollectionPlan
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 
@@ -29,7 +29,7 @@ def test_collection_retains_every_live_root_and_shared_object_then_converges(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:
@@ -53,7 +53,7 @@ def test_collection_retains_every_live_root_and_shared_object_then_converges(
             owner_kind="research_run_attempt",
             owner_id="collection-active-attempt",
             lease_seconds=60,
-        )
+        ).pin
         _move_head(
             lifecycle,
             expected=run_pinned,
@@ -64,7 +64,7 @@ def test_collection_retains_every_live_root_and_shared_object_then_converges(
             owner_kind="tracking_advance_attempt",
             owner_id="collection-active-advance",
             lease_seconds=60,
-        )
+        ).pin
         _move_head(
             lifecycle,
             expected=track_pinned,
@@ -122,7 +122,7 @@ def test_invalid_retained_generation_aborts_before_any_deletion(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:
@@ -156,7 +156,7 @@ def test_failed_deletion_records_progress_and_retry_does_not_widen_plan(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:
@@ -209,7 +209,7 @@ def test_collection_uses_the_same_fence_as_pin_release_and_head_move(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:
@@ -224,7 +224,7 @@ def test_collection_uses_the_same_fence_as_pin_release_and_head_move(
             owner_kind="research_run_attempt",
             owner_id="race-first-pin",
             lease_seconds=60,
-        )
+        ).pin
         lifecycle.protect_candidate(
             operation_id="race-next-head",
             generation_manifest_sha256=next_head,
@@ -265,7 +265,7 @@ def test_collection_uses_the_same_fence_as_pin_release_and_head_move(
                 candidate_generation_manifest_sha256=next_head,
                 operation_id="race-next-head",
             )
-            selected = pin.result(timeout=2).generation_manifest_sha256
+            selected = pin.result(timeout=2).descriptor.manifest_sha256
             release.result(timeout=2)
             assert move.result(timeout=2).generation_manifest_sha256 == next_head
             assert not collection.done()
@@ -288,7 +288,7 @@ def test_retained_generation_validation_does_not_hold_the_lifecycle_fence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     validating = threading.Event()
@@ -332,7 +332,7 @@ def test_retained_generation_validation_does_not_hold_the_lifecycle_fence(
                 owner_kind="research_run_attempt",
                 owner_id="validation-concurrent-pin",
                 lease_seconds=60,
-            )
+            ).pin
             lifecycle.release_pin(pin.id, owner_id=pin.owner_id)
             moved = lifecycle.compare_and_swap_head(
                 expected_generation_manifest_sha256=head,
@@ -352,7 +352,7 @@ def test_abandoned_collector_is_reconciled_by_the_next_operator_session(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     recovery_database: PostgresDatabase | None = None
@@ -419,7 +419,7 @@ def test_materialized_refresh_candidate_is_never_planned_before_registration(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     candidate_materialized = threading.Event()

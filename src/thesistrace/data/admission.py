@@ -28,15 +28,15 @@ class DatasetAdmissionService:
         self._lifecycle = DatasetLifecycle(database, mount_root)
 
     def current(self) -> DatasetAdmissionSnapshot | None:
-        head = self._lifecycle.current_head()
-        if head is None:
+        admission = self._lifecycle.current_admission()
+        if admission is None:
             return None
-        calendar = head.generation.canonical["research_calendar"]
-        assert isinstance(calendar, list)
-        sessions = tuple(date.fromisoformat(str(value)) for value in calendar)
+        sessions = tuple(
+            date.fromisoformat(value) for value in admission.research_calendar
+        )
         return DatasetAdmissionSnapshot(
             coverage_start=sessions[0],
             coverage_end=sessions[-1],
             research_sessions=sessions,
-            available_field_ids=frozenset(head.generation.field_availability),
+            available_field_ids=frozenset(admission.generation.field_availability),
         )

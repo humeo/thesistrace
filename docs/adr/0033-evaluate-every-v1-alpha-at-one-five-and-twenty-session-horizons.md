@@ -16,10 +16,8 @@ Forward Return Labels of 1, 5, and 20 market sessions:
 Each metric observation is attributed to the Alpha's signal session `t`, not
 to the label's exit session. It becomes calculable only after its required exit
 open exists: `t+2`, `t+6`, or `t+21`, respectively. Recent signal sessions
-without that future open remain unlabeled. In a 504-session Research Window
-ending at the Dataset Release, the theoretical maximum labeled signal-session
-counts per instrument are therefore 502, 498, and 483, before other coverage
-loss. ADR-0086 defines the corresponding availability reasons.
+without that future open inside the selected Research Period remain unlabeled.
+ADR-0086 defines the corresponding availability reasons.
 
 The three horizons are sections of one Factor Evaluation produced by one
 ResearchRun. They do not create additional Alphas, runs, orders, or portfolios,

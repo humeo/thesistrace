@@ -47,11 +47,8 @@ the smallest dataset needed for its behavior; the 252-session Alpha boundary is
 tested at the expression or focused numeric layer rather than by routing a
 756-session fixture through every product boundary.
 
-This decision supersedes ADR-0068, ADR-0079, ADR-0080, and ADR-0147. It also
-supersedes ADR-0029's fixed 252-session publication prefix while retaining that
-ADR's maximum Effective Alpha Lookback and supersedes only the fixed-window
-examples in ADR-0033. It also supersedes ADR-0086's Dataset-Release-end boundary
-and fixed-504 examples while retaining its missing-label classifications.
-In every other accepted ADR, a fixed `Research Window` or exact `Research Input
-History` shape is superseded; the retained business rule applies to the
-user-selected Research Period or its derived Calculation Warm-up as appropriate.
+The current contract has no fixed `Research Window` or exact `Research Input
+History` shape. Any retained business rule applies to the user-selected
+Research Period or its derived Calculation Warm-up as appropriate. The maximum
+Effective Alpha Lookback remains 252 sessions; missing-label classifications
+remain valid with the Research Period end as their right-censoring boundary.

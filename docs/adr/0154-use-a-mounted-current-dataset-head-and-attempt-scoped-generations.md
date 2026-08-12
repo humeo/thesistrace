@@ -44,11 +44,9 @@ idempotent creation, cancellation, and user-Rerun rules remain in force;
 ADR-0103's explicit Track activation, Active DailyTrack Limit, and terminal Stop
 rules also remain in force.
 
-This decision supersedes ADR-0002, ADR-0013, and ADR-0144. It supersedes only
-the Dataset Release or immutable-data binding portions of ADR-0095, ADR-0099,
-ADR-0102, ADR-0103, ADR-0105, ADR-0108, ADR-0109, and ADR-0151 without changing
-their state, atomic-publication, equivalence, numeric, or module-first rules.
-Where another accepted ADR names a permanent Dataset Release solely as a data,
-provenance, or storage coordinate, this decision replaces that coordinate with
-the Dataset Head or the execution-pinned Data Generation while retaining the
-ADR's independent market, calculation, or validation rule.
+The current system has no permanent Dataset Release product resource or
+immutable-data binding at ResearchRun creation. Wherever an older retained
+market, calculation, or validation rule needs a data coordinate, that
+coordinate is the Dataset Head or the execution-pinned Data Generation. State
+machines, atomic publication, numeric rules, and the module-first architecture
+remain independent of that coordinate.

@@ -16,11 +16,11 @@ for later execution, or create overlapping holding cohorts. The portfolio
 continues to hold its positions between scheduled rebalances, subject to
 separately defined execution and existing-position rules.
 
-The first signal session of the reported Research Window is `D0`, providing a
+The first signal session of the selected Research Period is `D0`, providing a
 deterministic schedule anchor. A scheduled signal creates orders only when its
 execution open and one subsequent holding-valuation open both remain inside
-the Research Window; ADR-0080 defines the terminal cutoff. ADR-0043 defines the
+the Research Period. ADR-0043 defines the
 allowed range of N.
 
 ADR-0104 preserves that original `D0` phase when DailyTrack continues past its
-seed Research Window. Later Dataset Releases do not re-anchor the schedule.
+seed Research Period. Later Data Generations do not re-anchor the schedule.

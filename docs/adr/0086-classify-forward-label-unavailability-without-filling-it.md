@@ -8,26 +8,18 @@ For each signal session, instrument, and 1-, 5-, or 20-session horizon, V1
 classifies an unavailable Forward Return Label as exactly one of:
 
 ```text
-right_censored_by_release_end
+right_censored_by_research_period_end
 confirmed_market_open_unavailable
 unexplained_missing_or_invalid_data
 ```
 
-`right_censored_by_release_end` means the required entry or exit Research
-Session lies after the pinned Dataset Release's final session. For a
-504-session Research Window ending with that release, and assuming otherwise
-complete history, the theoretical maximum labeled signal-session counts per
-instrument are:
-
-```text
-1-session:   502
-5-session:   498
-20-session:  483
-```
-
-These counts follow directly from requiring opens at `t+1` and `t+1+h`.
+`right_censored_by_research_period_end` means the required entry or exit
+Research Session lies after the selected Research Period. The number of
+right-censored signals depends on the selected period length and horizon.
+The classification follows directly from requiring opens at `t+1` and
+`t+1+h`.
 Right-censoring is expected coverage loss, not a Dataset error, and V1 never
-moves or shortens the Research Window to remove it.
+moves or shortens the Research Period to remove it.
 
 `confirmed_market_open_unavailable` means the required entry session is
 `full_session_suspended` or already terminally delisted, or that the required
@@ -44,7 +36,7 @@ than an unavailable Label. The zero is not Canonical Market Data.
 
 `unexplained_missing_or_invalid_data` means a required open is absent or
 invalid without governing suspension evidence. It is a hard Dataset
-Publication or ResearchRun failure under ADR-0074, not a successful run's
+Generation validation or ResearchRun failure under ADR-0074, not a successful run's
 ordinary missing-label observation.
 
 This decision refines rather than replaces ADR-0026 and ADR-0074: unavailable

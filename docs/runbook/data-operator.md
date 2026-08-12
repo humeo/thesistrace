@@ -45,6 +45,41 @@ idempotency key; the operator reports `bootstrap_checkpoint/restored` and
 resumes at market facts. Changing the request window does not reuse the
 checkpoint. Successful publication clears it.
 
+## Refresh and collection
+
+Refresh is a private two-step operation. Submission records the frozen request;
+work execution later claims the next request and collects from Tushare:
+
+```sh
+docker compose -f deploy/core/compose.yaml run --rm api \
+  thesistrace-data-operator refresh \
+  --idempotency-key refresh-2026-08-12 \
+  --as-of 2026-08-12T18:00:00+08:00
+
+docker compose -f deploy/core/compose.yaml run --rm \
+  -e THESISTRACE_TUSHARE_TOKEN \
+  api thesistrace-data-operator work-refresh
+```
+
+Use `work-refresh --replay /private/operator/replay.json` for deterministic
+reproduction. Inspect an operation without changing it:
+
+```sh
+thesistrace-data-operator inspect-refresh \
+  --idempotency-key refresh-2026-08-12
+```
+
+Garbage collection is explicit and idempotent:
+
+```sh
+thesistrace-data-operator collect \
+  --idempotency-key collect-2026-08-12
+```
+
+Collection retains the current Head, live candidates, and active execution
+pins. It does not make completed ResearchRuns depend on permanently retained
+market-data Generations.
+
 The narrow Production Image smoke builds the backend image, runs the versioned
 operator twice through the shared named mount, and then starts and restarts the
 API and Worker without source credentials:

@@ -10,14 +10,14 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 
@@ -30,7 +30,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = _business_sessions(date(2024, 8, 1), count=510)
     seed_sessions = sessions[:3]
     head_a = _publish_head(

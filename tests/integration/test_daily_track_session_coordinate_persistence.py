@@ -16,12 +16,12 @@ from thesistrace.daily_track.session_persistence import (
     SessionCoordinateConflict,
     SessionCoordinateRepository,
 )
-from thesistrace.entrypoints.migrations import CORE_MIGRATION_PLANS, migrate_core
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
     open_core_runtime,
 )
+from thesistrace.entrypoints.schema import CORE_SCHEMAS, initialize_core
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 from thesistrace.research_kernel.terminal_state_schema import (
     LAST_DAILY_OBSERVATION_KEYS,
@@ -38,7 +38,7 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     _drop_product_schemas(settings.database_url)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -146,7 +146,7 @@ def test_invalid_session_coordinates_leave_no_partial_progression(
 ) -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings.database_url)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -200,7 +200,7 @@ def test_track_rejects_a_second_unresolved_progression(
 ) -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings.database_url)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -275,7 +275,7 @@ def test_track_rejects_a_second_unresolved_progression(
 def test_terminal_state_validation_rolls_back_activation_and_publication() -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings.database_url)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -369,7 +369,7 @@ def test_terminal_state_validation_rolls_back_activation_and_publication() -> No
 def test_reader_observes_one_snapshot_while_checkpoint_commit_is_pending() -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings.database_url)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     publisher_database = PostgresDatabase(settings.database_url)
@@ -457,7 +457,7 @@ def test_reader_observes_one_snapshot_while_checkpoint_commit_is_pending() -> No
 def test_relational_coordinates_cannot_disagree_with_checkpoint_ancestry() -> None:
     settings = CoreSettings.from_environment()
     _drop_product_schemas(settings.database_url)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -683,7 +683,7 @@ def _drop_product_schemas(database_url: str) -> None:
     database.open()
     try:
         with database.transaction() as transaction:
-            for plan in reversed(CORE_MIGRATION_PLANS):
-                transaction.execute(f'DROP SCHEMA IF EXISTS "{plan.schema}" CASCADE')
+            for schema in reversed((*CORE_SCHEMAS, "thesistrace_meta")):
+                transaction.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
     finally:
         database.close()

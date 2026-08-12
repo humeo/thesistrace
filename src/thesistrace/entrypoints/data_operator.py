@@ -9,8 +9,6 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import NoReturn
 
-import boto3
-
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_provider import (
@@ -29,15 +27,9 @@ from thesistrace.data import (
     DataRefreshError,
     DataRefreshService,
     DataSourceError,
-    DevelopmentReset,
-    DevelopmentResetError,
-    DevelopmentResetOutcome,
     RefreshOutcome,
 )
-from thesistrace.entrypoints.migrations import (
-    verify_core_migrations,
-    verify_development_reset_migrations,
-)
+from thesistrace.entrypoints.schema import verify_core_schema
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +42,6 @@ def main(arguments: list[str] | None = None) -> None:
         DataCollectionError,
         DataOperatorError,
         DataRefreshError,
-        DevelopmentResetError,
     ) as error:
         _failure(error.code, diagnostic=_failure_diagnostic(error))
     except Exception:
@@ -62,7 +53,7 @@ def main(arguments: list[str] | None = None) -> None:
 def _run(
     arguments: list[str] | None = None,
 ) -> (
-    BootstrapOutcome | CollectionOutcome | DevelopmentResetOutcome | RefreshOutcome | dict[str, str]
+    BootstrapOutcome | CollectionOutcome | RefreshOutcome | dict[str, str]
 ):
     parser = argparse.ArgumentParser(description="ThesisTrace private Data Operator")
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -80,18 +71,7 @@ def _run(
     work.add_argument("--replay", type=Path)
     collect = subcommands.add_parser("collect")
     collect.add_argument("--idempotency-key", required=True)
-    reset = subcommands.add_parser("development-reset")
-    reset.add_argument("--idempotency-key", required=True)
-    reset.add_argument("--environment", required=True)
-    reset.add_argument("--confirm", required=True)
     parsed = parser.parse_args(arguments)
-
-    if parsed.command == "development-reset":
-        configured_environment = _environment("THESISTRACE_DEPLOYMENT_ENV")
-        if parsed.environment != configured_environment:
-            raise DevelopmentResetError("RESET_ENVIRONMENT_MISMATCH")
-        if configured_environment != "development":
-            raise DevelopmentResetError("RESET_ENVIRONMENT_REFUSED")
 
     transport: HttpTushareTransport | None = None
     database: PostgresDatabase | None = None
@@ -100,10 +80,7 @@ def _run(
         mount_root = Path(_environment("THESISTRACE_DATA_MOUNT"))
         database = PostgresDatabase(database_url)
         database.open()
-        if parsed.command == "development-reset":
-            verify_development_reset_migrations(database)
-        else:
-            verify_core_migrations(database)
+        verify_core_schema(database)
         if parsed.command == "refresh":
             return DataRefreshService(database, mount_root).submit(
                 idempotency_key=parsed.idempotency_key,
@@ -115,28 +92,6 @@ def _run(
             return DataGarbageCollector(database, mount_root).collect(
                 idempotency_key=parsed.idempotency_key
             )
-        if parsed.command == "development-reset":
-            s3 = boto3.client(
-                "s3",
-                endpoint_url=_environment("THESISTRACE_S3_ENDPOINT_URL"),
-                aws_access_key_id=_environment("THESISTRACE_S3_ACCESS_KEY_ID"),
-                aws_secret_access_key=_environment("THESISTRACE_S3_SECRET_ACCESS_KEY"),
-                region_name=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
-            )
-            try:
-                return DevelopmentReset(
-                    database,
-                    s3,
-                    bucket=_environment("THESISTRACE_S3_BUCKET"),
-                    mount_root=mount_root,
-                ).execute(
-                    idempotency_key=parsed.idempotency_key,
-                    environment_name=parsed.environment,
-                    confirmation=parsed.confirm,
-                )
-            finally:
-                s3.close()
-
         replay = parsed.replay
         live_provider: TushareAdapter | None = None
         if replay is not None:

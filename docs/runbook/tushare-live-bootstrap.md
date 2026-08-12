@@ -5,7 +5,7 @@ canonical `DataSource` adapter, but it is not selected by the current product
 runtime and it has no source-specific HTTP route.
 
 To verify a real Tushare credential and the adapter's required provider
-contracts without publishing a Dataset Release:
+contracts without moving the Dataset Head:
 
 ```sh
 export TUSHARE_TOKEN='...'

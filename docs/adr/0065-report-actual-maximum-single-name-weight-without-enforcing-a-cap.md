@@ -19,6 +19,6 @@ Price. Cash is excluded from the maximum. An all-cash portfolio records zero.
 Blocked sells, failed buys, rounding, and price movement may make the result
 exceed `1 / holdings_count`.
 
-Strategy Backtest retains the daily series and reports its Research Window
+Strategy Backtest retains the daily series and reports its Research Period
 maximum with the corresponding date, plus its ending value. V1 does not treat
 this diagnostic as a position cap or modify orders to satisfy it.

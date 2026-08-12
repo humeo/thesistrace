@@ -24,7 +24,7 @@ mise exec -- pnpm dev
 ```
 
 Open `http://127.0.0.1:5173`. Web, API, Worker, PostgreSQL, RustFS, and the
-one-shot Migration service all belong to the canonical Compose project. For a
+one-shot schema initializer all belong to the canonical Compose project. For a
 detached start use `mise exec -- pnpm dev:up`; use
 `mise exec -- pnpm dev:stop` to stop services without deleting data, and
 `mise exec -- pnpm dev:reset` only when the Development data should be erased.
@@ -33,6 +33,10 @@ The complete command contract, Test isolation rules, and failure evidence are
 documented in the [local lifecycle guide](docs/runbook/local-lifecycle.md).
 Only local Development and local Test exist today. Local checks are not
 Production readiness.
+
+Canonical market data is prepared outside the user product through the
+[private Data Operator](docs/runbook/data-operator.md). The Data page is a
+read-only view of the current Dataset Head.
 
 The current Tushare adapter has a separate
 [credential verification guide](docs/runbook/tushare-live-bootstrap.md).

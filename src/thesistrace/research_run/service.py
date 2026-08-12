@@ -716,16 +716,14 @@ class ResearchRunService:
             ).fetchone()
             assert ordinal_row is not None
             attempt_id = f"attempt_{uuid4().hex[:20]}"
-            pin = self._dataset_lifecycle.pin_current_in_transaction(
+            pinned = self._dataset_lifecycle.pin_current_in_transaction(
                 transaction,
                 owner_kind="research_run_attempt",
                 owner_id=attempt_id,
                 lease_seconds=self._lease_seconds,
             )
-            assert self._generation_store is not None
-            generation = self._generation_store.open_generation(
-                pin.generation_manifest_sha256
-            )
+            pin = pinned.pin
+            generation = pinned.descriptor
             transaction.execute(
                 """
                 UPDATE research_runs.runs

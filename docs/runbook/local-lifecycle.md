@@ -18,7 +18,7 @@ mise exec -- pnpm bootstrap
 
 Bootstrap runs frozen Python and pnpm dependency sync, validates the resolved
 Compose configuration, pulls PostgreSQL and RustFS, and builds the application
-images. It migrates no Development database and publishes no Seed data.
+images. It changes no Development database and publishes no Seed data.
 
 The examples below keep `mise exec --` explicit so that the pinned Node.js and
 pnpm versions are used even when shell activation is not configured.
@@ -63,9 +63,10 @@ mise exec -- pnpm dev:reset
 ```
 
 Reset accepts only the canonical `thesistrace-dev` project, deletes its volumes,
-recreates the complete topology, runs the one-shot Migration service, and waits
-for health. It does not publish Fixture data or any other Seed; the first
-Dataset Release must still come from the Data Update product action.
+recreates the complete topology, runs the one-shot schema initializer, and waits
+for health. It does not publish Fixture data or any other Seed; an empty mounted
+Canonical Data Store must be initialized explicitly through the private Data
+Operator before research can run.
 
 ## Test gates
 
@@ -96,7 +97,7 @@ Data mount on an internal-only Compose network:
 mise exec -- pnpm test:image-smoke
 ```
 
-The image smoke migrates a fresh database, prepares deterministic mounted data,
+The image smoke initializes a fresh database, prepares deterministic mounted data,
 executes one short dated ResearchRun through the real Worker, restarts API and
 Worker, and verifies the same Head, Result manifest, readiness, and single
 Attempt remain authoritative. It records image identities, health/exit state,

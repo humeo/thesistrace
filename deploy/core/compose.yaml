@@ -44,9 +44,9 @@ services:
     volumes:
       - rustfs-data:/data
 
-  migrate:
+  initialize:
     <<: *backend
-    command: ["thesistrace-migrate"]
+    command: ["thesistrace-initialize"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,7 +55,7 @@ services:
   api:
     <<: *backend
     depends_on:
-      migrate:
+      initialize:
         condition: service_completed_successfully
       rustfs:
         condition: service_healthy
@@ -73,15 +73,10 @@ services:
     <<: *backend
     command: ["thesistrace-core-worker"]
     depends_on:
-      migrate:
+      initialize:
         condition: service_completed_successfully
       rustfs:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "thesistrace-core-worker", "--healthcheck"]
-      interval: 5s
-      timeout: 30s
-      retries: 60
 
   web:
     build:

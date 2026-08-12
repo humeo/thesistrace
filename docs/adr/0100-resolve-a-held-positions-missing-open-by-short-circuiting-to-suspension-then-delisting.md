@@ -18,8 +18,8 @@ in this fixed order:
 5. every other missing Open is an unexplained data-quality failure.
 
 ResearchRun performs these lookups only against the immutable, locally indexed
-evidence in its pinned Dataset Release. It never makes a per-position or
-per-instrument Tushare request. Dataset Publication obtains and stores the
+evidence in its Attempt-pinned Data Generation. It never makes a per-position
+or per-instrument Tushare request. The Data Operator obtains and stores the
 source evidence through the batch interfaces fixed by ADR-0097.
 
 A Terminal Delisting Write-Off values the position at zero, removes it from

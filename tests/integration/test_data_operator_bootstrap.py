@@ -25,8 +25,8 @@ from thesistrace.data import (
     DataSourceError,
     MountedGenerationStore,
 )
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 AS_OF = datetime(2026, 8, 3, 10, tzinfo=UTC)
@@ -629,7 +629,7 @@ def test_real_private_command_bootstraps_from_tushare_replay(
 
 
 def _database(settings: CoreSettings) -> PostgresDatabase:
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     with database.transaction() as transaction:

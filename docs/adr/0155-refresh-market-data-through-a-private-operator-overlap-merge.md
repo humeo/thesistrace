@@ -32,10 +32,6 @@ later operator refresh may append several missed sessions in one Generation.
 
 Financial data remains outside the implemented V1 Dataset Scope; its accepted
 Point-in-Time semantics are unchanged and no financial refresh window is added
-by this decision. This decision supersedes ADR-0008, ADR-0088, ADR-0091, and
-ADR-0092. It also supersedes only the immutable-Release correction timing in
-ADR-0023 and ADR-0074 while retaining their adjustment, trading-state, and
-validation rules.
-Any earlier user-facing Data Update or Dataset Publication entrypoint and any
-requirement to wait for a new-session immutable Release before applying overlap
-data are superseded; independent source-normalization and validation rules remain.
+by this decision. There is no user-facing Data Update, Dataset Publication
+entrypoint, correction log, or immutable Release chain. Independent
+source-normalization, adjustment, trading-state, and validation rules remain.

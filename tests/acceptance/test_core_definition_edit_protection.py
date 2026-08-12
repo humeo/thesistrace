@@ -3,7 +3,8 @@ from threading import Barrier
 from time import monotonic, sleep
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
+from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
@@ -16,7 +17,7 @@ from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_co
 )
 def test_revision_conflicts_and_malformed_edits_never_corrupt_definition() -> None:
     settings = CoreSettings.from_environment()
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
 
     with TestClient(create_app(settings)) as client:
         created = client.post("/api/definitions", json={}).json()
@@ -134,15 +135,6 @@ def test_revision_conflicts_and_malformed_edits_never_corrupt_definition() -> No
             "end_date": "2026-12-31",
         }
 
-
-def _drop_definitions_schema(settings: CoreSettings) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")
-    finally:
-        database.close()
 
 
 def _wait_for_blocked_definition_locks(

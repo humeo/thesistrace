@@ -9,14 +9,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, GenerationStoreError, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 
@@ -29,7 +29,7 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = ("2026-08-05", "2026-08-06", "2026-08-07")
     retired = _publish_head(
         settings,

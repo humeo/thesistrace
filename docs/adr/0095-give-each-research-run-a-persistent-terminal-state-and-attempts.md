@@ -12,7 +12,8 @@ queued -> running -> succeeded | failed | cancelled
 
 A retry of a transient infrastructure failure creates another execution
 attempt under the same ResearchRun identity. It does not create another
-user-visible run or change the pinned Research Definition and Dataset Release.
+user-visible run or change the frozen Research Definition and calculation
+contracts. Each new Attempt selects and pins the then-current Data Generation.
 
 A user-requested rerun always creates a new ResearchRun identity and preserves
 the earlier run and its result or diagnostics. A cancelled run is terminal; a
@@ -23,5 +24,5 @@ instead of starting duplicates.
 Tracking Advance is not a ResearchRun or user rerun. Under ADR-0105, its
 Attempts use the same execution terminal states, but a failed or cancelled
 Attempt leaves the persistent Advance blocked and retryable. The Advance
-identity is scoped to one DailyTrack Generation and target Dataset Release and
+identity is scoped to one DailyTrack and target Research Session progression and
 becomes terminal only on success.

@@ -214,13 +214,17 @@ def test_development_reset_rejects_every_noncanonical_project(project_name: str)
 def test_development_topology_declares_every_core_service_and_pinned_infrastructure() -> None:
     compose = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
 
-    for service in ("postgres", "rustfs", "migrate", "api", "worker", "web"):
+    for service in ("postgres", "rustfs", "initialize", "api", "worker", "web"):
         assert f"  {service}:\n" in compose
     assert "postgres:16.10-alpine" in compose
     assert "rustfs/rustfs:1.0.0-beta.12" in compose
     assert ":latest" not in compose
     assert "service_completed_successfully" in compose
-    assert "thesistrace-core-worker\", \"--healthcheck" in compose
+    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split(
+        "  web:\n", maxsplit=1
+    )[0]
+    assert "healthcheck:" not in worker_service
+    assert "--healthcheck" not in compose
     api_service = compose.split("  api:\n", maxsplit=1)[1].split(
         "  worker:\n", maxsplit=1
     )[0]
@@ -294,8 +298,8 @@ if "up --watch" not in arguments:
 def terminate(signum, _frame):
     with open(os.environ["WATCH_SIGNAL_FILE"], "w") as signal_file:
         signal_file.write(signal.Signals(signum).name)
-    print("panic: close of closed channel", file=sys.stderr, flush=True)
-    print("watch panic trace", file=sys.stderr, flush=True)
+    os.write(2, b"panic: close of closed channel\\n")
+    os.write(2, b"watch panic trace\\n")
     raise SystemExit(2)
 
 signal.signal(signal.SIGINT, terminate)
@@ -536,7 +540,7 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     ) == 1
     for phase in (
         "integration-infrastructure",
-        "integration-migration",
+        "integration-initialization",
         "integration-pytest",
         "integration-database-restart",
     ):
@@ -548,7 +552,7 @@ def test_integration_runtime_validates_starts_host_tests_and_cleans(
     assert commands.index("config --quiet") < commands.index("up --detach")
     assert "up --detach --wait --wait-timeout 300 postgres rustfs" in commands
     assert "--build" not in commands
-    assert "uv run thesistrace-migrate" in commands
+    assert "uv run thesistrace-initialize" in commands
     assert "uv run pytest -q tests/integration tests/acceptance" in commands
     assert "db=postgresql://thesistrace:thesistrace-test@127.0.0.1:41001" in commands
     assert "s3=http://127.0.0.1:41002" in commands
@@ -575,21 +579,21 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
     assert commands.index("config --quiet") < commands.index("up --detach")
-    assert commands.count("build migrate web\n") == 1
+    assert commands.count("build initialize web\n") == 1
     assert (
-        f"docker image tag {project_name}-migrate {project_name}-api\n" in commands
+        f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
     assert (
-        f"docker image tag {project_name}-migrate {project_name}-worker\n" in commands
+        f"docker image tag {project_name}-initialize {project_name}-worker\n" in commands
     )
     assert (
-        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs migrate\n"
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize\n"
         in commands
     )
-    assert "wait migrate\n" in commands
+    assert "wait initialize\n" in commands
     assert "up --detach --no-build --wait --wait-timeout 300 api worker web\n" in commands
     assert "--build" not in commands
-    assert "uv run thesistrace-migrate" not in commands
+    assert "uv run thesistrace-initialize" not in commands
     assert "bun run --cwd web test:e2e origin=http://127.0.0.1:41004" in commands
     assert "thesistrace-api" not in commands
     assert "thesistrace-worker" not in commands
@@ -651,18 +655,18 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert completed.returncode == 0, completed.stderr
     project_name = completed.stdout.splitlines()[1].removeprefix("Compose project: ")
     commands = command_log.read_text()
-    assert commands.count("build migrate web\n") == 1
+    assert commands.count("build initialize web\n") == 1
     assert (
-        f"docker image tag {project_name}-migrate {project_name}-api\n" in commands
+        f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
     assert (
-        f"docker image tag {project_name}-migrate {project_name}-worker\n" in commands
+        f"docker image tag {project_name}-initialize {project_name}-worker\n" in commands
     )
     assert (
-        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs migrate\n"
+        "up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize\n"
         in commands
     )
-    assert "wait migrate\n" in commands
+    assert "wait initialize\n" in commands
     assert "up --detach --no-build --wait --wait-timeout 300 api worker web\n" in commands
     assert "up --detach --no-build --wait --wait-timeout 120 api worker\n" in commands
     assert "--build" not in commands
@@ -1054,7 +1058,7 @@ def test_full_compose_lifecycle_decision_is_recorded_without_glossary_drift() ->
 
     assert "status: accepted" in adr
     assert "Web, API, Worker, PostgreSQL, RustFS" in adr
-    assert "one-shot Migration" in adr
+    assert "one-shot schema initialization" in adr
     assert "hybrid" in adr
     assert "host test runners" in adr
     assert "not Production readiness" in adr
@@ -1067,3 +1071,26 @@ def test_full_compose_lifecycle_decision_is_recorded_without_glossary_drift() ->
         "test:e2e",
     ):
         assert engineering_term not in glossary
+
+
+def test_current_architecture_documents_only_the_active_data_and_schema_contracts() -> None:
+    architecture = (ROOT / "docs" / "architecture" / "core.md").read_text()
+
+    for current in (
+        "one-shot schema initializer",
+        "thesistrace_meta.schema_contract",
+        "private `thesistrace-data-operator`",
+        "Attempt starts",
+        "pins the then-current Data",
+        "There is no upgrade, downgrade, fallback",
+    ):
+        assert current in architecture
+
+    for obsolete in (
+        "one-shot Migration",
+        "migration-runner",
+        "data.next_release",
+        "Data Update product action",
+        "Rerun always creates a new ResearchRun ID using exactly",
+    ):
+        assert obsolete not in architecture

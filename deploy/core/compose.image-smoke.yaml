@@ -3,7 +3,7 @@ networks:
     internal: true
 
 services:
-  migrate:
+  initialize:
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
       - ${THESISTRACE_TEST_EVIDENCE_DIR}:/smoke-evidence

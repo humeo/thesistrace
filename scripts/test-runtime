@@ -73,8 +73,8 @@ runtime_image_name() {
 }
 
 build_runtime_images() {
-  compose build migrate web
-  built_backend_image=$(runtime_image_name migrate)
+  compose build initialize web
+  built_backend_image=$(runtime_image_name initialize)
   docker image tag "$built_backend_image" "$(runtime_image_name api)"
   docker image tag "$built_backend_image" "$(runtime_image_name worker)"
 }
@@ -302,7 +302,7 @@ case "$command" in
     postgres_port=$(mapped_port postgres 5432)
     s3_port=$(mapped_port rustfs 9000)
     printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
-    run_phase integration-migration run_with_environment uv run thesistrace-migrate
+    run_phase integration-initialization run_with_environment uv run thesistrace-initialize
     run_phase integration-pytest run_with_environment uv run pytest -q \
       tests/integration tests/acceptance \
       -m "not database_restart" \
@@ -317,8 +317,8 @@ case "$command" in
     run_phase e2e-images build_runtime_images
     run_phase e2e-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      postgres rustfs migrate
-    run_phase e2e-migration compose wait migrate
+      postgres rustfs initialize
+    run_phase e2e-initialization compose wait initialize
     postgres_port=$(mapped_port postgres 5432)
     s3_port=$(mapped_port rustfs 9000)
     run_phase e2e-prepare-data run_with_environment uv run python \
@@ -337,9 +337,9 @@ case "$command" in
     run_phase image-smoke-images build_runtime_images
     run_phase image-smoke-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      postgres rustfs migrate
-    run_phase image-smoke-migration compose wait migrate
-    run_phase image-smoke-prepare-data compose run --rm --no-deps -T migrate \
+      postgres rustfs initialize
+    run_phase image-smoke-initialization compose wait initialize
+    run_phase image-smoke-prepare-data compose run --rm --no-deps -T initialize \
       python /smoke/browser/prepare_current_data.py
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
@@ -354,7 +354,7 @@ case "$command" in
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
-      migrate python /smoke/production_image_smoke.py before \
+      initialize python /smoke/production_image_smoke.py before \
       >"$evidence_dir/smoke-before.json" \
       2>"$evidence_dir/smoke-before.stderr.log"
     run_phase image-smoke-restart compose restart api worker
@@ -364,7 +364,7 @@ case "$command" in
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
-      migrate python /smoke/production_image_smoke.py after \
+      initialize python /smoke/production_image_smoke.py after \
       >"$evidence_dir/smoke-after.json" \
       2>"$evidence_dir/smoke-after.stderr.log"
     compose ps --all >"$evidence_dir/compose-ps-after-restart.txt"

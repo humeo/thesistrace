@@ -10,8 +10,8 @@ from fastapi.testclient import TestClient
 
 from thesistrace.data import DatasetHeadError, DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.http import create_app
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 
@@ -19,7 +19,7 @@ def test_api_exposes_a_dedicated_liveness_endpoint(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     settings = replace(core_settings, data_mount=tmp_path)
 
     with TestClient(create_app(settings)) as client:
@@ -33,8 +33,13 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     settings = replace(core_settings, data_mount=tmp_path)
+    with open_core_runtime(settings) as runtime:
+        with runtime.database.transaction() as transaction:
+            transaction.execute(
+                "UPDATE data.current_dataset_state SET last_refresh_at = NULL WHERE singleton = 1"
+            )
     empty = {
         "dataset_coverage": None,
         "data_through_session": None,
@@ -97,7 +102,7 @@ def test_data_overview_does_not_open_generation_parquet(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     settings = replace(core_settings, data_mount=tmp_path)
     store = MountedGenerationStore(tmp_path)
     generation = store.materialize(
@@ -148,7 +153,7 @@ def test_malformed_existing_head_prevents_healthy_runtime_start(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     (tmp_path / "HEAD.json").write_bytes(b'{"format":')
     settings = replace(core_settings, data_mount=tmp_path)
 
@@ -161,7 +166,7 @@ def test_same_generation_with_forged_head_projection_is_revalidated(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     settings = replace(core_settings, data_mount=tmp_path)
     generation = MountedGenerationStore(tmp_path).materialize(
         build_minimal_canonical_fixture(),

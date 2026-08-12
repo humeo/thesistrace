@@ -4,7 +4,7 @@ status: accepted
 
 # Separate confirmed suspension from unknown market-data loss
 
-Dataset Publication maps Tushare daily bars and dated suspension evidence into
+The Data module maps Tushare daily bars and dated suspension evidence into
 one `equity.trading_state` observation per active instrument and Research
 Session. The Canonical state is exactly one of:
 
@@ -42,16 +42,16 @@ Open coordinate under ADR-0089.
 
 For an active instrument, a missing or invalid daily bar or `open` without
 confirmed governing suspension evidence is an unknown market-data loss. It is
-neither a Market Rejection nor an Execution Diagnostic. Dataset Publication
-fails before releasing such a snapshot; a ResearchRun that nevertheless
+neither a Market Rejection nor an Execution Diagnostic. Data Generation validation
+fails before moving the Dataset Head; a ResearchRun that nevertheless
 detects it fails rather than treating it as suspension, zero turnover, or a
 blocked order.
 
 A contradiction such as a valid daily bar paired with
 `full_session_suspended`, or suspension evidence whose interval cannot be
 interpreted relative to the execution open, also fails Publication. A later
-Tushare correction enters the next new-session Dataset Release and never
-mutates a prior one; ADR-0088 forbids a correction-only release.
+Tushare correction enters a validated candidate Data Generation. The Head moves
+only after the complete candidate passes validation.
 
 ADR-0100 separately handles an Actual Holding that remains after its instrument
 has left the active Base Pool through explicit terminal delisting. That

@@ -5,15 +5,16 @@ status: accepted
 # Use one full Compose topology for local Development and Test
 
 The active local lifecycle uses one base Compose topology. The topology owns
-Web, API, Worker, PostgreSQL, RustFS, and one-shot Migration. Persistent local
-Development and disposable local Test select different overlays, project
-identities, ports, and data lifecycles without selecting different product
-runtimes.
+Web, API, Worker, PostgreSQL, RustFS, and one-shot schema initialization.
+Persistent local Development and disposable local Test select different
+overlays, project identities, ports, and data lifecycles without selecting
+different product runtimes.
 
 This replaces the former hybrid arrangement in which infrastructure ran in
 Compose while Web, API, and Worker ran as unrelated host processes. One service
-graph makes migration ordering, readiness, networking, state ownership, and
-failure diagnostics observable at the same boundary in both environments.
+graph makes schema initialization ordering, readiness, networking, state
+ownership, and failure diagnostics observable at the same boundary in both
+environments.
 
 Fast checks and the integration and browser host test runners remain on the
 host under mise, pnpm, and uv. Integration runners address only their newly

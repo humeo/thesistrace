@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import type { DataOverview } from "../data/DataPage";
+
 type DefinitionSummary = { id: string; name: string; revision: number };
 type DefinitionList = { items: DefinitionSummary[]; next_cursor: string | null };
 type DefinitionDetail = DefinitionSummary & {
@@ -14,6 +16,8 @@ type DefinitionDetail = DefinitionSummary & {
 };
 
 type ResearchDateFieldsProps = {
+  coverageStart: string | null;
+  coverageEnd: string | null;
   disabled?: boolean;
   startDate: string;
   endDate: string;
@@ -22,21 +26,33 @@ type ResearchDateFieldsProps = {
 };
 
 export function ResearchDateFields({
+  coverageStart,
+  coverageEnd,
   disabled = false,
   startDate,
   endDate,
   onStartDateChange,
   onEndDateChange,
 }: ResearchDateFieldsProps) {
+  const issue = researchDateIssue(startDate, endDate, coverageStart, coverageEnd);
+  const startMaximum = earlierDate(endDate, coverageEnd);
+  const endMinimum = laterDate(startDate, coverageStart);
   return (
     <fieldset>
       <legend>Research period</legend>
       <p>Both dates are required to run; incomplete drafts can still be saved.</p>
+      {coverageStart && coverageEnd ? (
+        <p>Available data: {coverageStart} to {coverageEnd}</p>
+      ) : (
+        <p>Current Data is not ready.</p>
+      )}
       <label>
         Start date
         <input
           aria-label="Research start date"
           disabled={disabled}
+          max={startMaximum}
+          min={coverageStart ?? undefined}
           onChange={(event) => onStartDateChange(event.target.value)}
           type="date"
           value={startDate}
@@ -47,11 +63,14 @@ export function ResearchDateFields({
         <input
           aria-label="Research end date"
           disabled={disabled}
+          max={coverageEnd ?? undefined}
+          min={endMinimum}
           onChange={(event) => onEndDateChange(event.target.value)}
           type="date"
           value={endDate}
         />
       </label>
+      {issue && (startDate || endDate) ? <p role="alert">{issue}</p> : null}
     </fieldset>
   );
 }
@@ -96,6 +115,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const [activeDefinitionId, setActiveDefinitionId] = useState(definitionId);
   const [items, setItems] = useState<DefinitionSummary[] | null>(null);
   const [options, setOptions] = useState<AuthoringOptions | null>(null);
+  const [dataOverview, setDataOverview] = useState<DataOverview | null>(null);
   const [definition, setDefinition] = useState<DefinitionDetail | null>(null);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
@@ -120,6 +140,15 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const loadGeneration = useRef(0);
   const skipNextRouteLoad = useRef(false);
   const runAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
+  const coverage = dataOverview?.readiness
+    ? dataOverview.dataset_coverage
+    : null;
+  const dateIssue = researchDateIssue(
+    startDate,
+    endDate,
+    coverage?.start ?? null,
+    coverage?.end ?? null,
+  );
 
   const applyDefinition = useCallback((loaded: DefinitionDetail, catalog: AuthoringOptions) => {
     setDefinition(loaded);
@@ -155,32 +184,38 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
       const optionsRequest = fetch("/api/definitions/authoring-options", {
         signal: controller.signal,
       });
+      const dataRequest = fetch("/api/data", { signal: controller.signal });
+      const definitionRequest = fetch(
+        activeDefinitionId
+          ? `/api/definitions/${activeDefinitionId}`
+          : "/api/definitions",
+        { signal: controller.signal },
+      );
+      const [response, optionsResponse, dataResponse] = await Promise.all([
+        definitionRequest,
+        optionsRequest,
+        dataRequest,
+      ]);
+      if (!response.ok || !optionsResponse.ok || !dataResponse.ok) {
+        throw new Error(
+          activeDefinitionId
+            ? "Research Definition unavailable"
+            : "Research Definitions unavailable",
+        );
+      }
+      const catalog = (await optionsResponse.json()) as AuthoringOptions;
+      const overview = (await dataResponse.json()) as DataOverview;
+      if (generation !== loadGeneration.current) return;
+      setOptions(catalog);
+      setDataOverview(overview);
       if (activeDefinitionId) {
-        const [response, optionsResponse] = await Promise.all([
-          fetch(`/api/definitions/${activeDefinitionId}`, { signal: controller.signal }),
-          optionsRequest,
-        ]);
-        if (!response.ok || !optionsResponse.ok) {
-          throw new Error("Research Definition unavailable");
-        }
         const loaded = (await response.json()) as DefinitionDetail;
-        const catalog = (await optionsResponse.json()) as AuthoringOptions;
         if (generation !== loadGeneration.current) return;
-        setOptions(catalog);
         applyDefinition(loaded, catalog);
       } else {
-        const [response, optionsResponse] = await Promise.all([
-          fetch("/api/definitions", { signal: controller.signal }),
-          optionsRequest,
-        ]);
-        if (!response.ok || !optionsResponse.ok) {
-          throw new Error("Research Definitions unavailable");
-        }
         const loaded = (await response.json()) as DefinitionList;
-        const catalog = (await optionsResponse.json()) as AuthoringOptions;
         if (generation !== loadGeneration.current) return;
         setItems(loaded.items);
-        setOptions(catalog);
       }
       if (kind === "refreshing") setStatus("Refreshed.");
     } catch (reason: unknown) {
@@ -319,7 +354,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   }
 
   async function run() {
-    if (busyRef.current) return;
+    if (busyRef.current || dateIssue !== null) return;
     busyRef.current = true;
     setBusy("running");
     setError(null);
@@ -422,7 +457,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   }
 
   const editing = creating || definition !== null;
-  if ((!editing && items === null) || options === null) {
+  if ((!editing && items === null) || options === null || dataOverview === null) {
     return <section aria-label="Definitions"><p>Loading Definitions…</p></section>;
   }
   const selectedOperator = options.operators.find(
@@ -461,6 +496,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
           </label>
 
           <ResearchDateFields
+            coverageEnd={coverage?.end ?? null}
+            coverageStart={coverage?.start ?? null}
             disabled={busy !== null}
             endDate={endDate}
             onEndDateChange={setEndDate}
@@ -534,7 +571,7 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
 
           {definition && <p>Revision {definition.revision}</p>}
           <button disabled={busy !== null} type="submit">Save</button>
-          <button disabled={busy !== null} type="button" onClick={() => void run()}>
+          <button disabled={busy !== null || dateIssue !== null} type="button" onClick={() => void run()}>
             Run
           </button>
           {(errorKind === null || errorKind === "load") && (
@@ -623,4 +660,31 @@ function optionalNumber(value: string): number | null {
 
 function toInputValue(value: number | null): string {
   return value === null ? "" : String(value);
+}
+
+export function researchDateIssue(
+  startDate: string,
+  endDate: string,
+  coverageStart: string | null,
+  coverageEnd: string | null,
+): string | null {
+  if (!coverageStart || !coverageEnd) return "Current Data is not ready";
+  if (!startDate || !endDate) return "Both dates are required to run";
+  if (startDate > endDate) return "Research end date must not precede start date";
+  if (startDate < coverageStart || endDate > coverageEnd) {
+    return "Research period must stay within current Data coverage";
+  }
+  return null;
+}
+
+function earlierDate(first: string, second: string | null): string | undefined {
+  if (!first) return second ?? undefined;
+  if (!second) return first;
+  return first < second ? first : second;
+}
+
+function laterDate(first: string, second: string | null): string | undefined {
+  if (!first) return second ?? undefined;
+  if (!second) return first;
+  return first > second ? first : second;
 }

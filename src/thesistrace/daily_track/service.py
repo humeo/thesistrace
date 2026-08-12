@@ -130,7 +130,6 @@ class _SessionProgressionClaim:
     predecessor_provenance: dict[str, object]
     current_session: str
     target_sessions: tuple[str, ...]
-    canonical: dict[str, object]
 
 
 class DailyTrackService:
@@ -885,16 +884,20 @@ class DailyTrackService:
             ).fetchall()
             for row in rows:
                 attempt_id = f"track_attempt_{uuid4().hex[:20]}"
-                pin = self._dataset_lifecycle.pin_current_in_transaction(
+                pinned = self._dataset_lifecycle.pin_current_in_transaction(
                     transaction,
                     owner_kind="tracking_advance_attempt",
                     owner_id=attempt_id,
                     lease_seconds=self._lease_seconds,
                 )
-                generation = self._generation_store.open_generation(
-                    pin.generation_manifest_sha256
+                pin = pinned.pin
+                admission = self._generation_store.open_admission(
+                    pinned.descriptor.manifest_sha256
                 )
-                calendar = canonical_sessions(generation.canonical, "Data Generation")
+                if admission.generation != pinned.descriptor:
+                    raise RuntimeError("Pinned Data Generation metadata changed")
+                generation = pinned.descriptor
+                calendar = list(admission.research_calendar)
                 current_session = row["boundary_session"].isoformat()
                 try:
                     current_index = calendar.index(current_session)
@@ -947,7 +950,7 @@ class DailyTrackService:
                         target_sessions=tuple(
                             _session_date(value) for value in target_sessions
                         ),
-                        data_generation_id=pin.generation_manifest_sha256,
+                        data_generation_id=generation.manifest_sha256,
                         provenance=progression_provenance,
                     )
                 else:
@@ -970,7 +973,7 @@ class DailyTrackService:
                             [_session_date(value) for value in target_sessions],
                             _session_date(target_sessions[0]),
                             _session_date(target_sessions[-1]),
-                            pin.generation_manifest_sha256,
+                            generation.manifest_sha256,
                             Jsonb(progression_provenance),
                             progression_id,
                             row["id"],
@@ -986,7 +989,7 @@ class DailyTrackService:
                     ordinal=ordinal,
                     fence=fence,
                     generation_pin_id=pin.id,
-                    data_generation_id=pin.generation_manifest_sha256,
+                    data_generation_id=generation.manifest_sha256,
                     data_through_session=_session_date(generation.data_through_session),
                     lease_seconds=self._lease_seconds,
                 )
@@ -1006,14 +1009,13 @@ class DailyTrackService:
                     attempt_id=attempt_id,
                     fence=fence,
                     generation_pin_id=pin.id,
-                    data_generation_id=pin.generation_manifest_sha256,
+                    data_generation_id=generation.manifest_sha256,
                     data_through_session=generation.data_through_session,
                     origin=TrackingOrigin.model_validate(row["origin"]),
                     predecessor_manifest_sha256=str(row["manifest_sha256"]),
                     predecessor_provenance=dict(row["provenance"]),
                     current_session=current_session,
                     target_sessions=target_sessions,
-                    canonical=generation.canonical,
                 )
         return None
 
@@ -1169,10 +1171,15 @@ class DailyTrackService:
         claim: _SessionProgressionClaim,
     ) -> tuple[PreparedPublication, dict[str, object], KernelState]:
         assert self._publication is not None
-        calendar = canonical_sessions(claim.canonical, "Data Generation")
+        assert self._generation_store is not None
+        generation = self._generation_store.open_generation(claim.data_generation_id)
+        if generation.data_through_session != claim.data_through_session:
+            raise RuntimeError("Pinned Data Generation metadata changed")
+        canonical = generation.canonical
+        calendar = canonical_sessions(canonical, "Data Generation")
         current_index = calendar.index(claim.current_session)
         prior_canonical = slice_canonical_sessions(
-            claim.canonical,
+            canonical,
             calendar[: current_index + 1],
         )
         predecessor = _read_publication_json(
@@ -1203,7 +1210,7 @@ class DailyTrackService:
         state = self._advance_kernel(
             AdvanceInput(
                 prior_state=prior,
-                target_canonical_data=claim.canonical,
+                target_canonical_data=canonical,
                 appended_sessions=list(claim.target_sessions),
                 continuation=continuation,
                 calculation_scope="forward_tracking",

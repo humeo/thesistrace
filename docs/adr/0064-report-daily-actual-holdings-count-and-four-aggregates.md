@@ -17,4 +17,4 @@ configured Holdings Count. Cash is not an instrument and does not enter the
 count.
 
 Strategy Backtest retains the daily Holdings Count series and reports its
-arithmetic mean, minimum, maximum, and ending value over the Research Window.
+arithmetic mean, minimum, maximum, and ending value over the Research Period.

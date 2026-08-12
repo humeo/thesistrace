@@ -3,7 +3,8 @@ import subprocess
 from dataclasses import replace
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
+from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
@@ -21,7 +22,7 @@ def test_requested_research_dates_save_reopen_and_keep_drafts_incomplete(
     if os.environ.get("THESISTRACE_DATABASE_RESTART_PHASE") != "1":
         pytest.skip("database restart acceptance runs in its isolated final phase")
     settings = CoreSettings.from_environment()
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
     app = create_app(settings)
     before = _execution_counts(settings)
 
@@ -77,7 +78,7 @@ def test_requested_research_dates_save_reopen_and_keep_drafts_incomplete(
 )
 def test_invalid_or_stale_date_edits_never_replace_the_durable_revision() -> None:
     settings = CoreSettings.from_environment()
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
 
     with TestClient(create_app(settings)) as client:
         created = client.post(
@@ -118,7 +119,7 @@ def test_invalid_or_stale_date_edits_never_replace_the_durable_revision() -> Non
 )
 def test_run_request_replay_fingerprint_includes_requested_dates() -> None:
     settings = CoreSettings.from_environment()
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
 
     command = {
         "request_id": "definition-dates-replay",
@@ -141,15 +142,6 @@ def test_run_request_replay_fingerprint_includes_requested_dates() -> None:
         assert replay.json() == first.json()
         assert conflict.status_code == 409
 
-
-def _drop_definitions_schema(settings: CoreSettings) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")
-    finally:
-        database.close()
 
 
 def _execution_counts(settings: CoreSettings) -> tuple[int, int, int]:

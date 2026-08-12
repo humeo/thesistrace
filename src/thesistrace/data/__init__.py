@@ -4,11 +4,6 @@ from thesistrace.data.collection import (
     DataCollectionError,
     DataGarbageCollector,
 )
-from thesistrace.data.development_reset import (
-    DevelopmentReset,
-    DevelopmentResetError,
-    DevelopmentResetOutcome,
-)
 from thesistrace.data.fields import (
     AuthorableField,
     authorable_field_bindings,
@@ -17,6 +12,7 @@ from thesistrace.data.fields import (
 from thesistrace.data.generation_store import (
     GenerationStoreError,
     MountedGeneration,
+    MountedGenerationDescriptor,
     MountedGenerationStore,
 )
 from thesistrace.data.head_store import (
@@ -31,6 +27,7 @@ from thesistrace.data.lifecycle import (
     DataNotReady,
     DatasetLifecycle,
     GenerationPin,
+    PinnedGeneration,
 )
 from thesistrace.data.models import DataOverview, DatasetCoverage
 from thesistrace.data.operator import BootstrapOutcome, DataOperator, DataOperatorError
@@ -60,9 +57,6 @@ __all__ = [
     "DataOverview",
     "DataCollectionError",
     "DataGarbageCollector",
-    "DevelopmentReset",
-    "DevelopmentResetError",
-    "DevelopmentResetOutcome",
     "DataRefreshError",
     "DataRefreshService",
     "DatasetAdmissionService",
@@ -84,7 +78,9 @@ __all__ = [
     "GenerationPin",
     "MountedDatasetHeadStore",
     "MountedGeneration",
+    "MountedGenerationDescriptor",
     "MountedGenerationStore",
+    "PinnedGeneration",
     "RefreshOutcome",
     "authorable_fields",
     "authorable_field_bindings",

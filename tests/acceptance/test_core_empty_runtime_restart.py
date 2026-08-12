@@ -17,8 +17,8 @@ from core_runtime import drop_product_schemas
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -58,7 +58,7 @@ def _request_status(url: str) -> int:
 def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:

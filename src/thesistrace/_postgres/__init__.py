@@ -1,18 +1,16 @@
 from thesistrace._postgres.database import PostgresDatabase, PostgresTransaction
-from thesistrace._postgres.migrations import (
-    Migration,
-    MigrationError,
-    MigrationPlan,
-    apply_migrations,
-    verify_migrations,
+from thesistrace._postgres.schema import (
+    SchemaDefinition,
+    SchemaError,
+    initialize_schemas,
+    verify_schemas,
 )
 
 __all__ = [
-    "Migration",
-    "MigrationError",
-    "MigrationPlan",
+    "SchemaDefinition",
+    "SchemaError",
     "PostgresDatabase",
     "PostgresTransaction",
-    "apply_migrations",
-    "verify_migrations",
+    "initialize_schemas",
+    "verify_schemas",
 ]

@@ -4,7 +4,8 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
+from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
@@ -19,7 +20,7 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
 
     with TestClient(create_app(settings)) as client:
         malformed = client.post(
@@ -145,7 +146,7 @@ def test_rejected_run_saves_once_and_replays_without_a_research_run(
 )
 def test_concurrent_request_ids_serialize_without_pool_reentry(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
 
     with TestClient(create_app(settings)) as client_a, TestClient(create_app(settings)) as client_b:
         matching = {"request_id": "concurrent-matching", "name": "Matching"}
@@ -203,18 +204,6 @@ def test_concurrent_request_ids_serialize_without_pool_reentry(tmp_path: Path) -
             responses = [future.result(timeout=10) for future in futures]
         assert [response.status_code for response in responses] == [200, 200, 200, 200]
 
-
-def _drop_definitions_schema(settings: CoreSettings) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute("DROP SCHEMA IF EXISTS research_runs CASCADE")
-            transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")
-            transaction.execute("DROP SCHEMA IF EXISTS data CASCADE")
-            transaction.execute("DROP SCHEMA IF EXISTS publication CASCADE")
-    finally:
-        database.close()
 
 
 def _durable_counts(settings: CoreSettings) -> dict[str, int]:

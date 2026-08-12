@@ -10,6 +10,10 @@ from uuid import uuid4
 from psycopg.errors import UniqueViolation
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.data.generation_store import (
+    MountedGenerationAdmission,
+    MountedGenerationDescriptor,
+)
 from thesistrace.data.head_store import (
     DatasetHead,
     DatasetHeadPointer,
@@ -57,6 +61,12 @@ class GenerationPin:
     status: str
     lease_expires_at: datetime
     heartbeat_at: datetime
+
+
+@dataclass(frozen=True)
+class PinnedGeneration:
+    pin: GenerationPin
+    descriptor: MountedGenerationDescriptor
 
 
 @dataclass(frozen=True)
@@ -113,6 +123,27 @@ class DatasetLifecycle:
                 lock_data_lifecycle(transaction)
                 if self._heads.current_pointer() == pointer:
                     return pointer
+        raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
+
+    def current_admission(self) -> MountedGenerationAdmission | None:
+        for _ in range(4):
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
+                pointer = self._heads.current_pointer()
+            if pointer is None:
+                return None
+            try:
+                admission = self._heads.resolve_admission(pointer)
+            except RuntimeError:
+                with self._database.transaction() as transaction:
+                    lock_data_lifecycle(transaction)
+                    if self._heads.current_pointer() == pointer:
+                        raise
+                continue
+            with self._database.transaction() as transaction:
+                lock_data_lifecycle(transaction)
+                if self._heads.current_pointer() == pointer:
+                    return admission
         raise DataLifecycleError("Dataset Head changed repeatedly during inspection")
 
     def protect_candidate(
@@ -303,7 +334,7 @@ class DatasetLifecycle:
         owner_kind: str,
         owner_id: str,
         lease_seconds: float,
-    ) -> GenerationPin:
+    ) -> PinnedGeneration:
         with self._database.transaction() as transaction:
             return self.pin_current_in_transaction(
                 transaction,
@@ -319,7 +350,7 @@ class DatasetLifecycle:
         owner_kind: str,
         owner_id: str,
         lease_seconds: float,
-    ) -> GenerationPin:
+    ) -> PinnedGeneration:
         if owner_kind not in _OWNER_KINDS:
             raise ValueError("Generation pin owner kind is invalid")
         _require_identity(owner_id, "Generation pin owner")
@@ -328,7 +359,7 @@ class DatasetLifecycle:
         pointer = self._heads.current_pointer()
         if pointer is None:
             raise DataNotReady("Dataset Head is not ready")
-        self._heads.resolve(pointer)
+        generation = self._heads.resolve_descriptor(pointer)
         pin_id = f"generation_pin_{uuid4().hex[:20]}"
         try:
             row = transaction.execute(
@@ -354,7 +385,7 @@ class DatasetLifecycle:
         except UniqueViolation as error:
             raise DataLifecycleError("Generation pin owner already has a pin") from error
         assert row is not None
-        return _pin(row)
+        return PinnedGeneration(pin=_pin(row), descriptor=generation)
 
     def heartbeat_pin(self, pin_id: str, *, owner_id: str, lease_seconds: float) -> GenerationPin:
         with self._database.transaction() as transaction:

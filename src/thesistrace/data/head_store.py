@@ -13,6 +13,7 @@ from pathlib import Path
 
 from thesistrace.data.generation_store import (
     MountedGeneration,
+    MountedGenerationAdmission,
     MountedGenerationDescriptor,
     MountedGenerationStore,
 )
@@ -118,6 +119,21 @@ class MountedDatasetHeadStore:
         if pointer != expected:
             raise DatasetHeadError("Dataset Head projection is incompatible")
         return generation
+
+    def resolve_admission(self, pointer: DatasetHeadPointer) -> MountedGenerationAdmission:
+        try:
+            admission = self._generations.open_admission(
+                pointer.generation_manifest_sha256
+            )
+        except RuntimeError as error:
+            raise DatasetHeadError("Dataset Head Generation is missing or invalid") from error
+        expected = _pointer_from_generation(
+            admission.generation,
+            prepared_at=datetime.fromisoformat(pointer.prepared_at),
+        )
+        if pointer != expected:
+            raise DatasetHeadError("Dataset Head projection is incompatible")
+        return admission
 
     def compare_and_swap(
         self,

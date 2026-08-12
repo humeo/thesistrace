@@ -5,14 +5,14 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 
@@ -106,7 +106,7 @@ def test_current_calendar_admits_any_positive_inclusive_period_without_binding_h
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     sessions = (
         "2026-07-31",
         "2026-08-03",
@@ -248,7 +248,7 @@ def test_current_head_without_the_referenced_alpha_field_rejects_admission(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     _publish_head(
         settings,
         sessions=("2026-08-03", "2026-08-04"),

@@ -1,8 +1,8 @@
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
+from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
-from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.fields import AUTHORABLE_FIELDS
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.research_kernel.alpha_expression import operator_catalog
@@ -14,7 +14,7 @@ from thesistrace.research_kernel.alpha_expression import operator_catalog
 )
 def test_authoring_options_and_saved_tree_use_authoritative_stable_ids() -> None:
     settings = CoreSettings.from_environment()
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
 
     with TestClient(create_app(settings)) as client:
         response = client.get("/api/definitions/authoring-options")
@@ -81,13 +81,3 @@ def test_authoring_options_and_saved_tree_use_authoritative_stable_ids() -> None
             json={"dataset_release": "release_user_selected"},
         )
         assert rejected.status_code == 422
-
-
-def _drop_definitions_schema(settings: CoreSettings) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")
-    finally:
-        database.close()

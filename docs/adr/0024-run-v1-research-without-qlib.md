@@ -6,7 +6,7 @@ status: accepted
 
 ThesisTrace V1 does not depend on Qlib, generate a Qlib Provider, maintain Qlib
 `.bin` data, or implement a custom Qlib adapter. ResearchRun reads Canonical
-Market Data from its pinned Dataset Release, while ThesisTrace owns the bounded
+Market Data from its Attempt-pinned Data Generation, while ThesisTrace owns the bounded
 Alpha expression evaluation, Factor Evaluation, and daily Strategy Backtest
 semantics required by the confirmed A-share end-of-day scope.
 

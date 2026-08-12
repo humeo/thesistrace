@@ -5,13 +5,8 @@ import sys
 import tomllib
 from pathlib import Path
 
-from thesistrace.daily_track.migrations import MIGRATIONS as DAILY_TRACK_MIGRATIONS
-from thesistrace.data.migrations import MIGRATIONS as DATA_MIGRATIONS
-from thesistrace.definition.migrations import MIGRATIONS as DEFINITION_MIGRATIONS
 from thesistrace.entrypoints.http import create_app
 from thesistrace.entrypoints.runtime import CoreRuntime, CoreSettings
-from thesistrace.publication.migrations import MIGRATIONS as PUBLICATION_MIGRATIONS
-from thesistrace.research_run.migrations import MIGRATIONS as RESEARCH_RUN_MIGRATIONS
 
 ROOT = Path(__file__).resolve().parents[2]
 CORE_PACKAGES = (
@@ -36,15 +31,6 @@ PRODUCT_SCHEMAS = {
     "daily_track": "daily_tracks",
     "publication": "publication",
 }
-MIGRATION_PLANS = {
-    "data": DATA_MIGRATIONS,
-    "definition": DEFINITION_MIGRATIONS,
-    "research_run": RESEARCH_RUN_MIGRATIONS,
-    "daily_track": DAILY_TRACK_MIGRATIONS,
-    "publication": PUBLICATION_MIGRATIONS,
-}
-
-
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
     for package in CORE_PACKAGES:
         for path in (ROOT / "src" / "thesistrace" / package).rglob("*.py"):
@@ -120,7 +106,13 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
 
 def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
     lifecycle_tables = {
-        "data": ("data.releases", "data.update_receipts", "data.update_attempts"),
+        "data": (
+            "data.current_dataset_state",
+            "data.bootstrap_operations",
+            "data.refresh_operations",
+            "data.generation_candidates",
+            "data.generation_pins",
+        ),
         "definition": ("definitions.records", "definitions.run_receipts"),
         "research_run": (
             "research_runs.runs",
@@ -131,9 +123,9 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
         ),
         "daily_track": (
             "daily_tracks.tracks",
-            "daily_tracks.progressions",
-            "daily_tracks.progression_attempts",
-            "daily_tracks.checkpoints",
+            "daily_tracks.session_progressions",
+            "daily_tracks.session_progression_attempts",
+            "daily_tracks.session_checkpoints",
             "daily_tracks.retry_receipts",
             "daily_tracks.stop_receipts",
         ),
@@ -148,32 +140,18 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
         active_strings = "\n".join(
             _string_literals(path)
             for path in (ROOT / "src" / "thesistrace" / module).rglob("*.py")
-            if path.name not in {"migrations.py", "development_reset.py"}
+            if path.name != "schema.sql"
         )
         for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
             assert f"{foreign_schema}." not in active_strings, (
                 f"{module} source contains cross-schema SQL for {foreign_schema}"
             )
 
-        plan = MIGRATION_PLANS[module]
-        assert plan.schema == owned_schema
-        statements = "\n".join(migration.statement for migration in plan.migrations)
+        statements = (ROOT / "src" / "thesistrace" / module / "schema.sql").read_text()
         for table in lifecycle_tables[module]:
             assert table in statements
-        for migration in plan.migrations:
-            statement = migration.statement
-            if (
-                module == "research_run"
-                and migration.name == "0007_import_legacy_start_tracking_receipts"
-            ):
-                assert "daily_tracks.activation_receipts" in statement
-                assert "daily_tracks.tracks" in statement
-                statement = statement.replace("daily_tracks.activation_receipts", "")
-                statement = statement.replace("daily_tracks.tracks", "")
-            for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
-                assert f"{foreign_schema}." not in statement, (
-                    f"{module} migration {migration.name} owns {foreign_schema} SQL"
-                )
+        for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
+            assert f"{foreign_schema}." not in statements
 
 
 def test_runtime_configuration_has_no_deployment_mode() -> None:
@@ -187,30 +165,26 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
     assert scripts == {
         "thesistrace-core-api": "thesistrace.entrypoints.http:main",
         "thesistrace-core-worker": "thesistrace.entrypoints.worker:main",
-        "thesistrace-api": "thesistrace.entrypoints.http:main",
-        "thesistrace-worker": "thesistrace.entrypoints.worker:main",
-        "thesistrace-migrate": "thesistrace.entrypoints.migrate:main",
+        "thesistrace-initialize": "thesistrace.entrypoints.initialize:main",
         "thesistrace-data-operator": "thesistrace.entrypoints.data_operator:main",
     }
 
 
-def test_long_running_runtime_verifies_but_does_not_apply_migrations() -> None:
+def test_long_running_runtime_verifies_but_does_not_initialize_schema() -> None:
     runtime_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
-    migration_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "migrate.py").read_text()
-    orchestration_source = (
-        ROOT / "src" / "thesistrace" / "entrypoints" / "migrations.py"
+    initializer_source = (
+        ROOT / "src" / "thesistrace" / "entrypoints" / "initialize.py"
     ).read_text()
     runtime_body = runtime_source.split("def open_core_runtime", maxsplit=1)[1]
 
-    assert "verify_core_migrations(database)" in runtime_body
-    assert "apply_migrations(" not in runtime_body
-    assert "migrate_core(database_url)" in migration_source
-    assert "apply_migrations(database, plan)" in orchestration_source
+    assert "verify_core_schema(database)" in runtime_body
+    assert "initialize_core(" not in runtime_body
+    assert "initialize_core(database_url)" in initializer_source
 
 
-def test_current_runtime_migrates_before_starting_long_running_processes() -> None:
+def test_current_runtime_initializes_before_starting_long_running_processes() -> None:
     compose = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
-    migrate_service = compose.split("  migrate:\n", maxsplit=1)[1].split(
+    initialize_service = compose.split("  initialize:\n", maxsplit=1)[1].split(
         "  api:\n", maxsplit=1
     )[0]
     api_service = compose.split("  api:\n", maxsplit=1)[1].split(
@@ -220,7 +194,7 @@ def test_current_runtime_migrates_before_starting_long_running_processes() -> No
         "  web:\n", maxsplit=1
     )[0]
 
-    assert 'command: ["thesistrace-migrate"]' in migrate_service
+    assert 'command: ["thesistrace-initialize"]' in initialize_service
     assert "condition: service_completed_successfully" in api_service
     assert "condition: service_completed_successfully" in worker_service
 
@@ -257,7 +231,7 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
         path.read_text() for path in (ROOT / "src" / "thesistrace" / "_postgres").rglob("*.py")
     )
     assert "ConnectionPool" in postgres_source
-    assert "MigrationPlan" in postgres_source
+    assert "SchemaDefinition" in postgres_source
     for product_schema in (
         "data.",
         "definitions.",
@@ -267,9 +241,10 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
     ):
         assert product_schema not in postgres_source
 
-    data_migrations = (ROOT / "src" / "thesistrace" / "data" / "migrations.py").read_text()
-    assert "CREATE TABLE data.state" in data_migrations
-    assert "CREATE TABLE data.releases" in data_migrations
+    data_schema = (ROOT / "src" / "thesistrace" / "data" / "schema.sql").read_text()
+    assert "CREATE TABLE data.current_dataset_state" in data_schema
+    assert "CREATE TABLE data.refresh_operations" in data_schema
+    assert "data.releases" not in data_schema
 
 
 def test_canonical_compose_pins_external_infrastructure_images() -> None:
@@ -421,7 +396,7 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         "src/thesistrace/tenancy.py",
         "src/thesistrace/hosted/control.py",
         "src/thesistrace/hosted/management.py",
-        "src/thesistrace/hosted/migrations.py",
+        "src/thesistrace/hosted/schema.sql",
         "src/thesistrace/hosted/provisioning.py",
         "src/thesistrace/hosted/runtime.py",
         "tests/hosted/test_compose_stack.py",
@@ -479,40 +454,29 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
         for token in retired_tokens:
             assert token not in source, f"{token} remains in {path.relative_to(ROOT)}"
 
-    for path in (
+    archive = ROOT / "docs" / "archive" / "hosted-v2-pre-core-closure.md"
+    archive_source = archive.read_text()
+    assert "refs/archive/hosted-v2-pre-core-closure" in archive_source
+    assert "Recovery contract" in archive_source
+
+    for obsolete_text in (
         ROOT / "docs" / "archive" / "hosted-compose.md",
         ROOT / "docs" / "archive" / "hosted-health.md",
         ROOT / "docs" / "archive" / "v1-operations.md",
-    ):
-        source = path.read_text()
-        assert "Archived" in source
-        assert "outside the active Core" in source
-
-    for path in (
         ROOT
         / "docs"
-        / "adr"
-        / ("0110-make-personal-" + "workspace-the-first-hosted-tenant-boundary.md"),
-        ROOT / "docs" / "adr" / "0112-deploy-hosted-platform-v2-on-one-compose-node-first.md",
-        ROOT / "docs" / "adr" / ("0128-expose-only-cad" + "dy-at-the-public-network-edge.md"),
-        ROOT / "docs" / "adr" / ("0133-serve-the-production-web-build-directly-from-cad" + "dy.md"),
-        ROOT / "docs" / "adr" / "0134-run-version-pinned-migrations-before-steady-services.md",
-        ROOT / "docs" / "adr" / "0137-keep-launch-secrets-in-host-mounted-files.md",
-        ROOT / "docs" / "adr" / "0141-enforce-workspace-isolation-in-the-api-and-postgresql-rls.md",
-        ROOT
-        / "docs"
-        / "adr"
-        / "0142-operate-the-first-release-through-one-audited-cli-operator.md",
-        ROOT
-        / "docs"
-        / "adr"
-        / ("0143-route-public-http-through-cloud" + "flare-before-cad" + "dy.md"),
+        / "research"
+        / ("2026-08-03-ins" + "forge-use-cases-and-reference-architecture.md"),
         ROOT
         / "docs"
         / "adr"
         / ("0150-separate-ins" + "forge-identity-from-thesistrace-auth-sessions.md"),
     ):
-        assert "scope: archived - outside the active Core" in path.read_text()
+        assert not obsolete_text.exists()
+
+    adr_sources = [path.read_text() for path in (ROOT / "docs" / "adr").glob("*.md")]
+    assert adr_sources
+    assert all("status: superseded" not in source for source in adr_sources)
 
 
 def test_alpha_tree_has_only_normalized_input_and_no_dynamic_execution() -> None:
@@ -561,42 +525,42 @@ def test_publication_hides_physical_s3_keys_and_uses_the_standard_client() -> No
 
 def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> None:
     service = (ROOT / "src" / "thesistrace" / "publication" / "service.py").read_text()
-    migrations = (ROOT / "src" / "thesistrace" / "publication" / "migrations.py").read_text()
+    schema = (ROOT / "src" / "thesistrace" / "publication" / "schema.sql").read_text()
 
-    assert "CREATE TABLE publication.objects" in migrations
-    assert "CREATE TABLE publication.manifests" in migrations
-    assert "CREATE TABLE publication.manifest_objects" in migrations
+    assert "CREATE TABLE publication.objects" in schema
+    assert "CREATE TABLE publication.manifests" in schema
+    assert "CREATE TABLE publication.manifest_objects" in schema
     assert "def record(" in service
     assert "def read_in_transaction(" in service
     assert ".commit(" not in service
     for product_schema in ("data.", "definitions.", "research_runs.", "daily_tracks."):
         assert product_schema not in service
-        assert product_schema not in migrations
+        assert product_schema not in schema
 
 
 def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> None:
     definition_source = (ROOT / "src" / "thesistrace" / "definition" / "service.py").read_text()
-    definition_migrations = (
-        ROOT / "src" / "thesistrace" / "definition" / "migrations.py"
+    definition_schema = (
+        ROOT / "src" / "thesistrace" / "definition" / "schema.sql"
     ).read_text()
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
-    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
+    run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
 
     assert "def admit(" in run_source
     assert ".commit(" not in run_source
-    assert "CREATE TABLE research_runs.runs" in run_migrations
+    assert "CREATE TABLE research_runs.runs" in run_schema
     assert "research_runs." not in definition_source
-    assert "research_runs." not in definition_migrations
+    assert "research_runs." not in definition_schema
     assert "definitions." not in run_source
-    assert "definitions." not in run_migrations
+    assert "definitions." not in run_schema
 
 
 def test_start_tracking_receipts_are_owned_only_by_research_runs() -> None:
     runtime = (ROOT / "src" / "thesistrace" / "entrypoints" / "runtime.py").read_text()
     track = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
     run = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
-    track_migrations = (ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py").read_text()
-    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
+    track_schema = (ROOT / "src" / "thesistrace" / "daily_track" / "schema.sql").read_text()
+    run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
     track_models = (ROOT / "src" / "thesistrace" / "daily_track" / "models.py").read_text()
     run_models = (ROOT / "src" / "thesistrace" / "research_run" / "models.py").read_text()
 
@@ -606,11 +570,10 @@ def test_start_tracking_receipts_are_owned_only_by_research_runs() -> None:
         assert f"{sql_verb} research_runs." not in runtime
         assert f"{sql_verb} daily_tracks." not in runtime
     assert "INSERT INTO research_runs.start_tracking_receipts" in run
-    assert "CREATE TABLE research_runs.start_tracking_receipts" in run_migrations
+    assert "CREATE TABLE research_runs.start_tracking_receipts" in run_schema
     assert "activation_receipts" not in track
-    assert "CREATE TABLE daily_tracks.activation_receipts" in track_migrations
-    assert "0007_drop_legacy_activation_receipts" in track_migrations
-    assert "0007_import_legacy_start_tracking_receipts" in run_migrations
+    assert "activation_receipts" not in track_schema
+    assert "activation_receipts" not in run_schema
     assert "LegacyStartTrackingReceipt" not in track_models
     assert "StartTrackingCommand" not in track_models
     assert "class StartTrackingCommand" in run_models
@@ -618,13 +581,13 @@ def test_start_tracking_receipts_are_owned_only_by_research_runs() -> None:
 
 def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
-    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
+    run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
     worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
     assert "def process_next(" in run_source
     assert "FOR UPDATE OF run SKIP LOCKED" in run_source
-    assert "CREATE TABLE research_runs.attempts" in run_migrations
-    assert "execution_fence" in run_migrations
+    assert "CREATE TABLE research_runs.attempts" in run_schema
+    assert "execution_fence" in run_schema
     assert "lease_expires_at <= now()" in run_source
     assert "def _maintain_claim(" in run_source
     assert "def _heartbeat_claim(" in run_source
@@ -637,18 +600,18 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     ]
     assert "PublicationPreparationError" not in failure_policy_source
     assert "PublicationVerificationError" not in failure_policy_source
-    assert "ADD COLUMN failure_reason text" in run_migrations
+    assert "failure_reason text" in run_schema
     assert "def cancel(" in run_source
-    assert "CREATE TABLE research_runs.cancel_receipts" in run_migrations
+    assert "CREATE TABLE research_runs.cancel_receipts" in run_schema
     assert "execution_fence = execution_fence + 1" in run_source
     assert "def rerun(" in run_source
-    assert "CREATE TABLE research_runs.rerun_receipts" in run_migrations
+    assert "CREATE TABLE research_runs.rerun_receipts" in run_schema
     assert "immutable_input, rerun_of_id" in run_source
     assert "self._publication.record(" in run_source
     assert "runtime.research_runs.process_next()" in worker_source
     for removed in ("outbox", "dispatch", "global job", "temporal"):
         assert removed not in run_source.lower()
-        assert removed not in run_migrations.lower()
+        assert removed not in run_schema.lower()
     for foreign_schema in ("data", "definitions", "publication", "daily_tracks"):
         for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
             assert f"{sql_verb} {foreign_schema}." not in run_source
@@ -656,19 +619,18 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
 
 def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     track_source = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
-    track_migrations = (ROOT / "src" / "thesistrace" / "daily_track" / "migrations.py").read_text()
+    track_schema = (ROOT / "src" / "thesistrace" / "daily_track" / "schema.sql").read_text()
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
-    run_migrations = (ROOT / "src" / "thesistrace" / "research_run" / "migrations.py").read_text()
+    run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
     http_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "http.py").read_text()
     worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
-    assert "CREATE TABLE daily_tracks.tracks" in track_migrations
-    assert "CREATE TABLE daily_tracks.session_progressions" in track_migrations
-    assert "CREATE TABLE daily_tracks.session_checkpoints" in track_migrations
-    assert "0009_session_coordinate_application_contract" in track_migrations
-    assert "blocked_progression_id" in track_migrations
-    assert "CREATE TABLE daily_tracks.retry_receipts" in track_migrations
-    assert "CREATE TABLE daily_tracks.stop_receipts" in track_migrations
+    assert "CREATE TABLE daily_tracks.tracks" in track_schema
+    assert "CREATE TABLE daily_tracks.session_progressions" in track_schema
+    assert "CREATE TABLE daily_tracks.session_checkpoints" in track_schema
+    assert "blocked_progression_id" in track_schema
+    assert "CREATE TABLE daily_tracks.retry_receipts" in track_schema
+    assert "CREATE TABLE daily_tracks.stop_receipts" in track_schema
     assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
     assert '"daily_tracks.activation.capacity"' in track_source
     assert "def _record_current_failure(" in track_source
@@ -678,7 +640,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "origin" in track_source
     assert "activate_track" in run_source
     assert "resolve_track_activation" not in run_source
-    assert "CREATE TABLE research_runs.start_tracking_receipts" in run_migrations
+    assert "CREATE TABLE research_runs.start_tracking_receipts" in run_schema
     activation_source = track_source[
         track_source.index("    def activate(") : track_source.index("    def process_next(")
     ]
@@ -687,7 +649,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "TrackingOrigin(" in run_source
     assert "daily_tracks." not in run_source
     assert "research_runs." not in track_source
-    assert "research_runs." not in track_migrations
+    assert "research_runs." not in track_schema
     for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
         assert f"{sql_verb} data." not in track_source
     assert "AdvanceInput(" in track_source

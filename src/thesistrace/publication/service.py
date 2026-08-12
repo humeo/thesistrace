@@ -221,10 +221,6 @@ class Publication:
         transaction: PostgresTransaction,
         prepared: PreparedPublication,
     ) -> PublishedRef:
-        # Development Reset holds the matching session-level advisory lock while it
-        # removes legacy publication records and bytes. Taking the transaction-level
-        # form here prevents a manifest from being committed against an object that
-        # Reset is concurrently deleting.
         lock_publication_mutation(transaction)
         self.verify_prepared(prepared)
         manifest = _load_manifest(prepared._manifest_bytes, prepared.manifest_sha256)

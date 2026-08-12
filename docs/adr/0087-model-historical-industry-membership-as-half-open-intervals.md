@@ -27,7 +27,7 @@ The second path applies on 2024-07-01 without an ambiguous inclusive endpoint.
 
 For one instrument and classification version, at most one industry path may
 contain a date. Overlapping intervals are contradictory Canonical data and
-fail Dataset Publication. Adjacent intervals may meet at one
+fail candidate Data Generation validation. Adjacent intervals may meet at one
 `valid_to_exclusive`/`valid_from` boundary.
 
 A source-history gap remains an absent Industry Classification. V1 does not

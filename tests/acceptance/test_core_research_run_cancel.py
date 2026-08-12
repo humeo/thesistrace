@@ -6,15 +6,15 @@ from pathlib import Path
 from threading import Event
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 from test_core_current_head_research_run_retry import _admit_run, _publish_head
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.research_run import ResearchRunService
 
 
@@ -27,7 +27,7 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
@@ -83,7 +83,7 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     _publish_head(settings, price_offset=0)
     prepared = Event()
     release_stale = Event()
@@ -138,7 +138,7 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
 def test_terminal_run_wins_over_late_cancel(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    migrate_core(settings.database_url)
+    initialize_core(settings.database_url)
     _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:

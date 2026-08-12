@@ -3,10 +3,10 @@ import subprocess
 import sys
 
 import pytest
-from core_runtime import create_migrated_test_app as create_app
+from core_runtime import create_initialized_test_app as create_app
+from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
 
-from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
@@ -19,7 +19,7 @@ from thesistrace.entrypoints.runtime import (
 )
 def test_incomplete_nameless_definition_survives_http_and_worker_restart() -> None:
     settings = CoreSettings.from_environment()
-    _drop_definitions_schema(settings)
+    drop_product_schemas(settings)
 
     with TestClient(create_app(settings)) as client:
         created = client.post("/api/definitions", json={})
@@ -87,15 +87,6 @@ def test_incomplete_nameless_definition_survives_http_and_worker_restart() -> No
         assert reopened.json()["name"] == "Quality without a hypothesis"
         assert reopened.json()["revision"] == 2
 
-
-def _drop_definitions_schema(settings: CoreSettings) -> None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            transaction.execute("DROP SCHEMA IF EXISTS definitions CASCADE")
-    finally:
-        database.close()
 
 
 def _restart_worker_once(settings: CoreSettings) -> None:

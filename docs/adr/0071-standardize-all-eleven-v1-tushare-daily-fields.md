@@ -4,12 +4,12 @@ status: accepted
 
 # Standardize all eleven V1 Tushare daily fields
 
-Dataset Publication always requests and retains the eleven long-history fields
+The Data Operator always requests and retains the eleven long-history fields
 in the Tushare `daily` contract. A Research Definition does not select source
 fields.
 
 The accepted source response preserves the original field names, values, and
-source units. Publication then maps each source field into the
+source units. The Data module then maps each source field into the
 `equity.eod_price` Dataset Family:
 
 | Tushare field | Canonical field | Canonical type and unit |
@@ -32,11 +32,11 @@ semantics. It must not be interpreted as an alias for the preceding row's
 that reference close; Publication must not replace it with
 `close_raw[t] - close_raw[t-1]`.
 
-The exact decimal value `vol * 100` must be an integer before Publication maps
-it to `volume_shares`. A non-integral result is invalid source data; Publication
+The exact decimal value `vol * 100` must be an integer before the Data module maps
+it to `volume_shares`. A non-integral result is invalid source data; the Data module
 does not round or truncate it.
 
-Dataset Publication separately requests Tushare `adj_factor`. Because it has a
+The Data Operator separately requests Tushare `adj_factor`. Because it has a
 different source-availability timeline from the post-close daily bar, it belongs
 to the dated `equity.adjustment_factor` Dataset Family:
 
@@ -46,7 +46,7 @@ to the dated `equity.adjustment_factor` Dataset Family:
 | `session_date` | date | source `trade_date` |
 | `source_adjustment_factor` | decimal, dimensionless | finite and greater than zero |
 
-Publication derives the following `equity.eod_price` fields under ADR-0023:
+The Data module derives the following `equity.eod_price` fields under ADR-0023:
 
 | Canonical field | Canonical type and unit | Constraint |
 | --- | --- | --- |
@@ -57,28 +57,28 @@ Publication derives the following `equity.eod_price` fields under ADR-0023:
 | `close_adj` | decimal causal cumulative-adjusted CNY per share | valid raw field and scale |
 
 ADR-0023 defines `adjustment_scale` as the same-session Source Adjustment
-Factor. Publication therefore derives adjusted OHLC without a future reference
+Factor. The Data module therefore derives adjusted OHLC without a future reference
 factor, and a later factor cannot rescale an earlier row.
 
 A present raw daily bar without a valid same-session
-`source_adjustment_factor` fails Dataset Publication; V1 does not forward-fill
+`source_adjustment_factor` fails candidate Data Generation validation; V1 does not forward-fill
 the factor. A factor row may exist for a confirmed suspended session that has
-no daily bar, but Publication does not invent an `equity.eod_price` row or
+no daily bar, but the Data module does not invent an `equity.eod_price` row or
 Adjusted Research Price for that session. ADR-0074 restricts this governed
 absence to `full_session_suspended`; every unknown daily-bar loss fails
-Publication.
+candidate validation.
 
 Canonical decimal values are not stored as binary floating-point source facts.
 A research engine may use a documented numeric execution type internally, but
 that does not change the Dataset Schema type or unit.
 
-Publication owns one explicit, versioned source-field request list. New
+The Data module owns one explicit, versioned source-field request list. New
 upstream fields do not silently enter Canonical Market Data: adding one requires
 a new Dataset Schema version under ADR-0014. Users therefore never configure
-Tushare `fields`, while Dataset Releases still record exactly which source
-contract and Canonical schema they contain.
+Tushare `fields`, while each Data Generation records the exact source contract
+and Canonical schema it contains.
 
 Field Catalog exposes the complete Canonical inventory, including definitions,
-units, coverage, and Dataset Release availability. Catalog presence does not by
+units, coverage, and current Head availability. Catalog presence does not by
 itself make a field available to Alpha Expression; ADR-0072 fixes the V1
 Alpha-authorable subset.

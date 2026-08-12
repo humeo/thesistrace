@@ -41,11 +41,10 @@ test("current data supports one visible ResearchRun and DailyTrack journey", asy
     await page.getByLabel("Holdings count").fill("1");
     await page.getByLabel("Rebalance interval").fill("1");
 
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Run", exact: true })).toBeDisabled();
     await expect(
       page.getByText("Research end date must not precede start date"),
     ).toBeVisible();
-    await expect(page).toHaveURL(/\/definitions\/def_[a-f0-9]+$/);
     const rejectedRuns = await page.request.get("/api/research-runs");
     expect(rejectedRuns.ok()).toBeTruthy();
     expect((await rejectedRuns.json()).items).toHaveLength(0);

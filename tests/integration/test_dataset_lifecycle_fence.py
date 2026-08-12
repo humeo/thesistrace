@@ -17,8 +17,8 @@ from thesistrace.data import (
     DatasetLifecycle,
     MountedGenerationStore,
 )
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 
 
@@ -27,7 +27,7 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:
@@ -51,11 +51,13 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
         )
         assert first_head.generation_manifest_sha256 == first
 
-        first_pin = lifecycle.pin_current(
+        first_pinned = lifecycle.pin_current(
             owner_kind="research_run_attempt",
             owner_id="run-attempt-1",
             lease_seconds=60,
         )
+        first_pin = first_pinned.pin
+        assert first_pinned.descriptor.manifest_sha256 == first
         assert first_pin.status == "active"
         assert first_pin.lease_expires_at > first_pin.heartbeat_at
         renewed = lifecycle.heartbeat_pin(
@@ -106,7 +108,7 @@ def test_head_move_and_pin_share_one_real_postgres_lifecycle_fence(
                 owner_kind="tracking_advance_attempt",
                 owner_id="track-attempt-1",
                 lease_seconds=60,
-            ).generation_manifest_sha256
+            ).descriptor.manifest_sha256
 
         def move_during_pin() -> str:
             started_move.set()
@@ -293,7 +295,7 @@ def test_invalid_candidate_is_released_and_database_constraints_reject_bad_rows(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
-    migrate_core(core_settings.database_url)
+    initialize_core(core_settings.database_url)
     database = PostgresDatabase(core_settings.database_url)
     database.open()
     try:

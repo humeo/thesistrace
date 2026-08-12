@@ -19,7 +19,7 @@ from thesistrace.data import (
     authorable_fields,
 )
 from thesistrace.definition import DefinitionService
-from thesistrace.entrypoints.migrations import verify_core_migrations
+from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
 from thesistrace.research_kernel import operator_catalog
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
@@ -107,7 +107,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
     database = PostgresDatabase(settings.database_url)
     try:
         database.open()
-        verify_core_migrations(database)
+        verify_core_schema(database)
         s3 = boto3.client(
             "s3",
             endpoint_url=settings.s3_endpoint_url,

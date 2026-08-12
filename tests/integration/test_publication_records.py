@@ -3,8 +3,8 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from botocore.client import BaseClient
 
-from thesistrace.entrypoints.migrations import migrate_core
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.publication import (
     JsonPayload,
     PublicationNotFoundError,
@@ -14,8 +14,8 @@ from thesistrace.publication.serialization import canonical_json_bytes
 
 
 @pytest.fixture(autouse=True)
-def _migrated_core(core_settings: CoreSettings) -> None:
-    migrate_core(core_settings.database_url)
+def _initialized_core(core_settings: CoreSettings) -> None:
+    initialize_core(core_settings.database_url)
 
 
 def test_record_joins_the_callers_transaction_and_read_starts_from_commit(
