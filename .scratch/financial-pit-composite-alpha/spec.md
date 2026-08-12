@@ -729,8 +729,9 @@ Parquet.
 ## Further Notes
 
 - This specification freezes the decisions represented by the accepted
-  financial ADRs 0170 and 0175 through 0189. ADR-0177's original TTM field names
-  are superseded by ADR-0179's latest-full-year fields.
+  financial ADRs 0170, 0175, 0176, and 0178 through 0189. The obsolete
+  TTM-first proposal was removed; ADR-0179 is the sole initial flow-field
+  decision.
 - The Alpha Language and Research Workspace specification remains the
   prerequisite for Formula compilation, stable Field References, the shared
   Series Execution Plan, and the user-visible Research workflow. Ticket
