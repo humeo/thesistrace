@@ -4,9 +4,12 @@ import hashlib
 import os
 import secrets
 import stat
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+
+from thesistrace.data.io_metrics import cold_file_reads_are_active, record_addressed_read
 
 
 class AddressedFileError(RuntimeError):
@@ -33,13 +36,15 @@ class AddressedFileStore:
     ) -> bytes:
         try:
             with self._open_parent(path, create=False) as (parent_fd, name):
-                return _read_entry(
+                content = _read_entry(
                     parent_fd,
                     name,
                     expected_sha256,
                     expected_byte_count=expected_byte_count,
                     max_byte_count=max_byte_count,
                 )
+                record_addressed_read(path, len(content))
+                return content
         except AddressedFileError:
             raise
         except FileNotFoundError as error:
@@ -170,6 +175,8 @@ def _read_entry(
     except FileNotFoundError as error:
         raise _EntryMissing(name) from error
     try:
+        if cold_file_reads_are_active():
+            _enable_cold_read(descriptor)
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode):
             raise AddressedFileError("addressed file is not a regular file")
@@ -189,6 +196,18 @@ def _read_entry(
         return bytes(content)
     finally:
         os.close(descriptor)
+
+
+def _enable_cold_read(descriptor: int) -> None:
+    if sys.platform == "darwin":
+        import fcntl
+
+        fcntl.fcntl(descriptor, 48, 1)  # F_NOCACHE
+        return
+    if hasattr(os, "posix_fadvise") and hasattr(os, "POSIX_FADV_DONTNEED"):
+        os.posix_fadvise(descriptor, 0, 0, os.POSIX_FADV_DONTNEED)
+        return
+    raise AddressedFileError("cold addressed reads are unsupported on this platform")
 
 
 def _create_temporary(parent_fd: int) -> tuple[str, int]:

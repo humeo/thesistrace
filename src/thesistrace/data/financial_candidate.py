@@ -33,6 +33,7 @@ from thesistrace.data.generation_schema import (
     GENERATION_SESSION_PARTITION_COUNT,
 )
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
+from thesistrace.data.io_metrics import record_parquet_scan
 from thesistrace.publication.serialization import (
     ParquetContractError,
     ParquetWriterContract,
@@ -268,7 +269,7 @@ class FinancialCandidateStore:
             collection,
             observation_through_session=observation_through_session,
             prior_checkpoints=(),
-            prior_candidate_manifest_sha256=None,
+            prior_shards=(),
         )
 
     def rebuild(
@@ -306,6 +307,7 @@ class FinancialCandidateStore:
             raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
         prior_entries = self._read_evidence_index(prior_manifest["raw_evidence"])
         prior_checkpoints = tuple(_checkpoint_from_evidence(item) for item in prior_entries)
+        prior_shards = self._manifest_evidence_shards(prior_manifest)
         historical = {item.instrument_id: item.ts_code for item in current_lifecycles}
         self._validate_historical_identities(prior_checkpoints, historical)
         historical_checkpoints = _merge_evidence_checkpoints(
@@ -320,7 +322,7 @@ class FinancialCandidateStore:
             collection,
             observation_through_session=observation_through_session,
             prior_checkpoints=prior_checkpoints,
-            prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+            prior_shards=prior_shards,
         )
 
     def preflight_rebuild(
@@ -365,7 +367,7 @@ class FinancialCandidateStore:
         *,
         observation_through_session: str,
         prior_checkpoints: Sequence[FinancialShardCheckpoint],
-        prior_candidate_manifest_sha256: str | None,
+        prior_shards: Sequence[FinancialDateShard],
     ) -> FinancialFamilyCandidate:
         sessions = self._validated_market_sessions(
             collection.generation_manifest_sha256,
@@ -422,6 +424,7 @@ class FinancialCandidateStore:
             )
         current_evidence_reference = self._materialize_evidence_index(collection.shards)
         evidence_reference = self._materialize_evidence_index(historical_checkpoints)
+        evidence_shards = _merge_evidence_shards((*prior_shards, *collection.contract.shards))
         coverage = {
             "kind": "financial-observation-range",
             "start": coverage_start,
@@ -440,12 +443,12 @@ class FinancialCandidateStore:
             "family_id": _FAMILY_ID,
             "schema_contract": _SCHEMA_CONTRACT,
             "source_generation_manifest_sha256": collection.generation_manifest_sha256,
-            "prior_candidate_manifest_sha256": prior_candidate_manifest_sha256,
             "source_collection": {
                 "idempotency_key": collection.idempotency_key,
                 "contract": collection.contract.descriptor(),
                 "finished_at": collection.finished_at,
             },
+            "evidence_shards": [_evidence_shard_descriptor(item) for item in evidence_shards],
             "dataset_coverage": coverage,
             "current_raw_evidence": current_evidence_reference,
             "raw_evidence": evidence_reference,
@@ -532,26 +535,24 @@ class FinancialCandidateStore:
         if len(evidence) != descriptor.raw_batch_count:
             raise FinancialCandidateError("FINANCIAL_EVIDENCE_COUNT_INVALID")
         contract = self._manifest_collection_contract(manifest)
-        prior_sha256 = manifest.get("prior_candidate_manifest_sha256")
-        if prior_sha256 is not None:
-            _require_sha256(prior_sha256)
-            prior = self.validate(str(prior_sha256))
-            prior_manifest = self._read_family(str(prior_sha256))
-            prior_contract = self._manifest_collection_contract(prior_manifest)
-            if (
-                prior.observation_through_session > descriptor.observation_through_session
-                or not _compatible_collection_contracts(prior_contract, contract)
-            ):
-                raise FinancialCandidateError("FINANCIAL_REFRESH_PROVENANCE_INVALID")
-            prior_evidence = self._read_evidence_index(prior_manifest["raw_evidence"])
-        else:
-            prior_evidence = []
-        expected_union = _merge_evidence_descriptors((*prior_evidence, *current_evidence))
-        if _merge_evidence_descriptors(evidence) != expected_union:
+        evidence_shards = self._manifest_evidence_shards(manifest)
+        if not set(contract.shards).issubset(evidence_shards):
+            raise FinancialCandidateError("FINANCIAL_EVIDENCE_SHARD_SET_INVALID")
+        canonical_evidence = _merge_evidence_descriptors(evidence)
+        if canonical_evidence != _merge_evidence_descriptors((*evidence, *current_evidence)) or len(
+            canonical_evidence
+        ) != len(evidence):
             raise FinancialCandidateError("FINANCIAL_REFRESH_EVIDENCE_UNION_INVALID")
         _validate_contract_coverage(contract, descriptor.observation_through_session)
         current_fields = self._validate_evidence_entries(current_evidence, contract=contract)
-        endpoint_fields = current_fields
+        endpoint_fields = self._validate_evidence_entries(
+            evidence,
+            contract=contract,
+            historical=True,
+            historical_shards=evidence_shards,
+        )
+        if endpoint_fields != current_fields:
+            raise FinancialCandidateError("FINANCIAL_SOURCE_SCHEMA_DRIFT")
         sessions = self._validated_market_sessions(
             str(manifest["source_generation_manifest_sha256"]),
             descriptor.observation_through_session,
@@ -571,18 +572,13 @@ class FinancialCandidateStore:
         historical = {item.instrument_id: item.ts_code for item in lifecycles}
         self._validate_target_set(current_checkpoints, historical, contract)
         self._validate_historical_identities(checkpoints, historical)
-        current_source_evidence = [
-            (checkpoint, self._read_raw_batch(str(checkpoint.batch_sha256)))
-            for checkpoint in current_checkpoints
-        ]
-        prior_source_evidence = [
+        source_evidence = [
             (
                 _checkpoint_from_evidence(item),
                 self._read_raw_batch(str(item["batch_sha256"])),
             )
-            for item in prior_evidence
+            for item in evidence
         ]
-        source_evidence = [*prior_source_evidence, *current_source_evidence]
         versions, quarantine = self._canonical_versions(
             source_evidence,
             endpoint_fields,
@@ -761,17 +757,24 @@ class FinancialCandidateStore:
                 GENERATION_OBJECT_MAX_BYTES,
             )
             try:
-                table = pq.read_table(pa.BufferReader(content), columns=list(source_columns))
+                table = pq.read_table(
+                    pa.BufferReader(content),
+                    columns=list(source_columns),
+                    filters=[
+                        ("instrument_id", "in", sorted(instrument_ids)),
+                        ("effective_available_session", "<=", through_session),
+                    ],
+                )
             except (ArrowException, TypeError, ValueError) as error:
                 raise FinancialCandidateError("FINANCIAL_OBJECT_INVALID") from error
-            if table.schema != expected_schema or table.num_rows != object_ref.get("row_count"):
-                raise FinancialCandidateError("FINANCIAL_OBJECT_SCHEMA_INVALID")
-            rows.extend(
-                row
-                for row in table.to_pylist()
-                if str(row["instrument_id"]) in instrument_ids
-                and str(row["effective_available_session"]) <= through_session
+            record_parquet_scan(
+                source="financial",
+                row_count=table.num_rows,
+                column_count=len(table.column_names),
             )
+            if table.schema != expected_schema:
+                raise FinancialCandidateError("FINANCIAL_OBJECT_SCHEMA_INVALID")
+            rows.extend(row for row in table.to_pylist())
         return tuple(rows)
 
     def quarantined_row_count(self, manifest_sha256: str) -> int:
@@ -881,6 +884,8 @@ class FinancialCandidateStore:
         *,
         loaded_batches: Mapping[str | None, dict[str, object]] | None = None,
         contract: FinancialCollectionContract,
+        historical: bool = False,
+        historical_shards: Sequence[FinancialDateShard] = (),
     ) -> dict[str, tuple[str, ...]]:
         endpoint_fields: dict[str, tuple[str, ...]] = {}
         seen: set[tuple[str, str, str]] = set()
@@ -896,7 +901,13 @@ class FinancialCandidateStore:
             )
             if batch is None:
                 raise FinancialCandidateError("FINANCIAL_RAW_BATCH_INVALID")
-            fields = self._validate_raw_batch(batch, entry, contract)
+            fields = self._validate_raw_batch(
+                batch,
+                entry,
+                contract,
+                historical=historical,
+                historical_shards=historical_shards,
+            )
             if dict(contract.endpoint_fields).get(endpoint) != fields:
                 raise FinancialCandidateError("FINANCIAL_SOURCE_SCHEMA_DRIFT")
             previous = endpoint_fields.setdefault(endpoint, fields)
@@ -907,7 +918,7 @@ class FinancialCandidateStore:
                 str(entry.get("instrument_id")),
                 str(entry.get("shard")),
             )
-            if identity in seen:
+            if identity in seen and not historical:
                 raise FinancialCandidateError("FINANCIAL_EVIDENCE_DUPLICATE")
             seen.add(identity)
         if tuple(endpoint_fields) != FINANCIAL_ENDPOINTS:
@@ -925,6 +936,9 @@ class FinancialCandidateStore:
         batch: Mapping[str, object],
         entry: Mapping[str, object],
         contract: FinancialCollectionContract,
+        *,
+        historical: bool = False,
+        historical_shards: Sequence[FinancialDateShard] = (),
     ) -> tuple[str, ...]:
         if set(batch) != {
             "format",
@@ -984,8 +998,9 @@ class FinancialCandidateStore:
             raise FinancialCandidateError("FINANCIAL_RAW_BATCH_INVALID")
         parameters = batch["parameters"]
         assert isinstance(parameters, Mapping)
+        validation_shards = historical_shards if historical else contract.shards
         shard = next(
-            (item for item in contract.shards if item.name == entry.get("shard")),
+            (item for item in validation_shards if item.name == entry.get("shard")),
             None,
         )
         if shard is None or dict(parameters) != {
@@ -1300,9 +1315,40 @@ class FinancialCandidateStore:
             or manifest.get("version") != _VERSION
             or manifest.get("family_id") != _FAMILY_ID
             or manifest.get("schema_contract") != _SCHEMA_CONTRACT
+            or set(manifest)
+            != {
+                "format",
+                "version",
+                "family_id",
+                "schema_contract",
+                "source_generation_manifest_sha256",
+                "source_collection",
+                "evidence_shards",
+                "dataset_coverage",
+                "current_raw_evidence",
+                "raw_evidence",
+                "quarantine",
+                "validation_summary",
+                "tables",
+            }
         ):
             raise FinancialCandidateError("FINANCIAL_FAMILY_MANIFEST_INVALID")
         return manifest
+
+    @staticmethod
+    def _manifest_evidence_shards(
+        manifest: Mapping[str, object],
+    ) -> tuple[FinancialDateShard, ...]:
+        value = manifest.get("evidence_shards")
+        if not isinstance(value, list):
+            raise FinancialCandidateError("FINANCIAL_EVIDENCE_SHARD_SET_INVALID")
+        try:
+            shards = tuple(_evidence_shard_from_descriptor(item) for item in value)
+            if shards != _merge_evidence_shards(shards):
+                raise ValueError
+        except (TypeError, ValueError) as error:
+            raise FinancialCandidateError("FINANCIAL_EVIDENCE_SHARD_SET_INVALID") from error
+        return shards
 
     @staticmethod
     def _manifest_collection_contract(
@@ -1331,10 +1377,6 @@ class FinancialCandidateStore:
             )
             or not isinstance(tables, list)
             or not isinstance(source_collection, Mapping)
-            or (
-                manifest.get("prior_candidate_manifest_sha256") is not None
-                and not isinstance(manifest.get("prior_candidate_manifest_sha256"), str)
-            )
         ):
             raise FinancialCandidateError("FINANCIAL_FAMILY_MANIFEST_INVALID")
         assert isinstance(coverage, Mapping)
@@ -1534,6 +1576,40 @@ def _compatible_collection_contracts(
     current: FinancialCollectionContract,
 ) -> bool:
     return prior.endpoint_fields == current.endpoint_fields
+
+
+def _evidence_shard_descriptor(shard: FinancialDateShard) -> dict[str, str | None]:
+    return {
+        "name": shard.name,
+        "start_date": shard.start_date,
+        "end_date": shard.end_date,
+    }
+
+
+def _evidence_shard_from_descriptor(value: object) -> FinancialDateShard:
+    if not isinstance(value, Mapping) or set(value) != {"name", "start_date", "end_date"}:
+        raise ValueError("financial evidence shard descriptor is invalid")
+    name = value["name"]
+    start_date = value["start_date"]
+    end_date = value["end_date"]
+    if (
+        not isinstance(name, str)
+        or (start_date is not None and not isinstance(start_date, str))
+        or (end_date is not None and not isinstance(end_date, str))
+    ):
+        raise ValueError("financial evidence shard descriptor is invalid")
+    return FinancialDateShard(name=name, start_date=start_date, end_date=end_date)
+
+
+def _merge_evidence_shards(
+    shards: Sequence[FinancialDateShard],
+) -> tuple[FinancialDateShard, ...]:
+    by_name: dict[str, FinancialDateShard] = {}
+    for shard in shards:
+        previous = by_name.setdefault(shard.name, shard)
+        if previous != shard:
+            raise FinancialCandidateError("FINANCIAL_EVIDENCE_SHARD_SET_INVALID")
+    return tuple(sorted(by_name.values(), key=lambda item: item.name))
 
 
 def _merge_evidence_checkpoints(

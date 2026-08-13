@@ -21,6 +21,7 @@ from thesistrace.data.financial_collection import (
     FinancialRawSource,
 )
 from thesistrace.data.generation_store import GenerationStoreError
+from thesistrace.data.lifecycle import mounted_data_mutation_lock
 from thesistrace.publication.serialization import canonical_json_bytes
 
 
@@ -80,6 +81,17 @@ class FinancialRefreshService:
             prior_candidate_manifest_sha256,
             observation_through_session,
         )
+        with mounted_data_mutation_lock(self._database):
+            existing = self._initialize(
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+                generation_manifest_sha256=generation_manifest_sha256,
+                prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+                observation_through_session=observation_through_session,
+                allow_create=True,
+            )
+            if existing is not None:
+                return existing
         with self._database.session_advisory_lock(f"financial-refresh:{idempotency_key}"):
             existing = self._initialize(
                 idempotency_key=idempotency_key,
@@ -87,6 +99,7 @@ class FinancialRefreshService:
                 generation_manifest_sha256=generation_manifest_sha256,
                 prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
                 observation_through_session=observation_through_session,
+                allow_create=False,
             )
             if existing is not None:
                 return existing
@@ -202,6 +215,7 @@ class FinancialRefreshService:
         generation_manifest_sha256: str,
         prior_candidate_manifest_sha256: str,
         observation_through_session: str,
+        allow_create: bool,
     ) -> FinancialRefreshOutcome | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
@@ -212,6 +226,8 @@ class FinancialRefreshService:
                 (idempotency_key,),
             ).fetchone()
             if row is None:
+                if not allow_create:
+                    raise RuntimeError("Financial refresh claim disappeared")
                 transaction.execute(
                     """
                     INSERT INTO data.financial_refresh_operations (
@@ -264,8 +280,42 @@ class FinancialRefreshService:
                     outcome.idempotency_key,
                 ),
             ).rowcount
+            if changed == 1:
+                transaction.execute(
+                    """
+                    UPDATE data.financial_collection_operations
+                    SET retention_released_at = COALESCE(retention_released_at, %s),
+                        updated_at = %s
+                    WHERE idempotency_key = %s AND status = 'succeeded'
+                    """,
+                    (completed_at, completed_at, outcome.idempotency_key),
+                )
         if changed != 1:
             raise FinancialRefreshError("FINANCIAL_REFRESH_COMPLETION_CONFLICT")
+
+    def release(self, idempotency_key: str) -> None:
+        with mounted_data_mutation_lock(self._database):
+            with self._database.transaction() as transaction:
+                row = transaction.execute(
+                    """
+                SELECT status FROM data.financial_refresh_operations
+                WHERE idempotency_key = %s FOR UPDATE
+                """,
+                    (idempotency_key,),
+                ).fetchone()
+                if row is None:
+                    raise FinancialRefreshError("FINANCIAL_REFRESH_NOT_FOUND")
+                if row["status"] != "succeeded":
+                    raise FinancialRefreshError("FINANCIAL_REFRESH_NOT_RELEASABLE")
+                transaction.execute(
+                    """
+                    UPDATE data.financial_refresh_operations
+                    SET retention_released_at = COALESCE(retention_released_at, now()),
+                        updated_at = now()
+                    WHERE idempotency_key = %s
+                    """,
+                    (idempotency_key,),
+                )
 
     def _fail(self, idempotency_key: str, code: str) -> None:
         failed_at = self._clock()

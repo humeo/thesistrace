@@ -611,14 +611,18 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
         "pnpm test:integration",
         "pnpm test:e2e",
     ]
-    assert scripts["check:release"] == "pnpm check && pnpm test:image-smoke"
+    assert scripts["check:release"] == (
+        "pnpm check && pnpm test:image-smoke && pnpm test:benchmark"
+    )
     assert scripts["check:release"].split(" && ") == [
         "pnpm check",
         "pnpm test:image-smoke",
+        "pnpm test:benchmark",
     ]
     assert scripts["test:integration"] == "./scripts/test-runtime integration"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == "./scripts/test-runtime image-smoke"
+    assert scripts["test:benchmark"] == "./scripts/test-runtime benchmark"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
 
 

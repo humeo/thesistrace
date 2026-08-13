@@ -47,6 +47,7 @@ from thesistrace.data.generation_validation import (
     GenerationValidationError,
     validate_canonical_generation,
 )
+from thesistrace.data.io_metrics import record_parquet_scan
 from thesistrace.data.market_series import (
     MarketSeriesError,
     align_market_research_data,
@@ -221,9 +222,7 @@ class MountedGenerationStore:
 
             financial_store = FinancialCandidateStore(self._root)
             try:
-                financial = financial_store.validate(
-                    descriptor.financial_candidate_manifest_sha256
-                )
+                financial = financial_store.validate(descriptor.financial_candidate_manifest_sha256)
                 expected_reference = financial_store.family_reference(
                     descriptor.financial_candidate_manifest_sha256
                 )
@@ -260,9 +259,7 @@ class MountedGenerationStore:
             financial_candidate_manifest_sha256
         )
         if (
-            financial_store.source_generation_manifest_sha256(
-                financial_candidate_manifest_sha256
-            )
+            financial_store.source_generation_manifest_sha256(financial_candidate_manifest_sha256)
             != market_generation_manifest_sha256
             or financial.coverage_start < market.research_sessions[0]
             or financial.observation_through_session > market.data_through_session
@@ -505,9 +502,7 @@ class MountedGenerationStore:
         if financial_manifest is None:
             raise GenerationStoreError("Composite Series lacks Financial Data")
         try:
-            financial_values = FinancialSeriesResolver(
-                FinancialCandidateStore(self._root)
-            ).resolve(
+            financial_values = FinancialSeriesResolver(FinancialCandidateStore(self._root)).resolve(
                 manifest_sha256=financial_manifest,
                 field_ids=tuple(financial_bindings),
                 sessions=tuple(sessions),
@@ -543,9 +538,7 @@ class MountedGenerationStore:
                     for family in descriptor.families
                     if family.family_id == "equity.financial_pit"
                 )
-                value = financial_family.dataset_coverage[
-                    "observation_through_session"
-                ]
+                value = financial_family.dataset_coverage["observation_through_session"]
                 financial_through = date.fromisoformat(str(value)).isoformat()
             except (KeyError, StopIteration, ValueError) as error:
                 raise GenerationStoreError("Financial admission projection is invalid") from error
@@ -757,6 +750,32 @@ class MountedGenerationStore:
                 )
         return frozenset(references)
 
+    def financial_candidate_referenced_files(
+        self,
+        manifest_sha256: str,
+    ) -> frozenset[GenerationFileRef]:
+        from thesistrace.data.financial_candidate import (
+            FinancialCandidateError,
+            FinancialCandidateStore,
+        )
+
+        try:
+            FinancialCandidateStore(self._root).validate(manifest_sha256)
+        except FinancialCandidateError as error:
+            raise GenerationStoreError("Financial retained candidate is invalid") from error
+        return frozenset(self._financial_referenced_files(manifest_sha256))
+
+    def validate_raw_financial_batch(self, sha256: str) -> None:
+        from thesistrace.data.financial_collection import (
+            FinancialCollectionError,
+            RawFinancialBatchStore,
+        )
+
+        try:
+            RawFinancialBatchStore(self._root).read(sha256)
+        except FinancialCollectionError as error:
+            raise GenerationStoreError("Financial retained raw batch is invalid") from error
+
     def _financial_referenced_files(
         self,
         manifest_sha256: str,
@@ -766,9 +785,6 @@ class MountedGenerationStore:
         source_generation = manifest.get("source_generation_manifest_sha256")
         if isinstance(source_generation, str):
             references.update(self.referenced_files(source_generation))
-        prior = manifest.get("prior_candidate_manifest_sha256")
-        if isinstance(prior, str):
-            references.update(self._financial_referenced_files(prior))
         tables = manifest.get("tables")
         if isinstance(tables, list):
             for table in tables:
@@ -793,11 +809,19 @@ class MountedGenerationStore:
             index = self._read_manifest(index_sha256)
             chunks = index.get("chunks")
             if isinstance(chunks, list):
-                references.update(
-                    GenerationFileRef("manifest", str(chunk["sha256"]))
-                    for chunk in chunks
-                    if isinstance(chunk, Mapping)
-                )
+                for chunk_reference in chunks:
+                    if not isinstance(chunk_reference, Mapping):
+                        continue
+                    chunk_sha256 = str(chunk_reference["sha256"])
+                    references.add(GenerationFileRef("manifest", chunk_sha256))
+                    chunk = self._read_manifest(chunk_sha256)
+                    entries = chunk.get("entries")
+                    if isinstance(entries, list):
+                        references.update(
+                            GenerationFileRef("raw_financial", str(entry["batch_sha256"]))
+                            for entry in entries
+                            if isinstance(entry, Mapping)
+                        )
         return references
 
     def inventory(self) -> frozenset[GenerationFileRef]:
@@ -809,6 +833,10 @@ class MountedGenerationStore:
             GenerationFileRef("object", sha256)
             for sha256 in _inventory_sha256(self._root, "objects", ".parquet")
         )
+        references.update(
+            GenerationFileRef("raw_financial", sha256)
+            for sha256 in _inventory_sha256(self._root, "financial/raw", ".json")
+        )
         return frozenset(references)
 
     def delete_file(self, reference: GenerationFileRef) -> bool:
@@ -816,6 +844,8 @@ class MountedGenerationStore:
             target = self._manifest_path(reference.sha256)
         elif reference.kind == "object":
             target = self._object_path(reference.sha256)
+        elif reference.kind == "raw_financial":
+            target = self._raw_financial_path(reference.sha256)
         else:
             raise GenerationStoreError("Generation file kind is invalid")
         try:
@@ -843,9 +873,11 @@ class MountedGenerationStore:
         }:
             raise GenerationStoreError("Family Generation candidate schema is incompatible")
         families = root["families"]
-        family_ids = [
-            entry.get("family_id") for entry in families if isinstance(entry, Mapping)
-        ] if isinstance(families, list) else []
+        family_ids = (
+            [entry.get("family_id") for entry in families if isinstance(entry, Mapping)]
+            if isinstance(families, list)
+            else []
+        )
         if family_ids not in (
             [spec.family_id for spec in MARKET_FAMILY_SPECS],
             [*(spec.family_id for spec in MARKET_FAMILY_SPECS), "equity.financial_pit"],
@@ -1111,6 +1143,11 @@ class MountedGenerationStore:
                     else [("instrument_id", "in", sorted(instrument_ids))]
                 ),
             )
+            record_parquet_scan(
+                source="market",
+                row_count=table.num_rows,
+                column_count=len(table.column_names),
+            )
         except (ArrowException, TypeError, ValueError) as error:
             raise GenerationStoreError("Generation object projection is incompatible") from error
         return table.to_pylist()
@@ -1329,6 +1366,11 @@ class MountedGenerationStore:
         )
         try:
             table = pq.read_table(pa.BufferReader(content))
+            record_parquet_scan(
+                source="market",
+                row_count=table.num_rows,
+                column_count=len(table.column_names),
+            )
             if table.schema != spec.contract.schema:
                 raise GenerationStoreError("Generation object schema is incompatible")
             rows = canonicalize_parquet_rows(table.to_pylist(), spec.contract)
@@ -1386,6 +1428,10 @@ class MountedGenerationStore:
     def _object_path(self, sha256: str) -> Path:
         _require_sha256(sha256)
         return self._root / "objects" / "sha256" / sha256[:2] / f"{sha256}.parquet"
+
+    def _raw_financial_path(self, sha256: str) -> Path:
+        _require_sha256(sha256)
+        return self._root / "financial" / "raw" / "sha256" / sha256[:2] / f"{sha256}.json"
 
 
 def _inventory_sha256(root: Path, directory: str, suffix: str) -> tuple[str, ...]:

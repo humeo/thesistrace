@@ -15,6 +15,7 @@ from psycopg.types.json import Jsonb
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_store import HistoricalInstrumentIdentity, MountedGenerationStore
+from thesistrace.data.lifecycle import mounted_data_mutation_lock
 from thesistrace.data.source import RawSourceError, RawSourceResponse
 from thesistrace.publication.serialization import canonical_json_bytes
 
@@ -485,7 +486,7 @@ class FinancialCollectionService:
         _validate_collection_request(idempotency_key, generation_manifest_sha256, contract)
         collection_started = self._monotonic()
         lock_name = f"financial-collection:{idempotency_key}"
-        with self._database.session_advisory_lock(lock_name):
+        with mounted_data_mutation_lock(self._database):
             identities = self._generation_store.read_historical_ordinary_a_share_identities(
                 generation_manifest_sha256
             )
@@ -498,12 +499,22 @@ class FinancialCollectionService:
                     }
                 )
             ).hexdigest()
+            self._initialize_operation(
+                idempotency_key=idempotency_key,
+                fingerprint=fingerprint,
+                generation_manifest_sha256=generation_manifest_sha256,
+                contract=contract,
+                identities=identities,
+                allow_create=True,
+            )
+        with self._database.session_advisory_lock(lock_name):
             existing = self._initialize_operation(
                 idempotency_key=idempotency_key,
                 fingerprint=fingerprint,
                 generation_manifest_sha256=generation_manifest_sha256,
                 contract=contract,
                 identities=identities,
+                allow_create=False,
             )
             if existing.status == "succeeded":
                 return existing
@@ -664,6 +675,30 @@ class FinancialCollectionService:
             ).fetchall()
         return tuple(_checkpoint(row) for row in rows)
 
+    def release(self, idempotency_key: str) -> None:
+        with mounted_data_mutation_lock(self._database):
+            with self._database.transaction() as transaction:
+                row = transaction.execute(
+                    """
+                SELECT status FROM data.financial_collection_operations
+                WHERE idempotency_key = %s FOR UPDATE
+                """,
+                    (idempotency_key,),
+                ).fetchone()
+                if row is None:
+                    raise FinancialCollectionError("COLLECTION_NOT_FOUND")
+                if row["status"] != "succeeded":
+                    raise FinancialCollectionError("COLLECTION_NOT_RELEASABLE")
+                transaction.execute(
+                    """
+                    UPDATE data.financial_collection_operations
+                    SET retention_released_at = COALESCE(retention_released_at, now()),
+                        updated_at = now()
+                    WHERE idempotency_key = %s
+                    """,
+                    (idempotency_key,),
+                )
+
     def inspect_outcome(self, idempotency_key: str) -> FinancialCollectionOutcome | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
@@ -762,6 +797,7 @@ class FinancialCollectionService:
         generation_manifest_sha256: str,
         contract: FinancialCollectionContract,
         identities: Sequence[HistoricalInstrumentIdentity],
+        allow_create: bool,
     ) -> FinancialCollectionOutcome:
         target_count = len(FINANCIAL_ENDPOINTS) * len(identities) * len(contract.shards)
         with self._database.transaction() as transaction:
@@ -774,6 +810,8 @@ class FinancialCollectionService:
                 (idempotency_key,),
             ).fetchone()
             if row is None:
+                if not allow_create:
+                    raise RuntimeError("Financial collection claim disappeared")
                 transaction.execute(
                     """
                     INSERT INTO data.financial_collection_operations (

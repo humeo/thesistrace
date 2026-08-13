@@ -84,7 +84,7 @@ CREATE TABLE data.collection_targets (
     status text NOT NULL,
     deleted_at timestamp with time zone,
     CONSTRAINT collection_targets_check CHECK ((((status = ANY (ARRAY['pending'::text, 'deleting'::text])) AND (deleted_at IS NULL)) OR ((status = 'deleted'::text) AND (deleted_at IS NOT NULL)))),
-    CONSTRAINT collection_targets_file_kind_check CHECK ((file_kind = ANY (ARRAY['manifest'::text, 'object'::text]))),
+    CONSTRAINT collection_targets_file_kind_check CHECK ((file_kind = ANY (ARRAY['manifest'::text, 'object'::text, 'raw_financial'::text]))),
     CONSTRAINT collection_targets_ordinal_check CHECK ((ordinal >= 0)),
     CONSTRAINT collection_targets_sha256_check CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT collection_targets_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'deleting'::text, 'deleted'::text])))
@@ -124,11 +124,13 @@ CREATE TABLE data.financial_collection_operations (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
+    retention_released_at timestamp with time zone,
     CONSTRAINT financial_collection_operations_counts_check CHECK ((target_count >= 0) AND (completed_count >= 0) AND (completed_count <= target_count)),
     CONSTRAINT financial_collection_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_collection_operations_generation_check CHECK ((generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_collection_operations_capability_check CHECK ((capability_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_collection_operations_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
+    CONSTRAINT financial_collection_operations_retention_check CHECK (((retention_released_at IS NULL) OR (status = 'succeeded'::text))),
     CONSTRAINT financial_collection_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text]))),
     CONSTRAINT financial_collection_operations_state_check CHECK ((((status = 'running'::text) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = 'succeeded'::text) AND (completed_count = target_count) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (failure_code IS NOT NULL) AND (failure_endpoint IS NOT NULL) AND (failure_instrument IS NOT NULL) AND (failure_shard IS NOT NULL) AND (finished_at IS NOT NULL))))
 );
@@ -153,11 +155,13 @@ CREATE TABLE data.financial_refresh_operations (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
+    retention_released_at timestamp with time zone,
     CONSTRAINT financial_refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_refresh_operations_generation_check CHECK ((generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_refresh_operations_prior_check CHECK ((prior_candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_refresh_operations_candidate_check CHECK (((candidate_manifest_sha256 IS NULL) OR (candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT financial_refresh_operations_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
+    CONSTRAINT financial_refresh_operations_retention_check CHECK (((retention_released_at IS NULL) OR (status = 'succeeded'::text))),
     CONSTRAINT financial_refresh_operations_counts_check CHECK (((expected_shard_count IS NULL) OR ((expected_shard_count >= 0) AND (completed_shard_count >= 0) AND (completed_shard_count <= expected_shard_count) AND (resumed_shard_count >= 0) AND (resumed_shard_count <= completed_shard_count)))),
     CONSTRAINT financial_refresh_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text]))),
     CONSTRAINT financial_refresh_operations_state_check CHECK ((((status = 'running'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = 'succeeded'::text) AND (candidate_manifest_sha256 IS NOT NULL) AND (expected_shard_count IS NOT NULL) AND (completed_shard_count IS NOT NULL) AND (resumed_shard_count IS NOT NULL) AND (expected_shard_count = completed_shard_count) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL))))

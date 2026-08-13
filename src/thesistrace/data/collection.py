@@ -19,8 +19,6 @@ from thesistrace.data.lifecycle import (
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 
-_COLLECTION_LOCK = "thesistrace-generation-collection"
-
 
 class DataCollectionError(RuntimeError):
     def __init__(self, code: str) -> None:
@@ -52,27 +50,29 @@ class DataGarbageCollector:
             return self._collect(key)
 
     def _collect(self, key: str) -> CollectionOutcome:
-        with self._database.session_advisory_lock(_COLLECTION_LOCK):
-            self._reconcile_abandoned()
-            try:
-                self._ensure_plan(key)
-                failure_code = self._execute_plan(key)
-            except (DataLifecycleError, DatasetHeadError, GenerationStoreError) as error:
-                raise DataCollectionError("COLLECTION_ROOTS_INVALID") from error
-            if failure_code is not None:
-                raise DataCollectionError(failure_code)
-            return self._outcome(key)
+        self._reconcile_abandoned()
+        try:
+            self._ensure_plan(key)
+            failure_code = self._execute_plan(key)
+        except (DataLifecycleError, DatasetHeadError, GenerationStoreError) as error:
+            raise DataCollectionError("COLLECTION_ROOTS_INVALID") from error
+        if failure_code is not None:
+            raise DataCollectionError(failure_code)
+        return self._outcome(key)
 
     def _ensure_plan(self, key: str) -> None:
         for _ in range(4):
-            root_ids = self._snapshot_root_ids()
-            retained = self._validated_retained_files(root_ids)
+            root_ids, financial_outputs = self._snapshot_retention()
+            retained = self._validated_retained_files(root_ids, financial_outputs)
             inventory = self._generations.inventory()
             with self._database.transaction() as transaction:
                 lock_data_lifecycle(transaction)
                 if _data_work_is_active(transaction):
                     raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
-                if self._lifecycle.retention_root_ids_in_transaction(transaction) != root_ids:
+                if _retention_snapshot(self._lifecycle, transaction) != (
+                    root_ids,
+                    financial_outputs,
+                ):
                     continue
                 existing = transaction.execute(
                     """
@@ -140,12 +140,14 @@ class DataGarbageCollector:
                 """
             )
 
-    def _snapshot_root_ids(self) -> tuple[str, ...]:
+    def _snapshot_retention(
+        self,
+    ) -> tuple[tuple[str, ...], tuple[GenerationFileRef, ...]]:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
             if _data_work_is_active(transaction):
                 raise DataCollectionError("COLLECTION_DATA_WORK_ACTIVE")
-            return self._lifecycle.retention_root_ids_in_transaction(transaction)
+            return _retention_snapshot(self._lifecycle, transaction)
 
     def _execute_plan(self, key: str) -> str | None:
         while True:
@@ -263,10 +265,22 @@ class DataGarbageCollector:
     def _validated_retained_files(
         self,
         root_ids: tuple[str, ...],
+        financial_outputs: tuple[GenerationFileRef, ...],
     ) -> frozenset[GenerationFileRef]:
         retained: set[GenerationFileRef] = set()
         for manifest_sha256 in root_ids:
+            self._generations.validate_generation(manifest_sha256)
             retained.update(self._generations.referenced_files(manifest_sha256))
+        for output in financial_outputs:
+            if output.kind == "financial_candidate":
+                retained.update(
+                    self._generations.financial_candidate_referenced_files(output.sha256)
+                )
+            elif output.kind == "raw_financial":
+                self._generations.validate_raw_financial_batch(output.sha256)
+                retained.add(output)
+            else:
+                raise DataCollectionError("COLLECTION_ROOTS_INVALID")
         return frozenset(retained)
 
     def _outcome(self, key: str) -> CollectionOutcome:
@@ -314,10 +328,48 @@ def _data_work_is_active(transaction: PostgresTransaction) -> bool:
             SELECT 1 FROM data.bootstrap_operations WHERE status = 'running'
             UNION ALL
             SELECT 1 FROM data.refresh_operations WHERE status = 'running'
+            UNION ALL
+            SELECT 1 FROM data.financial_collection_operations WHERE status = 'running'
+            UNION ALL
+            SELECT 1 FROM data.financial_refresh_operations WHERE status = 'running'
         ) AS active
         """
     ).fetchone()
     return bool(row and row["active"])
+
+
+def _retention_snapshot(
+    lifecycle: DatasetLifecycle,
+    transaction: PostgresTransaction,
+) -> tuple[tuple[str, ...], tuple[GenerationFileRef, ...]]:
+    roots = lifecycle.retention_root_ids_in_transaction(transaction)
+    retained: set[GenerationFileRef] = set()
+    candidate_rows = transaction.execute(
+        """
+        SELECT candidate_manifest_sha256
+        FROM data.financial_refresh_operations
+        WHERE status = 'succeeded' AND retention_released_at IS NULL
+        """
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("financial_candidate", str(row["candidate_manifest_sha256"]))
+        for row in candidate_rows
+    )
+    raw_rows = transaction.execute(
+        """
+        SELECT DISTINCT shard.batch_sha256
+        FROM data.financial_collection_operations AS operation
+        JOIN data.financial_collection_shards AS shard
+          ON shard.idempotency_key = operation.idempotency_key
+        WHERE operation.status = 'succeeded'
+          AND operation.retention_released_at IS NULL
+          AND shard.status = 'completed'
+        """
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("raw_financial", str(row["batch_sha256"])) for row in raw_rows
+    )
+    return roots, tuple(sorted(retained))
 
 
 def _targets(

@@ -1,0 +1,17 @@
+{
+  "format": "thesistrace-financial-io-profile",
+  "version": 1,
+  "calendar_start": "2010-01-04",
+  "calendar_end": "2026-08-13",
+  "ordinary_a_share_instrument_count": 5541,
+  "execution_universe_size": 300,
+  "market_dense_session_count": 4334,
+  "financial_versions_per_instrument_endpoint": 34,
+  "wide_non_null_stride": 16,
+  "statement_source_field_counts": {
+    "income": 82,
+    "balancesheet": 140,
+    "cashflow": 90
+  },
+  "repetitions_per_phase": 5
+}

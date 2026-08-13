@@ -12,6 +12,9 @@ from psycopg.errors import CheckViolation
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_provider import TushareSourceError
 from thesistrace.data import (
+    DataCollectionError,
+    DataGarbageCollector,
+    DatasetLifecycle,
     FinancialCandidateError,
     FinancialCandidateStore,
     FinancialFamilyCandidate,
@@ -26,7 +29,9 @@ from thesistrace.data.financial_collection import (
     FinancialCollectionError,
     FinancialCollectionService,
     FinancialDateShard,
+    RawFinancialBatchStore,
 )
+from thesistrace.data.generation_files import AddressedFileStore
 from thesistrace.data.source import RawSourceResponse
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
@@ -208,6 +213,155 @@ def test_interrupted_collection_resumes_only_unfinished_shards(
         assert len(source.requests) == 6
         assert len(set(source.requests)) == 6
     finally:
+        database.close()
+
+
+def test_gc_cannot_delete_raw_evidence_while_financial_collection_is_active(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    raw_written = threading.Event()
+    continue_collection = threading.Event()
+
+    def progress(event: dict[str, object]) -> None:
+        if (
+            event.get("event") == "financial_collection"
+            and event.get("phase") == "source_request"
+            and event.get("status") == "completed"
+            and not raw_written.is_set()
+        ):
+            raw_written.set()
+            if not continue_collection.wait(timeout=20):
+                raise AssertionError("financial collection barrier was not released")
+
+    try:
+        manifest = _market_generation(tmp_path)
+        service = FinancialCollectionService(
+            database,
+            tmp_path,
+            StatementSource(),
+            clock=lambda: COLLECTED_AT,
+            progress=progress,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            collecting = executor.submit(
+                service.collect,
+                idempotency_key="gc-fenced-financial",
+                generation_manifest_sha256=manifest,
+                contract=_contract(),
+            )
+            assert raw_written.wait(timeout=20)
+            raw_files = tuple((tmp_path / "financial" / "raw").rglob("*.json"))
+            assert raw_files
+
+            with pytest.raises(DataCollectionError) as rejected:
+                DataGarbageCollector(database, tmp_path).collect(
+                    idempotency_key="gc-during-financial"
+                )
+
+            assert rejected.value.code == "COLLECTION_DATA_WORK_ACTIVE"
+            assert all(path.exists() for path in raw_files)
+            continue_collection.set()
+            assert collecting.result(timeout=20).status == "succeeded"
+    finally:
+        continue_collection.set()
+        database.close()
+
+
+def test_successful_collection_retains_raw_evidence_until_explicit_release(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        manifest = _market_generation(tmp_path)
+        service = FinancialCollectionService(
+            database,
+            tmp_path,
+            StatementSource(),
+            clock=lambda: COLLECTED_AT,
+        )
+        service.collect(
+            idempotency_key="retained-financial",
+            generation_manifest_sha256=manifest,
+            contract=_contract(),
+        )
+        raw_files = tuple((tmp_path / "financial" / "raw").rglob("*.json"))
+        assert raw_files
+
+        DataGarbageCollector(database, tmp_path).collect(idempotency_key="gc-retained-financial")
+
+        assert all(path.exists() for path in raw_files)
+        assert service.completed_snapshot("retained-financial").target_count == 6
+        service.release("retained-financial")
+        DataGarbageCollector(database, tmp_path).collect(idempotency_key="gc-released-financial")
+        assert not any(path.exists() for path in raw_files)
+    finally:
+        database.close()
+
+
+def test_gc_exclusive_lock_cannot_deadlock_a_financial_claim(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    deletion_started = threading.Event()
+    continue_gc = threading.Event()
+    original_delete = AddressedFileStore.delete
+
+    def blocked_delete(store: AddressedFileStore, path: Path) -> bool:
+        deletion_started.set()
+        if not continue_gc.wait(timeout=20):
+            raise AssertionError("GC deletion barrier was not released")
+        return original_delete(store, path)
+
+    try:
+        manifest = _market_generation(tmp_path)
+        DatasetLifecycle(database, tmp_path).protect_candidate(
+            operation_id="retain-market-for-reverse-race",
+            generation_manifest_sha256=manifest,
+            lease_seconds=60,
+        )
+        RawFinancialBatchStore(tmp_path).store(b"{}")
+        monkeypatch.setattr(AddressedFileStore, "delete", blocked_delete)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            collecting_garbage = executor.submit(
+                DataGarbageCollector(database, tmp_path).collect,
+                idempotency_key="gc-first-reverse-race",
+            )
+            assert deletion_started.wait(timeout=20)
+            collecting_financial = executor.submit(
+                FinancialCollectionService(
+                    database,
+                    tmp_path,
+                    StatementSource(),
+                    clock=lambda: COLLECTED_AT,
+                ).collect,
+                idempotency_key="financial-second-reverse-race",
+                generation_manifest_sha256=manifest,
+                contract=_contract(),
+            )
+            collecting_second_writer = executor.submit(
+                FinancialCollectionService(
+                    database,
+                    tmp_path,
+                    StatementSource(),
+                    clock=lambda: COLLECTED_AT,
+                ).collect,
+                idempotency_key="financial-third-reverse-race",
+                generation_manifest_sha256=manifest,
+                contract=_contract(capability_sha256="d" * 64),
+            )
+            assert not collecting_financial.done()
+            assert not collecting_second_writer.done()
+            continue_gc.set()
+            assert collecting_garbage.result(timeout=20).status == "succeeded"
+            assert collecting_financial.result(timeout=20).status == "succeeded"
+            assert collecting_second_writer.result(timeout=20).status == "succeeded"
+    finally:
+        continue_gc.set()
         database.close()
 
 
@@ -475,6 +629,119 @@ def test_refresh_rebuild_retains_absent_versions_and_reports_progress(
                 prior_candidate_manifest_sha256=first.manifest_sha256,
                 observation_through_session="2026-08-07",
             )
+    finally:
+        database.close()
+
+
+def test_successful_refresh_candidate_survives_gc_until_composed_and_released(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    composable_fields = {
+        "income": (*FIELDS[:7], "total_revenue", "n_income_attr_p", "update_flag"),
+        "balancesheet": (
+            *FIELDS[:7],
+            "total_assets",
+            "total_liab",
+            "total_hldr_eqy_exc_min_int",
+            "update_flag",
+        ),
+        "cashflow": (*FIELDS[:7], "n_cashflow_act", "update_flag"),
+    }
+
+    class ComposableSource(StatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            assert fields == composable_fields[endpoint]
+            self.requests.append((endpoint, str(params["ts_code"]), "complete-history"))
+            values = {
+                "income": ("10", "4"),
+                "balancesheet": ("20", "8", "12"),
+                "cashflow": ("6",),
+            }[endpoint]
+            return RawSourceResponse(
+                fields,
+                (
+                    (
+                        str(params["ts_code"]),
+                        "20100420",
+                        "",
+                        "20091231",
+                        "1",
+                        "1",
+                        "4",
+                        *values,
+                        "0",
+                    ),
+                ),
+            )
+
+    composable_contract = FinancialCollectionContract(
+        capability_sha256="c" * 64,
+        endpoint_fields=tuple(
+            (endpoint, composable_fields[endpoint]) for endpoint in FINANCIAL_ENDPOINTS
+        ),
+        suspected_truncation_row_counts=tuple((endpoint, None) for endpoint in FINANCIAL_ENDPOINTS),
+        shards=(FinancialDateShard("complete-history"),),
+    )
+    database = _database(core_settings)
+    try:
+        manifest = _market_generation(tmp_path)
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ComposableSource(),
+            manifest,
+            idempotency_key="retained-refresh-prior",
+            contract=composable_contract,
+        )
+        service = FinancialRefreshService(
+            database,
+            tmp_path,
+            ComposableSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+        outcome = service.rebuild(
+            idempotency_key="retained-refresh",
+            generation_manifest_sha256=manifest,
+            contract=composable_contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+        DataGarbageCollector(database, tmp_path).collect(idempotency_key="gc-retained-refresh")
+
+        assert (
+            service.rebuild(
+                idempotency_key="retained-refresh",
+                generation_manifest_sha256=manifest,
+                contract=composable_contract,
+                prior_candidate_manifest_sha256=prior.manifest_sha256,
+                observation_through_session="2026-08-13",
+            )
+            == outcome
+        )
+        composite = MountedGenerationStore(tmp_path).compose_financial_candidate(
+            manifest,
+            outcome.candidate.manifest_sha256,
+            prepared_at=COLLECTED_AT + timedelta(days=1),
+        )
+        DatasetLifecycle(database, tmp_path).protect_candidate(
+            operation_id="retain-composed-financial",
+            generation_manifest_sha256=composite.manifest_sha256,
+            lease_seconds=60,
+        )
+        service.release("retained-refresh")
+        DataGarbageCollector(database, tmp_path).collect(idempotency_key="gc-composed-financial")
+        assert (
+            MountedGenerationStore(tmp_path).validate_generation(composite.manifest_sha256)
+            == composite
+        )
     finally:
         database.close()
 
@@ -1039,6 +1306,7 @@ def _initial_candidate(
     generation_manifest_sha256: str,
     *,
     idempotency_key: str,
+    contract: FinancialCollectionContract | None = None,
 ) -> FinancialFamilyCandidate:
     collection = FinancialCollectionService(
         database,
@@ -1049,7 +1317,7 @@ def _initial_candidate(
     collection.collect(
         idempotency_key=idempotency_key,
         generation_manifest_sha256=generation_manifest_sha256,
-        contract=_contract(),
+        contract=contract or _contract(),
     )
     return FinancialCandidateStore(root).materialize(
         collection.completed_snapshot(idempotency_key),

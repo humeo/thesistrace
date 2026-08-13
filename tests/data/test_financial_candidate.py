@@ -309,6 +309,10 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
     assert resolved.research_data.fields == {"total_revenue_latest_fy": {}}
     retained = generation_store.referenced_files(composite.manifest_sha256)
     assert retained <= generation_store.inventory()
+    assert (
+        sum(reference.kind == "raw_financial" for reference in retained)
+        == complete.raw_batch_count
+    )
     assert any(
         reference.kind == "manifest" and reference.sha256 == complete.manifest_sha256
         for reference in retained
@@ -379,6 +383,44 @@ def test_financial_series_read_projects_requested_columns_and_instruments(
             ("2009-04-27", "2010-01-04"),
             frozenset({"equity:000001.SZ"}),
         )
+
+
+@pytest.mark.parametrize("target", ["raw", "parquet"])
+@pytest.mark.parametrize("damage", ["missing", "corrupt"])
+def test_missing_or_corrupt_financial_evidence_fails_closed(
+    tmp_path: Path,
+    target: str,
+    damage: str,
+) -> None:
+    store, candidate, _repeated, snapshot = _materialized_candidate(tmp_path)
+    if target == "raw":
+        sha256 = str(snapshot.shards[0].batch_sha256)
+        path = tmp_path / "financial" / "raw" / "sha256" / sha256[:2] / f"{sha256}.json"
+        expected = "FINANCIAL_RAW_BATCH_INVALID"
+    else:
+        family_path = (
+            tmp_path
+            / "manifests"
+            / "sha256"
+            / candidate.manifest_sha256[:2]
+            / f"{candidate.manifest_sha256}.json"
+        )
+        family = json.loads(family_path.read_bytes())
+        table_sha256 = str(family["tables"][0]["manifest_sha256"])
+        table_path = (
+            tmp_path / "manifests" / "sha256" / table_sha256[:2] / f"{table_sha256}.json"
+        )
+        table = json.loads(table_path.read_bytes())
+        sha256 = str(table["objects"][0]["sha256"])
+        path = tmp_path / "objects" / "sha256" / sha256[:2] / f"{sha256}.parquet"
+        expected = "FINANCIAL_ADDRESSED_FILE_INVALID"
+    if damage == "missing":
+        path.unlink()
+    else:
+        path.write_bytes(b"corrupt")
+
+    with pytest.raises(FinancialCandidateError, match=expected):
+        store.validate(candidate.manifest_sha256)
 
 
 def test_revalidation_rejects_self_consistent_false_coverage(tmp_path: Path) -> None:
@@ -681,6 +723,7 @@ def test_rebuild_unions_prior_evidence_and_never_deletes_absent_versions(
         / f"{candidate.manifest_sha256}.json"
     )
     forged = json.loads(candidate_path.read_bytes())
+    assert "prior_candidate_manifest_sha256" not in forged
     forged["raw_evidence"] = forged["current_raw_evidence"]
     forged["validation_summary"]["raw_batch_count"] = forged["raw_evidence"]["entry_count"]
     forged_content = canonical_json_bytes(forged)
@@ -692,7 +735,7 @@ def test_rebuild_unions_prior_evidence_and_never_deletes_absent_versions(
     )
     with pytest.raises(
         FinancialCandidateError,
-        match="FINANCIAL_REFRESH_EVIDENCE_UNION_INVALID",
+        match="FINANCIAL_CANONICAL_PROJECTION_INVALID",
     ):
         store.validate(forged_sha256)
 
@@ -728,6 +771,7 @@ def test_rebuild_rejects_prior_evidence_missing_from_current_market_identity_map
 
 def test_exact_refresh_reuses_prior_family_manifest(tmp_path: Path) -> None:
     store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    inventory_before = MountedGenerationStore(tmp_path).inventory()
 
     replay = store.rebuild(
         replace(snapshot, idempotency_key="exact-refresh-replay"),
@@ -736,6 +780,7 @@ def test_exact_refresh_reuses_prior_family_manifest(tmp_path: Path) -> None:
     )
 
     assert replay == prior
+    assert MountedGenerationStore(tmp_path).inventory() == inventory_before
 
 
 def test_exact_refresh_reuses_prior_manifest_across_timestamp_offsets(tmp_path: Path) -> None:

@@ -1,0 +1,137 @@
+{
+  "derived_from": "financial-io-2010-baseline.json",
+  "format": "thesistrace-financial-io-budgets",
+  "scenarios": {
+    "descriptor": {
+      "cold": {
+        "bytes_read": 62047,
+        "columns_scanned": 0,
+        "duration_ms": 167,
+        "financial_parquet_scans": 0,
+        "manifest_opens": 1,
+        "market_parquet_scans": 0,
+        "parquet_object_opens": 0,
+        "peak_memory_bytes": 2362004,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 0
+      },
+      "warm": {
+        "bytes_read": 62047,
+        "columns_scanned": 0,
+        "duration_ms": 98,
+        "financial_parquet_scans": 0,
+        "manifest_opens": 1,
+        "market_parquet_scans": 0,
+        "parquet_object_opens": 0,
+        "peak_memory_bytes": 2358360,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 0
+      }
+    },
+    "financial_only": {
+      "cold": {
+        "bytes_read": 22442129,
+        "columns_scanned": 579,
+        "duration_ms": 12398,
+        "financial_parquet_scans": 51,
+        "manifest_opens": 14,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 56,
+        "peak_memory_bytes": 38734924,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 52084
+      },
+      "warm": {
+        "bytes_read": 22442129,
+        "columns_scanned": 579,
+        "duration_ms": 10378,
+        "financial_parquet_scans": 51,
+        "manifest_opens": 14,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 56,
+        "peak_memory_bytes": 38728976,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 52084
+      }
+    },
+    "mixed": {
+      "cold": {
+        "bytes_read": 22442129,
+        "columns_scanned": 580,
+        "duration_ms": 9749,
+        "financial_parquet_scans": 51,
+        "manifest_opens": 14,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 56,
+        "peak_memory_bytes": 40569204,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 52084
+      },
+      "warm": {
+        "bytes_read": 22442129,
+        "columns_scanned": 580,
+        "duration_ms": 9631,
+        "financial_parquet_scans": 51,
+        "manifest_opens": 14,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 56,
+        "peak_memory_bytes": 40565916,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 52084
+      }
+    },
+    "price_only": {
+      "cold": {
+        "bytes_read": 150940,
+        "columns_scanned": 19,
+        "duration_ms": 5682,
+        "financial_parquet_scans": 0,
+        "manifest_opens": 11,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 5,
+        "peak_memory_bytes": 29766332,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 41884
+      },
+      "warm": {
+        "bytes_read": 150940,
+        "columns_scanned": 19,
+        "duration_ms": 5821,
+        "financial_parquet_scans": 0,
+        "manifest_opens": 11,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 5,
+        "peak_memory_bytes": 29762992,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 41884
+      }
+    },
+    "tracking_advance": {
+      "cold": {
+        "bytes_read": 23124646,
+        "columns_scanned": 580,
+        "duration_ms": 45229,
+        "financial_parquet_scans": 51,
+        "manifest_opens": 25,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 56,
+        "peak_memory_bytes": 96968304,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 52084
+      },
+      "warm": {
+        "bytes_read": 23124646,
+        "columns_scanned": 580,
+        "duration_ms": 43726,
+        "financial_parquet_scans": 51,
+        "manifest_opens": 25,
+        "market_parquet_scans": 5,
+        "parquet_object_opens": 56,
+        "peak_memory_bytes": 96941148,
+        "raw_financial_batch_opens": 0,
+        "rows_scanned": 52084
+      }
+    }
+  },
+  "version": 1
+}

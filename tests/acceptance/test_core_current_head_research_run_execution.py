@@ -1617,7 +1617,7 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
         def barrier(stage: str, _run_id: str) -> None:
             if stage == "claimed":
                 claimed.set()
-                assert continue_execution.wait(timeout=5)
+                assert continue_execution.wait(timeout=30)
 
         processor = ResearchRunService(
             runtime.database,
@@ -1628,16 +1628,31 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
         )
         worker = Thread(target=processor.process_next)
         worker.start()
-        assert claimed.wait(timeout=5)
-        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
-        head_b = _publish_head(
-            settings,
-            sessions=sessions,
-            price_offset=9,
-            expected_manifest=head_a,
-        )
-        continue_execution.set()
-        worker.join(timeout=10)
+        try:
+            assert claimed.wait(timeout=5)
+            assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
+            replay_root = tmp_path / "attempt-refresh-replay"
+            replay_root.mkdir()
+            canonical_b = _canonical(
+                sessions,
+                price_offset=9,
+                available_field_id="price.close.adjusted",
+            )
+            refreshed = _refresh_via_private_operator(
+                settings,
+                replay_root=replay_root,
+                idempotency_key="attempt-pinned-refresh",
+                canonical=canonical_b,
+                request_start=sessions[0],
+                include_industry_membership=False,
+            )
+            assert refreshed["outcome"] == "published"
+            pointer = DatasetLifecycle(runtime.database, settings.data_mount).current_pointer()
+            assert pointer is not None
+            head_b = pointer.generation_manifest_sha256
+        finally:
+            continue_execution.set()
+            worker.join(timeout=15)
         assert not worker.is_alive()
 
         stored = _stored_execution(settings, run_id)
@@ -2294,6 +2309,7 @@ def _write_refresh_replay(
     canonical: dict[str, object],
     *,
     request_start: str,
+    include_industry_membership: bool = True,
 ) -> None:
     calendar = canonical["research_calendar"]
     instruments = canonical["instruments"]
@@ -2389,7 +2405,9 @@ def _write_refresh_replay(
             }
             for industry in industries
             if isinstance(industry, dict)
-        ],
+        ]
+        if include_industry_membership
+        else [],
     }
     replay = {
         "format": "thesistrace-tushare-refresh-replay",
@@ -2411,11 +2429,17 @@ def _refresh_via_private_operator(
     idempotency_key: str,
     canonical: dict[str, object],
     request_start: str,
+    include_industry_membership: bool = True,
 ) -> dict[str, object]:
     calendar = canonical["research_calendar"]
     assert isinstance(calendar, list) and calendar
     replay = replay_root / f"{idempotency_key}.json"
-    _write_refresh_replay(replay, canonical, request_start=request_start)
+    _write_refresh_replay(
+        replay,
+        canonical,
+        request_start=request_start,
+        include_industry_membership=include_industry_membership,
+    )
     submitted = _run_data_operator(
         settings,
         [

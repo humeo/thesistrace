@@ -241,9 +241,9 @@ case "$command" in
     mapped_port postgres 5432
     exit 0
     ;;
-  integration | e2e | image-smoke) ;;
+  integration | benchmark | e2e | image-smoke) ;;
   *)
-    echo "usage: $0 {identity|cleanup|restart-postgres|integration|e2e|image-smoke [--keep-environment]}" >&2
+    echo "usage: $0 {identity|cleanup|restart-postgres|integration|benchmark|e2e|image-smoke [--keep-environment]}" >&2
     exit 2
     ;;
 esac
@@ -274,6 +274,15 @@ data_mount="$run_root/canonical-data"
 evidence_dir="$run_root/evidence"
 pytest_report="$evidence_dir/pytest.xml"
 database_restart_report="$evidence_dir/pytest-database-restart.xml"
+if [ "${THESISTRACE_UPDATE_BENCHMARK_BASELINE:-0}" = 1 ] && [ -n "${THESISTRACE_BENCHMARK_OUTPUT:-}" ]; then
+  echo "THESISTRACE_BENCHMARK_OUTPUT is incompatible with baseline update mode" >&2
+  exit 2
+fi
+if [ "${THESISTRACE_UPDATE_BENCHMARK_BASELINE:-0}" = 1 ]; then
+  benchmark_output="$repo_root/benchmarks/financial-io-2010-baseline.json"
+else
+  benchmark_output=${THESISTRACE_BENCHMARK_OUTPUT:-"$evidence_dir/financial-io-2010.json"}
+fi
 run_metadata="$run_root/run.txt"
 validate_test_project
 mkdir -p "$evidence_dir" "$data_mount"
@@ -296,6 +305,27 @@ trap 'handle_signal 143' TERM
 
 compose config --quiet
 case "$command" in
+  benchmark)
+    run_phase benchmark-infrastructure compose up --detach \
+      --wait --wait-timeout 300 postgres rustfs
+    postgres_port=$(mapped_port postgres 5432)
+    s3_port=$(mapped_port rustfs 9000)
+    printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
+    run_phase benchmark-initialization run_with_environment uv run thesistrace-initialize
+    if [ "${THESISTRACE_UPDATE_BENCHMARK_BASELINE:-0}" = 1 ]; then
+      run_phase benchmark-execution run_with_environment uv run python \
+        scripts/benchmark_financial_io.py \
+        --mount-root "$data_mount" \
+        --output "$benchmark_output" \
+        --skip-budgets \
+        --update-budgets
+    else
+      run_phase benchmark-execution run_with_environment uv run python \
+        scripts/benchmark_financial_io.py \
+        --mount-root "$data_mount" \
+        --output "$benchmark_output"
+    fi
+    ;;
   integration)
     run_phase integration-infrastructure compose up --detach \
       --wait --wait-timeout 300 postgres rustfs

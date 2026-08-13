@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
@@ -19,11 +20,86 @@ from thesistrace.data import (
     GenerationStoreError,
     MountedGenerationStore,
 )
+from thesistrace.data.financial_candidate import FinancialCandidateStore
+from thesistrace.data.financial_collection import (
+    CompletedFinancialCollection,
+    FinancialCollectionContract,
+    FinancialDateShard,
+    FinancialShardCheckpoint,
+    RawFinancialBatchStore,
+)
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
+from thesistrace.data.io_metrics import measure_data_io
 from thesistrace.data.source import CollectionPlan
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.publication.serialization import canonical_json_bytes
+
+
+def test_financial_generation_pin_protects_transitive_evidence_until_release(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    initialize_core(core_settings.database_url)
+    database = PostgresDatabase(core_settings.database_url)
+    database.open()
+    try:
+        _clear_collection_state(database)
+        store = MountedGenerationStore(tmp_path)
+        lifecycle = DatasetLifecycle(database, tmp_path)
+        market = _financial_market_generation(store)
+        generation_a = _financial_generation(tmp_path, market, value="100", ordinal=1)
+        generation_b = _financial_generation(tmp_path, market, value="200", ordinal=2)
+        references_a = store.referenced_files(generation_a)
+        references_b = store.referenced_files(generation_b)
+        a_only = references_a - references_b
+        assert {reference.kind for reference in a_only} >= {
+            "manifest",
+            "object",
+            "raw_financial",
+        }
+
+        _install_head(lifecycle, generation_a, operation_id="financial-a-head")
+        with measure_data_io() as pin_io:
+            pin = lifecycle.pin_current(
+                owner_kind="research_run_attempt",
+                owner_id="financial-a-attempt",
+                lease_seconds=60,
+            ).pin
+        assert pin_io.parquet_object_opens == 0
+        assert pin_io.raw_financial_batch_opens == 0
+        assert pin_io.rows_scanned == 0
+        result_a = _financial_value(store, generation_a)
+        _move_head(
+            lifecycle,
+            expected=generation_a,
+            candidate=generation_b,
+            operation_id="financial-b-head",
+        )
+
+        first = DataGarbageCollector(database, tmp_path).collect(
+            idempotency_key="financial-a-pinned"
+        )
+
+        assert first.status == "succeeded"
+        assert references_a <= store.inventory()
+        assert _financial_value(store, generation_a) == result_a == "100"
+        assert _financial_value(store, generation_b) == "200"
+
+        lifecycle.release_pin(pin.id, owner_id=pin.owner_id)
+        second = DataGarbageCollector(database, tmp_path).collect(
+            idempotency_key="financial-a-released"
+        )
+
+        assert second.status == "succeeded"
+        assert second.deleted_file_count >= len(a_only)
+        assert a_only.isdisjoint(store.inventory())
+        assert store.validate_generation(generation_b).manifest_sha256 == generation_b
+        assert _financial_value(store, generation_b) == "200"
+    finally:
+        _clear_collection_state(database)
+        database.close()
 
 
 def test_collection_retains_every_live_root_and_shared_object_then_converges(
@@ -499,6 +575,163 @@ def _materialize(store: MountedGenerationStore, *, ordinal: int) -> str:
         source_name="generation-collection-test",
         source_lineage={"ordinal": ordinal},
     ).manifest_sha256
+
+
+def _financial_market_generation(store: MountedGenerationStore) -> str:
+    canonical = build_minimal_canonical_fixture()
+    sessions = ("2010-01-04", "2010-04-21", "2026-08-07")
+    instrument_id = str(canonical["instruments"][0]["instrument_id"])
+    price = dict(canonical["prices"][0])
+    state = dict(canonical["trading_states"][0])
+    limit = dict(canonical["price_limits"][0])
+    universe = {"instrument_ids": [instrument_id], "status": "available"}
+    canonical["research_calendar"] = list(sessions)
+    canonical["prices"] = [dict(price, session=session) for session in sessions]
+    canonical["trading_states"] = [dict(state, session=session) for session in sessions]
+    canonical["price_limits"] = [dict(limit, session=session) for session in sessions]
+    canonical["base_pool"] = [
+        {"session": session, "instrument_ids": [instrument_id]} for session in sessions
+    ]
+    canonical["liquidity_universes"] = {
+        name: [{"session": session, **universe} for session in sessions]
+        for name in ("top300", "top1000", "top2000", "top3000")
+    }
+    field = dict(canonical["field_catalog"][0])
+    field["release_available_from"] = sessions[0]
+    canonical["field_catalog"] = [field]
+    return store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 7, 9, tzinfo=UTC),
+        source_name="financial-generation-collection-test",
+        source_lineage={"fixture": "financial-market"},
+    ).manifest_sha256
+
+
+def _financial_generation(root: Path, market: str, *, value: str, ordinal: int) -> str:
+    fields = {
+        "income": (
+            "ts_code",
+            "ann_date",
+            "f_ann_date",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "end_type",
+            "total_revenue",
+            "n_income_attr_p",
+            "update_flag",
+        ),
+        "balancesheet": (
+            "ts_code",
+            "ann_date",
+            "f_ann_date",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "end_type",
+            "total_assets",
+            "total_liab",
+            "total_hldr_eqy_exc_min_int",
+            "update_flag",
+        ),
+        "cashflow": (
+            "ts_code",
+            "ann_date",
+            "f_ann_date",
+            "end_date",
+            "report_type",
+            "comp_type",
+            "end_type",
+            "n_cashflow_act",
+            "update_flag",
+        ),
+    }
+    endpoint_values = {
+        "income": (value, value),
+        "balancesheet": (value, value, value),
+        "cashflow": (value,),
+    }
+    raw = RawFinancialBatchStore(root)
+    checkpoints: list[FinancialShardCheckpoint] = []
+    for endpoint in ("income", "balancesheet", "cashflow"):
+        item = [
+            "000001.SZ",
+            "20100420",
+            "",
+            "20091231",
+            "1",
+            "1",
+            "4",
+            *endpoint_values[endpoint],
+            "0",
+        ]
+        payload_sha256 = hashlib.sha256(
+            canonical_json_bytes({"fields": list(fields[endpoint]), "items": [item]})
+        ).hexdigest()
+        payload = {
+            "format": "thesistrace-raw-financial-batch",
+            "version": 1,
+            "source_contract_version": "tushare-financial-ordinary-v1",
+            "endpoint": endpoint,
+            "parameters": {"ts_code": "000001.SZ"},
+            "returned_fields": list(fields[endpoint]),
+            "items": [item],
+            "row_count": 1,
+            "source_date_extent": ["20100420", "20100420"],
+            "payload_sha256": payload_sha256,
+        }
+        checkpoints.append(
+            FinancialShardCheckpoint(
+                ordinal=len(checkpoints),
+                endpoint=endpoint,
+                instrument_id="equity:000001.SZ",
+                ts_code="000001.SZ",
+                shard="complete-history",
+                status="completed",
+                batch_sha256=raw.store(canonical_json_bytes(payload)),
+                collected_at="2026-08-07T08:00:00+00:00",
+                first_observed_at="2026-08-07T08:00:00+00:00",
+            )
+        )
+    contract = FinancialCollectionContract(
+        capability_sha256=str(ordinal) * 64,
+        endpoint_fields=tuple((endpoint, fields[endpoint]) for endpoint in fields),
+        suspected_truncation_row_counts=tuple(
+            (endpoint, None) for endpoint in ("income", "balancesheet", "cashflow")
+        ),
+        shards=(FinancialDateShard("complete-history"),),
+    )
+    candidate = FinancialCandidateStore(root).materialize(
+        CompletedFinancialCollection(
+            idempotency_key=f"financial-generation-{ordinal}",
+            generation_manifest_sha256=market,
+            contract=contract,
+            finished_at="2026-08-07T09:00:00+00:00",
+            target_count=3,
+            shards=tuple(checkpoints),
+        ),
+        observation_through_session="2026-08-07",
+    )
+    return (
+        MountedGenerationStore(root)
+        .compose_financial_candidate(
+            market,
+            candidate.manifest_sha256,
+            prepared_at=datetime(2026, 8, 7, 10, tzinfo=UTC) + timedelta(minutes=ordinal),
+        )
+        .manifest_sha256
+    )
+
+
+def _financial_value(store: MountedGenerationStore, generation: str) -> str:
+    data = store.read_composite_slice(
+        generation,
+        sessions=["2026-08-07"],
+        universe_name="top300",
+        neutralization="none",
+        field_bindings={"total_revenue_latest_fy": "total_revenue_latest_fy"},
+    ).research_data
+    return str(data.fields["total_revenue_latest_fy"][("2026-08-07", "equity:000001.SZ")])
 
 
 def _install_head(lifecycle: DatasetLifecycle, manifest: str, *, operation_id: str) -> None:
