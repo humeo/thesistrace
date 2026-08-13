@@ -76,6 +76,7 @@ class GenerationStoreError(RuntimeError):
 class MountedGenerationAdmission:
     generation: MountedFamilyGenerationDescriptor
     research_calendar: tuple[str, ...]
+    financial_observation_through_session: str | None
 
 
 @dataclass(frozen=True)
@@ -534,9 +535,24 @@ class MountedGenerationStore:
             "session_count": len(calendar),
         }:
             raise GenerationStoreError("Generation admission projection is incompatible")
+        financial_through: str | None = None
+        if descriptor.financial_candidate_manifest_sha256 is not None:
+            try:
+                financial_family = next(
+                    family
+                    for family in descriptor.families
+                    if family.family_id == "equity.financial_pit"
+                )
+                value = financial_family.dataset_coverage[
+                    "observation_through_session"
+                ]
+                financial_through = date.fromisoformat(str(value)).isoformat()
+            except (KeyError, StopIteration, ValueError) as error:
+                raise GenerationStoreError("Financial admission projection is invalid") from error
         return MountedGenerationAdmission(
             generation=descriptor,
             research_calendar=calendar,
+            financial_observation_through_session=financial_through,
         )
 
     def open_refresh_base(

@@ -251,6 +251,7 @@ def test_materializes_sparse_versioned_financial_family_without_publishing(tmp_p
 
 def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     candidate_store, incomplete, _repeated, _snapshot = _materialized_candidate(tmp_path)
     market_manifest = candidate_store.source_generation_manifest_sha256(
@@ -292,6 +293,12 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
         "total_liabilities_latest_reported",
         "equity_parent_latest_reported",
     } <= set(composite.field_availability)
+    def reject_child_manifest(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("admission opened the child Financial manifest")
+
+    monkeypatch.setattr(FinancialCandidateStore, "reopen", reject_child_manifest)
+    admission = generation_store.open_admission(composite.manifest_sha256)
+    assert admission.financial_observation_through_session == "2026-08-13"
     resolved = generation_store.read_composite_slice(
         composite.manifest_sha256,
         sessions=["2026-08-13"],

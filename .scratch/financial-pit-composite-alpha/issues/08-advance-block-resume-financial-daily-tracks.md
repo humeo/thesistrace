@@ -8,35 +8,35 @@ later complete financial Generation without rewriting prior checkpoints.
 
 **Blocked by:** 07 — Run a cs_rank Composite Alpha ResearchRun.
 
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Starting a DailyTrack from a successful market-financial ResearchRun
+- [x] Starting a DailyTrack from a successful market-financial ResearchRun
   freezes the complete seed input, Field References, Formula, and calculation
   contracts.
-- [ ] Tracking Advance uses the same Data-owned Series reader, financial
+- [x] Tracking Advance uses the same Data-owned Series reader, financial
   point-in-time rules, Series Execution Plan, Builtin Definitions, and numeric
   behavior as the seed ResearchRun.
-- [ ] A Track advance reads only bounded Effective Alpha Lookback state plus
+- [x] A Track advance reads only bounded Effective Alpha Lookback state plus
   the new target Research Sessions.
-- [ ] Reference batch execution and session-by-session Tracking Advance produce
+- [x] Reference batch execution and session-by-session Tracking Advance produce
   exactly equal Alpha, ranking, and retained Strategy outcomes for the same
   inputs.
-- [ ] A financial Track blocks before the first target session beyond the
+- [x] A financial Track blocks before the first target session beyond the
   financial observation-through cutoff.
-- [ ] The blocked state identifies Financial Coverage as the readiness reason
+- [x] The blocked state identifies Financial Coverage as the readiness reason
   and preserves the last authoritative Tracking Checkpoint.
-- [ ] After a complete later financial Generation advances the cutoff, the
+- [x] After a complete later financial Generation advances the cutoff, the
   blocked Track resumes and catches up without changing its Formula or
   historical checkpoints.
-- [ ] A market-only DailyTrack advances through the same market sessions even
+- [x] A market-only DailyTrack advances through the same market sessions even
   when Financial Coverage is behind or Financial Refresh has failed.
-- [ ] Each Tracking Advance Attempt pins one complete Data Generation and never
+- [x] Each Tracking Advance Attempt pins one complete Data Generation and never
   joins independently moving family Heads.
-- [ ] Retry, duplicate claim, cancellation, crash recovery, and publication
+- [x] Retry, duplicate claim, cancellation, crash recovery, and publication
   remain idempotent for financial Tracks.
-- [ ] A later observed financial correction never rewrites an already
+- [x] A later observed financial correction never rewrites an already
   published Tracking Checkpoint.
-- [ ] Deterministic integration tests cover cutoff blocking, refresh recovery,
+- [x] Deterministic integration tests cover cutoff blocking, refresh recovery,
   market-only independence, and batch-incremental equality.
 
 ## Comments

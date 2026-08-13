@@ -206,12 +206,23 @@ Tracking Advance Attempt pins one current Data Generation. Only a complete
 immutable Checkpoint moves the Tracking Head. A concurrent Data Refresh is
 handled by later work rather than by mixing Generations inside one Attempt.
 
+If the frozen Formula references financial fields, an Advance stops at the
+Generation's financial observation-through session and blocks before the first
+later target with Financial Coverage as its public readiness reason. A later
+complete Generation can be retried from the unchanged Checkpoint. Market-only
+Tracks do not depend on Financial Coverage and continue through Market Coverage.
+
 After bounded retries are exhausted, a Track becomes blocked and retains its
 last successful Head. Retry continues from that Head. Stop is irreversible.
 
 The Working Cache is a private, bounded, disposable optimization. PostgreSQL
 state and immutable Checkpoints remain authoritative. Missing or invalid cache
-state is rebuilt; startup reconciliation removes cache state for stopped Tracks.
+state is rebuilt from the latest 504 retained Factor sessions plus the frozen
+Effective Alpha Lookback needed to calculate their first row exactly. Each
+Advance reads that bounded dependency slice plus new targets so it can verify
+the cache against current immutable inputs; a valid cache avoids recomputing
+Alpha and Factor history. Startup reconciliation removes cache state for
+stopped Tracks.
 
 ## Research Kernel and Publication
 

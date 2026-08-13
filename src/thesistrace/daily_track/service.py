@@ -31,7 +31,11 @@ from thesistrace.daily_track.models import (
     TrackingOrigin,
 )
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
-from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data import (
+    FINANCIAL_FIELDS,
+    DatasetLifecycle,
+    MountedGenerationStore,
+)
 from thesistrace.publication import (
     JsonPayload,
     PreparedPublication,
@@ -51,7 +55,7 @@ from thesistrace.research_kernel import (
     equivalence_bytes,
     first_divergence,
 )
-from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
+from thesistrace.research_kernel.alpha_expression import restore_compiled_alpha
 from thesistrace.research_series import (
     AlignedResearchData,
     research_data_identity,
@@ -69,6 +73,8 @@ ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
 ACTIVE_DAILY_TRACK_LIMIT = 10
 PUBLIC_BLOCKED_REASON = "DailyTrack could not process the current dataset."
+FINANCIAL_COVERAGE_BLOCKED_REASON = "Financial Coverage ends before the next Research Session."
+_FINANCIAL_FIELD_IDS = frozenset(field.field_id for field in FINANCIAL_FIELDS)
 
 
 class DailyTrackFenced(RuntimeError):
@@ -80,6 +86,10 @@ class DailyTrackActivationLimitReached(RuntimeError):
 
 
 class DailyTrackProgressionFailed(RuntimeError):
+    pass
+
+
+class FinancialCoverageUnavailable(RuntimeError):
     pass
 
 
@@ -132,6 +142,7 @@ class _SessionProgressionClaim:
     predecessor_provenance: dict[str, object]
     current_session: str
     target_sessions: tuple[str, ...]
+    financial_coverage_unavailable: bool
 
 
 class DailyTrackService:
@@ -296,6 +307,16 @@ class DailyTrackService:
                         "DailyTrack session progression rejected by execution fence",
                         extra={"track_id": current_claim.track_id},
                     )
+                except FinancialCoverageUnavailable as error:
+                    if not self._record_current_failure(
+                        current_claim,
+                        error,
+                        blocked_reason=FINANCIAL_COVERAGE_BLOCKED_REASON,
+                    ):
+                        logger.info(
+                            "DailyTrack Financial Coverage block rejected by execution fence",
+                            extra={"track_id": current_claim.track_id},
+                        )
                 except Exception as error:
                     if self._record_current_failure(current_claim, error):
                         raise DailyTrackProgressionFailed(
@@ -719,9 +740,11 @@ class DailyTrackService:
         if head is None:
             raise RuntimeError("Dataset Head is not ready")
         calendar = list(head.research_calendar)
-        generation = self._generation_store.read_market_slice(
+        calculation_start_index = _origin_calculation_start_index(origin, calendar)
+        calculation_calendar = calendar[calculation_start_index:]
+        generation = self._generation_store.read_composite_slice(
             head.generation.manifest_sha256,
-            sessions=calendar,
+            sessions=calculation_calendar,
             universe_name=_origin_universe(origin),
             neutralization=_origin_neutralization(origin),
             field_bindings={
@@ -730,6 +753,7 @@ class DailyTrackService:
             },
         )
         research_data = generation.research_data
+        research_calendar = research_sessions(research_data)
         checkpoints = snapshot.checkpoints
         if not checkpoints or checkpoints[0].progression_id is not None:
             raise DailyTrackEquivalenceMismatch(
@@ -797,12 +821,12 @@ class DailyTrackService:
                 ),
                 payload_name="checkpoint",
             )
-            boundary_index = calendar.index(checkpoint.boundary_session.isoformat())
+            boundary_index = research_calendar.index(checkpoint.boundary_session.isoformat())
             state = restore_tracking_checkpoint(
                 value,
                 research_data=slice_research_sessions(
                     research_data,
-                    calendar[: boundary_index + 1],
+                    [research_calendar[boundary_index]],
                 ),
             )
             _assert_equivalent(
@@ -898,6 +922,20 @@ class DailyTrackService:
                         owner_id=attempt_id,
                     )
                     continue
+                origin = TrackingOrigin.model_validate(row["origin"])
+                financial_coverage_unavailable = False
+                if _uses_financial_fields(origin):
+                    financial_through = admission.financial_observation_through_session
+                    covered_targets = tuple(
+                        session
+                        for session in target_sessions
+                        if financial_through is not None and session <= financial_through
+                    )
+                    if covered_targets:
+                        target_sessions = covered_targets
+                    else:
+                        target_sessions = (target_sessions[0],)
+                        financial_coverage_unavailable = True
                 fence = int(row["execution_fence"]) + 1
                 progression_provenance: dict[str, object] = {
                     "schema_version": "daily-track-progression-v1",
@@ -988,11 +1026,12 @@ class DailyTrackService:
                     generation_pin_id=pin.id,
                     data_generation_id=generation.manifest_sha256,
                     data_through_session=generation.data_through_session,
-                    origin=TrackingOrigin.model_validate(row["origin"]),
+                    origin=origin,
                     predecessor_manifest_sha256=str(row["manifest_sha256"]),
                     predecessor_provenance=dict(row["provenance"]),
                     current_session=current_session,
                     target_sessions=target_sessions,
+                    financial_coverage_unavailable=financial_coverage_unavailable,
                 )
         return None
 
@@ -1152,13 +1191,36 @@ class DailyTrackService:
         admission = self._generation_store.open_admission(claim.data_generation_id)
         if admission.generation.data_through_session != claim.data_through_session:
             raise RuntimeError("Pinned Data Generation metadata changed")
+        if claim.financial_coverage_unavailable:
+            raise FinancialCoverageUnavailable(
+                "Financial Coverage does not include the next Research Session"
+            )
         full_calendar = list(admission.research_calendar)
         current_full_index = full_calendar.index(claim.current_session)
         target_end_index = full_calendar.index(claim.target_sessions[-1])
-        selected_sessions = full_calendar[max(0, current_full_index - 503) : target_end_index + 1]
-        generation = self._generation_store.read_market_slice(
+        predecessor = _read_publication_json(
+            self._publication,
+            PublishedRef(
+                manifest_sha256=claim.predecessor_manifest_sha256,
+                kind="daily-track.checkpoint",
+                provenance=claim.predecessor_provenance,
+            ),
+            payload_name="checkpoint",
+        )
+        dependency_session_count = 504 + _origin_effective_lookback(claim.origin)
+        calculation_start_index = _origin_calculation_start_index(
+            claim.origin,
+            full_calendar,
+        )
+        dependency_sessions = full_calendar[
+            max(
+                calculation_start_index,
+                current_full_index - dependency_session_count + 1,
+            ) : target_end_index + 1
+        ]
+        generation = self._generation_store.read_composite_slice(
             claim.data_generation_id,
-            sessions=selected_sessions,
+            sessions=dependency_sessions,
             universe_name=_origin_universe(claim.origin),
             neutralization=_origin_neutralization(claim.origin),
             field_bindings={
@@ -1173,14 +1235,11 @@ class DailyTrackService:
             research_data,
             calendar[: current_index + 1],
         )
-        predecessor = _read_publication_json(
-            self._publication,
-            PublishedRef(
-                manifest_sha256=claim.predecessor_manifest_sha256,
-                kind="daily-track.checkpoint",
-                provenance=claim.predecessor_provenance,
-            ),
-            payload_name="checkpoint",
+        continuation_basis_sha256 = _continuation_basis_sha256(prior_research_data)
+        cached_continuation = self._load_current_continuation(
+            claim,
+            predecessor,
+            basis_sha256=continuation_basis_sha256,
         )
         if predecessor.get("schema_version") == ("daily-track-activation-checkpoint-v1"):
             terminal = _mapping_value(
@@ -1190,9 +1249,7 @@ class DailyTrackService:
             prior = restore_tracking_origin(claim.origin, terminal, prior_research_data)
         else:
             prior = _state_from_payload(predecessor, prior_research_data)
-        continuation = self._current_continuation(
-            claim,
-            predecessor,
+        continuation = cached_continuation or self._rebuild_current_continuation(
             prior,
             prior_research_data,
         )
@@ -1233,13 +1290,13 @@ class DailyTrackService:
         )
         return prepared, provenance, state
 
-    def _current_continuation(
+    def _load_current_continuation(
         self,
         claim: _SessionProgressionClaim,
         predecessor: Mapping[str, object],
-        prior: KernelState,
-        prior_research_data: AlignedResearchData,
-    ) -> Mapping[str, object]:
+        *,
+        basis_sha256: str,
+    ) -> Mapping[str, object] | None:
         if (
             self._working_cache is not None
             and predecessor.get("schema_version") != "daily-track-activation-checkpoint-v1"
@@ -1247,7 +1304,7 @@ class DailyTrackService:
             checkpoint = KernelStateCheckpoint.model_validate(predecessor)
             cached = self._working_cache.load(
                 track_id=claim.track_id,
-                basis_sha256=_continuation_basis_sha256(prior, prior_research_data),
+                basis_sha256=basis_sha256,
                 head_manifest_sha256=claim.predecessor_manifest_sha256,
                 fence=claim.fence - 1,
                 continuation_sha256=checkpoint.continuation_sha256,
@@ -1258,6 +1315,13 @@ class DailyTrackService:
                 return cached
         elif self._working_cache is not None:
             self._working_cache.delete(claim.track_id)
+        return None
+
+    def _rebuild_current_continuation(
+        self,
+        prior: KernelState,
+        prior_research_data: AlignedResearchData,
+    ) -> Mapping[str, object]:
         rebuild_sessions = research_sessions(prior_research_data)[-504:]
         return advance_continuation(
             run_input=prior.run_input_with_research_data(prior_research_data),
@@ -1324,10 +1388,7 @@ class DailyTrackService:
         try:
             stored = self._working_cache.store(
                 track_id=claim.track_id,
-                basis_sha256=_continuation_basis_sha256(
-                    state,
-                    state.research_data_snapshot(),
-                ),
+                basis_sha256=_continuation_basis_sha256(_continuation_dependency_slice(state)),
                 head_manifest_sha256=published.manifest_sha256,
                 fence=claim.fence,
                 verified_continuation=continuation_snapshot(state),
@@ -1368,6 +1429,8 @@ class DailyTrackService:
         self,
         claim: _SessionProgressionClaim,
         error: Exception,
+        *,
+        blocked_reason: str = PUBLIC_BLOCKED_REASON,
     ) -> bool:
         assert self._dataset_lifecycle is not None
         failure_reason = type(error).__name__
@@ -1428,7 +1491,7 @@ class DailyTrackService:
                 """,
                 (
                     claim.progression_id,
-                    PUBLIC_BLOCKED_REASON,
+                    blocked_reason,
                     claim.track_id,
                     claim.fence,
                 ),
@@ -1441,6 +1504,64 @@ class DailyTrackService:
                 owner_id=claim.attempt_id,
             )
         return True
+
+
+def _uses_financial_fields(origin: TrackingOrigin) -> bool:
+    field_bindings = origin.immutable_input.get("field_bindings")
+    if not isinstance(field_bindings, Mapping):
+        raise RuntimeError("DailyTrack field bindings are invalid")
+    return bool(set(field_bindings) & _FINANCIAL_FIELD_IDS)
+
+
+def _origin_calculation_start_index(
+    origin: TrackingOrigin,
+    calendar: list[str],
+) -> int:
+    requested_start = origin.immutable_input.get("requested_start_date")
+    compiled_alpha = origin.immutable_input.get("compiled_alpha")
+    if not isinstance(requested_start, str) or not isinstance(compiled_alpha, Mapping):
+        raise RuntimeError("DailyTrack frozen calculation input is invalid")
+    try:
+        first_research_index = next(
+            index for index, session in enumerate(calendar) if session >= requested_start
+        )
+        lookback = restore_compiled_alpha(compiled_alpha).effective_lookback
+    except (StopIteration, ValueError) as error:
+        raise RuntimeError("DailyTrack frozen calculation input is outside current data") from error
+    calculation_start = first_research_index - lookback
+    if calculation_start < 0:
+        raise RuntimeError("DailyTrack frozen calculation warm-up is outside current data")
+    return calculation_start
+
+
+def _origin_effective_lookback(origin: TrackingOrigin) -> int:
+    compiled_alpha = origin.immutable_input.get("compiled_alpha")
+    if not isinstance(compiled_alpha, Mapping):
+        raise RuntimeError("DailyTrack frozen compiled Alpha is invalid")
+    try:
+        return restore_compiled_alpha(compiled_alpha).effective_lookback
+    except ValueError as error:
+        raise RuntimeError("DailyTrack frozen compiled Alpha is invalid") from error
+
+
+def _continuation_dependency_slice(state: KernelState) -> AlignedResearchData:
+    research_data = state.research_data_snapshot()
+    calendar = research_sessions(research_data)
+    boundary_index = calendar.index(state.boundary_session)
+    dependency_session_count = (
+        504
+        + restore_compiled_alpha(
+            state.run_input_with_research_data(research_data).compiled_alpha_snapshot()
+        ).effective_lookback
+    )
+    return slice_research_sessions(
+        research_data,
+        calendar[max(0, boundary_index - dependency_session_count + 1) : boundary_index + 1],
+    )
+
+
+def _continuation_basis_sha256(research_data: AlignedResearchData) -> str:
+    return hashlib.sha256(canonical_json_bytes(research_data_identity(research_data))).hexdigest()
 
 
 _TRACK_SELECT = """
@@ -1592,21 +1713,6 @@ def _assert_equivalent(actual: object, expected: object, coordinate: str) -> Non
         return
     suffix = divergence[1:] if divergence.startswith("$") else divergence
     raise DailyTrackEquivalenceMismatch(f"EQUIVALENCE_MISMATCH at {coordinate}{suffix}")
-
-
-def _continuation_basis_sha256(
-    state: KernelState,
-    research_data: AlignedResearchData,
-) -> str:
-    run_input = state.run_input_with_research_data(research_data)
-    expression = validate_normalized_alpha(
-        run_input.alpha_expression_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
-    )
-    sessions = research_sessions(research_data)
-    dependency_sessions = sessions[-(504 + expression.effective_lookback) :]
-    dependency = slice_research_sessions(research_data, dependency_sessions)
-    return hashlib.sha256(canonical_json_bytes(research_data_identity(dependency))).hexdigest()
 
 
 def _state_payload(

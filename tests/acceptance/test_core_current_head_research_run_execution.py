@@ -55,6 +55,7 @@ from thesistrace.research_kernel import (
     RunInput,
     advance,
     advance_continuation,
+    continuation_snapshot,
     empty_continuation,
     run,
 )
@@ -177,6 +178,279 @@ def test_financial_cutoff_rejects_only_financial_formula_before_queueing(
         }
     ]
     assert market["outcome"] == "accepted"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_financial_daily_track_blocks_at_cutoff_and_resumes_without_rewriting_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = (
+        "2010-01-04",
+        "2010-04-20",
+        "2010-04-21",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+    seed_head = _publish_composite_head(
+        settings,
+        sessions=seed_sessions,
+        operation_id="financial-track-seed",
+    )
+    composite_alpha = {
+        "operator_id": "add",
+        "operands": [
+            {
+                "operator_id": "cs_rank",
+                "operands": [{"field_id": "price.close.adjusted"}],
+            },
+            {
+                "operator_id": "cs_rank",
+                "operands": [{"field_id": "total_revenue_latest_fy"}],
+            },
+        ],
+    }
+
+    with TestClient(create_app(settings)) as client:
+        track_ids: dict[str, str] = {}
+        for name, alpha in (
+            ("financial", composite_alpha),
+            ("market", {"field_id": "price.close.adjusted"}),
+        ):
+            accepted = client.post(
+                "/api/definitions/run",
+                json=_run_command(f"{name}-track-seed", alpha=alpha),
+            )
+            assert accepted.status_code == 200
+            run_id = str(accepted.json()["run"]["id"])
+            assert client.app.state.core_runtime.research_runs.process_next() is True
+            activated = client.post(
+                f"/api/research-runs/{run_id}/daily-tracks",
+                json={"request_id": f"{name}-track-activation"},
+            )
+            assert activated.status_code == 201
+            track_ids[name] = str(activated.json()["id"])
+
+        lagged_sessions = (*seed_sessions, "2026-08-06", "2026-08-07")
+        lagged_head = _publish_composite_head(
+            settings,
+            sessions=lagged_sessions,
+            financial_through="2026-08-06",
+            expected_manifest=seed_head,
+            operation_id="financial-track-lagged",
+        )
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        blocked = client.get(f"/api/daily-tracks/{track_ids['financial']}").json()
+        assert blocked["status"] == "blocked"
+        assert blocked["strategy_session"] == "2026-08-06"
+        assert blocked["blocked_reason"] == (
+            "Financial Coverage ends before the next Research Session."
+        )
+        market = client.get(f"/api/daily-tracks/{track_ids['market']}").json()
+        assert market["status"] == "active"
+        assert market["strategy_session"] == "2026-08-07"
+        before_history = _tracking_checkpoint_history(settings, track_ids["financial"])
+        assert [item["boundary_session"] for item in before_history] == [
+            "2026-08-05",
+            "2026-08-06",
+        ]
+        blocked_state = _stored_tracking_activation(settings, track_ids["financial"])
+        assert blocked_state["latest_attempt_failure_reason"] == "FinancialCoverageUnavailable"
+        assert blocked_state["active_pin_count"] == 0
+
+        recovered_sessions = (*lagged_sessions, "2026-08-10")
+        recovered_head = _publish_composite_head(
+            settings,
+            sessions=recovered_sessions,
+            financial_through=recovered_sessions[-1],
+            expected_manifest=lagged_head,
+            operation_id="financial-track-recovered",
+        )
+        retry = client.post(
+            f"/api/daily-tracks/{track_ids['financial']}/retry",
+            json={"request_id": "financial-track-retry"},
+        )
+        assert retry.status_code == 202
+        completed = _run_worker_once(settings)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        recovered = client.get(f"/api/daily-tracks/{track_ids['financial']}").json()
+        assert recovered["status"] == "active"
+        assert recovered["strategy_session"] == recovered_sessions[-1]
+        after_history = _tracking_checkpoint_history(settings, track_ids["financial"])
+        assert after_history[:2] == before_history
+        assert [item["boundary_session"] for item in after_history] == [
+            "2026-08-05",
+            "2026-08-06",
+            "2026-08-10",
+        ]
+        final_state = _stored_tracking_activation(settings, track_ids["financial"])
+        origin = TrackingOrigin.model_validate(final_state["origin"])
+        calculation_sessions = list(recovered_sessions[3:])
+        research_data = (
+            MountedGenerationStore(settings.data_mount)
+            .read_composite_slice(
+                recovered_head,
+                sessions=calculation_sessions,
+                universe_name="top300",
+                neutralization="none",
+                field_bindings={
+                    str(key): str(value)
+                    for key, value in origin.immutable_input["field_bindings"].items()
+                },
+            )
+            .research_data
+        )
+        seed_research_data = slice_research_sessions(
+            research_data,
+            calculation_sessions[:3],
+        )
+        reference_origin = restore_tracking_origin(
+            origin,
+            origin.initial_strategy_state.model_dump(mode="json"),
+            seed_research_data,
+        )
+        reference = advance(
+            AdvanceInput(
+                prior_state=reference_origin,
+                target_research_data=research_data,
+                appended_sessions=calculation_sessions[3:],
+                continuation=advance_continuation(
+                    run_input=reference_origin.run_input_with_research_data(seed_research_data),
+                    prior_continuation=empty_continuation(),
+                    target_research_data=seed_research_data,
+                    appended_sessions=calculation_sessions[:3],
+                ),
+                calculation_scope="forward_tracking",
+            )
+        )
+        first_incremental_data = slice_research_sessions(
+            research_data,
+            calculation_sessions[:4],
+        )
+        incremental = advance(
+            AdvanceInput(
+                prior_state=reference_origin,
+                target_research_data=first_incremental_data,
+                appended_sessions=[calculation_sessions[3]],
+                continuation=advance_continuation(
+                    run_input=reference_origin.run_input_with_research_data(seed_research_data),
+                    prior_continuation=empty_continuation(),
+                    target_research_data=seed_research_data,
+                    appended_sessions=calculation_sessions[:3],
+                ),
+                calculation_scope="forward_tracking",
+            )
+        )
+        incremental = advance(
+            AdvanceInput(
+                prior_state=incremental,
+                target_research_data=research_data,
+                appended_sessions=calculation_sessions[4:],
+                continuation=continuation_snapshot(incremental),
+                calculation_scope="forward_tracking",
+            )
+        )
+        assert (
+            incremental.output_snapshot()["alpha_matrix"]
+            == reference.output_snapshot()["alpha_matrix"]
+        )
+        assert terminal_strategy_state(incremental) == terminal_strategy_state(reference)
+        expected_checkpoint = project_tracking_checkpoint(
+            reference,
+            retained_strategy_sessions=calculation_sessions[3:],
+        )
+        assert (
+            _checkpoint_payload(
+                client.app.state.core_runtime.publication,
+                final_state,
+            )
+            == expected_checkpoint
+        )
+        proof = client.app.state.core_runtime.daily_tracks.verify_persisted_equivalence(
+            track_ids["financial"]
+        )
+        assert proof.status == "equivalent"
+        assert proof.head_session == recovered_sessions[-1]
+
+        stopped = client.post(
+            f"/api/daily-tracks/{track_ids['market']}/stop",
+            json={"request_id": "financial-track-stop-market-control"},
+        )
+        assert stopped.status_code == 202
+        opened_session_slices: list[tuple[str, ...]] = []
+        original_read_composite_slice = MountedGenerationStore.read_composite_slice
+
+        def record_composite_slice(
+            store: MountedGenerationStore,
+            manifest_sha256: str,
+            *,
+            sessions: list[str],
+            universe_name: str,
+            neutralization: str,
+            field_bindings: dict[str, str],
+        ):
+            opened_session_slices.append(tuple(sessions))
+            return original_read_composite_slice(
+                store,
+                manifest_sha256,
+                sessions=sessions,
+                universe_name=universe_name,
+                neutralization=neutralization,
+                field_bindings=field_bindings,
+            )
+
+        monkeypatch.setattr(
+            MountedGenerationStore,
+            "read_composite_slice",
+            record_composite_slice,
+        )
+        processor = DailyTrackService(
+            client.app.state.core_runtime.database,
+            publication=client.app.state.core_runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(
+                client.app.state.core_runtime.database,
+                settings.data_mount,
+            ),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            working_cache_root=tmp_path / "financial-track-working-cache",
+        )
+        cold_sessions = (
+            *recovered_sessions,
+            *_weekday_sessions_after(
+                date.fromisoformat(recovered_sessions[-1]),
+                count=25,
+            ),
+        )
+        cold_head = _publish_composite_head(
+            settings,
+            sessions=cold_sessions,
+            expected_manifest=recovered_head,
+            operation_id="financial-track-cold-cache-rebuild",
+        )
+        assert processor.process_next() is True
+        warm_sessions = (
+            *cold_sessions,
+            *_weekday_sessions_after(date.fromisoformat(cold_sessions[-1]), count=1),
+        )
+        _publish_composite_head(
+            settings,
+            sessions=warm_sessions,
+            expected_manifest=cold_head,
+            operation_id="financial-track-warm-cache-advance",
+        )
+        assert processor.process_next() is True
+        assert opened_session_slices[-1] == tuple(warm_sessions[3:])
 
 
 @pytest.mark.skipif(
@@ -1226,6 +1500,102 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_working_cache_and_cold_rebuild_match_after_dependency_correction(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = _weekday_sessions_after(date(2026, 6, 30), count=25)
+    seed_head = _publish_canonical_head(
+        settings,
+        _two_instrument_canonical(seed_sessions, corrected=False),
+        operation_id="cache-correction-seed",
+    )
+    alpha = {
+        "operator_id": "ts_mean",
+        "operands": [
+            {"field_id": "price.close.adjusted"},
+            {"literal": 20},
+        ],
+    }
+
+    with TestClient(create_app(settings)) as client:
+        track_ids: list[str] = []
+        for index in range(2):
+            accepted = client.post(
+                "/api/definitions/run",
+                json=_run_command(
+                    f"cache-correction-run-{index}",
+                    alpha=alpha,
+                    start_date=seed_sessions[20],
+                    end_date=seed_sessions[-1],
+                ),
+            )
+            assert accepted.status_code == 200
+            completed = _run_worker_once(settings)
+            assert completed.returncode == 0, completed.stdout + completed.stderr
+            tracking = client.post(
+                f"/api/research-runs/{accepted.json()['run']['id']}/daily-tracks",
+                json={"request_id": f"cache-correction-track-{index}"},
+            )
+            assert tracking.status_code == 201
+            track_ids.append(str(tracking.json()["id"]))
+
+        runtime = client.app.state.core_runtime
+        cache_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            working_cache_root=tmp_path / "correction-working-cache",
+        )
+        cold_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+        )
+        first_sessions = (
+            *seed_sessions,
+            *_weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=500),
+        )
+        first_head = _publish_canonical_head(
+            settings,
+            _two_instrument_canonical(first_sessions, corrected=False),
+            operation_id="cache-correction-mature",
+            expected_manifest=seed_head,
+        )
+        assert cache_processor.process_next() is True
+        assert cold_processor.process_next() is True
+
+        corrected_sessions = (
+            *first_sessions,
+            *_weekday_sessions_after(date.fromisoformat(first_sessions[-1]), count=1),
+        )
+        _publish_canonical_head(
+            settings,
+            _two_instrument_canonical(corrected_sessions, corrected=True),
+            operation_id="cache-correction-historical-row",
+            expected_manifest=first_head,
+        )
+        assert cache_processor.process_next() is True
+        assert cold_processor.process_next() is True
+
+        cached_state = _stored_tracking_activation(settings, track_ids[0])
+        cold_state = _stored_tracking_activation(settings, track_ids[1])
+        assert _checkpoint_payload(
+            runtime.publication,
+            cached_state,
+        ) == _checkpoint_payload(runtime.publication, cold_state)
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -1317,9 +1687,9 @@ def test_claim_commits_before_generation_parquet_is_opened(
         assert accepted.status_code == 200
         run_id = accepted.json()["run"]["id"]
         runtime = client.app.state.core_runtime
-        original_read_market_slice = MountedGenerationStore.read_market_slice
+        original_read_composite_slice = MountedGenerationStore.read_composite_slice
 
-        def blocking_read_market_slice(
+        def blocking_read_composite_slice(
             store: MountedGenerationStore,
             manifest_sha256: str,
             *,
@@ -1332,7 +1702,7 @@ def test_claim_commits_before_generation_parquet_is_opened(
             generation_opened.set()
             if not allow_generation_open.wait(timeout=10):
                 raise AssertionError("Generation open was not released by the test")
-            return original_read_market_slice(
+            return original_read_composite_slice(
                 store,
                 manifest_sha256,
                 sessions=sessions,
@@ -1343,8 +1713,8 @@ def test_claim_commits_before_generation_parquet_is_opened(
 
         monkeypatch.setattr(
             MountedGenerationStore,
-            "read_market_slice",
-            blocking_read_market_slice,
+            "read_composite_slice",
+            blocking_read_composite_slice,
         )
         processor = ResearchRunService(
             runtime.database,
@@ -1416,9 +1786,9 @@ def test_daily_track_claim_commits_before_generation_parquet_is_opened(
             price_offset=1,
             expected_manifest=seed_head,
         )
-        original_read_market_slice = MountedGenerationStore.read_market_slice
+        original_read_composite_slice = MountedGenerationStore.read_composite_slice
 
-        def blocking_read_market_slice(
+        def blocking_read_composite_slice(
             store: MountedGenerationStore,
             manifest_sha256: str,
             *,
@@ -1430,7 +1800,7 @@ def test_daily_track_claim_commits_before_generation_parquet_is_opened(
             generation_opened.set()
             if not allow_generation_open.wait(timeout=10):
                 raise AssertionError("Generation open was not released by the test")
-            return original_read_market_slice(
+            return original_read_composite_slice(
                 store,
                 manifest_sha256,
                 sessions=sessions,
@@ -1441,8 +1811,8 @@ def test_daily_track_claim_commits_before_generation_parquet_is_opened(
 
         monkeypatch.setattr(
             MountedGenerationStore,
-            "read_market_slice",
-            blocking_read_market_slice,
+            "read_composite_slice",
+            blocking_read_composite_slice,
         )
         processor = DailyTrackService(
             runtime.database,
@@ -2082,6 +2452,7 @@ def _publish_canonical_head(
     canonical: dict[str, object],
     *,
     operation_id: str,
+    expected_manifest: str | None = None,
 ) -> str:
     generation = MountedGenerationStore(settings.data_mount).materialize(
         canonical,
@@ -2099,7 +2470,7 @@ def _publish_canonical_head(
             lease_seconds=60,
         )
         lifecycle.compare_and_swap_head(
-            expected_generation_manifest_sha256=None,
+            expected_generation_manifest_sha256=expected_manifest,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id=operation_id,
         )
@@ -2113,7 +2484,11 @@ def _publish_composite_head(
     *,
     sessions: tuple[str, ...],
     financial_through: str | None = None,
+    expected_manifest: str | None = None,
+    operation_id: str = "composite-e2e",
 ) -> str:
+    observation_through = financial_through or sessions[-1]
+    finished_date = max(observation_through, "2026-08-05")
     market_store = MountedGenerationStore(settings.data_mount)
     market = market_store.materialize(
         _two_instrument_canonical(sessions, corrected=False),
@@ -2228,33 +2603,33 @@ def _publish_composite_head(
     )
     financial = FinancialCandidateStore(settings.data_mount).materialize(
         CompletedFinancialCollection(
-            idempotency_key="composite-e2e",
+            idempotency_key=operation_id,
             generation_manifest_sha256=market.manifest_sha256,
             contract=contract,
-            finished_at="2026-08-05T10:00:00+00:00",
+            finished_at=f"{finished_date}T10:00:00+00:00",
             target_count=len(checkpoints),
             shards=tuple(checkpoints),
         ),
-        observation_through_session=financial_through or sessions[-1],
+        observation_through_session=observation_through,
     )
     composite = market_store.compose_financial_candidate(
         market.manifest_sha256,
         financial.manifest_sha256,
-        prepared_at=datetime(2026, 8, 5, 11, tzinfo=UTC),
+        prepared_at=datetime.fromisoformat(f"{finished_date}T11:00:00+00:00"),
     )
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
         lifecycle = DatasetLifecycle(database, settings.data_mount)
         lifecycle.protect_candidate(
-            operation_id="composite-e2e",
+            operation_id=operation_id,
             generation_manifest_sha256=composite.manifest_sha256,
             lease_seconds=60,
         )
         lifecycle.compare_and_swap_head(
-            expected_generation_manifest_sha256=None,
+            expected_generation_manifest_sha256=expected_manifest,
             candidate_generation_manifest_sha256=composite.manifest_sha256,
-            operation_id="composite-e2e",
+            operation_id=operation_id,
         )
     finally:
         database.close()

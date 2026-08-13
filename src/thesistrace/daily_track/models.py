@@ -207,6 +207,7 @@ class KernelRunInputSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     alpha_expression: dict[str, object]
+    compiled_alpha: dict[str, object]
     field_bindings: dict[str, str]
     universe: str
     neutralization: str
@@ -226,7 +227,6 @@ class KernelStateCheckpoint(BaseModel):
 
     schema_version: Literal["daily-track-checkpoint-v1"]
     origin_session: str
-    session_count: int
     boundary_session: str
     run_input: KernelRunInputSnapshot
     alpha_state: dict[str, object]

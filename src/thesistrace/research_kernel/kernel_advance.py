@@ -11,6 +11,7 @@ from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
     evaluate_compiled_alpha_matrix,
 )
+from thesistrace.research_kernel.alpha_expression import restore_compiled_alpha
 from thesistrace.research_kernel.factor import (
     HORIZONS,
     affected_label_sessions,
@@ -215,11 +216,14 @@ def advance_continuation(
     appended_sessions: list[str],
 ) -> dict[str, object]:
     """Advance only the bounded transient Alpha and Factor working state."""
+    effective_lookback = restore_compiled_alpha(
+        run_input.compiled_alpha_snapshot()
+    ).effective_lookback
     restored = _with_continuation(
         {
             "alpha_matrix": {
                 "expression": run_input.alpha_expression_snapshot(),
-                "effective_lookback": MAX_ALPHA_LOOKBACK_SESSIONS,
+                "effective_lookback": effective_lookback,
                 "neutralization": run_input.neutralization,
                 "sessions": [],
             },
@@ -239,7 +243,7 @@ def advance_continuation(
     first_index = calendar.index(appended_sessions[0])
     window = slice_research_sessions(
         target_research_data,
-        calendar[max(0, first_index - MAX_ALPHA_LOOKBACK_SESSIONS) :],
+        calendar[max(0, first_index - effective_lookback) :],
     )
     evaluated = evaluate_compiled_alpha_matrix(
         window,
@@ -500,9 +504,7 @@ def _advance_factor(
             for item in [*prior_daily, *partial_daily]
             if isinstance(item, Mapping)
         }
-        selected = [session for session in calendar if session in available_sessions][
-            -MAX_ROLLING_FACTOR_SESSIONS:
-        ]
+        selected = sorted(available_sessions)[-MAX_ROLLING_FACTOR_SESSIONS:]
         selected_set = set(selected)
         by_session = {
             str(item["session"]): dict(item)

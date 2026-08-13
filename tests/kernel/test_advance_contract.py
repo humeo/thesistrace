@@ -266,6 +266,105 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions() -> None:
         assert len(horizons[horizon]["daily"]) == 504
 
 
+def test_warm_continuation_keeps_504_factor_sessions_with_a_short_data_slice() -> None:
+    _, canonical = build_fixture(session_count=526)
+    definition = {
+        "alpha": {"expression": {"field_id": "price.close.adjusted"}},
+        "neutralization": "none",
+        "universe": "top300",
+        "strategy": {
+            "holdings_count": 10,
+            "rebalance_interval": 5,
+            "initial_cash_cny": "10000000",
+        },
+        "costs": {
+            "commission_rate_all_in": "0.0003",
+            "commission_min_cny": "5",
+            "stamp_duty_sell_rate": "0.0005",
+            "transfer_fee_rate": "0.00001",
+        },
+    }
+    calendar = list(canonical["research_calendar"])
+    complete = _research_data(canonical, definition)
+    prior_data = slice_research_sessions(complete, calendar[:-1])
+    prior = run(
+        _run_input(
+            prior_data,
+            definition,
+            research_start_session=calendar[0],
+            research_end_session=calendar[-2],
+        )
+    ).track_state
+    checkpoint = project_tracking_checkpoint(
+        prior,
+        retained_strategy_sessions=[prior.boundary_session],
+    )
+    short_prior_data = slice_research_sessions(complete, calendar[-22:-1])
+    restored = restore_tracking_checkpoint(checkpoint, research_data=short_prior_data)
+    short_target_data = slice_research_sessions(complete, calendar[-22:])
+
+    advanced = advance(
+        AdvanceInput(
+            prior_state=restored,
+            target_research_data=short_target_data,
+            appended_sessions=[calendar[-1]],
+            continuation=continuation_snapshot(prior),
+            calculation_scope="forward_tracking",
+        )
+    )
+
+    horizons = advanced.output_snapshot()["factor_evaluation"]["horizons"]
+    for horizon in ("1", "5", "20"):
+        assert [item["session"] for item in horizons[horizon]["daily"]] == calendar[-504:]
+
+
+def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() -> None:
+    _, canonical = build_fixture(session_count=756)
+    definition = {
+        "alpha": {
+            "expression": {
+                "operator_id": "ts_mean",
+                "operands": [
+                    {"field_id": "price.close.adjusted"},
+                    {"literal": 252},
+                ],
+            }
+        },
+        "neutralization": "none",
+        "universe": "top300",
+        "strategy": {
+            "holdings_count": 10,
+            "rebalance_interval": 5,
+            "initial_cash_cny": "10000000",
+        },
+        "costs": {
+            "commission_rate_all_in": "0.0003",
+            "commission_min_cny": "5",
+            "stamp_duty_sell_rate": "0.0005",
+            "transfer_fee_rate": "0.00001",
+        },
+    }
+    calendar = list(canonical["research_calendar"])
+    research_data = _research_data(canonical, definition)
+    reference = run(
+        _run_input(
+            research_data,
+            definition,
+            research_start_session=calendar[252],
+            research_end_session=calendar[-1],
+        )
+    ).track_state
+
+    rebuilt = advance_continuation(
+        run_input=reference.run_input_with_research_data(research_data),
+        prior_continuation=empty_continuation(),
+        target_research_data=research_data,
+        appended_sessions=calendar[-504:],
+    )
+
+    assert rebuilt == continuation_snapshot(reference)
+
+
 def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
     accepted_calculation_case: dict[str, object],
     accepted_kernel_state: KernelState,
@@ -400,6 +499,12 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
     checkpoint = project_tracking_checkpoint(
         advanced,
         retained_strategy_sessions=[prior.boundary_session, advanced.boundary_session],
+    )
+    assert (
+        checkpoint["run_input"]["compiled_alpha"]
+        == advanced.run_input_with_research_data(
+            advanced.research_data_snapshot()
+        ).compiled_alpha_snapshot()
     )
     delta = checkpoint["strategy_state"]["retained_delta"]
     assert len(delta) == 2
