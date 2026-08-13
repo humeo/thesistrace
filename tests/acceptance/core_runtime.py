@@ -21,7 +21,7 @@ def drop_product_schemas(settings: CoreSettings) -> None:
                 "thesistrace_meta",
                 "daily_tracks",
                 "research_runs",
-                "definitions",
+                "research_folders",
                 "publication",
                 "data",
             ):

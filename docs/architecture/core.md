@@ -9,17 +9,19 @@ ThesisTrace currently closes one local, single-operator research loop:
 ```text
 Data Operator prepares the current Dataset Head
     -> Data Overview exposes current coverage read-only
-    -> save and run a Research Definition for selected dates
+    -> author one browser-local Draft inside a Research Folder
+    -> Run compiles and atomically admits one immutable ResearchRun
     -> a ResearchRun Attempt pins the current Data Generation
     -> immutable Factor and Strategy Result
     -> optionally start a DailyTrack
     -> later market sessions advance that Track
 ```
 
-The user-visible resources are Data Overview, Research Definitions,
-ResearchRuns, and DailyTracks. Data Generation, execution Attempt, Tracking
-Checkpoint, Working Cache, publication manifest, and schema fingerprint are
-implementation concepts, not additional product resources.
+The user-visible resources are Data Overview, Research Folders, Research
+(ResearchRuns), and DailyTracks. Browser Draft is local authoring state rather
+than a server resource. Data Generation, execution Attempt, Tracking Checkpoint,
+Working Cache, publication manifest, and schema fingerprint are implementation
+concepts, not additional product resources.
 
 Login, tenancy, collaboration, hosted deployment, and production operations are
 not part of the active system. There is no Local/Hosted product mode.
@@ -53,8 +55,9 @@ files. No runtime downloads data during API or Worker startup.
 
 ```text
 src/thesistrace/
+├── alpha_language/
 ├── data/
-├── definition/
+├── research_folder/
 ├── research_run/
 ├── daily_track/
 ├── research_kernel/
@@ -70,13 +73,14 @@ PostgreSQL, S3, HTTP, Worker, or Data Operator concepts.
 
 ```mermaid
 flowchart LR
-    E["HTTP and Worker entrypoints"] --> D["Definitions"]
+    E["HTTP and Worker entrypoints"] --> F["Research Folders"]
     E --> R["ResearchRuns"]
     E --> T["DailyTracks"]
     E --> A["Data"]
-    D --> A
-    D --> K["Research Kernel"]
-    D --> R
+    E --> L["Alpha Language"]
+    L --> A
+    L --> K["Research Kernel"]
+    R --> F
     R --> A
     R --> K
     R --> P["Publication"]
@@ -101,7 +105,7 @@ The active checkout defines exactly five product schemas:
 ```text
 publication
 data
-definitions
+research_folders
 research_runs
 daily_tracks
 ```
@@ -142,31 +146,36 @@ Tushare is the live source adapter. Replay is the deterministic operator and
 test adapter. Neither source adapter owns product IDs, lifecycle state, or the
 Dataset Head transition.
 
-## Research Definitions
+## Research authoring
 
-Definitions are mutable authoring resources with optimistic revisions. Save may
-retain incomplete content. Run saves the submitted revision and requires a
-complete runnable definition, including selected start and end dates.
+The Alpha Language exposes one read-only Catalog and authoritative Formula
+Diagnostics. Authoring state is one browser-local Draft per Research Folder.
+It may remain incomplete and has no server identity, Revision, or audit
+authority. Run submits one complete Draft for compilation and admission.
 
 ```text
-list / get / create / save
-authoring_options
-run(current content, expected revision, request ID)
+GET  /api/alpha/catalog
+POST /api/alpha/diagnostics
+GET  /api/research-folders
+POST /api/research-runs (complete Draft snapshot, Folder, request ID)
 ```
 
-Run validates the requested Research Period against the current Dataset Head,
-freezes the research question, calculation contracts, and selected Data
-Generation, then atomically admits a queued ResearchRun with durable Generation
-retention. Claim replaces that retention with an Attempt pin before data opens.
+The backend compiler is the single Formula authority. Run validates Formula,
+Research Period, selected Universe, Data availability, and work budget before
+any durable mutation, then freezes the submitted Formula, canonical Alpha
+Expression, field bindings, research question, and calculation contracts while
+atomically admitting a queued ResearchRun with the selected Data Generation and
+durable Generation retention. Claim replaces that retention with an Attempt pin
+before opening any physical data.
 
 The same request ID and fingerprint returns the original outcome. Reusing the
-ID with different input is a conflict. Invalid runnable semantics preserve the
-saved Definition but create no ResearchRun.
+ID with different input is a conflict. Rejection returns source-ranged
+Diagnostics and creates neither a ResearchRun nor an admission receipt. Run
+does not clear the browser Draft.
 
 ## ResearchRuns
 
-ResearchRun creation is available only through the Run action. Reusing an
-earlier Research requires Use as Draft followed by an ordinary Run action.
+ResearchRun creation is available only through direct Run admission.
 
 ```text
 queued -> running -> succeeded | failed
@@ -176,13 +185,13 @@ queued | running -> cancelled
 When an Attempt starts, it atomically pins the Data Generation frozen at Run
 admission. The pin remains fixed for the complete calculation even if Refresh
 moves the Dataset Head concurrently. A retry pins the same frozen Generation
-and recomputes from the beginning; retryable gaps retain that Generation and
-partial outputs are never combined.
+and recomputes from the beginning; partial outputs from different Generations
+are never combined.
 
-Use as Draft copies an earlier Run's authorable values into browser-local state.
-Submitting that Draft follows ordinary compilation and admission, including a
-fresh current Data Generation selection, and creates a new ResearchRun. Edits
-never mutate the original Run.
+`Use as Draft` is the sole reuse action. It copies frozen authorable input into
+one selected Folder's browser-local Draft and creates no server state. A later
+ordinary Run creates an independent ResearchRun. Mutable Research name and
+Folder membership stay outside immutable execution input.
 
 A succeeded Run exposes one immutable Result containing bounded Factor
 summaries, Strategy metrics and daily observations, benchmark results, terminal
@@ -206,12 +215,6 @@ Tracking Advance Attempt pins one current Data Generation. Only a complete
 immutable Checkpoint moves the Tracking Head. A concurrent Data Refresh is
 handled by later work rather than by mixing Generations inside one Attempt.
 
-If the frozen Formula references financial fields, an Advance stops at the
-Generation's financial observation-through session and blocks before the first
-later target with Financial Coverage as its public readiness reason. A later
-complete Generation can be retried from the unchanged Checkpoint. Market-only
-Tracks do not depend on Financial Coverage and continue through Market Coverage.
-
 After bounded retries are exhausted, a Track becomes blocked and retains its
 last successful Head. Retry continues from that Head. Stop is irreversible.
 
@@ -219,17 +222,15 @@ The Working Cache is a private, bounded, disposable optimization. PostgreSQL
 state and immutable Checkpoints remain authoritative. Missing or invalid cache
 state is rebuilt from the latest 504 retained Factor sessions plus the frozen
 Effective Alpha Lookback needed to calculate their first row exactly. Each
-Advance reads that bounded dependency slice plus new targets so it can verify
-the cache against current immutable inputs; a valid cache avoids recomputing
-Alpha and Factor history. Startup reconciliation removes cache state for
-stopped Tracks.
+Advance reads that bounded dependency slice plus new targets; every Worker also
+reconciles its cache against authoritative active and blocked Track IDs.
 
 ## Research Kernel and Publication
 
 The Research Kernel owns Alpha evaluation, label maturation, Factor aggregation,
 Strategy transitions, numeric semantics, and deterministic ordering. Its Run
 and Advance paths share one implementation of those rules. Operators form a
-closed versioned catalog; there is no runtime plugin or arbitrary Python/SQL
+closed append-only catalog; there is no runtime plugin or arbitrary Python/SQL
 execution.
 
 Publication is the shared module for immutable ResearchRun Results and
@@ -253,8 +254,7 @@ referenced object.
 
 ```text
 /data
-/definitions
-/definitions/:definitionId
+/research
 /research-runs
 /research-runs/:runId
 /daily-tracks
@@ -278,14 +278,14 @@ generic dispatch interface.
 The active local gates are documented in the
 [local lifecycle guide](../runbook/local-lifecycle.md):
 
-1. `mise exec -- pnpm test` runs fast host checks.
-2. `mise exec -- pnpm test:integration` exercises real PostgreSQL and RustFS in
+1. `bun run test` runs fast host checks.
+2. `bun run test:integration` exercises real PostgreSQL and RustFS in
    a fresh isolated Compose Test project.
-3. `mise exec -- pnpm test:e2e` drives the complete browser loop against a fresh
+3. `bun run test:e2e` drives the complete browser loop against a fresh
    topology.
-4. `mise exec -- pnpm test:image-smoke` qualifies the built application images.
-5. `mise exec -- pnpm check` is the ordinary merge gate;
-   `mise exec -- pnpm check:release` adds image qualification.
+4. `bun run test:image-smoke` qualifies the built application images.
+5. `bun run check` is the ordinary merge gate; `bun run check:release` adds
+   image qualification.
 
 Live Tushare credential verification is a separate explicit gate. Local checks
 are not Production readiness.
@@ -298,6 +298,8 @@ are not Production readiness.
 - Hosted deployment, Temporal, event relay, generic scheduler, or event bus.
 - SQLite Product State or a second runtime implementation.
 - Raw artifact browsers, physical object paths, or internal lifecycle pages.
+- Server Definitions, visible Revisions, Save, authoring Refresh, or product
+  Rerun endpoints and compatibility paths.
 
 The current domain vocabulary is defined in [`CONTEXT.md`](../../CONTEXT.md).
 Operator commands are documented in the

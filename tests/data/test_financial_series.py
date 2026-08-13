@@ -37,11 +37,17 @@ def test_catalog_declares_six_complete_financial_field_meanings() -> None:
         "equity_parent_latest_reported",
     ]
     assert all(field.family_id == "equity.financial_pit" for field in FINANCIAL_FIELDS)
-    assert all(field.numeric_type == "decimal" for field in FINANCIAL_FIELDS)
+    assert all(field.physical_type == "decimal" for field in FINANCIAL_FIELDS)
     assert all(field.unit == "CNY" for field in FINANCIAL_FIELDS)
-    assert all(field.information_time == "next-research-session" for field in FINANCIAL_FIELDS)
+    assert all(
+        field.availability == "next_research_session_after_source_publication"
+        for field in FINANCIAL_FIELDS
+    )
     assert all(field.reporting_scope == "report_type_1_consolidated" for field in FINANCIAL_FIELDS)
-    assert all(field.missingness == "missing" for field in FINANCIAL_FIELDS)
+    assert all(
+        field.missingness == "missing_when_no_visible_eligible_fact"
+        for field in FINANCIAL_FIELDS
+    )
     assert all(field.source_lineage.startswith("tushare.") for field in FINANCIAL_FIELDS)
     assert all(field.applicable_company_types == ("1", "2", "3", "4") for field in FINANCIAL_FIELDS)
     assert {field.report_period_selection for field in FINANCIAL_FIELDS} == {

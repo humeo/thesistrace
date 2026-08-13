@@ -8,16 +8,16 @@ from dataclasses import dataclass, field
 
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
-    evaluate_compiled_alpha_matrix,
-    validate_alpha,
+    evaluate_alpha_matrix,
 )
-from thesistrace.research_kernel.alpha_expression import (
-    AlphaExpression,
-    freeze_parsed_alpha,
-    restore_compiled_alpha,
-)
+from thesistrace.research_kernel.alpha_expression import AlphaExpression
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.serialization import canonical_json_bytes
+from thesistrace.research_kernel.series_plan import (
+    ExecutableAlpha,
+    SeriesExecutionPlan,
+    build_series_execution_plan,
+)
 from thesistrace.research_kernel.strategy import transition_strategy
 from thesistrace.research_series import AlignedResearchData, slice_research_sessions
 
@@ -34,8 +34,8 @@ class InsufficientCalculationWarmupError(KernelRunError):
 class RunInput:
     _research_data: AlignedResearchData = field(repr=False)
     _alpha_expression_json: bytes = field(repr=False)
-    _compiled_alpha_json: bytes = field(repr=False)
     _field_bindings: tuple[tuple[str, str], ...] = field(repr=False)
+    _effective_alpha_lookback: int = field(repr=False)
     universe: str
     neutralization: str
     holdings_count: int
@@ -53,8 +53,8 @@ class RunInput:
         *,
         research_data: AlignedResearchData,
         alpha_expression: AlphaExpression,
-        compiled_alpha: Mapping[str, object] | None = None,
         field_bindings: Mapping[str, str],
+        effective_alpha_lookback: int,
         universe: str,
         neutralization: str,
         holdings_count: int,
@@ -69,36 +69,23 @@ class RunInput:
     ) -> None:
         if not isinstance(alpha_expression, Mapping):
             raise KernelRunError("Alpha expression must be a normalized tree")
+        if effective_alpha_lookback < 0 or effective_alpha_lookback > 252:
+            raise KernelRunError("Effective Alpha Lookback is invalid")
         object.__setattr__(self, "_research_data", research_data.snapshot())
         object.__setattr__(
             self,
             "_alpha_expression_json",
             canonical_json_bytes(alpha_expression),
         )
-        frozen_alpha = (
-            freeze_parsed_alpha(validate_alpha(alpha_expression, field_bindings=field_bindings))
-            if compiled_alpha is None
-            else dict(compiled_alpha)
-        )
-        try:
-            restored = restore_compiled_alpha(frozen_alpha)
-        except ValueError as error:
-            raise KernelRunError(str(error)) from error
-        if (
-            dict(restored.expression) != dict(alpha_expression)
-            or not set(restored.field_ids) <= set(field_bindings)
-        ):
-            raise KernelRunError("compiled Alpha does not match frozen Formula references")
-        object.__setattr__(
-            self,
-            "_compiled_alpha_json",
-            canonical_json_bytes(frozen_alpha),
-        )
         object.__setattr__(
             self,
             "_field_bindings",
             tuple(sorted((str(key), str(value)) for key, value in field_bindings.items())),
         )
+        object.__setattr__(self, "_effective_alpha_lookback", effective_alpha_lookback)
+        plan = self.alpha_execution_plan()
+        if set(plan.field_names) != set(field_bindings):
+            raise KernelRunError("Alpha expression and field bindings disagree")
         object.__setattr__(self, "universe", universe)
         object.__setattr__(self, "neutralization", neutralization)
         object.__setattr__(self, "holdings_count", holdings_count)
@@ -123,11 +110,18 @@ class RunInput:
     def field_bindings_snapshot(self) -> dict[str, str]:
         return dict(self._field_bindings)
 
-    def compiled_alpha_snapshot(self) -> dict[str, object]:
-        value = json.loads(self._compiled_alpha_json)
-        if not isinstance(value, dict):
-            raise KernelRunError("compiled Alpha snapshot is invalid")
-        return value
+    def compiled_alpha_snapshot(self) -> ExecutableAlpha:
+        return ExecutableAlpha(
+            expression=self.alpha_expression_snapshot(),
+            field_ids_by_identifier={
+                identifier: field_id
+                for field_id, identifier in self._field_bindings
+            },
+            effective_lookback=self._effective_alpha_lookback,
+        )
+
+    def alpha_execution_plan(self) -> SeriesExecutionPlan:
+        return build_series_execution_plan(self.compiled_alpha_snapshot())
 
     def with_research_data(
         self,
@@ -138,8 +132,8 @@ class RunInput:
         return RunInput(
             research_data=research_data,
             alpha_expression=self.alpha_expression_snapshot(),
-            compiled_alpha=self.compiled_alpha_snapshot(),
             field_bindings=self.field_bindings_snapshot(),
+            effective_alpha_lookback=self._effective_alpha_lookback,
             universe=self.universe,
             neutralization=self.neutralization,
             holdings_count=self.holdings_count,
@@ -270,17 +264,18 @@ def _run_explicit_period(
         end_index = calendar.index(end_session)
     except ValueError as error:
         raise KernelRunError(
-            "Research Period boundary is not a canonical Research Session"
+            "Research Period boundary is not a Research Session"
         ) from error
     if start_index > end_index:
         raise KernelRunError("Research Period first session is after its last session")
 
-    parsed = restore_compiled_alpha(run_input.compiled_alpha_snapshot())
-    warmup_start = start_index - parsed.effective_lookback
+    warmup_start = start_index - run_input.alpha_execution_plan().effective_lookback
     if warmup_start < 0:
         raise InsufficientCalculationWarmupError(
             "insufficient Calculation Warm-up: "
-            f"requires {parsed.effective_lookback} sessions before {start_session}"
+            "requires "
+            f"{run_input.alpha_execution_plan().effective_lookback} sessions before "
+            f"{start_session}"
         )
     period_sessions = calendar[start_index : end_index + 1]
     calculation_sessions = calendar[warmup_start : end_index + 1]
@@ -303,10 +298,9 @@ def _calculate(
 ) -> RunOutput:
     alpha_expression = run_input.alpha_expression_snapshot()
     definition = calculation_definition(run_input, alpha_expression)
-    matrix = evaluate_compiled_alpha_matrix(
+    matrix = evaluate_alpha_matrix(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )
     selected = set(period_sessions)

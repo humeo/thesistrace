@@ -1,13 +1,16 @@
 from __future__ import annotations
 
-import ast
 import math
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from thesistrace.research_kernel.alpha_builtins import BUILTIN_DEFINITIONS
+
 type AlphaExpression = Mapping[str, object]
 type OperandRule = Literal["numeric", "window"]
+
+MAX_ALPHA_RUN_ESTIMATED_WORK = 15_000_000
 
 
 @dataclass(frozen=True)
@@ -26,14 +29,11 @@ class AlphaValidationError(ValueError):
 @dataclass(frozen=True)
 class ParsedAlpha:
     expression: AlphaExpression
-    tree: ast.Expression
     field_names: tuple[str, ...]
     field_ids: tuple[str, ...]
+    field_ids_by_identifier: dict[str, str]
     effective_lookback: int
-
-
-COMPILED_ALPHA_FORMAT = "thesistrace-compiled-alpha"
-COMPILED_ALPHA_VERSION = 1
+    estimated_work: int
 
 
 @dataclass(frozen=True)
@@ -41,11 +41,6 @@ class OperatorDefinition:
     operator_id: str
     kind: Literal["arithmetic", "scalar", "historical", "rolling", "cross-sectional"]
     operand_rules: tuple[OperandRule, ...]
-    lookback_rule: Literal["none", "historical", "rolling"] = "none"
-    complexity: str = "linear-in-series-length"
-    cross_section_evaluator: Callable[
-        [Sequence[tuple[str, float]]], dict[str, float]
-    ] | None = None
 
     @property
     def rolling_bounds(self) -> dict[str, int] | None:
@@ -54,6 +49,7 @@ class OperatorDefinition:
         return {"minimum": 1, "maximum": 252}
 
     def public(self) -> dict[str, object]:
+        lookback_rule = self.kind if self.kind in {"historical", "rolling"} else "none"
         return {
             "operator_id": self.operator_id,
             "kind": self.kind,
@@ -61,8 +57,12 @@ class OperatorDefinition:
             "operand_rules": list(self.operand_rules),
             "result_type": "numeric",
             "rolling_bounds": self.rolling_bounds,
-            "lookback_rule": self.lookback_rule,
-            "complexity": self.complexity,
+            "lookback_rule": lookback_rule,
+            "complexity": (
+                "n-log-n-per-session"
+                if self.kind == "cross-sectional"
+                else "linear-in-series-length"
+            ),
         }
 
 
@@ -75,20 +75,15 @@ OPERATORS = (
     OperatorDefinition("abs", "scalar", ("numeric",)),
     OperatorDefinition("log", "scalar", ("numeric",)),
     OperatorDefinition("sign", "scalar", ("numeric",)),
-    OperatorDefinition("lag", "historical", ("numeric", "window"), "historical"),
-    OperatorDefinition("delta", "historical", ("numeric", "window"), "historical"),
-    OperatorDefinition("pct_change", "historical", ("numeric", "window"), "historical"),
-    OperatorDefinition("ts_mean", "rolling", ("numeric", "window"), "rolling"),
-    OperatorDefinition("ts_sum", "rolling", ("numeric", "window"), "rolling"),
-    OperatorDefinition("ts_std", "rolling", ("numeric", "window"), "rolling"),
-    OperatorDefinition("ts_min", "rolling", ("numeric", "window"), "rolling"),
-    OperatorDefinition("ts_max", "rolling", ("numeric", "window"), "rolling"),
-    OperatorDefinition(
-        "cs_rank",
-        "cross-sectional",
-        ("numeric",),
-        cross_section_evaluator=lambda values: _ascending_average_ordinal_rank(values),
-    ),
+    OperatorDefinition("lag", "historical", ("numeric", "window")),
+    OperatorDefinition("delta", "historical", ("numeric", "window")),
+    OperatorDefinition("pct_change", "historical", ("numeric", "window")),
+    OperatorDefinition("ts_mean", "rolling", ("numeric", "window")),
+    OperatorDefinition("ts_sum", "rolling", ("numeric", "window")),
+    OperatorDefinition("ts_std", "rolling", ("numeric", "window")),
+    OperatorDefinition("ts_min", "rolling", ("numeric", "window")),
+    OperatorDefinition("ts_max", "rolling", ("numeric", "window")),
+    OperatorDefinition("cs_rank", "cross-sectional", ("numeric",)),
 )
 OPERATOR_BY_ID = {operator.operator_id: operator for operator in OPERATORS}
 SCALAR_OPERATOR_IDS = frozenset(
@@ -103,24 +98,6 @@ ROLLING_OPERATOR_IDS = frozenset(
 WINDOW_OPERATOR_IDS = HISTORICAL_OPERATOR_IDS | ROLLING_OPERATOR_IDS
 
 
-def _ascending_average_ordinal_rank(
-    values: Sequence[tuple[str, float]],
-) -> dict[str, float]:
-    if len(values) == 1:
-        return {values[0][0]: 0.5}
-    ordered = sorted(values, key=lambda item: (item[1], item[0]))
-    ranked: dict[str, float] = {}
-    position = 0
-    while position < len(ordered):
-        end = position + 1
-        while end < len(ordered) and ordered[end][1] == ordered[position][1]:
-            end += 1
-        rank = ((position + end - 1) / 2) / (len(ordered) - 1)
-        ranked.update((instrument_id, rank) for instrument_id, _value in ordered[position:end])
-        position = end
-    return ranked
-
-
 def operator_catalog() -> dict[str, object]:
     return {
         "semantic_version": "1.1.0",
@@ -133,10 +110,9 @@ def validate_normalized_alpha(
     *,
     field_bindings: Mapping[str, str],
 ) -> ParsedAlpha:
-    body, effective_lookback, fields, field_ids = _build_node(
+    expression, effective_lookback, estimated_work, fields, field_ids = _validate_compiled_node(
         expression,
         location="alpha.expression",
-        expected_rule="numeric",
         field_bindings=field_bindings,
     )
     if effective_lookback > 252:
@@ -146,138 +122,151 @@ def validate_normalized_alpha(
             f"effective lookback {effective_lookback} exceeds 252",
         )
     return ParsedAlpha(
-        expression=dict(expression),
-        tree=ast.fix_missing_locations(ast.Expression(body=body)),
+        expression=expression,
         field_names=tuple(sorted(fields)),
         field_ids=tuple(sorted(field_ids)),
+        field_ids_by_identifier={
+            identifier: field_id
+            for field_id, identifier in field_bindings.items()
+            if field_id in field_ids
+        },
         effective_lookback=effective_lookback,
+        estimated_work=estimated_work,
     )
 
 
-def freeze_parsed_alpha(parsed: ParsedAlpha) -> dict[str, object]:
-    """Freeze validated Alpha IR without retaining a live operator catalog."""
-    return {
-        "format": COMPILED_ALPHA_FORMAT,
-        "version": COMPILED_ALPHA_VERSION,
-        "expression": dict(parsed.expression),
-        "execution_tree": _freeze_execution_node(parsed.tree.body),
-        "field_names": list(parsed.field_names),
-        "field_ids": list(parsed.field_ids),
-        "effective_lookback": parsed.effective_lookback,
-    }
+def _validate_compiled_node(
+    node: Mapping[str, object],
+    *,
+    location: str,
+    field_bindings: Mapping[str, str],
+) -> tuple[dict[str, object], int, int, set[str], set[str]]:
+    kind = node.get("kind")
+    if kind == "field":
+        if set(node) != {"kind", "field_id"}:
+            _reject("INVALID_NODE", location, "Alpha field node is malformed")
+        field_id = node.get("field_id")
+        if not isinstance(field_id, str) or field_id not in field_bindings:
+            _reject("UNKNOWN_FIELD", location, f"unknown Alpha field: {field_id}")
+        return dict(node), 0, 1, {field_bindings[field_id]}, {field_id}
+    if kind == "number":
+        if set(node) != {"kind", "value"}:
+            _reject("INVALID_NODE", location, "Alpha number node is malformed")
+        value = node.get("value")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int | float)
+            or not math.isfinite(value)
+        ):
+            _reject("INVALID_LITERAL", location, "Alpha number must be finite")
+        return dict(node), 0, 1, set(), set()
+    if kind == "unary":
+        if set(node) != {"kind", "operator", "operand"}:
+            _reject("INVALID_NODE", location, "Alpha unary node is malformed")
+        if node.get("operator") != "negate" or not isinstance(node.get("operand"), Mapping):
+            _reject("INVALID_OPERATOR", location, "Alpha unary operator is invalid")
+        child, lookback, work, fields, field_ids = _validate_compiled_node(
+            node["operand"],
+            location=f"{location}.operand",
+            field_bindings=field_bindings,
+        )
+        return (
+            {"kind": "unary", "operator": "negate", "operand": child},
+            lookback,
+            work + 1,
+            fields,
+            field_ids,
+        )
+    if kind == "binary":
+        if set(node) != {"kind", "operator", "left", "right"}:
+            _reject("INVALID_NODE", location, "Alpha binary node is malformed")
+        operator = node.get("operator")
+        left = node.get("left")
+        right = node.get("right")
+        if (
+            operator not in {"add", "subtract", "multiply", "divide"}
+            or not isinstance(left, Mapping)
+            or not isinstance(right, Mapping)
+        ):
+            _reject("INVALID_OPERATOR", location, "Alpha binary operator is invalid")
+        left_node, left_lookback, left_work, left_fields, left_ids = _validate_compiled_node(
+            left, location=f"{location}.left", field_bindings=field_bindings
+        )
+        right_node, right_lookback, right_work, right_fields, right_ids = _validate_compiled_node(
+            right, location=f"{location}.right", field_bindings=field_bindings
+        )
+        return (
+            {"kind": "binary", "operator": operator, "left": left_node, "right": right_node},
+            max(left_lookback, right_lookback),
+            left_work + right_work + 1,
+            left_fields | right_fields,
+            left_ids | right_ids,
+        )
+    if kind == "call":
+        if set(node) != {"kind", "identifier", "arguments"}:
+            _reject("INVALID_NODE", location, "Alpha call node is malformed")
+        identifier = node.get("identifier")
+        arguments = node.get("arguments")
+        definition = next(
+            (item for item in BUILTIN_DEFINITIONS if item.identifier == identifier),
+            None,
+        )
+        if definition is None or not isinstance(arguments, list):
+            _reject("INVALID_OPERATOR", location, f"unknown Alpha builtin: {identifier}")
+        if len(arguments) != len(definition.parameters):
+            _reject("INVALID_ARITY", location, f"Alpha builtin {identifier} has invalid arity")
+        compiled_arguments: list[dict[str, object]] = []
+        lookbacks: list[int] = []
+        work = 1
+        fields: set[str] = set()
+        field_ids: set[str] = set()
+        window: int | None = None
+        for index, (argument, parameter) in enumerate(
+            zip(arguments, definition.parameters, strict=True)
+        ):
+            if not isinstance(argument, Mapping):
+                _reject("INVALID_OPERAND", location, "Alpha builtin argument is invalid")
+            if parameter.rule == "window":
+                value = argument.get("value") if argument.get("kind") == "number" else None
+                if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 252:
+                    _reject(
+                        "INVALID_WINDOW",
+                        f"{location}.arguments[{index}]",
+                        "Alpha window must be an integer from 1 to 252",
+                    )
+                window = value
+                compiled_arguments.append(dict(argument))
+                continue
+            child, child_lookback, child_work, child_fields, child_ids = _validate_compiled_node(
+                argument,
+                location=f"{location}.arguments[{index}]",
+                field_bindings=field_bindings,
+            )
+            compiled_arguments.append(child)
+            lookbacks.append(child_lookback)
+            work += child_work
+            fields |= child_fields
+            field_ids |= child_ids
+        child_lookback = max(lookbacks, default=0)
+        return (
+            {"kind": "call", "identifier": identifier, "arguments": compiled_arguments},
+            definition.effective_lookback(child_lookback, window),
+            definition.estimated_work(work, window),
+            fields,
+            field_ids,
+        )
+    _reject("INVALID_NODE", location, "Alpha expression must use the compiled Formula IR")
 
 
-def restore_compiled_alpha(value: Mapping[str, object]) -> ParsedAlpha:
-    """Restore frozen execution IR without consulting the authoring catalog."""
-    if set(value) != {
-        "format",
-        "version",
-        "expression",
-        "execution_tree",
-        "field_names",
-        "field_ids",
-        "effective_lookback",
-    } or (
-        value.get("format") != COMPILED_ALPHA_FORMAT
-        or value.get("version") != COMPILED_ALPHA_VERSION
-    ):
-        raise ValueError("compiled Alpha contract is invalid")
-    expression = value.get("expression")
-    field_names = value.get("field_names")
-    field_ids = value.get("field_ids")
-    lookback = value.get("effective_lookback")
-    if (
-        not isinstance(expression, Mapping)
-        or not isinstance(field_names, list)
-        or not all(isinstance(item, str) and item for item in field_names)
-        or field_names != sorted(set(field_names))
-        or not isinstance(field_ids, list)
-        or not all(isinstance(item, str) and item for item in field_ids)
-        or field_ids != sorted(set(field_ids))
-        or isinstance(lookback, bool)
-        or not isinstance(lookback, int)
-        or not 0 <= lookback <= 252
-    ):
-        raise ValueError("compiled Alpha contract is invalid")
-    tree, restored_names = _restore_execution_node(value.get("execution_tree"))
-    if restored_names != set(field_names):
-        raise ValueError("compiled Alpha fields are invalid")
-    return ParsedAlpha(
-        expression=dict(expression),
-        tree=ast.fix_missing_locations(ast.Expression(body=tree)),
-        field_names=tuple(field_names),
-        field_ids=tuple(field_ids),
-        effective_lookback=lookback,
-    )
-
-
-def _freeze_execution_node(node: ast.AST) -> dict[str, object]:
-    if isinstance(node, ast.Name):
-        return {"kind": "field", "evaluation_name": node.id[1:]}
-    if isinstance(node, ast.Constant):
-        return {"kind": "literal", "value": node.value}
-    if isinstance(node, ast.UnaryOp):
-        return {
-            "kind": "operator",
-            "operator_id": "negate",
-            "operands": [_freeze_execution_node(node.operand)],
-        }
-    if isinstance(node, ast.BinOp):
-        operator_id = {
-            ast.Add: "add",
-            ast.Sub: "subtract",
-            ast.Mult: "multiply",
-            ast.Div: "divide",
-        }.get(type(node.op))
-        if operator_id is None:
-            raise ValueError("validated Alpha contains an unsupported execution node")
-        return {
-            "kind": "operator",
-            "operator_id": operator_id,
-            "operands": [
-                _freeze_execution_node(node.left),
-                _freeze_execution_node(node.right),
-            ],
-        }
-    if isinstance(node, ast.Call):
-        return {
-            "kind": "operator",
-            "operator_id": node.func.id,
-            "operands": [_freeze_execution_node(operand) for operand in node.args],
-        }
-    raise ValueError("validated Alpha contains an unsupported execution node")
-
-
-def _restore_execution_node(value: object) -> tuple[ast.expr, set[str]]:
-    if not isinstance(value, Mapping):
-        raise ValueError("compiled Alpha execution tree is invalid")
-    kind = value.get("kind")
-    if kind == "field" and set(value) == {"kind", "evaluation_name"}:
-        name = value.get("evaluation_name")
-        if not isinstance(name, str) or not name:
-            raise ValueError("compiled Alpha field is invalid")
-        return ast.Name(id=f"f{name}", ctx=ast.Load()), {name}
-    if kind == "literal" and set(value) == {"kind", "value"}:
-        literal = value.get("value")
-        if isinstance(literal, bool) or not isinstance(literal, (int, float)):
-            raise ValueError("compiled Alpha literal is invalid")
-        return ast.Constant(value=literal), set()
-    if kind != "operator" or set(value) != {"kind", "operator_id", "operands"}:
-        raise ValueError("compiled Alpha execution tree is invalid")
-    operator_id = value.get("operator_id")
-    operands = value.get("operands")
-    definition = OPERATOR_BY_ID.get(operator_id) if isinstance(operator_id, str) else None
-    if (
-        definition is None
-        or not isinstance(operands, list)
-        or len(operands) != len(definition.operand_rules)
-    ):
-        raise ValueError("compiled Alpha operator is invalid")
-    restored = [_restore_execution_node(operand) for operand in operands]
-    return (
-        _operator_ast(operator_id, [item[0] for item in restored]),
-        set().union(*(item[1] for item in restored)),
-    )
+def estimate_alpha_run_work(
+    formula_work: int,
+    *,
+    research_session_count: int,
+    universe_instrument_count: int,
+) -> int:
+    if formula_work < 1 or research_session_count < 1 or universe_instrument_count < 0:
+        raise ValueError("Alpha Run work dimensions are invalid")
+    return formula_work * research_session_count * universe_instrument_count
 
 
 def _build_node(
@@ -286,10 +275,10 @@ def _build_node(
     location: str,
     expected_rule: OperandRule,
     field_bindings: Mapping[str, str],
-) -> tuple[ast.expr, int, set[str], set[str]]:
+) -> tuple[dict[str, object], int, int, set[str], set[str]]:
     if expected_rule == "window":
-        expression, lookback, fields = _build_window(node, location)
-        return expression, lookback, fields, set()
+        expression, lookback, work, fields = _build_window(node, location)
+        return expression, lookback, work, fields, set()
     if not isinstance(node, Mapping):
         _reject("MALFORMED_NODE", location, "expression node must be an object")
 
@@ -301,7 +290,7 @@ def _build_node(
         evaluation_name = field_bindings.get(field_id)
         if evaluation_name is None:
             _reject("UNKNOWN_FIELD", location, f"unknown field_id: {field_id}")
-        return ast.Name(id=f"f{evaluation_name}", ctx=ast.Load()), 0, {evaluation_name}, {field_id}
+        return {"kind": "field", "field_id": field_id}, 0, 1, {evaluation_name}, {field_id}
 
     if keys == {"literal"}:
         value = node["literal"]
@@ -313,7 +302,7 @@ def _build_node(
             finite_value = False
         if not finite_value:
             _reject("NON_FINITE_LITERAL", location, "literal must be finite")
-        return ast.Constant(value=value), 0, set(), set()
+        return {"kind": "number", "value": value}, 0, 1, set(), set()
 
     if keys != {"operator_id", "operands"}:
         _reject("MALFORMED_NODE", location, "node has unknown or missing properties")
@@ -343,23 +332,33 @@ def _build_node(
         for index, (operand, rule) in enumerate(zip(operands, operator.operand_rules, strict=True))
     ]
     child_lookback = max((item[1] for item in built), default=0)
-    fields = set().union(*(item[2] for item in built))
-    field_ids = set().union(*(item[3] for item in built))
+    child_work = sum(item[2] for item in built)
+    fields = set().union(*(item[3] for item in built))
+    field_ids = set().union(*(item[4] for item in built))
     if operator.kind == "historical":
         effective_lookback = child_lookback + int(operands[1]["literal"])
     elif operator.kind == "rolling":
         effective_lookback = child_lookback + int(operands[1]["literal"]) - 1
     else:
         effective_lookback = child_lookback
+    if operator.kind == "arithmetic":
+        estimated_work = child_work + 1
+    else:
+        builtin = next(
+            definition for definition in BUILTIN_DEFINITIONS if definition.identifier == operator_id
+        )
+        window = int(operands[1]["literal"]) if operator_id in WINDOW_OPERATOR_IDS else None
+        estimated_work = builtin.estimated_work(child_work, window)
     return (
-        _operator_ast(operator_id, [item[0] for item in built]),
+        _operator_expression(operator_id, [item[0] for item in built]),
         effective_lookback,
+        estimated_work,
         fields,
         field_ids,
     )
 
 
-def _build_window(node: object, location: str) -> tuple[ast.expr, int, set[str]]:
+def _build_window(node: object, location: str) -> tuple[dict[str, object], int, int, set[str]]:
     if not isinstance(node, Mapping) or set(node) != {"literal"}:
         _reject("INVALID_OPERAND", location, "window operand must be an integer literal")
     value = node["literal"]
@@ -367,21 +366,23 @@ def _build_window(node: object, location: str) -> tuple[ast.expr, int, set[str]]
         _reject("INVALID_OPERAND", location, "window operand must be an integer literal")
     if value < 1 or value > 252:
         _reject("WINDOW_OUT_OF_RANGE", location, "window must be between 1 and 252")
-    return ast.Constant(value=value), 0, set()
+    return {"kind": "number", "value": value}, 0, 1, set()
 
 
-def _operator_ast(operator_id: str, operands: list[ast.expr]) -> ast.expr:
-    binary = {
-        "add": ast.Add,
-        "subtract": ast.Sub,
-        "multiply": ast.Mult,
-        "divide": ast.Div,
-    }
-    if operator_type := binary.get(operator_id):
-        return ast.BinOp(left=operands[0], op=operator_type(), right=operands[1])
+def _operator_expression(
+    operator_id: str,
+    operands: list[dict[str, object]],
+) -> dict[str, object]:
+    if operator_id in {"add", "subtract", "multiply", "divide"}:
+        return {
+            "kind": "binary",
+            "operator": operator_id,
+            "left": operands[0],
+            "right": operands[1],
+        }
     if operator_id == "negate":
-        return ast.UnaryOp(op=ast.USub(), operand=operands[0])
-    return ast.Call(func=ast.Name(id=operator_id, ctx=ast.Load()), args=operands, keywords=[])
+        return {"kind": "unary", "operator": "negate", "operand": operands[0]}
+    return {"kind": "call", "identifier": operator_id, "arguments": operands}
 
 
 def _reject(reason_code: str, location: str, message: str) -> None:

@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  browserDraftFromRun,
-  storeResearchDraft,
-  type ResearchRunDraft,
-} from "../definitions/browserDraft";
+  useResearchAsDraft,
+  type FrozenResearchAuthorableInput,
+} from "../research/draft";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -104,19 +103,27 @@ type ResearchResult = {
   };
 };
 
-type ResearchRun = {
+export type ResearchRun = {
   id: string;
   status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  definition_id: string;
-  definition_revision: number;
+  name: string;
+  folder_id: string;
+  created_at: string;
   start_date: string;
   end_date: string;
-  draft: ResearchRunDraft;
+  formula_summary: string;
+  input?: FrozenResearchAuthorableInput;
   failure_reason?: string;
   result?: ResearchResult;
 };
 
 type ResearchRunList = { items: ResearchRun[]; next_cursor: string | null };
+export type ResearchFolderOption = {
+  id: string;
+  name: string;
+  is_default: boolean;
+};
+type ResearchFolderList = { items: ResearchFolderOption[]; next_cursor: null };
 type LoadState = "loading" | "refreshing" | null;
 const FACTOR_HORIZONS = ["1", "5", "20"] as const;
 const ACTIVE_TRACK_LIMIT_DETAIL = "Active DailyTrack limit of 10 reached";
@@ -126,11 +133,17 @@ const ACTIVE_TRACK_LIMIT_MESSAGE =
 export function ResearchRunsPage({ runId }: { runId?: string }) {
   const [run, setRun] = useState<ResearchRun | null>(null);
   const [items, setItems] = useState<ResearchRun[] | null>(null);
+  const [folders, setFolders] = useState<ResearchFolderOption[]>([]);
+  const [folderFilter, setFolderFilter] = useState("");
+  const [folderError, setFolderError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [canceling, setCanceling] = useState(false);
   const [startingTracking, setStartingTracking] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const [folderRefreshGeneration, setFolderRefreshGeneration] = useState(0);
   const loadGeneration = useRef(0);
   const cancelGeneration = useRef(0);
   const cancelController = useRef<AbortController | null>(null);
@@ -138,6 +151,24 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   const trackingGeneration = useRef(0);
   const trackingController = useRef<AbortController | null>(null);
   const trackingRequest = useRef<{ runId: string; requestId: string } | null>(null);
+  const deleteGeneration = useRef(0);
+  const deleteController = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setFolderError(null);
+    void fetch("/api/research-folders", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Research Folders unavailable");
+        const payload = (await response.json()) as ResearchFolderList;
+        setFolders(payload.items);
+      })
+      .catch((reason: unknown) => {
+        if (reason instanceof DOMException && reason.name === "AbortError") return;
+        setFolderError("Research Folders unavailable");
+      });
+    return () => controller.abort();
+  }, [folderRefreshGeneration]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -145,7 +176,11 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     let timeout: number | undefined;
     setError(null);
     setLoadState(refreshGeneration === 0 ? "loading" : "refreshing");
-    const path = runId ? `/api/research-runs/${runId}` : "/api/research-runs";
+    const path = runId
+      ? `/api/research-runs/${runId}`
+      : folderFilter
+        ? `/api/research-runs?folder_id=${encodeURIComponent(folderFilter)}`
+        : "/api/research-runs";
 
     async function load(polling = false) {
       try {
@@ -182,7 +217,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       if (timeout !== undefined) window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [refreshGeneration, runId]);
+  }, [folderFilter, refreshGeneration, runId]);
 
   useEffect(() => () => {
     cancelGeneration.current += 1;
@@ -193,20 +228,17 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     trackingController.current?.abort();
     trackingController.current = null;
     trackingRequest.current = null;
+    deleteGeneration.current += 1;
+    deleteController.current?.abort();
+    deleteController.current = null;
   }, [runId]);
 
   function refresh() {
     setRefreshGeneration((generation) => generation + 1);
   }
 
-  function useAsDraft() {
-    if (run === null) return;
-    const stored = storeResearchDraft(
-      browserDraftFromRun(run.draft),
-      window.localStorage,
-      () => window.confirm("Replace the existing browser draft?"),
-    );
-    if (stored) window.location.assign("/definitions");
+  function refreshFolders() {
+    setFolderRefreshGeneration((generation) => generation + 1);
   }
 
   async function cancel() {
@@ -249,7 +281,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   }
 
   async function startTracking() {
-    if (run === null || run.status !== "succeeded") return;
+    if (run === null || run.status !== "succeeded" || deleting) return;
     const targetRun = run;
     const generation = ++trackingGeneration.current;
     loadGeneration.current += 1;
@@ -300,6 +332,40 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     }
   }
 
+  async function deleteResearch(): Promise<void> {
+    if (
+      run === null
+      || !isTerminalResearch(run.status)
+      || deleting
+      || startingTracking
+    ) return;
+    if (!window.confirm(`Permanently delete ${run.name}? DailyTracks will remain.`)) return;
+    const generation = ++deleteGeneration.current;
+    deleteController.current?.abort();
+    const controller = new AbortController();
+    deleteController.current = controller;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      const response = await fetch(`/api/research-runs/${run.id}`, {
+        method: "DELETE",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Research deletion failed (${response.status})`);
+      if (generation !== deleteGeneration.current) return;
+      window.location.assign("/research-runs");
+    } catch (reason: unknown) {
+      if (reason instanceof DOMException && reason.name === "AbortError") return;
+      if (generation !== deleteGeneration.current) return;
+      setDeleteError(reason instanceof Error ? reason.message : "Research deletion failed");
+    } finally {
+      if (generation === deleteGeneration.current) {
+        deleteController.current = null;
+        setDeleting(false);
+      }
+    }
+  }
+
   if (error) {
     return (
       <section aria-label="Research Runs">
@@ -331,21 +397,20 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             ) : null}
             {run.status === "succeeded" ? (
               <button
-                disabled={startingTracking}
+                disabled={startingTracking || deleting}
                 onClick={() => void startTracking()}
               >
                 {startingTracking ? "Starting Tracking…" : "Start Tracking"}
               </button>
             ) : null}
-            <button disabled={startingTracking} onClick={useAsDraft}>
-              Use as Draft
-            </button>
-            <button
-              disabled={loadState !== null || canceling || startingTracking}
-              onClick={refresh}
-            >
-              Refresh
-            </button>
+            {isTerminalResearch(run.status) ? (
+              <button
+                disabled={deleting || startingTracking}
+                onClick={() => void deleteResearch()}
+              >
+                {deleting ? "Deleting…" : "Delete Research"}
+              </button>
+            ) : null}
           </div>
         </header>
         {loadState === "refreshing" ? (
@@ -353,14 +418,28 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         ) : null}
         <div className="research-run-facts">
           <p><strong>Status</strong> {run.status}</p>
-          <p>
-            <strong>Definition</strong>{" "}
-            <a href={`/definitions/${run.definition_id}`}>
-              Revision {run.definition_revision}
-            </a>
-          </p>
+          <p><strong>Name</strong> {run.name}</p>
+          <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
         </div>
+        {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
+        {deleting ? null : folderError !== null ? (
+          <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
+        ) : folders.length === 0 ? (
+          <p role="status">Loading Research Folders…</p>
+        ) : (
+          <ResearchOrganizationPanel
+            folders={folders}
+            key={`${run.id}:${run.name}:${run.folder_id}`}
+            onOrganized={(organized) => setRun((current) => current === null
+              ? organized
+              : { ...current, ...organized })}
+            run={run}
+          />
+        )}
+        {!deleting && folders.length > 0 && run.input !== undefined && isTerminalResearch(run.status) ? (
+          <UseAsDraftPanel folders={folders} input={run.input} sourceFolderId={run.folder_id} />
+        ) : null}
         {run.status === "failed" && run.failure_reason ? (
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
         ) : null}
@@ -373,16 +452,198 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
   return (
     <section aria-label="Research Runs">
       <h1>Research Runs</h1>
+      {folderError !== null ? (
+        <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
+      ) : folders.length === 0 ? (
+        <p role="status">Loading Research Folders…</p>
+      ) : (
+        <label>Filter by Folder
+          <select
+            aria-label="Filter by Folder"
+            onChange={(event) => setFolderFilter(event.target.value)}
+            value={folderFilter}
+          >
+            <option value="">All Folders</option>
+            {folders.map((folder) => (
+              <option key={folder.id} value={folder.id}>{folder.name}</option>
+            ))}
+          </select>
+        </label>
+      )}
       {items?.length === 0 ? <p>No Research Runs yet.</p> : null}
-      <ol aria-label="Research Runs">
-        {items?.map((item) => (
-          <li key={item.id}>
-            <a href={`/research-runs/${item.id}`}>{item.id}</a>
-            <span> · {item.status} · {item.start_date} to {item.end_date}</span>
-          </li>
-        ))}
-      </ol>
+      <ResearchRunHistory items={items ?? []} />
     </section>
+  );
+}
+
+export function isTerminalResearch(status: ResearchRun["status"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "cancelled";
+}
+
+export function UseAsDraftPanel({
+  folders,
+  input,
+  sourceFolderId,
+  storage = window.localStorage,
+  confirmDiscard = (message) => window.confirm(message),
+  navigate = (path) => window.location.assign(path),
+}: {
+  folders: ResearchFolderOption[];
+  input: FrozenResearchAuthorableInput;
+  sourceFolderId: string;
+  storage?: Pick<Storage, "getItem" | "setItem">;
+  confirmDiscard?: (message: string) => boolean;
+  navigate?: (path: string) => void;
+}) {
+  const [targetFolderId, setTargetFolderId] = useState(sourceFolderId);
+  const [error, setError] = useState<string | null>(null);
+
+  function useAsDraft(): void {
+    setError(null);
+    try {
+      if (!useResearchAsDraft(storage, targetFolderId, input, confirmDiscard)) return;
+      navigate(targetFolderId === "folder_default"
+        ? "/research"
+        : `/research?folder=${encodeURIComponent(targetFolderId)}`);
+    } catch {
+      setError("This Research could not be copied into the browser Draft.");
+    }
+  }
+
+  return (
+    <section aria-label="Reuse Research" className="research-use-as-draft">
+      <h2>Reuse</h2>
+      <p>Copy the frozen research inputs into a browser Draft to inspect or edit them.</p>
+      <label>Target Folder
+        <select
+          aria-label="Target Folder"
+          onChange={(event) => setTargetFolderId(event.target.value)}
+          value={targetFolderId}
+        >
+          {folders.map((folder) => (
+            <option key={folder.id} value={folder.id}>{folder.name}</option>
+          ))}
+        </select>
+      </label>
+      <button onClick={useAsDraft}>Use as Draft</button>
+      {error !== null ? <p role="alert">{error}</p> : null}
+    </section>
+  );
+}
+
+export function ResearchFolderLoadFailure({
+  error,
+  onRetry,
+}: {
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <section aria-label="Research Folder availability">
+      <p role="alert">{error}</p>
+      <button onClick={onRetry}>Retry Folders</button>
+    </section>
+  );
+}
+
+export function ResearchOrganizationPanel({
+  run,
+  folders,
+  onOrganized,
+}: {
+  run: ResearchRun;
+  folders: ResearchFolderOption[];
+  onOrganized: (run: ResearchRun) => void;
+}) {
+  const [name, setName] = useState(run.name);
+  const [folderId, setFolderId] = useState(run.folder_id);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const normalizedName = name.trim();
+  const nameChanged = normalizedName !== "" && normalizedName !== run.name;
+  const folderChanged = folderId !== run.folder_id;
+
+  async function organize(): Promise<void> {
+    if ((!nameChanged && !folderChanged) || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    const body: { name?: string; folder_id?: string } = {};
+    if (nameChanged) body.name = normalizedName;
+    if (folderChanged) body.folder_id = folderId;
+    try {
+      const response = await fetch(`/api/research-runs/${run.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) {
+        let detail = `Research organization failed (${response.status})`;
+        try {
+          const payload = (await response.json()) as { detail?: unknown };
+          if (typeof payload.detail === "string") detail = payload.detail;
+        } catch {
+          // The HTTP status remains a sufficient public failure reason.
+        }
+        throw new Error(detail);
+      }
+      onOrganized((await response.json()) as ResearchRun);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : "Research organization failed");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section aria-label="Research organization" className="research-organization">
+      <h2>Organization</h2>
+      <label>Research name
+        <input
+          aria-label="Research name"
+          disabled={submitting}
+          maxLength={200}
+          onChange={(event) => setName(event.target.value)}
+          value={name}
+        />
+      </label>
+      <label>Research Folder
+        <select
+          aria-label="Research Folder"
+          disabled={submitting}
+          onChange={(event) => setFolderId(event.target.value)}
+          value={folderId}
+        >
+          {folders.map((folder) => (
+            <option key={folder.id} value={folder.id}>{folder.name}</option>
+          ))}
+        </select>
+      </label>
+      <button
+        disabled={submitting || (!nameChanged && !folderChanged)}
+        onClick={() => void organize()}
+      >
+        {submitting ? "Updating…" : "Update organization"}
+      </button>
+      {error !== null ? <p role="alert">{error}</p> : null}
+    </section>
+  );
+}
+
+export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
+  return (
+    <ol aria-label="Research Runs" className="research-run-history">
+      {items.map((item) => (
+        <li key={item.id}>
+          <a href={`/research-runs/${item.id}`}><strong>{item.name}</strong></a>
+          <dl>
+            <div><dt>Run ID</dt><dd><code>{item.id}</code></dd></div>
+            <div><dt>Created</dt><dd><time dateTime={item.created_at}>{item.created_at}</time></dd></div>
+            <div><dt>Status</dt><dd>{item.status}</dd></div>
+            <div><dt>Formula</dt><dd><code>{item.formula_summary}</code></dd></div>
+          </dl>
+        </li>
+      ))}
+    </ol>
   );
 }
 

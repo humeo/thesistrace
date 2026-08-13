@@ -340,7 +340,7 @@ case "$command" in
     postgres_port=$(mapped_port postgres 5432)
     run_phase integration-database-restart run_with_environment env \
       THESISTRACE_DATABASE_RESTART_PHASE=1 \
-      uv run pytest -q tests/acceptance/test_core_definition_dates.py \
+      uv run pytest -q tests/acceptance/test_core_direct_research_run_admission.py \
       -m database_restart --junitxml="$database_restart_report"
     ;;
   e2e)

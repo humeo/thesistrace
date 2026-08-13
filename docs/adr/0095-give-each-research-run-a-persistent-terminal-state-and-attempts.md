@@ -26,3 +26,11 @@ Attempts use the same execution terminal states, but a failed or cancelled
 Attempt leaves the persistent Advance blocked and retryable. The Advance
 identity is scoped to one DailyTrack and target Research Session progression and
 becomes terminal only on success.
+
+## Superseded clauses
+
+ADR-0171 replaces the frozen Research Definition wording with immutable
+ResearchRun input, and ADR-0182 replaces the user-requested rerun action with
+explicit browser-local `Use as Draft` followed by ordinary Run. The persistent
+state machine, Attempt retry, cancellation, and idempotent admission decisions
+above remain accepted.

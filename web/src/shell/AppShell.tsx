@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 const resourceRoutes = [
   { path: "/data", label: "Data" },
-  { path: "/definitions", label: "Definitions" },
+  { path: "/research", label: "Research" },
   { path: "/research-runs", label: "Research Runs" },
   { path: "/daily-tracks", label: "Daily Tracks" },
 ] as const;
@@ -47,7 +47,10 @@ export function AppShell({ currentPath, children }: AppShellProps) {
       <div className="workspace">
         <header className="topbar">
           <div className="breadcrumb"><span>THESIS /</span> {labelForPath(currentPath)}</div>
-          <div className="topbar-meta"><span className="live-pulse" /> Canonical data · local</div>
+          <div className="topbar-actions">
+            <div className="topbar-meta"><span className="live-pulse" /> Canonical data · local</div>
+            <a className="global-new-research" href="/research?new">New Research</a>
+          </div>
         </header>
         <main className="main-content">{children}</main>
       </div>
@@ -56,7 +59,7 @@ export function AppShell({ currentPath, children }: AppShellProps) {
 }
 
 function labelForPath(path: string) {
-  if (path.startsWith("/definitions")) return "DEFINITIONS";
+  if (path.startsWith("/research") && !path.startsWith("/research-runs")) return "RESEARCH";
   if (path.startsWith("/research-runs")) return "RESEARCH RUNS";
   if (path.startsWith("/daily-tracks")) return "DAILY TRACKS";
   return "DATA ROOM";

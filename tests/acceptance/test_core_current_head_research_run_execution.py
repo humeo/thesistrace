@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import json
 import os
 import subprocess
@@ -36,428 +35,29 @@ from thesistrace.daily_track.checkpoint import (
     terminal_strategy_state,
 )
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
-from thesistrace.data.financial_candidate import FinancialCandidateStore
-from thesistrace.data.financial_collection import (
-    CompletedFinancialCollection,
-    FinancialCollectionContract,
-    FinancialDateShard,
-    FinancialShardCheckpoint,
-    RawFinancialBatchStore,
-)
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
-from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
     KernelRunError,
     RunInput,
     advance,
     advance_continuation,
-    continuation_snapshot,
     empty_continuation,
     run,
 )
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
-from thesistrace.research_series import (
-    AlignedResearchData,
-    research_sessions,
-    slice_research_sessions,
-)
+from thesistrace.research_series import research_sessions, slice_research_sessions
 
 
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_composite_alpha_runs_through_http_claim_worker_and_publication(
-    tmp_path: Path,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    sessions = (
-        "2010-01-04",
-        "2010-04-20",
-        "2010-04-21",
-        "2026-08-03",
-        "2026-08-04",
-        "2026-08-05",
-    )
-    generation_id = _publish_composite_head(settings, sessions=sessions)
-    alpha = {
-        "operator_id": "add",
-        "operands": [
-            {
-                "operator_id": "cs_rank",
-                "operands": [{"field_id": "price.close.adjusted"}],
-            },
-            {
-                "operator_id": "cs_rank",
-                "operands": [{"field_id": "total_revenue_latest_fy"}],
-            },
-        ],
-    }
-
-    with TestClient(create_app(settings)) as client:
-        options = client.get("/api/definitions/authoring-options").json()
-        assert "cs_rank" in {item["operator_id"] for item in options["operators"]}
-        assert {
-            "total_revenue_latest_fy",
-            "net_profit_parent_latest_fy",
-            "operating_cash_flow_latest_fy",
-            "total_assets_latest_reported",
-            "total_liabilities_latest_reported",
-            "equity_parent_latest_reported",
-        } <= {item["field_id"] for item in options["fields"]}
-        accepted = client.post(
-            "/api/definitions/run",
-            json=_run_command("composite-e2e", alpha=alpha),
-        )
-        assert accepted.status_code == 200
-        assert accepted.json()["outcome"] == "accepted"
-        run_id = accepted.json()["run"]["id"]
-
-        completed = _run_worker_once(settings)
-        assert completed.returncode == 0, completed.stdout + completed.stderr
-
-        detail = client.get(f"/api/research-runs/{run_id}")
-        assert detail.status_code == 200
-        assert detail.json()["status"] == "succeeded"
-        assert len(detail.json()["result"]["strategy"]["observations"]) == 3
-        stored = _stored_execution(settings, run_id)
-        assert stored["attempt_data_generation_id"] == generation_id
-        assert stored["attempt_status"] == "succeeded"
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_financial_cutoff_rejects_only_financial_formula_before_queueing(
-    tmp_path: Path,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    sessions = (
-        "2010-01-04",
-        "2010-04-20",
-        "2010-04-21",
-        "2026-08-03",
-        "2026-08-04",
-        "2026-08-05",
-    )
-    _publish_composite_head(
-        settings,
-        sessions=sessions,
-        financial_through="2026-08-04",
-    )
-
-    with TestClient(create_app(settings)) as client:
-        financial = client.post(
-            "/api/definitions/run",
-            json=_run_command(
-                "financial-cutoff",
-                alpha={"field_id": "total_revenue_latest_fy"},
-            ),
-        ).json()
-        market = client.post(
-            "/api/definitions/run",
-            json=_run_command("market-past-financial-cutoff"),
-        ).json()
-
-    assert financial["outcome"] == "rejected"
-    assert financial["issues"] == [
-        {
-            "code": "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE",
-            "field": "alpha",
-            "message": "Financial Alpha calculation slice exceeds Financial Coverage",
-        }
-    ]
-    assert market["outcome"] == "accepted"
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_financial_daily_track_blocks_at_cutoff_and_resumes_without_rewriting_history(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    seed_sessions = (
-        "2010-01-04",
-        "2010-04-20",
-        "2010-04-21",
-        "2026-08-03",
-        "2026-08-04",
-        "2026-08-05",
-    )
-    seed_head = _publish_composite_head(
-        settings,
-        sessions=seed_sessions,
-        operation_id="financial-track-seed",
-    )
-    composite_alpha = {
-        "operator_id": "add",
-        "operands": [
-            {
-                "operator_id": "cs_rank",
-                "operands": [{"field_id": "price.close.adjusted"}],
-            },
-            {
-                "operator_id": "cs_rank",
-                "operands": [{"field_id": "total_revenue_latest_fy"}],
-            },
-        ],
-    }
-
-    with TestClient(create_app(settings)) as client:
-        track_ids: dict[str, str] = {}
-        for name, alpha in (
-            ("financial", composite_alpha),
-            ("market", {"field_id": "price.close.adjusted"}),
-        ):
-            accepted = client.post(
-                "/api/definitions/run",
-                json=_run_command(f"{name}-track-seed", alpha=alpha),
-            )
-            assert accepted.status_code == 200
-            run_id = str(accepted.json()["run"]["id"])
-            assert client.app.state.core_runtime.research_runs.process_next() is True
-            activated = client.post(
-                f"/api/research-runs/{run_id}/daily-tracks",
-                json={"request_id": f"{name}-track-activation"},
-            )
-            assert activated.status_code == 201
-            track_ids[name] = str(activated.json()["id"])
-
-        lagged_sessions = (*seed_sessions, "2026-08-06", "2026-08-07")
-        lagged_head = _publish_composite_head(
-            settings,
-            sessions=lagged_sessions,
-            financial_through="2026-08-06",
-            expected_manifest=seed_head,
-            operation_id="financial-track-lagged",
-        )
-        completed = _run_worker_once(settings)
-        assert completed.returncode == 0, completed.stdout + completed.stderr
-
-        blocked = client.get(f"/api/daily-tracks/{track_ids['financial']}").json()
-        assert blocked["status"] == "blocked"
-        assert blocked["strategy_session"] == "2026-08-06"
-        assert blocked["blocked_reason"] == (
-            "Financial Coverage ends before the next Research Session."
-        )
-        market = client.get(f"/api/daily-tracks/{track_ids['market']}").json()
-        assert market["status"] == "active"
-        assert market["strategy_session"] == "2026-08-07"
-        before_history = _tracking_checkpoint_history(settings, track_ids["financial"])
-        assert [item["boundary_session"] for item in before_history] == [
-            "2026-08-05",
-            "2026-08-06",
-        ]
-        blocked_state = _stored_tracking_activation(settings, track_ids["financial"])
-        assert blocked_state["latest_attempt_failure_reason"] == "FinancialCoverageUnavailable"
-        assert blocked_state["active_pin_count"] == 0
-
-        recovered_sessions = (*lagged_sessions, "2026-08-10")
-        recovered_head = _publish_composite_head(
-            settings,
-            sessions=recovered_sessions,
-            financial_through=recovered_sessions[-1],
-            expected_manifest=lagged_head,
-            operation_id="financial-track-recovered",
-        )
-        retry = client.post(
-            f"/api/daily-tracks/{track_ids['financial']}/retry",
-            json={"request_id": "financial-track-retry"},
-        )
-        assert retry.status_code == 202
-        completed = _run_worker_once(settings)
-        assert completed.returncode == 0, completed.stdout + completed.stderr
-
-        recovered = client.get(f"/api/daily-tracks/{track_ids['financial']}").json()
-        assert recovered["status"] == "active"
-        assert recovered["strategy_session"] == recovered_sessions[-1]
-        after_history = _tracking_checkpoint_history(settings, track_ids["financial"])
-        assert after_history[:2] == before_history
-        assert [item["boundary_session"] for item in after_history] == [
-            "2026-08-05",
-            "2026-08-06",
-            "2026-08-10",
-        ]
-        final_state = _stored_tracking_activation(settings, track_ids["financial"])
-        origin = TrackingOrigin.model_validate(final_state["origin"])
-        calculation_sessions = list(recovered_sessions[3:])
-        research_data = (
-            MountedGenerationStore(settings.data_mount)
-            .read_composite_slice(
-                recovered_head,
-                sessions=calculation_sessions,
-                universe_name="top300",
-                neutralization="none",
-                field_bindings={
-                    str(key): str(value)
-                    for key, value in origin.immutable_input["field_bindings"].items()
-                },
-            )
-            .research_data
-        )
-        seed_research_data = slice_research_sessions(
-            research_data,
-            calculation_sessions[:3],
-        )
-        reference_origin = restore_tracking_origin(
-            origin,
-            origin.initial_strategy_state.model_dump(mode="json"),
-            seed_research_data,
-        )
-        reference = advance(
-            AdvanceInput(
-                prior_state=reference_origin,
-                target_research_data=research_data,
-                appended_sessions=calculation_sessions[3:],
-                continuation=advance_continuation(
-                    run_input=reference_origin.run_input_with_research_data(seed_research_data),
-                    prior_continuation=empty_continuation(),
-                    target_research_data=seed_research_data,
-                    appended_sessions=calculation_sessions[:3],
-                ),
-                calculation_scope="forward_tracking",
-            )
-        )
-        first_incremental_data = slice_research_sessions(
-            research_data,
-            calculation_sessions[:4],
-        )
-        incremental = advance(
-            AdvanceInput(
-                prior_state=reference_origin,
-                target_research_data=first_incremental_data,
-                appended_sessions=[calculation_sessions[3]],
-                continuation=advance_continuation(
-                    run_input=reference_origin.run_input_with_research_data(seed_research_data),
-                    prior_continuation=empty_continuation(),
-                    target_research_data=seed_research_data,
-                    appended_sessions=calculation_sessions[:3],
-                ),
-                calculation_scope="forward_tracking",
-            )
-        )
-        incremental = advance(
-            AdvanceInput(
-                prior_state=incremental,
-                target_research_data=research_data,
-                appended_sessions=calculation_sessions[4:],
-                continuation=continuation_snapshot(incremental),
-                calculation_scope="forward_tracking",
-            )
-        )
-        assert (
-            incremental.output_snapshot()["alpha_matrix"]
-            == reference.output_snapshot()["alpha_matrix"]
-        )
-        assert terminal_strategy_state(incremental) == terminal_strategy_state(reference)
-        expected_checkpoint = project_tracking_checkpoint(
-            reference,
-            retained_strategy_sessions=calculation_sessions[3:],
-        )
-        assert (
-            _checkpoint_payload(
-                client.app.state.core_runtime.publication,
-                final_state,
-            )
-            == expected_checkpoint
-        )
-        proof = client.app.state.core_runtime.daily_tracks.verify_persisted_equivalence(
-            track_ids["financial"]
-        )
-        assert proof.status == "equivalent"
-        assert proof.head_session == recovered_sessions[-1]
-
-        stopped = client.post(
-            f"/api/daily-tracks/{track_ids['market']}/stop",
-            json={"request_id": "financial-track-stop-market-control"},
-        )
-        assert stopped.status_code == 202
-        opened_session_slices: list[tuple[str, ...]] = []
-        original_read_composite_slice = MountedGenerationStore.read_composite_slice
-
-        def record_composite_slice(
-            store: MountedGenerationStore,
-            manifest_sha256: str,
-            *,
-            sessions: list[str],
-            universe_name: str,
-            neutralization: str,
-            field_bindings: dict[str, str],
-        ):
-            opened_session_slices.append(tuple(sessions))
-            return original_read_composite_slice(
-                store,
-                manifest_sha256,
-                sessions=sessions,
-                universe_name=universe_name,
-                neutralization=neutralization,
-                field_bindings=field_bindings,
-            )
-
-        monkeypatch.setattr(
-            MountedGenerationStore,
-            "read_composite_slice",
-            record_composite_slice,
-        )
-        processor = DailyTrackService(
-            client.app.state.core_runtime.database,
-            publication=client.app.state.core_runtime.publication,
-            dataset_lifecycle=DatasetLifecycle(
-                client.app.state.core_runtime.database,
-                settings.data_mount,
-            ),
-            generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
-            working_cache_root=tmp_path / "financial-track-working-cache",
-        )
-        cold_sessions = (
-            *recovered_sessions,
-            *_weekday_sessions_after(
-                date.fromisoformat(recovered_sessions[-1]),
-                count=25,
-            ),
-        )
-        cold_head = _publish_composite_head(
-            settings,
-            sessions=cold_sessions,
-            expected_manifest=recovered_head,
-            operation_id="financial-track-cold-cache-rebuild",
-        )
-        assert processor.process_next() is True
-        warm_sessions = (
-            *cold_sessions,
-            *_weekday_sessions_after(date.fromisoformat(cold_sessions[-1]), count=1),
-        )
-        _publish_composite_head(
-            settings,
-            sessions=warm_sessions,
-            expected_manifest=cold_head,
-            operation_id="financial-track-warm-cache-advance",
-        )
-        assert processor.process_next() is True
-        assert opened_session_slices[-1] == tuple(warm_sessions[3:])
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None:
+def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -466,11 +66,11 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-start-head"),
         )
-        assert accepted.status_code == 200
-        run_id = accepted.json()["run"]["id"]
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
         head_b = _publish_head(
             settings,
             sessions=sessions,
@@ -488,23 +88,14 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
         assert set(public_run) == {
             "id",
             "status",
-            "definition_id",
-            "definition_revision",
+            "name",
+            "folder_id",
+            "created_at",
             "start_date",
             "end_date",
-            "draft",
+            "formula_summary",
+            "input",
             "result",
-        }
-        assert public_run["draft"] == {
-            "name": "Attempt-scoped current data",
-            "hypothesis": None,
-            "start_date": sessions[0],
-            "end_date": sessions[-1],
-            "alpha": {"field_id": "price.close.adjusted"},
-            "universe": "top300",
-            "neutralization": "none",
-            "holdings_count": 1,
-            "rebalance_every_sessions": 1,
         }
         assert set(public_run["result"]) == {
             "factor",
@@ -522,10 +113,9 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
         assert len(public_run["result"]["strategy"]["observations"]) == 3
         terminal_account = public_run["result"]["terminal_strategy_state"]
         assert terminal_account["session"] == sessions[-1]
-        assert (
-            terminal_account["net_nav"]
-            == public_run["result"]["strategy"]["observations"][-1]["net_nav"]
-        )
+        assert terminal_account["net_nav"] == public_run["result"]["strategy"][
+            "observations"
+        ][-1]["net_nav"]
         assert set(terminal_account) == {
             "session",
             "gross_cash",
@@ -557,8 +147,6 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
             "id": track["id"],
             "status": "active",
             "seed_run_id": run_id,
-            "definition_id": public_run["definition_id"],
-            "definition_revision": public_run["definition_revision"],
             "result_checksum_sha256": track["result_checksum_sha256"],
             "origin_session": sessions[-1],
             "strategy_session": sessions[-1],
@@ -637,12 +225,15 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
         assert caught_up_detail["data_through_session"] == latest_sessions[-1]
         assert caught_up_detail["lag_sessions"] == 0
         assert [
-            observation["session"] for observation in caught_up_detail["strategy"]["observations"]
+            observation["session"]
+            for observation in caught_up_detail["strategy"]["observations"]
         ] == list(latest_sessions)
         assert "release" not in caught_up.text.lower()
         assert "generation" not in caught_up.text.lower()
         progressed = _stored_tracking_activation(settings, track["id"])
-        assert progressed["current_checkpoint_session"].isoformat() == (latest_sessions[-1])
+        assert progressed["current_checkpoint_session"].isoformat() == (
+            latest_sessions[-1]
+        )
         assert progressed["checkpoint_count"] == 3
         assert progressed["progression_count"] == 2
         assert progressed["active_pin_count"] == 0
@@ -691,10 +282,7 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
         research_data_d = _research_data(canonical_d)
         calendar_d = research_sessions(research_data_d)
         prior_d = slice_research_sessions(research_data_d, calendar_d[:-1])
-        restored_c = restore_tracking_checkpoint(
-            checkpoint_c,
-            research_data=prior_d,
-        )
+        restored_c = restore_tracking_checkpoint(checkpoint_c, research_data=prior_d)
         reference_d = advance(
             AdvanceInput(
                 prior_state=restored_c,
@@ -709,7 +297,9 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
                 calculation_scope="forward_tracking",
             )
         )
-        assert progressed["terminal_strategy_state"] == terminal_strategy_state(reference_d)
+        assert progressed["terminal_strategy_state"] == terminal_strategy_state(
+            reference_d
+        )
 
         _publish_head(
             settings,
@@ -752,7 +342,9 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
         assert stopped_replay.json() == stopped.json()
         assert runtime.daily_tracks.process_next() is False
         stopped_state = _stored_tracking_activation(settings, track["id"])
-        assert stopped_state["current_checkpoint_session"].isoformat() == (latest_sessions[-1])
+        assert stopped_state["current_checkpoint_session"].isoformat() == (
+            latest_sessions[-1]
+        )
         assert stopped_state["checkpoint_count"] == 3
         assert stopped_state["cancelled_progression_count"] == 1
         assert stopped_state["cancelled_attempt_count"] == 1
@@ -775,41 +367,305 @@ def test_attempt_uses_the_generation_frozen_at_admission(tmp_path: Path) -> None
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_use_as_draft_submits_frozen_values_through_ordinary_run_admission(
+def test_research_delete_preserves_track_until_explicit_stop_and_delete(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
-    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
-    head_a = _publish_head(settings, sessions=sessions, price_offset=0)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
-        source = client.post(
-            "/api/definitions/run",
-            json=_run_command("use-as-draft-source"),
-        ).json()["run"]
-        assert client.app.state.core_runtime.research_runs.process_next() is True
-        frozen_draft = client.get(f"/api/research-runs/{source['id']}").json()["draft"]
-        head_b = _publish_head(
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("delete-preserves-track-seed"),
+        )
+        assert accepted.status_code == 202
+        run_id = str(accepted.json()["id"])
+        runtime = client.app.state.core_runtime
+        assert runtime.research_runs.process_next() is True
+        stored_run = _stored_execution(settings, run_id)
+        result_manifest = str(stored_run["result_manifest_sha256"])
+
+        tracking = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "delete-preserves-track-activation"},
+        )
+        assert tracking.status_code == 201
+        track_id = str(tracking.json()["id"])
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 409
+
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 204
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 404
+        assert client.get(f"/api/research-runs/{run_id}").status_code == 404
+        surviving = client.get(f"/api/daily-tracks/{track_id}")
+        assert surviving.status_code == 200
+        assert surviving.json()["origin"]["seed_run_id"] == run_id
+        assert surviving.json()["origin"]["seed_research_available"] is False
+        assert surviving.json()["strategy_session"] == seed_sessions[-1]
+        with runtime.database.transaction() as transaction:
+            assert transaction.execute(
+                "SELECT 1 FROM publication.manifests WHERE sha256 = %s",
+                (result_manifest,),
+            ).fetchone() == {"?column?": 1}
+            research_counts = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM research_runs.runs WHERE id = %s) AS runs,
+                    (SELECT count(*) FROM research_runs.attempts WHERE run_id = %s) AS attempts,
+                    (SELECT count(*) FROM research_runs.admission_requests
+                     WHERE run_id = %s) AS admissions,
+                    (SELECT count(*) FROM research_runs.start_tracking_receipts
+                     WHERE seed_run_id = %s) AS tracking_receipts
+                """,
+                (run_id, run_id, run_id, run_id),
+            ).fetchone()
+        assert research_counts == {
+            "runs": 0,
+            "attempts": 0,
+            "admissions": 0,
+            "tracking_receipts": 0,
+        }
+
+        advanced_sessions = (*seed_sessions, "2026-08-06", "2026-08-07")
+        advanced_head = _publish_head(
             settings,
-            sessions=sessions,
-            price_offset=4,
-            expected_manifest=head_a,
+            sessions=advanced_sessions,
+            price_offset=1,
+            expected_manifest=seed_head,
         )
-
-        copied = client.post(
-            "/api/definitions/run",
-            json={"request_id": "use-as-draft-copy", **frozen_draft},
+        worker_cache_root = tmp_path / "separate-worker-cache"
+        worker_tracks = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            working_cache_root=worker_cache_root,
         )
+        assert worker_tracks.process_next() is True
+        worker_cache_paths = list(worker_cache_root.glob("*.json"))
+        assert len(worker_cache_paths) == 1
+        advanced = client.get(f"/api/daily-tracks/{track_id}")
+        assert advanced.status_code == 200
+        assert advanced.json()["strategy_session"] == advanced_sessions[-1]
+        assert advanced.json()["origin"]["seed_research_available"] is False
 
-        assert copied.status_code == 200
-        assert copied.json()["outcome"] == "accepted"
-        copied_run_id = copied.json()["run"]["id"]
-        assert copied_run_id != source["id"]
-        copied_input = _stored_run_input(settings, copied_run_id)
-        assert copied_input["definition"]["content"] == frozen_draft
-        assert copied_input["data_generation_manifest_sha256"] == head_b
+        with runtime.database.transaction() as transaction:
+            checkpoint_manifests = {
+                str(row["manifest_sha256"])
+                for row in transaction.execute(
+                    """
+                    SELECT manifest_sha256
+                    FROM daily_tracks.session_checkpoints
+                    WHERE track_id = %s
+                    """,
+                    (track_id,),
+                ).fetchall()
+            }
+            owned_manifests = checkpoint_manifests | {result_manifest}
+            owned_objects = {
+                str(row["object_sha256"])
+                for row in transaction.execute(
+                    """
+                    SELECT object_sha256
+                    FROM publication.manifest_objects
+                    WHERE manifest_sha256 = ANY(%s)
+                    """,
+                    (list(owned_manifests),),
+                ).fetchall()
+            }
+        assert checkpoint_manifests
+        assert owned_objects
+
+        stopped = client.post(
+            f"/api/daily-tracks/{track_id}/stop",
+            json={"request_id": "delete-preserves-track-stop"},
+        )
+        assert stopped.status_code == 202
+        assert stopped.json()["status"] == "stopped"
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 204
+        assert worker_cache_paths[0].is_file()
+        cache_mode = worker_cache_root.stat().st_mode
+        worker_cache_root.chmod(0o500)
+        try:
+            assert worker_tracks.reconcile_working_cache() == 0
+            assert worker_cache_paths[0].is_file()
+        finally:
+            worker_cache_root.chmod(cache_mode)
+        assert worker_tracks.reconcile_working_cache() == 1
+        assert not worker_cache_paths[0].exists()
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 404
+        assert client.get(f"/api/daily-tracks/{track_id}").status_code == 404
+
+        with runtime.database.transaction() as transaction:
+            track_counts = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM daily_tracks.tracks WHERE id = %s) AS tracks,
+                    (SELECT count(*) FROM daily_tracks.session_tracking_states
+                     WHERE track_id = %s) AS states,
+                    (SELECT count(*) FROM daily_tracks.session_checkpoints
+                     WHERE track_id = %s) AS checkpoints,
+                    (SELECT count(*) FROM daily_tracks.session_progressions
+                     WHERE track_id = %s) AS progressions,
+                    (SELECT count(*) FROM daily_tracks.session_progression_attempts
+                     WHERE track_id = %s) AS attempts,
+                    (SELECT count(*) FROM daily_tracks.stop_receipts
+                     WHERE track_id = %s) AS stop_receipts,
+                    (SELECT count(*) FROM daily_tracks.retry_receipts
+                     WHERE track_id = %s) AS retry_receipts,
+                    (SELECT count(*) FROM publication.manifests
+                     WHERE sha256 = ANY(%s)) AS owned_manifests,
+                    (SELECT count(*) FROM publication.objects
+                     WHERE sha256 = ANY(%s)) AS owned_objects,
+                    (SELECT count(*) FROM publication.object_deletions) AS pending_deletions
+                """,
+                (
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    track_id,
+                    list(owned_manifests),
+                    list(owned_objects),
+                ),
+            ).fetchone()
+        assert track_counts == {
+            "tracks": 0,
+            "states": 0,
+            "checkpoints": 0,
+            "progressions": 0,
+            "attempts": 0,
+            "stop_receipts": 0,
+            "retry_receipts": 0,
+            "owned_manifests": 0,
+            "owned_objects": 0,
+            "pending_deletions": 0,
+        }
+        current_head = DatasetLifecycle(
+            runtime.database,
+            settings.data_mount,
+        ).current_pointer()
+        assert current_head is not None
+        assert current_head.generation_manifest_sha256 == advanced_head
+        assert (
+            MountedGenerationStore(settings.data_mount)
+            .validate_generation(advanced_head)
+            .manifest_sha256
+            == advanced_head
+        )
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=settings.s3_endpoint_url,
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+        )
+        remaining_keys = {
+            str(item["Key"])
+            for item in s3.list_objects_v2(
+                Bucket=settings.s3_bucket,
+                Prefix="publication/v1/sha256/",
+            ).get("Contents", [])
+        }
+        assert not {
+            f"publication/v1/sha256/{digest[:2]}/{digest}"
+            for digest in owned_objects
+        } & remaining_keys
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_delete_races_linearize_with_cancel_and_stop(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(
+        settings,
+        sessions=("2026-08-03", "2026-08-04", "2026-08-05"),
+        price_offset=0,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        queued = client.post(
+            "/api/research-runs",
+            json=_run_command("delete-cancel-race"),
+        )
+        run_id = str(queued.json()["id"])
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 409
+        run_barrier = Barrier(2)
+
+        def cancel_run():
+            run_barrier.wait(timeout=10)
+            return client.post(
+                f"/api/research-runs/{run_id}/cancel",
+                json={"request_id": "delete-cancel-race-cancel"},
+            )
+
+        def delete_run():
+            run_barrier.wait(timeout=10)
+            return client.delete(f"/api/research-runs/{run_id}")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            cancel_future = executor.submit(cancel_run)
+            delete_future = executor.submit(delete_run)
+            cancel_response = cancel_future.result(timeout=30)
+            delete_response = delete_future.result(timeout=30)
+        assert cancel_response.status_code in {200, 404}
+        assert delete_response.status_code in {204, 409}
+        remaining_run = client.get(f"/api/research-runs/{run_id}")
+        if remaining_run.status_code == 200:
+            assert remaining_run.json()["status"] == "cancelled"
+            assert client.delete(f"/api/research-runs/{run_id}").status_code == 204
+        else:
+            assert remaining_run.status_code == 404
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 404
+
+        seed = client.post(
+            "/api/research-runs",
+            json=_run_command("delete-stop-race"),
+        )
+        seed_run_id = str(seed.json()["id"])
+        runtime = client.app.state.core_runtime
+        assert runtime.research_runs.process_next() is True
+        tracking = client.post(
+            f"/api/research-runs/{seed_run_id}/daily-tracks",
+            json={"request_id": "delete-stop-race-activation"},
+        )
+        track_id = str(tracking.json()["id"])
+        track_barrier = Barrier(2)
+
+        def stop_track():
+            track_barrier.wait(timeout=10)
+            return client.post(
+                f"/api/daily-tracks/{track_id}/stop",
+                json={"request_id": "delete-stop-race-stop"},
+            )
+
+        def delete_track():
+            track_barrier.wait(timeout=10)
+            return client.delete(f"/api/daily-tracks/{track_id}")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            stop_future = executor.submit(stop_track)
+            delete_future = executor.submit(delete_track)
+            stop_response = stop_future.result(timeout=30)
+            delete_response = delete_future.result(timeout=30)
+        assert stop_response.status_code in {202, 404}
+        assert delete_response.status_code in {204, 409}
+        remaining_track = client.get(f"/api/daily-tracks/{track_id}")
+        if remaining_track.status_code == 200:
+            assert remaining_track.json()["status"] == "stopped"
+            assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 204
+        else:
+            assert remaining_track.status_code == 404
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 404
 
 
 @pytest.mark.skipif(
@@ -830,11 +686,11 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         run_ids: list[str] = []
         for index in range(11):
             accepted = client.post(
-                "/api/definitions/run",
+                "/api/research-runs",
                 json=_run_command(f"current-track-capacity-{index}"),
             )
-            assert accepted.status_code == 200
-            run_ids.append(str(accepted.json()["run"]["id"]))
+            assert accepted.status_code == 202
+            run_ids.append(str(accepted.json()["id"]))
         # Keep one real Worker process boundary; the remaining capacity seeds still
         # execute through the production service, Kernel, PostgreSQL, and RustFS.
         completed = _run_worker_once(settings)
@@ -856,11 +712,17 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             )
 
         with ThreadPoolExecutor(max_workers=4) as executor:
-            same_seed_futures = [executor.submit(start_same_seed, index) for index in range(4)]
-            same_seed_responses = [future.result(timeout=30) for future in same_seed_futures]
+            same_seed_futures = [
+                executor.submit(start_same_seed, index) for index in range(4)
+            ]
+            same_seed_responses = [
+                future.result(timeout=30) for future in same_seed_futures
+            ]
         assert [response.status_code for response in same_seed_responses] == [201] * 4
         first_track = same_seed_responses[0].json()
-        assert [response.json() for response in same_seed_responses] == [first_track] * 4
+        assert [response.json() for response in same_seed_responses] == [
+            first_track
+        ] * 4
         assert client.get("/api/daily-tracks").json()["items"] == [first_track]
 
         tracks: list[dict[str, object]] = [first_track]
@@ -883,8 +745,12 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             )
 
         with ThreadPoolExecutor(max_workers=2) as executor:
-            capacity_futures = [executor.submit(race_capacity, index) for index in range(2)]
-            capacity_responses = [future.result(timeout=30) for future in capacity_futures]
+            capacity_futures = [
+                executor.submit(race_capacity, index) for index in range(2)
+            ]
+            capacity_responses = [
+                future.result(timeout=30) for future in capacity_futures
+            ]
         assert sorted(response.status_code for response in capacity_responses) == [
             201,
             409,
@@ -895,16 +761,13 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             if response.status_code == 409
         )
         rejected_run_id = run_ids[9 + rejected_index]
-        assert (
-            len(
-                [
-                    item
-                    for item in client.get("/api/daily-tracks").json()["items"]
-                    if item["status"] in {"active", "blocked"}
-                ]
-            )
-            == 10
-        )
+        assert len(
+            [
+                item
+                for item in client.get("/api/daily-tracks").json()["items"]
+                if item["status"] in {"active", "blocked"}
+            ]
+        ) == 10
 
         stopped = client.post(
             f"/api/daily-tracks/{tracks[0]['id']}/stop",
@@ -918,7 +781,9 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         assert admitted.status_code == 201
         final_tracks = client.get("/api/daily-tracks").json()["items"]
         assert len(final_tracks) == 11
-        assert len([item for item in final_tracks if item["status"] in {"active", "blocked"}]) == 10
+        assert len(
+            [item for item in final_tracks if item["status"] in {"active", "blocked"}]
+        ) == 10
 
 
 @pytest.mark.skipif(
@@ -938,11 +803,11 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("tracking-live-owner"),
         )
-        assert accepted.status_code == 200
-        run_id = str(accepted.json()["run"]["id"])
+        assert accepted.status_code == 202
+        run_id = str(accepted.json()["id"])
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         tracking = client.post(
@@ -992,7 +857,9 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
                     track_id,
                     after_heartbeat=initial_timing["heartbeat_at"],
                 )
-                assert renewed_timing["lease_expires_at"] > initial_timing["lease_expires_at"]
+                assert renewed_timing["lease_expires_at"] > initial_timing[
+                    "lease_expires_at"
+                ]
                 assert duplicate.process_next() is False
             finally:
                 release_kernel.set()
@@ -1023,11 +890,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         tracks: list[dict[str, object]] = []
         for index in range(2):
             accepted = client.post(
-                "/api/definitions/run",
+                "/api/research-runs",
                 json=_run_command(f"track-recovery-seed-{index}"),
             )
-            assert accepted.status_code == 200
-            run_id = accepted.json()["run"]["id"]
+            assert accepted.status_code == 202
+            run_id = accepted.json()["id"]
             completed = _run_worker_once(settings)
             assert completed.returncode == 0, completed.stdout + completed.stderr
             tracking = client.post(
@@ -1071,7 +938,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         )
         assert "injected" not in blocked.text
         failed_state = _stored_tracking_activation(settings, str(first_track["id"]))
-        assert failed_state["current_checkpoint_session"].isoformat() == (seed_sessions[-1])
+        assert failed_state["current_checkpoint_session"].isoformat() == (
+            seed_sessions[-1]
+        )
         assert failed_state["checkpoint_count"] == 1
         assert failed_state["blocked_progression_count"] == 1
         assert failed_state["failed_attempt_count"] == 1
@@ -1082,7 +951,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         control = client.get(f"/api/daily-tracks/{control_track['id']}").json()
         assert control["strategy_session"] == catch_up_sessions[-1]
         assert control["lag_sessions"] == 0
-        assert client.get(f"/api/daily-tracks/{first_track['id']}").json()["status"] == "blocked"
+        assert client.get(f"/api/daily-tracks/{first_track['id']}").json()[
+            "status"
+        ] == "blocked"
 
     recovered_sessions = (*catch_up_sessions, "2026-08-11")
     recovered_head = _publish_head(
@@ -1109,7 +980,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             json={"request_id": "track-recovery-retry"},
         )
         assert retry_conflict.status_code == 409
-        assert retry_conflict.json() == {"detail": "DailyTrack Retry request_id conflicts"}
+        assert retry_conflict.json() == {
+            "detail": "DailyTrack Retry request_id conflicts"
+        }
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
@@ -1153,7 +1026,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
                 target_research_data=recovered_research_data,
                 appended_sessions=list(recovered_sessions[len(seed_sessions) :]),
                 continuation=advance_continuation(
-                    run_input=recovery_origin.run_input_with_research_data(recovery_prior_data),
+                    run_input=recovery_origin.run_input_with_research_data(
+                        recovery_prior_data
+                    ),
                     prior_continuation=empty_continuation(),
                     target_research_data=recovery_prior_data,
                     appended_sessions=recovered_calendar[: len(seed_sessions)],
@@ -1201,7 +1076,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
                 settings,
                 str(first_track["id"]),
             )
-            assert lost_state["current_checkpoint_session"].isoformat() == (recovered_sessions[-1])
+            assert lost_state["current_checkpoint_session"].isoformat() == (
+                recovered_sessions[-1]
+            )
             assert lost_state["checkpoint_count"] == 2
             assert lost_state["blocked_progression_count"] == 1
             assert lost_state["latest_attempt_failure_reason"] == "WorkerLost"
@@ -1234,11 +1111,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         cache_run_ids: list[str] = []
         for index in range(2):
             accepted = restarted.post(
-                "/api/definitions/run",
+                "/api/research-runs",
                 json=_run_command(f"track-recovery-cache-seed-{index}"),
             )
-            assert accepted.status_code == 200
-            cache_run_ids.append(str(accepted.json()["run"]["id"]))
+            assert accepted.status_code == 202
+            cache_run_ids.append(str(accepted.json()["id"]))
         for _run_id in cache_run_ids:
             completed = _run_worker_once(settings)
             assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -1288,14 +1165,18 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         )
         assert intact_processor.process_next() is True
         assert cache_processor.process_next() is True
-        intact_detail = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
-        cache_detail = restarted.get(f"/api/daily-tracks/{control_track['id']}").json()
+        intact_detail = restarted.get(
+            f"/api/daily-tracks/{first_track['id']}"
+        ).json()
+        cache_detail = restarted.get(
+            f"/api/daily-tracks/{control_track['id']}"
+        ).json()
         assert intact_detail["factor"] == cache_detail["factor"]
         assert intact_detail["strategy"] == cache_detail["strategy"]
         assert cache_detail["strategy_session"] == cache_sessions[-1]
-        assert [item["session"] for item in cache_detail["strategy"]["observations"]] == list(
-            cache_sessions
-        )
+        assert [
+            item["session"] for item in cache_detail["strategy"]["observations"]
+        ] == list(cache_sessions)
         assert cache_path.exists()
         assert cache_path.stat().st_size <= MAX_WORKING_CACHE_BYTES
         intact_checkpoint = _stored_tracking_activation(
@@ -1315,7 +1196,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             settings,
             str(first_track["id"]),
         )
-        checkpoint_manifest = str(authoritative["current_checkpoint_manifest_sha256"])
+        checkpoint_manifest = str(
+            authoritative["current_checkpoint_manifest_sha256"]
+        )
         _remove_manifest_object_reference(settings, checkpoint_manifest)
         unavailable_sessions = (*cache_sessions, "2026-08-24")
         _publish_head(
@@ -1326,7 +1209,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         )
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
-        intact_after_failure = restarted.get(f"/api/daily-tracks/{control_track['id']}").json()
+        intact_after_failure = restarted.get(
+            f"/api/daily-tracks/{control_track['id']}"
+        ).json()
         assert intact_after_failure["strategy_session"] == unavailable_sessions[-1]
         unavailable = restarted.get(f"/api/daily-tracks/{first_track['id']}")
         assert unavailable.status_code == 503
@@ -1336,8 +1221,12 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             str(first_track["id"]),
         )
         assert unavailable_state["track_status"] == "blocked"
-        assert unavailable_state["current_checkpoint_session"].isoformat() == (cache_sessions[-1])
-        assert unavailable_state["checkpoint_count"] == authoritative["checkpoint_count"]
+        assert unavailable_state["current_checkpoint_session"].isoformat() == (
+            cache_sessions[-1]
+        )
+        assert unavailable_state["checkpoint_count"] == authoritative[
+            "checkpoint_count"
+        ]
         assert unavailable_state["active_pin_count"] == 0
 
 
@@ -1373,11 +1262,11 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("forward-only-seed-run", alpha=alpha),
         )
-        assert accepted.status_code == 200
-        run_id = str(accepted.json()["run"]["id"])
+        assert accepted.status_code == 202
+        run_id = str(accepted.json()["id"])
         completed = _run_worker_once(settings)
         assert completed.returncode == 0, completed.stdout + completed.stderr
         tracking = client.post(
@@ -1395,7 +1284,9 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert '"orders"' not in before_checkpoint_text
         assert '"fills"' not in before_checkpoint_text
         before_detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert _position_ids(before_state["terminal_strategy_state"]) == {"equity:000001.SZ"}
+        assert _position_ids(before_state["terminal_strategy_state"]) == {
+            "equity:000001.SZ"
+        }
 
         corrected = _two_instrument_canonical(seed_sessions, corrected=True)
         replay_root = tmp_path / "operator-replays"
@@ -1421,10 +1312,9 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert completed.returncode == 0, completed.stdout + completed.stderr
         assert _tracking_checkpoint_history(settings, track_id) == before_history
         unchanged_state = _stored_tracking_activation(settings, track_id)
-        assert (
-            unchanged_state["current_checkpoint_manifest_sha256"]
-            == before_state["current_checkpoint_manifest_sha256"]
-        )
+        assert unchanged_state["current_checkpoint_manifest_sha256"] == before_state[
+            "current_checkpoint_manifest_sha256"
+        ]
         assert _checkpoint_payload(runtime.publication, unchanged_state) == before_payload
         assert client.get(f"/api/daily-tracks/{track_id}").json() == before_detail
         overview = client.get("/api/data")
@@ -1469,130 +1359,40 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         impact_checkpoint_text = json.dumps(impact_payload, sort_keys=True)
         assert '"orders"' not in impact_checkpoint_text
         assert '"fills"' not in impact_checkpoint_text
-        assert _position_ids(impact_state["terminal_strategy_state"]) == {"equity:000002.SZ"}
+        assert _position_ids(impact_state["terminal_strategy_state"]) == {
+            "equity:000002.SZ"
+        }
 
+        seed_research_data = _research_data(seed_canonical)
         counterfactual_prior = restore_tracking_origin(
             TrackingOrigin.model_validate(before_state["origin"]),
             before_state["terminal_strategy_state"],
-            _research_data(seed_canonical),
+            seed_research_data,
         )
         uncorrected_impact = _two_instrument_canonical(
             impact_sessions,
             corrected=False,
         )
+        uncorrected_research_data = _research_data(uncorrected_impact)
         counterfactual = advance(
             AdvanceInput(
                 prior_state=counterfactual_prior,
-                target_research_data=_research_data(uncorrected_impact),
+                target_research_data=uncorrected_research_data,
                 appended_sessions=list(impact_sessions[len(seed_sessions) :]),
                 continuation=advance_continuation(
                     run_input=counterfactual_prior.run_input_with_research_data(
-                        _research_data(seed_canonical)
+                        seed_research_data
                     ),
                     prior_continuation=empty_continuation(),
-                    target_research_data=_research_data(seed_canonical),
+                    target_research_data=seed_research_data,
                     appended_sessions=list(seed_sessions),
                 ),
                 calculation_scope="forward_tracking",
             )
         )
-        assert _position_ids(terminal_strategy_state(counterfactual)) == {"equity:000001.SZ"}
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_working_cache_and_cold_rebuild_match_after_dependency_correction(
-    tmp_path: Path,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    seed_sessions = _weekday_sessions_after(date(2026, 6, 30), count=25)
-    seed_head = _publish_canonical_head(
-        settings,
-        _two_instrument_canonical(seed_sessions, corrected=False),
-        operation_id="cache-correction-seed",
-    )
-    alpha = {
-        "operator_id": "ts_mean",
-        "operands": [
-            {"field_id": "price.close.adjusted"},
-            {"literal": 20},
-        ],
-    }
-
-    with TestClient(create_app(settings)) as client:
-        track_ids: list[str] = []
-        for index in range(2):
-            accepted = client.post(
-                "/api/definitions/run",
-                json=_run_command(
-                    f"cache-correction-run-{index}",
-                    alpha=alpha,
-                    start_date=seed_sessions[20],
-                    end_date=seed_sessions[-1],
-                ),
-            )
-            assert accepted.status_code == 200
-            completed = _run_worker_once(settings)
-            assert completed.returncode == 0, completed.stdout + completed.stderr
-            tracking = client.post(
-                f"/api/research-runs/{accepted.json()['run']['id']}/daily-tracks",
-                json={"request_id": f"cache-correction-track-{index}"},
-            )
-            assert tracking.status_code == 201
-            track_ids.append(str(tracking.json()["id"]))
-
-        runtime = client.app.state.core_runtime
-        cache_processor = DailyTrackService(
-            runtime.database,
-            publication=runtime.publication,
-            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
-            generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
-            working_cache_root=tmp_path / "correction-working-cache",
-        )
-        cold_processor = DailyTrackService(
-            runtime.database,
-            publication=runtime.publication,
-            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
-            generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
-        )
-        first_sessions = (
-            *seed_sessions,
-            *_weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=500),
-        )
-        first_head = _publish_canonical_head(
-            settings,
-            _two_instrument_canonical(first_sessions, corrected=False),
-            operation_id="cache-correction-mature",
-            expected_manifest=seed_head,
-        )
-        assert cache_processor.process_next() is True
-        assert cold_processor.process_next() is True
-
-        corrected_sessions = (
-            *first_sessions,
-            *_weekday_sessions_after(date.fromisoformat(first_sessions[-1]), count=1),
-        )
-        _publish_canonical_head(
-            settings,
-            _two_instrument_canonical(corrected_sessions, corrected=True),
-            operation_id="cache-correction-historical-row",
-            expected_manifest=first_head,
-        )
-        assert cache_processor.process_next() is True
-        assert cold_processor.process_next() is True
-
-        cached_state = _stored_tracking_activation(settings, track_ids[0])
-        cold_state = _stored_tracking_activation(settings, track_ids[1])
-        assert _checkpoint_payload(
-            runtime.publication,
-            cached_state,
-        ) == _checkpoint_payload(runtime.publication, cold_state)
+        assert _position_ids(terminal_strategy_state(counterfactual)) == {
+            "equity:000001.SZ"
+        }
 
 
 @pytest.mark.skipif(
@@ -1605,22 +1405,24 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
     initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     head_a = _publish_head(settings, sessions=sessions, price_offset=0)
-    canonical_a = open_complete_refresh_basis(MountedGenerationStore(settings.data_mount), head_a)
+    canonical_a = open_complete_refresh_basis(
+        MountedGenerationStore(settings.data_mount), head_a
+    )
     claimed = Event()
     continue_execution = Event()
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-pinned-head"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
 
         def barrier(stage: str, _run_id: str) -> None:
             if stage == "claimed":
                 claimed.set()
-                assert continue_execution.wait(timeout=30)
+                assert continue_execution.wait(timeout=5)
 
         processor = ResearchRunService(
             runtime.database,
@@ -1631,31 +1433,17 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
         )
         worker = Thread(target=processor.process_next)
         worker.start()
-        try:
-            assert claimed.wait(timeout=5)
-            assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
-            replay_root = tmp_path / "attempt-refresh-replay"
-            replay_root.mkdir()
-            canonical_b = _canonical(
-                sessions,
-                price_offset=9,
-                available_field_id="price.close.adjusted",
-            )
-            refreshed = _refresh_via_private_operator(
-                settings,
-                replay_root=replay_root,
-                idempotency_key="attempt-pinned-refresh",
-                canonical=canonical_b,
-                request_start=sessions[0],
-                include_industry_membership=False,
-            )
-            assert refreshed["outcome"] == "published"
-            pointer = DatasetLifecycle(runtime.database, settings.data_mount).current_pointer()
-            assert pointer is not None
-            head_b = pointer.generation_manifest_sha256
-        finally:
-            continue_execution.set()
-            worker.join(timeout=15)
+        assert claimed.wait(timeout=5)
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 409
+        head_b = _publish_head(
+            settings,
+            sessions=sessions,
+            price_offset=9,
+            expected_manifest=head_a,
+        )
+        continue_execution.set()
+        worker.join(timeout=10)
         assert not worker.is_alive()
 
         stored = _stored_execution(settings, run_id)
@@ -1699,35 +1487,24 @@ def test_claim_commits_before_generation_parquet_is_opened(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("claim-before-generation-open"),
         )
-        assert accepted.status_code == 200
-        run_id = accepted.json()["run"]["id"]
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         original_read_composite_slice = MountedGenerationStore.read_composite_slice
 
         def blocking_read_composite_slice(
             store: MountedGenerationStore,
             manifest_sha256: str,
-            *,
-            sessions: list[str],
-            universe_name: str,
-            neutralization: str,
-            field_bindings: dict[str, str],
+            **kwargs,
         ):
             opened_generations.append(manifest_sha256)
             generation_opened.set()
             if not allow_generation_open.wait(timeout=10):
                 raise AssertionError("Generation open was not released by the test")
-            return original_read_composite_slice(
-                store,
-                manifest_sha256,
-                sessions=sessions,
-                universe_name=universe_name,
-                neutralization=neutralization,
-                field_bindings=field_bindings,
-            )
+            return original_read_composite_slice(store, manifest_sha256, **kwargs)
 
         monkeypatch.setattr(
             MountedGenerationStore,
@@ -1751,9 +1528,9 @@ def test_claim_commits_before_generation_parquet_is_opened(
         worker.start()
         try:
             assert generation_opened.wait(timeout=5)
-            status_during_generation_open = client.get(f"/api/research-runs/{run_id}").json()[
-                "status"
-            ]
+            status_during_generation_open = client.get(
+                f"/api/research-runs/{run_id}"
+            ).json()["status"]
         finally:
             allow_generation_open.set()
             worker.join(timeout=15)
@@ -1769,127 +1546,7 @@ def test_claim_commits_before_generation_parquet_is_opened(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_daily_track_claim_commits_before_generation_parquet_is_opened(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
-    drop_product_schemas(settings)
-    initialize_core(settings.database_url)
-    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
-    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
-    generation_opened = Event()
-    allow_generation_open = Event()
-    worker_errors: list[BaseException] = []
-
-    with TestClient(create_app(settings)) as client:
-        accepted = client.post(
-            "/api/definitions/run",
-            json=_run_command("daily-track-claim-before-generation-open"),
-        )
-        assert accepted.status_code == 200
-        run_id = accepted.json()["run"]["id"]
-        runtime = client.app.state.core_runtime
-        assert runtime.research_runs.process_next() is True
-        activated = client.post(
-            f"/api/research-runs/{run_id}/daily-tracks",
-            json={"request_id": "daily-track-claim-before-generation-open"},
-        )
-        assert activated.status_code == 201
-        track_id = activated.json()["id"]
-        target_sessions = (*seed_sessions, "2026-08-06")
-        target_head = _publish_head(
-            settings,
-            sessions=target_sessions,
-            price_offset=1,
-            expected_manifest=seed_head,
-        )
-        original_read_composite_slice = MountedGenerationStore.read_composite_slice
-
-        def blocking_read_composite_slice(
-            store: MountedGenerationStore,
-            manifest_sha256: str,
-            *,
-            sessions: list[str],
-            universe_name: str,
-            neutralization: str,
-            field_bindings: dict[str, str],
-        ):
-            generation_opened.set()
-            if not allow_generation_open.wait(timeout=10):
-                raise AssertionError("Generation open was not released by the test")
-            return original_read_composite_slice(
-                store,
-                manifest_sha256,
-                sessions=sessions,
-                universe_name=universe_name,
-                neutralization=neutralization,
-                field_bindings=field_bindings,
-            )
-
-        monkeypatch.setattr(
-            MountedGenerationStore,
-            "read_composite_slice",
-            blocking_read_composite_slice,
-        )
-        processor = DailyTrackService(
-            runtime.database,
-            publication=runtime.publication,
-            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
-            generation_store=MountedGenerationStore(settings.data_mount),
-            read_result_bundle=read_result_bundle,
-        )
-
-        def process_one() -> None:
-            try:
-                processor.process_next()
-            except BaseException as error:  # pragma: no cover - asserted below
-                worker_errors.append(error)
-
-        worker = Thread(target=process_one)
-        worker.start()
-        try:
-            assert generation_opened.wait(timeout=5)
-            with runtime.database.transaction() as transaction:
-                committed_claim = transaction.execute(
-                    """
-                    SELECT attempt.status AS attempt_status,
-                           progression.status AS progression_status,
-                           attempt.data_generation_id,
-                           pin.status AS pin_status
-                    FROM daily_tracks.session_progression_attempts AS attempt
-                    JOIN daily_tracks.session_progressions AS progression
-                      ON progression.id = attempt.progression_id
-                    JOIN data.generation_pins AS pin
-                      ON pin.id = attempt.generation_pin_id
-                    WHERE progression.track_id = %s
-                    ORDER BY attempt.ordinal DESC
-                    LIMIT 1
-                    """,
-                    (track_id,),
-                ).fetchone()
-        finally:
-            allow_generation_open.set()
-            worker.join(timeout=15)
-
-        assert committed_claim is not None
-        assert committed_claim["attempt_status"] == "running"
-        assert committed_claim["progression_status"] == "running"
-        assert committed_claim["data_generation_id"] == target_head
-        assert committed_claim["pin_status"] == "active"
-        assert not worker.is_alive()
-        assert worker_errors == []
-        assert (
-            client.get(f"/api/daily-tracks/{track_id}").json()["strategy_session"]
-            == (target_sessions[-1])
-        )
-
-
-@pytest.mark.skipif(
-    not core_environment_is_configured(),
-    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
-)
-def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> None:
+def test_insufficient_warmup_is_rejected_before_run_creation(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -1897,8 +1554,8 @@ def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> N
     _publish_head(settings, sessions=sessions, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
-        accepted = client.post(
-            "/api/definitions/run",
+        rejected = client.post(
+            "/api/research-runs",
             json=_run_command(
                 "attempt-insufficient-warmup",
                 alpha={
@@ -1910,29 +1567,19 @@ def test_insufficient_warmup_is_one_terminal_domain_failure(tmp_path: Path) -> N
                 },
             ),
         )
-        run_id = accepted.json()["run"]["id"]
-
-        assert client.app.state.core_runtime.research_runs.process_next() is True
+        assert rejected.status_code == 422
+        assert rejected.json()["issues"] == [
+            {
+                "code": "INSUFFICIENT_CALCULATION_WARMUP",
+                "field": "start_date",
+                "message": "Research Period requires 1 sessions before 2026-08-03",
+                "severity": "error",
+                "range": None,
+                "details": None,
+            }
+        ]
+        assert client.get("/api/research-runs").json()["items"] == []
         assert client.app.state.core_runtime.research_runs.process_next() is False
-
-        detail = client.get(f"/api/research-runs/{run_id}").json()
-        draft = detail.pop("draft")
-        assert draft["alpha"]["operator_id"] == "ts_mean"
-        assert detail == {
-            "id": run_id,
-            "status": "failed",
-            "definition_id": detail["definition_id"],
-            "definition_revision": 1,
-            "start_date": sessions[0],
-            "end_date": sessions[-1],
-            "failure_reason": ("Selected data does not contain the complete Calculation Warm-up."),
-        }
-        stored = _stored_execution(settings, run_id)
-        assert stored["attempt_count"] == 1
-        assert stored["attempt_failure_reason"] == "InsufficientCalculationWarmup"
-        assert stored["result_manifest_sha256"] is None
-        assert stored["result_provenance"] is None
-        assert stored["active_pin_count"] == 0
 
 
 @pytest.mark.parametrize("session_count", [1, 2])
@@ -1952,14 +1599,14 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command(
                 f"attempt-short-{session_count}",
                 start_date=sessions[0],
                 end_date=sessions[-1],
             ),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
 
         assert runtime.research_runs.process_next() is True
@@ -1993,6 +1640,57 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
         assert stored["active_pin_count"] == 0
 
 
+@pytest.mark.parametrize("incompatibility", ["coverage", "field"])
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_attempt_is_unchanged_by_an_incompatible_later_head(
+    tmp_path: Path,
+    incompatibility: str,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head_a = _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(f"attempt-revalidate-{incompatibility}"),
+        )
+        run_id = accepted.json()["id"]
+        replacement_sessions = sessions[1:] if incompatibility == "coverage" else sessions
+        _publish_head(
+            settings,
+            sessions=replacement_sessions,
+            price_offset=2,
+            expected_manifest=head_a,
+            available_field_id=(
+                "market.volume.shares"
+                if incompatibility == "field"
+                else "price.close.adjusted"
+            ),
+        )
+
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        assert client.app.state.core_runtime.research_runs.process_next() is False
+
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded"
+        assert detail["start_date"] == sessions[0]
+        assert detail["end_date"] == sessions[-1]
+        stored = _stored_execution(settings, run_id)
+        assert stored["attempt_count"] == 1
+        assert stored["attempt_failure_reason"] is None
+        assert stored["attempt_data_generation_id"] == head_a
+        assert stored["result_manifest_sha256"] is not None
+        assert stored["active_pin_count"] == 0
+        assert client.delete(f"/api/research-runs/{run_id}").status_code == 204
+        assert client.get(f"/api/research-runs/{run_id}").status_code == 404
+
+
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
@@ -2010,10 +1708,10 @@ def test_publication_failure_is_atomic_and_releases_the_generation_pin(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command(f"attempt-publication-failure-{failure_stage}"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         manifest_count = _publication_manifest_count(settings)
         _install_publication_rejection(settings, failure_stage=failure_stage)
@@ -2048,10 +1746,10 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-denied-rustfs-write"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         denied_s3 = boto3.client(
             "s3",
@@ -2100,10 +1798,10 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json=_run_command("attempt-result-read-failure"),
         )
-        run_id = accepted.json()["run"]["id"]
+        run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
         assert runtime.research_runs.process_next() is True
 
@@ -2154,15 +1852,35 @@ def _run_command(
 ) -> dict[str, object]:
     return {
         "request_id": request_id,
+        "folder_id": "folder_default",
         "name": "Attempt-scoped current data",
         "start_date": start_date,
         "end_date": end_date,
-        "alpha": alpha or {"field_id": "price.close.adjusted"},
+        "formula": _formula(alpha or {"field_id": "price.close.adjusted"}),
         "universe": "top300",
         "neutralization": "none",
         "holdings_count": 1,
         "rebalance_every_sessions": 1,
     }
+
+
+def _formula(node: dict[str, object]) -> str:
+    if set(node) == {"field_id"}:
+        return {"price.close.adjusted": "close_adj"}[str(node["field_id"])]
+    if set(node) == {"literal"}:
+        return str(node["literal"])
+    operator = str(node["operator_id"])
+    operands = node["operands"]
+    assert isinstance(operands, list)
+    rendered = [_formula(operand) for operand in operands if isinstance(operand, dict)]
+    if operator in {"add", "subtract", "multiply", "divide"}:
+        symbol = {"add": "+", "subtract": "-", "multiply": "*", "divide": "/"}[
+            operator
+        ]
+        return f"({rendered[0]} {symbol} {rendered[1]})"
+    if operator == "negate":
+        return f"-({rendered[0]})"
+    return f"{operator}({', '.join(rendered)})"
 
 
 def _canonical(
@@ -2183,7 +1901,9 @@ def _canonical(
             {
                 **template["field_catalog"][0],
                 "name": (
-                    "close_adj" if available_field_id == "price.close.adjusted" else "volume_shares"
+                    "close_adj"
+                    if available_field_id == "price.close.adjusted"
+                    else "volume_shares"
                 ),
                 "field_id": available_field_id,
             }
@@ -2230,7 +1950,11 @@ def _two_instrument_canonical(
     limits: list[dict[str, object]] = []
     price_template = template["prices"][0]
     for session in sessions:
-        closes = ("1", "30") if corrected and session == "2026-08-05" else ("20", "10")
+        closes = (
+            ("1", "30")
+            if corrected and session == "2026-08-05"
+            else ("20", "10")
+        )
         for instrument_id, close, open_price in zip(
             instrument_ids,
             closes,
@@ -2291,7 +2015,8 @@ def _two_instrument_canonical(
         "trading_states": states,
         "price_limits": limits,
         "base_pool": [
-            {"session": session, "instrument_ids": list(instrument_ids)} for session in sessions
+            {"session": session, "instrument_ids": list(instrument_ids)}
+            for session in sessions
         ],
         "liquidity_universes": universe,
     }
@@ -2312,7 +2037,6 @@ def _write_refresh_replay(
     canonical: dict[str, object],
     *,
     request_start: str,
-    include_industry_membership: bool = True,
 ) -> None:
     calendar = canonical["research_calendar"]
     instruments = canonical["instruments"]
@@ -2408,9 +2132,7 @@ def _write_refresh_replay(
             }
             for industry in industries
             if isinstance(industry, dict)
-        ]
-        if include_industry_membership
-        else [],
+        ],
     }
     replay = {
         "format": "thesistrace-tushare-refresh-replay",
@@ -2432,17 +2154,11 @@ def _refresh_via_private_operator(
     idempotency_key: str,
     canonical: dict[str, object],
     request_start: str,
-    include_industry_membership: bool = True,
 ) -> dict[str, object]:
     calendar = canonical["research_calendar"]
     assert isinstance(calendar, list) and calendar
     replay = replay_root / f"{idempotency_key}.json"
-    _write_refresh_replay(
-        replay,
-        canonical,
-        request_start=request_start,
-        include_industry_membership=include_industry_membership,
-    )
+    _write_refresh_replay(replay, canonical, request_start=request_start)
     submitted = _run_data_operator(
         settings,
         [
@@ -2479,7 +2195,6 @@ def _publish_canonical_head(
     canonical: dict[str, object],
     *,
     operation_id: str,
-    expected_manifest: str | None = None,
 ) -> str:
     generation = MountedGenerationStore(settings.data_mount).materialize(
         canonical,
@@ -2497,170 +2212,13 @@ def _publish_canonical_head(
             lease_seconds=60,
         )
         lifecycle.compare_and_swap_head(
-            expected_generation_manifest_sha256=expected_manifest,
+            expected_generation_manifest_sha256=None,
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id=operation_id,
         )
     finally:
         database.close()
     return generation.manifest_sha256
-
-
-def _publish_composite_head(
-    settings: CoreSettings,
-    *,
-    sessions: tuple[str, ...],
-    financial_through: str | None = None,
-    expected_manifest: str | None = None,
-    operation_id: str = "composite-e2e",
-) -> str:
-    observation_through = financial_through or sessions[-1]
-    finished_date = max(observation_through, "2026-08-05")
-    market_store = MountedGenerationStore(settings.data_mount)
-    market = market_store.materialize(
-        _two_instrument_canonical(sessions, corrected=False),
-        prepared_at=datetime(2026, 8, 5, 10, tzinfo=UTC),
-        source_name="composite-alpha-test",
-        source_lineage={"fixture": "composite-alpha"},
-    )
-    endpoint_fields = {
-        "income": (
-            "ts_code",
-            "ann_date",
-            "f_ann_date",
-            "end_date",
-            "report_type",
-            "comp_type",
-            "end_type",
-            "total_revenue",
-            "n_income_attr_p",
-            "update_flag",
-        ),
-        "balancesheet": (
-            "ts_code",
-            "ann_date",
-            "f_ann_date",
-            "end_date",
-            "report_type",
-            "comp_type",
-            "end_type",
-            "total_assets",
-            "total_liab",
-            "total_hldr_eqy_exc_min_int",
-            "update_flag",
-        ),
-        "cashflow": (
-            "ts_code",
-            "ann_date",
-            "f_ann_date",
-            "end_date",
-            "report_type",
-            "comp_type",
-            "end_type",
-            "n_cashflow_act",
-            "update_flag",
-        ),
-    }
-    values = {
-        "income": (("100", "10"), ("200", "20")),
-        "balancesheet": (("1000", "400", "600"), ("2000", "800", "1200")),
-        "cashflow": (("30",), ("60",)),
-    }
-    raw = RawFinancialBatchStore(settings.data_mount)
-    checkpoints: list[FinancialShardCheckpoint] = []
-    for endpoint in ("income", "balancesheet", "cashflow"):
-        fields = endpoint_fields[endpoint]
-        for index, (instrument_id, ts_code) in enumerate(
-            (
-                ("equity:000001.SZ", "000001.SZ"),
-                ("equity:000002.SZ", "000002.SZ"),
-            )
-        ):
-            item = [
-                ts_code,
-                "20100420",
-                "",
-                "20091231",
-                "1",
-                "1",
-                "4",
-                *values[endpoint][index],
-                "0",
-            ]
-            payload_sha256 = hashlib.sha256(
-                canonical_json_bytes({"fields": list(fields), "items": [item]})
-            ).hexdigest()
-            payload = {
-                "format": "thesistrace-raw-financial-batch",
-                "version": 1,
-                "source_contract_version": "tushare-financial-ordinary-v1",
-                "endpoint": endpoint,
-                "parameters": {"ts_code": ts_code},
-                "returned_fields": list(fields),
-                "items": [item],
-                "row_count": 1,
-                "source_date_extent": ["20100420", "20100420"],
-                "payload_sha256": payload_sha256,
-            }
-            checkpoints.append(
-                FinancialShardCheckpoint(
-                    ordinal=len(checkpoints),
-                    endpoint=endpoint,
-                    instrument_id=instrument_id,
-                    ts_code=ts_code,
-                    shard="complete-history",
-                    status="completed",
-                    batch_sha256=raw.store(canonical_json_bytes(payload)),
-                    collected_at="2026-08-05T09:00:00+00:00",
-                    first_observed_at="2026-08-05T09:00:00+00:00",
-                )
-            )
-    contract = FinancialCollectionContract(
-        capability_sha256="e" * 64,
-        endpoint_fields=tuple(
-            (endpoint, endpoint_fields[endpoint])
-            for endpoint in ("income", "balancesheet", "cashflow")
-        ),
-        suspected_truncation_row_counts=(
-            ("income", None),
-            ("balancesheet", None),
-            ("cashflow", None),
-        ),
-        shards=(FinancialDateShard("complete-history"),),
-    )
-    financial = FinancialCandidateStore(settings.data_mount).materialize(
-        CompletedFinancialCollection(
-            idempotency_key=operation_id,
-            generation_manifest_sha256=market.manifest_sha256,
-            contract=contract,
-            finished_at=f"{finished_date}T10:00:00+00:00",
-            target_count=len(checkpoints),
-            shards=tuple(checkpoints),
-        ),
-        observation_through_session=observation_through,
-    )
-    composite = market_store.compose_financial_candidate(
-        market.manifest_sha256,
-        financial.manifest_sha256,
-        prepared_at=datetime.fromisoformat(f"{finished_date}T11:00:00+00:00"),
-    )
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        lifecycle = DatasetLifecycle(database, settings.data_mount)
-        lifecycle.protect_candidate(
-            operation_id=operation_id,
-            generation_manifest_sha256=composite.manifest_sha256,
-            lease_seconds=60,
-        )
-        lifecycle.compare_and_swap_head(
-            expected_generation_manifest_sha256=expected_manifest,
-            candidate_generation_manifest_sha256=composite.manifest_sha256,
-            operation_id=operation_id,
-        )
-    finally:
-        database.close()
-    return composite.manifest_sha256
 
 
 def _publish_head(
@@ -2708,8 +2266,9 @@ def _kernel_input(
 ) -> RunInput:
     return RunInput(
         research_data=_research_data(canonical),
-        alpha_expression={"field_id": "price.close.adjusted"},
+        alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
         field_bindings={"price.close.adjusted": "close_adj"},
+        effective_alpha_lookback=0,
         universe="top300",
         neutralization="none",
         holdings_count=1,
@@ -2724,7 +2283,7 @@ def _kernel_input(
     )
 
 
-def _research_data(canonical: dict[str, object]) -> AlignedResearchData:
+def _research_data(canonical: dict[str, object]):
     return align_canonical_market_data(
         canonical,
         field_bindings={"price.close.adjusted": "close_adj"},
@@ -2759,21 +2318,6 @@ def _stored_execution(settings: CoreSettings, run_id: str) -> dict[str, object]:
             ).fetchone()
         assert row is not None
         return row
-    finally:
-        database.close()
-
-
-def _stored_run_input(settings: CoreSettings, run_id: str) -> dict[str, object]:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            row = transaction.execute(
-                "SELECT immutable_input FROM research_runs.runs WHERE id = %s",
-                (run_id,),
-            ).fetchone()
-        assert row is not None
-        return dict(row["immutable_input"])
     finally:
         database.close()
 
@@ -2872,7 +2416,11 @@ def _position_ids(value: object) -> set[str]:
     assert isinstance(value, dict)
     positions = value.get("positions")
     assert isinstance(positions, list)
-    return {str(position["instrument_id"]) for position in positions if isinstance(position, dict)}
+    return {
+        str(position["instrument_id"])
+        for position in positions
+        if isinstance(position, dict)
+    }
 
 
 def _expire_current_tracking_attempt(settings: CoreSettings, track_id: str) -> None:
@@ -2936,7 +2484,9 @@ def _wait_for_tracking_lease_renewal(
         if latest["heartbeat_at"] > after_heartbeat:
             return latest
         poll_interval.wait(timeout=0.02)
-    raise AssertionError(f"DailyTrack lease was not renewed; latest attempt timing was {latest!r}")
+    raise AssertionError(
+        f"DailyTrack lease was not renewed; latest attempt timing was {latest!r}"
+    )
 
 
 def _checkpoint_payload(

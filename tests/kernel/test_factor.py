@@ -5,7 +5,7 @@ from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, PCT_CHANGE_20
 from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
-from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.factor import (
     FactorDataError,
     build_forward_labels,
@@ -23,8 +23,7 @@ def test_forward_labels_use_next_open_timing_and_explicit_period_limits() -> Non
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     signal_sessions = [str(session) for session in canonical["research_calendar"]]
@@ -173,8 +172,7 @@ def test_complete_factor_evaluation_is_deterministic_for_all_horizons() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=PCT_CHANGE_20,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(PCT_CHANGE_20, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     signal_sessions = [str(item["session"]) for item in matrix["sessions"]]

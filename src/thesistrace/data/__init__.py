@@ -1,4 +1,8 @@
-from thesistrace.data.admission import DatasetAdmissionService, DatasetAdmissionSnapshot
+from thesistrace.data.admission import (
+    DatasetAdmissionService,
+    DatasetAdmissionSnapshot,
+    DatasetWarmupUnavailable,
+)
 from thesistrace.data.collection import (
     CollectionOutcome,
     DataCollectionError,
@@ -7,9 +11,12 @@ from thesistrace.data.collection import (
 from thesistrace.data.fields import (
     FINANCIAL_FIELDS,
     MARKET_FIELDS,
-    AuthorableField,
-    authorable_field_bindings,
-    authorable_fields,
+    AlphaFieldCapability,
+    FieldDefinition,
+    alpha_field_catalog,
+    alpha_identifier_by_field_id,
+    field_definitions,
+    read_alpha_field_series,
 )
 from thesistrace.data.financial_candidate import (
     CanonicalFinancialVersion,
@@ -71,8 +78,9 @@ from thesistrace.data.source import (
 )
 
 __all__ = [
-    "AuthorableField",
+    "AlphaFieldCapability",
     "FINANCIAL_FIELDS",
+    "FieldDefinition",
     "MARKET_FIELDS",
     "BootstrapCollectionPlan",
     "BootstrapDataSource",
@@ -90,6 +98,7 @@ __all__ = [
     "DataRefreshService",
     "DatasetAdmissionService",
     "DatasetAdmissionSnapshot",
+    "DatasetWarmupUnavailable",
     "DatasetCoverage",
     "DatasetOverviewService",
     "DataLifecycleError",
@@ -127,9 +136,11 @@ __all__ = [
     "MountedGenerationStore",
     "PinnedGeneration",
     "RefreshOutcome",
-    "authorable_fields",
-    "authorable_field_bindings",
+    "alpha_field_catalog",
+    "alpha_identifier_by_field_id",
     "bootstrap_collection_plan",
+    "field_definitions",
     "refresh_collection_plan",
     "probe_financial_capability",
+    "read_alpha_field_series",
 ]

@@ -53,8 +53,8 @@ CREATE TABLE research_runs.cancel_receipts (
 
 CREATE TABLE research_runs.runs (
     id text NOT NULL,
-    definition_id text NOT NULL,
-    definition_revision integer NOT NULL,
+    folder_id text NOT NULL,
+    name text NOT NULL,
     requested_start_date date NOT NULL,
     requested_end_date date NOT NULL,
     status text NOT NULL,
@@ -66,11 +66,19 @@ CREATE TABLE research_runs.runs (
     result_provenance jsonb,
     failure_reason text,
     CONSTRAINT runs_check CHECK ((requested_start_date <= requested_end_date)),
-    CONSTRAINT runs_definition_revision_check CHECK ((definition_revision > 0)),
+    CONSTRAINT runs_name_check CHECK (name = btrim(name) AND name <> ''),
     CONSTRAINT runs_execution_fence_check CHECK ((execution_fence >= 0)),
     CONSTRAINT runs_immutable_input_check CHECK ((jsonb_typeof(immutable_input) = 'object'::text)),
     CONSTRAINT runs_result_provenance_check CHECK (((result_provenance IS NULL) OR (jsonb_typeof(result_provenance) = 'object'::text))),
     CONSTRAINT runs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
+);
+
+
+CREATE TABLE research_runs.admission_requests (
+    request_id text NOT NULL,
+    request_fingerprint text NOT NULL,
+    run_id text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
 
@@ -121,12 +129,23 @@ ALTER TABLE ONLY research_runs.cancel_receipts
     ADD CONSTRAINT cancel_receipts_pkey PRIMARY KEY (request_id);
 
 
+ALTER TABLE ONLY research_runs.admission_requests
+    ADD CONSTRAINT admission_requests_pkey PRIMARY KEY (request_id);
+
+ALTER TABLE ONLY research_runs.admission_requests
+    ADD CONSTRAINT admission_requests_run_id_key UNIQUE (run_id);
+
+
 --
 -- Name: runs runs_pkey; Type: CONSTRAINT; Schema: research_runs; Owner: -
 --
 
 ALTER TABLE ONLY research_runs.runs
     ADD CONSTRAINT runs_pkey PRIMARY KEY (id);
+
+
+ALTER TABLE ONLY research_runs.runs
+    ADD CONSTRAINT runs_folder_id_fkey FOREIGN KEY (folder_id) REFERENCES research_folders.folders(id);
 
 
 --
@@ -150,6 +169,8 @@ CREATE UNIQUE INDEX research_runs_one_running_attempt_idx ON research_runs.attem
 
 CREATE INDEX research_runs_runs_created_idx ON research_runs.runs USING btree (created_at DESC, id);
 
+CREATE INDEX research_runs_runs_folder_created_idx ON research_runs.runs USING btree (folder_id, created_at DESC, id);
+
 
 --
 -- Name: attempts attempts_run_id_fkey; Type: FK CONSTRAINT; Schema: research_runs; Owner: -
@@ -157,3 +178,7 @@ CREATE INDEX research_runs_runs_created_idx ON research_runs.runs USING btree (c
 
 ALTER TABLE ONLY research_runs.attempts
     ADD CONSTRAINT attempts_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id);
+
+
+ALTER TABLE ONLY research_runs.admission_requests
+    ADD CONSTRAINT admission_requests_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id);

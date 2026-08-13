@@ -2,9 +2,25 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import {
+  ResearchFolderLoadFailure,
+  ResearchOrganizationPanel,
+  ResearchRunHistory,
   TerminalStrategyStateView,
+  UseAsDraftPanel,
+  isTerminalResearch,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
+
+describe("ResearchFolderLoadFailure", () => {
+  it("keeps Folder recovery separate from ResearchRun loading", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchFolderLoadFailure error="Research Folders unavailable" onRetry={() => undefined} />,
+    );
+    expect(markup).toContain("Research Folders unavailable");
+    expect(markup).toContain("Retry Folders");
+    expect(markup).not.toContain("ResearchRun unavailable");
+  });
+});
 
 const TERMINAL_STATE: TerminalStrategyState = {
   session: "2026-08-05",
@@ -47,5 +63,104 @@ describe("TerminalStrategyStateView", () => {
     expect(markup).toContain("cn.stock.000001");
     expect(markup).toContain("remains pending");
     expect(markup).not.toMatch(/Generation|manifest|checkpoint|fence|object location/i);
+  });
+});
+
+describe("ResearchRunHistory", () => {
+  it("distinguishes duplicate names by identity, time, status, and Formula", () => {
+    const items = [
+      {
+        id: "run_aaaaaaaa",
+        status: "succeeded" as const,
+        name: "Mean",
+        folder_id: "folder_default",
+        created_at: "2026-08-13T01:02:03Z",
+        start_date: "2026-08-01",
+        end_date: "2026-08-05",
+        formula_summary: "ts_mean(close_adj, 20)",
+      },
+      {
+        id: "run_bbbbbbbb",
+        status: "queued" as const,
+        name: "Mean",
+        folder_id: "folder_default",
+        created_at: "2026-08-13T01:03:04Z",
+        start_date: "2026-08-01",
+        end_date: "2026-08-05",
+        formula_summary: "ts_mean(close_adj, 60)",
+      },
+    ];
+
+    const markup = renderToStaticMarkup(<ResearchRunHistory items={items} />);
+    expect(markup).toContain("run_aaaaaaaa");
+    expect(markup).toContain("run_bbbbbbbb");
+    expect(markup).toContain("2026-08-13T01:02:03Z");
+    expect(markup).toContain("succeeded");
+    expect(markup).toContain("ts_mean(close_adj, 20)");
+    expect(markup.match(/>Mean</g)).toHaveLength(2);
+  });
+});
+
+describe("ResearchOrganizationPanel", () => {
+  it("offers mutable name and Folder controls without Run or Draft recreation", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchOrganizationPanel
+        folders={[
+          { id: "folder_default", name: "Default", is_default: true },
+          { id: "folder_signals", name: "Signals", is_default: false },
+        ]}
+        onOrganized={() => undefined}
+        run={{
+          id: "run_aaaaaaaa",
+          status: "succeeded",
+          name: "Duplicate",
+          folder_id: "folder_default",
+          created_at: "2026-08-13T01:02:03Z",
+          start_date: "2026-08-01",
+          end_date: "2026-08-05",
+          formula_summary: "close_adj",
+        }}
+      />,
+    );
+    expect(markup).toContain("Research name");
+    expect(markup).toContain("Research Folder");
+    expect(markup).toContain("Signals");
+    expect(markup).toContain("Update organization");
+    expect(markup).not.toMatch(/Draft|Rerun|Revision/);
+  });
+});
+
+describe("UseAsDraftPanel", () => {
+  it("is available for every terminal Research state only", () => {
+    expect(isTerminalResearch("succeeded")).toBe(true);
+    expect(isTerminalResearch("failed")).toBe(true);
+    expect(isTerminalResearch("cancelled")).toBe(true);
+    expect(isTerminalResearch("queued")).toBe(false);
+    expect(isTerminalResearch("running")).toBe(false);
+  });
+
+  it("offers explicit local reuse without a Rerun action", () => {
+    const markup = renderToStaticMarkup(
+      <UseAsDraftPanel
+        folders={[{ id: "folder_default", name: "Default", is_default: true }]}
+        input={{
+          formula: "close_adj",
+          hypothesis: null,
+          start_date: "2026-08-01",
+          end_date: "2026-08-05",
+          universe: "top300",
+          neutralization: "none",
+          holdings_count: 10,
+          rebalance_every_sessions: 2,
+        }}
+        confirmDiscard={() => true}
+        navigate={() => undefined}
+        sourceFolderId="folder_default"
+        storage={{ getItem: () => null, setItem: () => undefined }}
+      />,
+    );
+    expect(markup).toContain("Use as Draft");
+    expect(markup).toContain("Target Folder");
+    expect(markup).not.toMatch(/Rerun|Run now/);
   });
 });

@@ -7,7 +7,7 @@ from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
 
 from thesistrace.research_kernel import RunInput, run
-from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.strategy import run_strategy
 
 SESSIONS = ("2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08")
@@ -512,8 +512,7 @@ def test_manual_historical_universe_excludes_a_future_stock_and_changes_on_sched
 
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical, universe="manual"),
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
 
@@ -657,6 +656,7 @@ def _kernel_run(
             research_data=aligned_market_data(canonical, universe="manual"),
             alpha_expression=CLOSE_ADJUSTED,
             field_bindings=FIELD_BINDINGS,
+            effective_alpha_lookback=0,
             universe="manual",
             neutralization="none",
             holdings_count=holdings_count,

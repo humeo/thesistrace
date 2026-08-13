@@ -30,10 +30,28 @@ def main() -> None:
 
 def _process_once(runtime: CoreRuntime) -> None:
     from thesistrace.daily_track import DailyTrackProgressionFailed
+    from thesistrace.publication import (
+        PublicationPreparationError,
+        PublicationUnavailableError,
+    )
 
     if runtime.research_runs.process_next():
         logger.info("Core worker processed ResearchRun")
-    removed_caches = runtime.daily_tracks.reconcile_stopped_working_cache()
+    removed_publication_objects = 0
+    try:
+        while runtime.publication.collect_one_pending_deletion():
+            removed_publication_objects += 1
+    except (PublicationPreparationError, PublicationUnavailableError) as error:
+        logger.warning(
+            "Core worker retained a pending Publication deletion for retry",
+            extra={"error_type": type(error).__name__},
+        )
+    if removed_publication_objects:
+        logger.info(
+            "Core worker removed unreferenced Publication objects",
+            extra={"removed_object_count": removed_publication_objects},
+        )
+    removed_caches = runtime.daily_tracks.reconcile_working_cache()
     if removed_caches:
         logger.info(
             "Core worker removed stopped DailyTrack Working Cache entries",

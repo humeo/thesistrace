@@ -13,9 +13,9 @@ CORE_PACKAGES = (
     "_postgres",
     "data",
     "daily_track",
-    "definition",
     "entrypoints",
     "publication",
+    "research_folder",
     "research_run",
 )
 FORBIDDEN_IMPORTS = (
@@ -26,11 +26,12 @@ FORBIDDEN_IMPORTS = (
 )
 PRODUCT_SCHEMAS = {
     "data": "data",
-    "definition": "definitions",
     "research_run": "research_runs",
     "daily_track": "daily_tracks",
     "publication": "publication",
+    "research_folder": "research_folders",
 }
+ALLOWED_SCHEMA_REFERENCES = {("research_run", "research_folders")}
 
 
 def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
@@ -56,10 +57,12 @@ def test_new_core_packages_do_not_import_old_or_hosted_runtime() -> None:
 def test_internal_import_graph_is_layered_and_acyclic() -> None:
     allowed = {
         "_postgres": set(),
+        "alpha_language": {"data", "research_kernel"},
         "publication": {"_postgres"},
         "research_series": set(),
         "research_kernel": {"research_series"},
         "data": {"_postgres", "publication", "research_series"},
+        "research_folder": {"_postgres"},
         "daily_track": {
             "_postgres",
             "data",
@@ -69,24 +72,25 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         },
         "research_run": {
             "_postgres",
+            "alpha_language",
             "daily_track",
             "data",
             "publication",
+            "research_folder",
             "research_kernel",
             "research_series",
         },
-        "definition": {"_postgres", "data", "research_kernel", "research_run"},
         "fixture": {"data"},
         "adapters": {"data", "fixture"},
         "entrypoints": {
             "_postgres",
+            "alpha_language",
             "adapters",
             "daily_track",
             "data",
-            "definition",
             "publication",
+            "research_folder",
             "research_kernel",
-            "research_series",
             "research_run",
         },
     }
@@ -103,11 +107,14 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
             dependencies.update(_internal_dependencies(path, tree) - {package})
         graph[package] = dependencies
         assert dependencies <= allowed_dependencies, (
-            f"{package} imports outward dependencies: {sorted(dependencies - allowed_dependencies)}"
+            f"{package} imports outward dependencies: "
+            f"{sorted(dependencies - allowed_dependencies)}"
         )
     assert set(graph) == set(allowed)
     assert all(
-        dependency in graph for dependencies in graph.values() for dependency in dependencies
+        dependency in graph
+        for dependencies in graph.values()
+        for dependency in dependencies
     )
     _assert_acyclic(graph)
 
@@ -121,9 +128,9 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "data.generation_candidates",
             "data.generation_pins",
         ),
-        "definition": ("definitions.records", "definitions.run_receipts"),
         "research_run": (
             "research_runs.runs",
+            "research_runs.admission_requests",
             "research_runs.attempts",
             "research_runs.cancel_receipts",
             "research_runs.start_tracking_receipts",
@@ -140,7 +147,9 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             "publication.objects",
             "publication.manifests",
             "publication.manifest_objects",
+            "publication.object_deletions",
         ),
+        "research_folder": ("research_folders.folders",),
     }
 
     for module, owned_schema in PRODUCT_SCHEMAS.items():
@@ -150,6 +159,8 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
             if path.name != "schema.sql"
         )
         for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
+            if (module, foreign_schema) in ALLOWED_SCHEMA_REFERENCES:
+                continue
             assert f"{foreign_schema}." not in active_strings, (
                 f"{module} source contains cross-schema SQL for {foreign_schema}"
             )
@@ -158,6 +169,8 @@ def test_product_modules_own_their_schema_sql_and_lifecycle_tables() -> None:
         for table in lifecycle_tables[module]:
             assert table in statements
         for foreign_schema in set(PRODUCT_SCHEMAS.values()) - {owned_schema}:
+            if (module, foreign_schema) in ALLOWED_SCHEMA_REFERENCES:
+                continue
             assert f"{foreign_schema}." not in statements
 
 
@@ -194,8 +207,12 @@ def test_current_runtime_initializes_before_starting_long_running_processes() ->
     initialize_service = compose.split("  initialize:\n", maxsplit=1)[1].split(
         "  api:\n", maxsplit=1
     )[0]
-    api_service = compose.split("  api:\n", maxsplit=1)[1].split("  worker:\n", maxsplit=1)[0]
-    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split("  web:\n", maxsplit=1)[0]
+    api_service = compose.split("  api:\n", maxsplit=1)[1].split(
+        "  worker:\n", maxsplit=1
+    )[0]
+    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split(
+        "  web:\n", maxsplit=1
+    )[0]
 
     assert 'command: ["thesistrace-initialize"]' in initialize_service
     assert "condition: service_completed_successfully" in api_service
@@ -241,6 +258,7 @@ def test_postgres_support_contains_mechanics_but_no_product_sql() -> None:
         "research_runs.",
         "daily_tracks.",
         "publication.",
+        "research_folders.",
     ):
         assert product_schema not in postgres_source
 
@@ -269,7 +287,7 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
     resource_routes = source.partition("] as const;")[0]
     for route in (
         'path: "/data"',
-        'path: "/definitions"',
+        'path: "/research"',
         'path: "/research-runs"',
         'path: "/daily-tracks"',
     ):
@@ -316,20 +334,23 @@ def test_web_shell_declares_only_the_four_product_resources() -> None:
 
 def test_http_route_and_action_inventory_is_exactly_the_four_core_resources() -> None:
     assert _http_routes() == {
+        ("get", "/api/alpha/catalog"),
+        ("post", "/api/alpha/diagnostics"),
         ("get", "/api/data"),
-        ("get", "/api/definitions"),
-        ("get", "/api/definitions/authoring-options"),
-        ("get", "/api/definitions/{definition_id}"),
-        ("post", "/api/definitions"),
-        ("put", "/api/definitions/{definition_id}"),
-        ("post", "/api/definitions/run"),
-        ("post", "/api/definitions/{definition_id}/run"),
+        ("get", "/api/research-folders"),
+        ("post", "/api/research-folders"),
+        ("patch", "/api/research-folders/{folder_id}"),
+        ("delete", "/api/research-folders/{folder_id}"),
         ("get", "/api/research-runs"),
+        ("post", "/api/research-runs"),
+        ("patch", "/api/research-runs/{run_id}"),
+        ("delete", "/api/research-runs/{run_id}"),
         ("get", "/api/research-runs/{run_id}"),
         ("post", "/api/research-runs/{run_id}/cancel"),
         ("post", "/api/research-runs/{run_id}/daily-tracks"),
         ("get", "/api/daily-tracks"),
         ("get", "/api/daily-tracks/{track_id}"),
+        ("delete", "/api/daily-tracks/{track_id}"),
         ("post", "/api/daily-tracks/{track_id}/retry"),
         ("post", "/api/daily-tracks/{track_id}/stop"),
     }
@@ -540,17 +561,18 @@ def test_publication_owns_its_sql_and_never_commits_a_caller_transaction() -> No
         assert product_schema not in schema
 
 
-def test_definition_and_research_run_keep_sql_behind_atomic_admission_seam() -> None:
-    definition_source = (ROOT / "src" / "thesistrace" / "definition" / "service.py").read_text()
-    definition_schema = (ROOT / "src" / "thesistrace" / "definition" / "schema.sql").read_text()
+def test_research_run_keeps_direct_admission_behind_one_atomic_sql_seam() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
     run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
 
     assert "def admit(" in run_source
     assert ".commit(" not in run_source
     assert "CREATE TABLE research_runs.runs" in run_schema
-    assert "research_runs." not in definition_source
-    assert "research_runs." not in definition_schema
+    assert "CREATE TABLE research_runs.admission_requests" in run_schema
+    assert "ResearchRunAdmissionCommand" in run_source
+    assert "compile_formula(command.formula)" in run_source
+    assert not list((ROOT / "src" / "thesistrace" / "definition").glob("*.py"))
+    assert not (ROOT / "src" / "thesistrace" / "definition" / "schema.sql").exists()
     assert "definitions." not in run_source
     assert "definitions." not in run_schema
 
@@ -605,8 +627,8 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "CREATE TABLE research_runs.cancel_receipts" in run_schema
     assert "execution_fence = execution_fence + 1" in run_source
     assert "def rerun(" not in run_source
-    assert "CREATE TABLE research_runs.rerun_receipts" not in run_schema
-    assert "rerun_of_id" not in run_schema
+    assert "rerun_receipts" not in run_schema
+    assert "compile_formula" not in run_source[run_source.index("    def process_next(") :]
     assert "self._publication.record(" in run_source
     assert "runtime.research_runs.process_next()" in worker_source
     for removed in ("outbox", "dispatch", "global job", "temporal"):
@@ -634,7 +656,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "ACTIVE_DAILY_TRACK_LIMIT = 10" in track_source
     assert '"daily_tracks.activation.capacity"' in track_source
     assert "def _record_current_failure(" in track_source
-    assert "def reconcile_stopped_working_cache(" in track_source
+    assert "def reconcile_working_cache(" in track_source
     assert "def activate(" in track_source
     assert "def resolve_activation(" not in track_source
     assert "origin" in track_source
@@ -655,12 +677,12 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "AdvanceInput(" in track_source
     assert 'kind="daily-track.checkpoint"' in track_source
     assert "while runtime.daily_tracks.process_next()" in worker_source
-    assert "runtime.daily_tracks.reconcile_stopped_working_cache()" in worker_source
+    assert "runtime.daily_tracks.reconcile_working_cache()" in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
     assert '"/api/daily-tracks/{track_id}/retry"' in http_source
     assert '"/api/daily-tracks/{track_id}/stop"' in http_source
     assert '@app.post("/api/daily-tracks"' not in http_source
-    assert '@app.delete("/api/daily-tracks' not in http_source
+    assert '"/api/daily-tracks/{track_id}"' in http_source
     for legacy_coordinate in (
         "seed_release_id",
         "current_release_id",
@@ -774,6 +796,51 @@ def test_legacy_definition_and_research_run_modules_are_absent() -> None:
         assert not (package / removed).exists()
 
     assert not (package / "api.py").exists()
+    assert not list((package / "definition").glob("*.py"))
+    assert not (package / "definition" / "schema.sql").exists()
+
+
+def test_obsolete_authoring_contract_cannot_reenter_the_active_runtime() -> None:
+    package = ROOT / "src" / "thesistrace"
+    http_source = (package / "entrypoints" / "http.py").read_text()
+    entrypoint_source = "\n".join(
+        path.read_text() for path in (package / "entrypoints").glob("*.py")
+    )
+    schema_source = (package / "entrypoints" / "schema.py").read_text()
+    worker_source = (package / "entrypoints" / "worker.py").read_text()
+    web_source = "\n".join(
+        path.read_text()
+        for path in (ROOT / "web" / "src").rglob("*")
+        if path.suffix in {".ts", ".tsx", ".css"} and ".test." not in path.name
+    )
+
+    assert '"research_folders"' in schema_source
+    assert '"definitions"' not in schema_source
+    assert "/api/definitions" not in entrypoint_source
+    assert "/rerun" not in entrypoint_source
+    assert "compile_formula" not in worker_source
+    assert "/definitions" not in web_source
+    assert "definition-list" not in web_source
+    assert not (package / "migrations").exists()
+    assert not (ROOT / "migrations").exists()
+
+    active_authoring = "\n".join(
+        (
+            http_source,
+            schema_source,
+            (package / "research_run" / "models.py").read_text(),
+            (package / "research_run" / "schema.sql").read_text(),
+        )
+    ).lower()
+    for forbidden in (
+        "revision_id",
+        "rerun_receipts",
+        "compatibility endpoint",
+        "definition_id",
+        "alpha_release_id",
+    ):
+        assert forbidden not in active_authoring
+
 
 
 def _string_literals(path: Path) -> str:
@@ -805,7 +872,9 @@ def _internal_dependencies(path: Path, tree: ast.AST) -> set[str]:
             elif node.module:
                 targets.append(node.module.split("."))
         dependencies.update(
-            target[1] for target in targets if len(target) > 1 and target[0] == "thesistrace"
+            target[1]
+            for target in targets
+            if len(target) > 1 and target[0] == "thesistrace"
         )
     return dependencies
 

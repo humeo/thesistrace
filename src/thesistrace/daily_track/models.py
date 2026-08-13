@@ -52,8 +52,6 @@ class TrackingOrigin(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     seed_run_id: str
-    definition_id: str
-    definition_revision: int
     immutable_input: dict[str, object]
     seed_data_generation_id: str
     seed_data_through_session: str
@@ -68,8 +66,6 @@ class DailyTrackSummary(BaseModel):
     id: str
     status: Literal["active", "blocked", "stopped"]
     seed_run_id: str
-    definition_id: str
-    definition_revision: int
     result_checksum_sha256: str
     origin_session: str
     strategy_session: str
@@ -128,8 +124,7 @@ class DailyTrackOriginView(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     seed_run_id: str
-    definition_id: str
-    definition_revision: int
+    seed_research_available: bool
     result_checksum_sha256: str
     strategy_session: str
     terminal_account: DailyTrackOriginAccount
@@ -207,8 +202,8 @@ class KernelRunInputSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     alpha_expression: dict[str, object]
-    compiled_alpha: dict[str, object]
     field_bindings: dict[str, str]
+    effective_alpha_lookback: int
     universe: str
     neutralization: str
     holdings_count: int

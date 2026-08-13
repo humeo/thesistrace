@@ -9,9 +9,8 @@ from typing import Literal
 
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
-    evaluate_compiled_alpha_matrix,
+    evaluate_alpha_matrix,
 )
-from thesistrace.research_kernel.alpha_expression import restore_compiled_alpha
 from thesistrace.research_kernel.factor import (
     HORIZONS,
     affected_label_sessions,
@@ -216,9 +215,7 @@ def advance_continuation(
     appended_sessions: list[str],
 ) -> dict[str, object]:
     """Advance only the bounded transient Alpha and Factor working state."""
-    effective_lookback = restore_compiled_alpha(
-        run_input.compiled_alpha_snapshot()
-    ).effective_lookback
+    effective_lookback = run_input.alpha_execution_plan().effective_lookback
     restored = _with_continuation(
         {
             "alpha_matrix": {
@@ -245,10 +242,9 @@ def advance_continuation(
         target_research_data,
         calendar[max(0, first_index - effective_lookback) :],
     )
-    evaluated = evaluate_compiled_alpha_matrix(
+    evaluated = evaluate_alpha_matrix(
         window,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )
     evaluated_rows = evaluated.get("sessions")
@@ -386,10 +382,9 @@ def _advance_alpha(
     calendar = research_sessions(research_data)
     window_start = max(0, prior_session_count - lookback)
     window = slice_research_sessions(research_data, calendar[window_start:])
-    evaluated = evaluate_compiled_alpha_matrix(
+    evaluated = evaluate_alpha_matrix(
         window,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )
     new_set = set(new_sessions)
@@ -589,10 +584,9 @@ def _rebuild_explicit_alpha(
     research_data: AlignedResearchData,
     research_sessions: list[str],
 ) -> dict[str, object]:
-    evaluated = evaluate_compiled_alpha_matrix(
+    evaluated = evaluate_alpha_matrix(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
-        field_bindings=run_input.field_bindings_snapshot(),
         neutralization=run_input.neutralization,
     )
     selected = set(research_sessions)

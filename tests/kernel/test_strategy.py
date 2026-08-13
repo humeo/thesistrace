@@ -6,7 +6,7 @@ from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
-from thesistrace.research_kernel.alpha import evaluate_alpha_matrix
+from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.strategy import (
     StrategyCalculationError,
     advance_strategy_metric_state,
@@ -92,8 +92,7 @@ def test_top_n_strategy_runs_one_deterministic_net_primary_account() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     definition = {
@@ -220,8 +219,7 @@ def test_unexplained_missing_held_open_fails_instead_of_becoming_suspension() ->
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     definition = {
@@ -265,8 +263,7 @@ def test_suspended_holding_carries_and_benchmark_catches_up_on_reopen() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     definition = strategy_definition(rebalance_interval=20)
@@ -327,8 +324,7 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     report_start = 0
@@ -364,8 +360,7 @@ def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=CLOSE_ADJUSTED,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     definition = strategy_definition(rebalance_interval=20)

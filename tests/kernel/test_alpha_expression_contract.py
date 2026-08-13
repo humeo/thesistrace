@@ -105,8 +105,10 @@ def test_cs_rank_preserves_child_lookback_and_ranks_complete_cross_sections() ->
 
     ranked = evaluate_alpha_matrix(
         data,
-        expression=operation("cs_rank", field("financial.test")),
-        field_bindings={"financial.test": "financial_test"},
+        compiled_alpha=validate_alpha(
+            operation("cs_rank", field("financial.test")),
+            field_bindings={"financial.test": "financial_test"},
+        ),
         neutralization="none",
     )
 
@@ -288,12 +290,14 @@ def test_rolling_numeric_result_is_independent_of_execution_prefix(operator_id: 
         )
         result = evaluate_alpha_matrix(
             data,
-            expression=operation(
-                operator_id,
-                field("price.close.adjusted"),
-                literal(3),
+            compiled_alpha=validate_alpha(
+                operation(
+                    operator_id,
+                    field("price.close.adjusted"),
+                    literal(3),
+                ),
+                field_bindings=FIELD_BINDINGS,
             ),
-            field_bindings=FIELD_BINDINGS,
             neutralization="none",
         )
         return result["sessions"][-1]["values"][0]["value"]
@@ -325,11 +329,13 @@ def test_rolling_and_cross_sectional_operators_normalize_non_finite_inputs_to_mi
     )
     result = evaluate_alpha_matrix(
         data,
-        expression=operation(
-            "cs_rank",
-            operation("ts_mean", field("price.close.adjusted"), literal(2)),
+        compiled_alpha=validate_alpha(
+            operation(
+                "cs_rank",
+                operation("ts_mean", field("price.close.adjusted"), literal(2)),
+            ),
+            field_bindings=FIELD_BINDINGS,
         ),
-        field_bindings=FIELD_BINDINGS,
         neutralization="none",
     )
 
@@ -343,8 +349,7 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
     normalized = operation("pct_change", field("price.close.adjusted"), literal(20))
     matrix = evaluate_alpha_matrix(
         aligned_market_data(canonical),
-        expression=normalized,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(normalized, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     assert matrix["checksum"] == (
@@ -358,23 +363,23 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
     [
         (field("price.close.raw"), "UNKNOWN_FIELD"),
         (field("close_adj"), "UNKNOWN_FIELD"),
-        (operation("python_eval", literal(1)), "UNKNOWN_OPERATOR"),
-        (operation("add", literal(1)), "INVALID_ARITY"),
+        (operation("python_eval", literal(1)), "INVALID_OPERATOR"),
+        (operation("add", literal(1)), "INVALID_OPERATOR"),
         (
             operation(
                 "lag",
                 field("price.close.adjusted"),
                 field("market.volume.shares"),
             ),
-            "INVALID_OPERAND",
+            "INVALID_WINDOW",
         ),
         (
             operation("lag", field("price.close.adjusted"), literal(0)),
-            "WINDOW_OUT_OF_RANGE",
+            "INVALID_WINDOW",
         ),
         (
             operation("lag", field("price.close.adjusted"), literal(253)),
-            "WINDOW_OUT_OF_RANGE",
+            "INVALID_WINDOW",
         ),
         (
             operation(
@@ -384,9 +389,8 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
             ),
             "LOOKBACK_EXCEEDS_LIMIT",
         ),
-        ({"literal": math.inf}, "NON_FINITE_LITERAL"),
-        ({"literal": 10**400}, "NON_FINITE_LITERAL"),
-        ({"field_id": "price.close.adjusted", "unexpected": True}, "MALFORMED_NODE"),
+        (literal(math.inf), "INVALID_LITERAL"),
+        ({"kind": "field", "field_id": "price.close.adjusted", "unexpected": True}, "INVALID_NODE"),
     ],
 )
 def test_normalized_tree_rejects_invalid_nodes_deterministically(

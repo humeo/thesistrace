@@ -1,13 +1,21 @@
+import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 
+import boto3
 import pytest
 from botocore.client import BaseClient
+from botocore.config import Config
+from botocore.exceptions import ClientError
 
+from thesistrace._postgres import PostgresDatabase
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
-from thesistrace.entrypoints.schema import initialize_core
+from thesistrace.entrypoints.schema import CORE_SCHEMAS, initialize_core
 from thesistrace.publication import (
     JsonPayload,
+    Publication,
     PublicationNotFoundError,
+    PublicationUnavailableError,
     PublicationVerificationError,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -126,6 +134,177 @@ def test_rollback_leaves_an_invisible_orphan_and_preserves_previous_reference(
         assert runtime.publication.read(baseline_ref).provenance == {"sequence": 1}
 
 
+def test_release_collects_only_after_the_last_manifest_reference(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+) -> None:
+    shared_payload = {"shared": "immutable"}
+    expected = canonical_json_bytes(shared_payload)
+    with open_core_runtime(core_settings) as runtime:
+        first = runtime.publication.prepare(
+            kind="publication.probe",
+            payloads={"canonical": JsonPayload(shared_payload)},
+            provenance={"owner": "first"},
+        )
+        second = runtime.publication.prepare(
+            kind="publication.probe",
+            payloads={"canonical": JsonPayload(shared_payload)},
+            provenance={"owner": "second"},
+        )
+        shared_sha256 = first.payload_sha256s["canonical"]
+        assert second.payload_sha256s["canonical"] == shared_sha256
+        with runtime.database.transaction() as transaction:
+            first_ref = runtime.publication.record(transaction, first)
+            second_ref = runtime.publication.record(transaction, second)
+
+        object_key = _find_key_with_content(
+            rustfs_admin,
+            core_settings.s3_bucket,
+            expected,
+        )
+        with runtime.database.transaction() as transaction:
+            runtime.publication.release_manifest_in_transaction(
+                transaction,
+                first_ref.manifest_sha256,
+                still_referenced=False,
+            )
+        assert runtime.publication.collect_one_pending_deletion() is False
+        assert runtime.publication.read(second_ref).provenance == {"owner": "second"}
+        assert rustfs_admin.head_object(
+            Bucket=core_settings.s3_bucket,
+            Key=object_key,
+        )["ResponseMetadata"]["HTTPStatusCode"] == 200
+
+        with runtime.database.transaction() as transaction:
+            runtime.publication.release_manifest_in_transaction(
+                transaction,
+                second_ref.manifest_sha256,
+                still_referenced=False,
+            )
+        assert runtime.publication.collect_one_pending_deletion() is True
+        assert runtime.publication.collect_one_pending_deletion() is False
+        with runtime.database.transaction() as transaction:
+            counts = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM publication.manifests
+                     WHERE sha256 = ANY(%s)) AS manifests,
+                    (SELECT count(*) FROM publication.objects
+                     WHERE sha256 = %s) AS objects,
+                    (SELECT count(*) FROM publication.object_deletions
+                     WHERE object_sha256 = %s) AS pending
+                """,
+                (
+                    [first_ref.manifest_sha256, second_ref.manifest_sha256],
+                    shared_sha256,
+                    shared_sha256,
+                ),
+            ).fetchone()
+        assert counts == {"manifests": 0, "objects": 0, "pending": 0}
+        with pytest.raises(ClientError) as deleted:
+            rustfs_admin.head_object(
+                Bucket=core_settings.s3_bucket,
+                Key=object_key,
+            )
+        assert deleted.value.response["Error"]["Code"] in {"404", "NoSuchKey"}
+
+
+def test_failed_object_deletion_remains_durable_until_worker_retry(
+    core_settings: CoreSettings,
+    rustfs_admin: BaseClient,
+) -> None:
+    _reset_core_schemas(core_settings)
+    payload = {"delete": "after-recovery"}
+    expected = canonical_json_bytes(payload)
+    with open_core_runtime(core_settings) as runtime:
+        prepared = runtime.publication.prepare(
+            kind="publication.probe",
+            payloads={"canonical": JsonPayload(payload)},
+            provenance={"owner": "deletion-recovery"},
+        )
+        object_sha256 = prepared.payload_sha256s["canonical"]
+        with runtime.database.transaction() as transaction:
+            published = runtime.publication.record(transaction, prepared)
+            runtime.publication.release_manifest_in_transaction(
+                transaction,
+                published.manifest_sha256,
+                still_referenced=False,
+            )
+
+        object_key = _find_key_with_content(
+            rustfs_admin,
+            core_settings.s3_bucket,
+            expected,
+        )
+        unreachable_s3 = boto3.client(
+            "s3",
+            endpoint_url="http://127.0.0.1:1",
+            aws_access_key_id=core_settings.s3_access_key_id,
+            aws_secret_access_key=core_settings.s3_secret_access_key,
+            region_name=core_settings.s3_region,
+            config=Config(
+                connect_timeout=0.1,
+                read_timeout=0.1,
+                retries={"max_attempts": 0},
+            ),
+        )
+        try:
+            failing = Publication(
+                runtime.database,
+                unreachable_s3,
+                bucket=core_settings.s3_bucket,
+            )
+            with pytest.raises(PublicationUnavailableError):
+                failing.collect_one_pending_deletion()
+        finally:
+            unreachable_s3.close()
+
+        with runtime.database.transaction() as transaction:
+            retained = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM publication.objects
+                     WHERE sha256 = %s) AS objects,
+                    (SELECT count(*) FROM publication.object_deletions
+                     WHERE object_sha256 = %s) AS pending
+                """,
+                (object_sha256, object_sha256),
+            ).fetchone()
+        assert retained == {"objects": 1, "pending": 1}
+        assert rustfs_admin.head_object(
+            Bucket=core_settings.s3_bucket,
+            Key=object_key,
+        )["ResponseMetadata"]["HTTPStatusCode"] == 200
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    with open_core_runtime(core_settings) as runtime:
+        with runtime.database.transaction() as transaction:
+            collected = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM publication.objects
+                     WHERE sha256 = %s) AS objects,
+                    (SELECT count(*) FROM publication.object_deletions
+                     WHERE object_sha256 = %s) AS pending
+                """,
+                (object_sha256, object_sha256),
+            ).fetchone()
+    assert collected == {"objects": 0, "pending": 0}
+    with pytest.raises(ClientError) as deleted:
+        rustfs_admin.head_object(
+            Bucket=core_settings.s3_bucket,
+            Key=object_key,
+        )
+    assert deleted.value.response["Error"]["Code"] in {"404", "NoSuchKey"}
+
+
 def test_committed_read_rejects_corrupt_object_before_returning_a_bundle(
     core_settings: CoreSettings,
     rustfs_admin: BaseClient,
@@ -187,6 +366,18 @@ def _reset_product_probe(database: object) -> None:
             )
             """
         )
+
+
+def _reset_core_schemas(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            for schema in reversed((*CORE_SCHEMAS, "thesistrace_meta")):
+                transaction.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+    finally:
+        database.close()
+    initialize_core(settings.database_url)
 
 
 def _find_key_with_content(s3: BaseClient, bucket: str, expected: bytes) -> str:

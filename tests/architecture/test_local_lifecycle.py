@@ -622,7 +622,6 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     assert scripts["test:integration"] == "./scripts/test-runtime integration"
     assert scripts["test:e2e"] == "./scripts/test-runtime e2e"
     assert scripts["test:image-smoke"] == "./scripts/test-runtime image-smoke"
-    assert scripts["test:benchmark"] == "./scripts/test-runtime benchmark"
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
 
 
@@ -1084,9 +1083,11 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "one-shot schema initializer",
         "thesistrace_meta.schema_contract",
         "private `thesistrace-data-operator`",
+        "one browser-local Draft per Research Folder",
+        "direct Run admission",
+        "`Use as Draft` is the sole reuse action",
         "Attempt starts",
-        "Data Generation frozen at Run",
-        "Use as Draft copies an earlier Run's authorable values",
+        "pins the Data Generation frozen at Run",
         "There is no upgrade, downgrade, fallback",
     ):
         assert current in architecture
@@ -1096,5 +1097,9 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "migration-runner",
         "data.next_release",
         "Data Update product action",
+        "## Research Definitions",
+        "/definitions/:definitionId",
+        "Run saves the submitted revision",
+        "Rerun always creates a new ResearchRun ID using exactly",
     ):
         assert obsolete not in architecture

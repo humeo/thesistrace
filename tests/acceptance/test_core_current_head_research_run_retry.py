@@ -21,7 +21,10 @@ from psycopg import Connection, connect
 from psycopg.conninfo import make_conninfo
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data import (
+    DatasetLifecycle,
+    MountedGenerationStore,
+)
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -134,9 +137,7 @@ class _BlockedWorker:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_worker_loss_retry_recomputes_on_the_admission_frozen_generation(
-    tmp_path: Path,
-) -> None:
+def test_worker_loss_retry_recomputes_on_the_frozen_generation(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -291,7 +292,7 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
-    head_a = _publish_head(settings, price_offset=0)
+    _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
         run_id = _admit_run(client, request_id="resource-exhaustion")
@@ -302,7 +303,6 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
             retrying = client.get(f"/api/research-runs/{run_id}").json()
             assert retrying["status"] == "running"
             assert "failure_reason" not in retrying
-            assert _live_run_retention(settings, run_id) == head_a
 
             second = _run_worker_once(settings)
             assert second.returncode == 0, second.stdout + second.stderr
@@ -324,18 +324,19 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
 
 
 def _admit_run(client: TestClient, *, request_id: str) -> str:
-    response = client.post("/api/definitions/run", json=_run_command(request_id))
-    assert response.status_code == 200
-    return str(response.json()["run"]["id"])
+    response = client.post("/api/research-runs", json=_run_command(request_id))
+    assert response.status_code == 202
+    return str(response.json()["id"])
 
 
 def _run_command(request_id: str) -> dict[str, object]:
     return {
         "request_id": request_id,
+        "folder_id": "folder_default",
         "name": "Same research question on current data",
         "start_date": SESSIONS[0],
         "end_date": SESSIONS[-1],
-        "alpha": {"field_id": "price.close.adjusted"},
+        "formula": "close_adj",
         "universe": "top300",
         "neutralization": "none",
         "holdings_count": 1,
@@ -401,19 +402,20 @@ def _canonical(*, price_offset: int) -> dict[str, object]:
 
 def _reference_result(settings: CoreSettings, generation_id: str) -> dict[str, object]:
     canonical = open_complete_refresh_basis(
-        MountedGenerationStore(settings.data_mount),
-        generation_id,
+        MountedGenerationStore(settings.data_mount), generation_id
+    )
+    research_data = align_canonical_market_data(
+        canonical,
+        field_bindings={"price.close.adjusted": "close_adj"},
+        universe="top300",
+        neutralization="none",
     )
     output = run(
         RunInput(
-            research_data=align_canonical_market_data(
-                canonical,
-                field_bindings={"price.close.adjusted": "close_adj"},
-                universe="top300",
-                neutralization="none",
-            ),
-            alpha_expression={"field_id": "price.close.adjusted"},
+            research_data=research_data,
+            alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
             field_bindings={"price.close.adjusted": "close_adj"},
+            effective_alpha_lookback=0,
             universe="top300",
             neutralization="none",
             holdings_count=1,
@@ -494,24 +496,6 @@ def _stored_run(settings: CoreSettings, run_id: str) -> dict[str, object]:
             ).fetchone()
         assert row is not None
         return row
-    finally:
-        database.close()
-
-
-def _live_run_retention(settings: CoreSettings, run_id: str) -> str | None:
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT generation_manifest_sha256
-                FROM data.generation_candidates
-                WHERE operation_id = %s AND status = 'live'
-                """,
-                (f"queued-research-run:{run_id}",),
-            ).fetchone()
-        return None if row is None else str(row["generation_manifest_sha256"])
     finally:
         database.close()
 

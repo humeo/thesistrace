@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from decimal import ROUND_HALF_EVEN, Decimal
 
-from thesistrace.data.fields import MARKET_FIELDS
+from thesistrace.data.fields import alpha_field_catalog
 
 SOURCE_CORRECTABLE_PRICE_FIELDS = frozenset(
     {
@@ -32,7 +32,9 @@ DAILY_FIELDS = (
 )
 
 ALPHA_FIELDS = tuple(
-    (field.evaluation_name, field.field_id, field.definition, field.unit) for field in MARKET_FIELDS
+    (field.alpha.identifier, field.field_id, field.description, field.unit)
+    for field in alpha_field_catalog()
+    if field.alpha is not None and field.family_id == "equity.eod_price"
 )
 
 

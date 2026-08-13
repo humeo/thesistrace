@@ -10,20 +10,22 @@ from tempfile import TemporaryDirectory
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.alpha_language import alpha_language
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
 from thesistrace.data import (
     DatasetAdmissionService,
     DatasetLifecycle,
     DatasetOverviewService,
     MountedGenerationStore,
-    authorable_fields,
 )
-from thesistrace.definition import DefinitionService
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.publication import Publication
-from thesistrace.research_kernel import operator_catalog
-from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
-from thesistrace.research_run import ResearchRunService
+from thesistrace.research_folder import ResearchFolderService
+from thesistrace.research_run import (
+    ResearchRunService,
+    research_result_manifest_is_referenced,
+    research_run_exists,
+)
 from thesistrace.research_run.result import read_result_bundle
 
 CORE_ENVIRONMENT_NAMES = (
@@ -94,7 +96,7 @@ def core_environment_is_configured(
 class CoreRuntime:
     database: PostgresDatabase
     data_overview: DatasetOverviewService
-    definitions: DefinitionService
+    research_folders: ResearchFolderService
     research_runs: ResearchRunService
     daily_tracks: DailyTrackService
     daily_track_sessions: SessionCoordinateRepository
@@ -129,6 +131,8 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             generation_store=generation_store,
             read_result_bundle=read_result_bundle,
             working_cache_root=Path(working_cache.name) / "daily-tracks",
+            seed_research_exists=research_run_exists,
+            research_references_result=research_result_manifest_is_referenced,
         )
         research_runs = ResearchRunService(
             database,
@@ -136,18 +140,14 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             generation_store=generation_store,
             publication=publication,
             activate_track=daily_tracks.activate,
+            compile_formula=alpha_language.compile,
+            current_dataset=dataset_admission.current,
+            track_references_result=daily_tracks.references_result_manifest,
         )
         yield CoreRuntime(
             database=database,
             data_overview=data_overview,
-            definitions=DefinitionService(
-                database,
-                authorable_fields=authorable_fields,
-                operator_catalog=operator_catalog,
-                validate_alpha=validate_normalized_alpha,
-                current_dataset=dataset_admission.current,
-                admit_run=research_runs.admit,
-            ),
+            research_folders=ResearchFolderService(database),
             research_runs=research_runs,
             daily_tracks=daily_tracks,
             daily_track_sessions=SessionCoordinateRepository(database),

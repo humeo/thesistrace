@@ -39,21 +39,22 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
 
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
-            "/api/definitions/run",
+            "/api/research-runs",
             json={
                 "request_id": "collection-acceptance-run",
+                "folder_id": "folder_default",
                 "name": "Collected input remains an audit coordinate",
                 "start_date": sessions[0],
                 "end_date": sessions[-1],
-                "alpha": {"field_id": "price.close.adjusted"},
+                "formula": "close_adj",
                 "universe": "top300",
                 "neutralization": "none",
                 "holdings_count": 1,
                 "rebalance_every_sessions": 1,
             },
         )
-        assert accepted.status_code == 200
-        run_id = str(accepted.json()["run"]["id"])
+        assert accepted.status_code == 202
+        run_id = str(accepted.json()["id"])
         worker = _run_worker_once(settings)
         assert worker.returncode == 0, worker.stdout + worker.stderr
         tracking = client.post(

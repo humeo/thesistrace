@@ -4,7 +4,11 @@ from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel import KernelState, RunInput, RunOutput, run
-from thesistrace.research_kernel.alpha import alpha_matrix_checksum, evaluate_alpha_matrix
+from thesistrace.research_kernel.alpha import (
+    alpha_matrix_checksum,
+    evaluate_alpha_matrix,
+    validate_alpha,
+)
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
 from thesistrace.research_kernel.strategy import run_strategy
 
@@ -40,8 +44,7 @@ def accepted_calculation_case() -> dict[str, object]:
     )
     matrix = evaluate_alpha_matrix(
         research_data,
-        expression=PCT_CHANGE_20,
-        field_bindings=FIELD_BINDINGS,
+        compiled_alpha=validate_alpha(PCT_CHANGE_20, field_bindings=FIELD_BINDINGS),
         neutralization="none",
     )
     selected = set(research_sessions)
@@ -103,6 +106,7 @@ def accepted_kernel_run(
             research_data=research_data,
             alpha_expression=alpha["expression"],
             field_bindings=FIELD_BINDINGS,
+            effective_alpha_lookback=20,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             holdings_count=int(strategy["holdings_count"]),

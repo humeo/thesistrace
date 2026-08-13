@@ -15,6 +15,7 @@ from thesistrace.research_kernel import (
     continuation_snapshot,
     run,
 )
+from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.result import build_result_payload, result_publication_payloads
@@ -110,7 +111,7 @@ def test_explicit_research_period_rejects_empty_reversed_or_partial_boundaries()
                 end=SESSIONS[1],
             )
         )
-    with pytest.raises(KernelRunError, match="not a canonical Research Session"):
+    with pytest.raises(KernelRunError, match="not a Research Session"):
         run(
             _run_input(
                 canonical,
@@ -431,6 +432,9 @@ def _run_input(
         research_data=(_research_data(canonical) if isinstance(canonical, dict) else canonical),
         alpha_expression=expression,
         field_bindings=FIELD_BINDINGS,
+        effective_alpha_lookback=validate_normalized_alpha(
+            expression, field_bindings=FIELD_BINDINGS
+        ).effective_lookback,
         universe="manual",
         neutralization="none",
         holdings_count=1,

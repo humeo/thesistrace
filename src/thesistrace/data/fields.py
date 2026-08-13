@@ -1,157 +1,233 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
+
+AlphaValueType = Literal["numeric_series"]
+type AlphaSeries = tuple[float | None, ...]
+type AlphaSeriesReader = Callable[
+    [Sequence[Mapping[str, object] | None]],
+    AlphaSeries,
+]
 
 
 @dataclass(frozen=True)
-class AuthorableField:
+class AlphaFieldCapability:
+    identifier: str
+    value_type: AlphaValueType = "numeric_series"
+
+
+@dataclass(frozen=True)
+class FieldDefinition:
     field_id: str
-    evaluation_name: str
-    definition: str
+    description: str
     unit: str
-    family_id: str = "equity.eod_price"
-    numeric_type: str = "decimal"
-    information_time: str = "post-close"
+    physical_type: str
+    availability: str
+    grain: str
+    missingness: str
+    family_id: str
+    alpha: AlphaFieldCapability | None = None
+    alpha_series_reader: AlphaSeriesReader | None = None
     reporting_scope: str = "market-observation"
     report_period_selection: str = "research-session"
-    missingness: str = "missing"
     source_lineage: str = "tushare.daily"
     applicable_company_types: tuple[str, ...] = ()
     source_endpoint: str = ""
     source_column: str = ""
 
 
+def _row_series(column: str) -> AlphaSeriesReader:
+    def read(rows: Sequence[Mapping[str, object] | None]) -> AlphaSeries:
+        return tuple(
+            None if row is None or row.get(column) is None else float(row[column])
+            for row in rows
+        )
+
+    return read
+
+
 MARKET_FIELDS = (
-    AuthorableField(
+    FieldDefinition(
         "price.open.adjusted",
-        "open_adj",
         "causal cumulative-adjusted open",
         "CNY/share",
+        "decimal",
+        "after_close",
+        "instrument_by_research_session",
+        "missing_when_no_valid_session_bar",
+        "equity.eod_price",
+        AlphaFieldCapability("open_adj"),
+        _row_series("open_adj"),
     ),
-    AuthorableField(
+    FieldDefinition(
         "price.high.adjusted",
-        "high_adj",
         "causal cumulative-adjusted high",
         "CNY/share",
+        "decimal",
+        "after_close",
+        "instrument_by_research_session",
+        "missing_when_no_valid_session_bar",
+        "equity.eod_price",
+        AlphaFieldCapability("high_adj"),
+        _row_series("high_adj"),
     ),
-    AuthorableField(
+    FieldDefinition(
         "price.low.adjusted",
-        "low_adj",
         "causal cumulative-adjusted low",
         "CNY/share",
+        "decimal",
+        "after_close",
+        "instrument_by_research_session",
+        "missing_when_no_valid_session_bar",
+        "equity.eod_price",
+        AlphaFieldCapability("low_adj"),
+        _row_series("low_adj"),
     ),
-    AuthorableField(
+    FieldDefinition(
         "price.close.adjusted",
-        "close_adj",
         "causal cumulative-adjusted close",
         "CNY/share",
+        "decimal",
+        "after_close",
+        "instrument_by_research_session",
+        "missing_when_no_valid_session_bar",
+        "equity.eod_price",
+        AlphaFieldCapability("close_adj"),
+        _row_series("close_adj"),
     ),
-    AuthorableField(
+    FieldDefinition(
         "market.volume.shares",
-        "volume_shares",
         "traded share volume",
         "shares",
+        "int64",
+        "after_close",
+        "instrument_by_research_session",
+        "missing_when_no_valid_session_bar",
+        "equity.eod_price",
+        AlphaFieldCapability("volume_shares"),
+        _row_series("volume_shares"),
     ),
-    AuthorableField(
+    FieldDefinition(
         "market.turnover.cny",
-        "turnover_amount_cny",
         "turnover amount",
         "CNY",
+        "decimal",
+        "after_close",
+        "instrument_by_research_session",
+        "missing_when_no_valid_session_bar",
+        "equity.eod_price",
+        AlphaFieldCapability("turnover_amount_cny"),
+        _row_series("turnover_cny"),
     ),
 )
+
+
+def _financial_field(
+    field_id: str,
+    description: str,
+    *,
+    endpoint: str,
+    column: str,
+    period_selection: str,
+) -> FieldDefinition:
+    return FieldDefinition(
+        field_id=field_id,
+        description=description,
+        unit="CNY",
+        physical_type="decimal",
+        availability="next_research_session_after_source_publication",
+        grain="instrument_by_research_session",
+        missingness="missing_when_no_visible_eligible_fact",
+        family_id="equity.financial_pit",
+        alpha=AlphaFieldCapability(field_id),
+        alpha_series_reader=_row_series(field_id),
+        reporting_scope="report_type_1_consolidated",
+        report_period_selection=period_selection,
+        source_lineage=f"tushare.{endpoint}.{column}",
+        applicable_company_types=("1", "2", "3", "4"),
+        source_endpoint=endpoint,
+        source_column=column,
+    )
+
 
 FINANCIAL_FIELDS = (
-    AuthorableField(
-        "total_revenue_latest_fy",
+    _financial_field(
         "total_revenue_latest_fy",
         "latest visible full-year consolidated total revenue",
-        "CNY",
-        family_id="equity.financial_pit",
-        information_time="next-research-session",
-        reporting_scope="report_type_1_consolidated",
-        report_period_selection="latest_visible_full_year",
-        source_lineage="tushare.income.total_revenue",
-        applicable_company_types=("1", "2", "3", "4"),
-        source_endpoint="income",
-        source_column="total_revenue",
+        endpoint="income",
+        column="total_revenue",
+        period_selection="latest_visible_full_year",
     ),
-    AuthorableField(
-        "net_profit_parent_latest_fy",
+    _financial_field(
         "net_profit_parent_latest_fy",
         "latest visible full-year consolidated net profit attributable to parent owners",
-        "CNY",
-        family_id="equity.financial_pit",
-        information_time="next-research-session",
-        reporting_scope="report_type_1_consolidated",
-        report_period_selection="latest_visible_full_year",
-        source_lineage="tushare.income.n_income_attr_p",
-        applicable_company_types=("1", "2", "3", "4"),
-        source_endpoint="income",
-        source_column="n_income_attr_p",
+        endpoint="income",
+        column="n_income_attr_p",
+        period_selection="latest_visible_full_year",
     ),
-    AuthorableField(
-        "operating_cash_flow_latest_fy",
+    _financial_field(
         "operating_cash_flow_latest_fy",
         "latest visible full-year consolidated net operating cash flow",
-        "CNY",
-        family_id="equity.financial_pit",
-        information_time="next-research-session",
-        reporting_scope="report_type_1_consolidated",
-        report_period_selection="latest_visible_full_year",
-        source_lineage="tushare.cashflow.n_cashflow_act",
-        applicable_company_types=("1", "2", "3", "4"),
-        source_endpoint="cashflow",
-        source_column="n_cashflow_act",
+        endpoint="cashflow",
+        column="n_cashflow_act",
+        period_selection="latest_visible_full_year",
     ),
-    AuthorableField(
-        "total_assets_latest_reported",
+    _financial_field(
         "total_assets_latest_reported",
         "latest visible quarterly or annual consolidated total assets",
-        "CNY",
-        family_id="equity.financial_pit",
-        information_time="next-research-session",
-        reporting_scope="report_type_1_consolidated",
-        report_period_selection="latest_visible_quarterly_or_annual",
-        source_lineage="tushare.balancesheet.total_assets",
-        applicable_company_types=("1", "2", "3", "4"),
-        source_endpoint="balancesheet",
-        source_column="total_assets",
+        endpoint="balancesheet",
+        column="total_assets",
+        period_selection="latest_visible_quarterly_or_annual",
     ),
-    AuthorableField(
-        "total_liabilities_latest_reported",
+    _financial_field(
         "total_liabilities_latest_reported",
         "latest visible quarterly or annual consolidated total liabilities",
-        "CNY",
-        family_id="equity.financial_pit",
-        information_time="next-research-session",
-        reporting_scope="report_type_1_consolidated",
-        report_period_selection="latest_visible_quarterly_or_annual",
-        source_lineage="tushare.balancesheet.total_liab",
-        applicable_company_types=("1", "2", "3", "4"),
-        source_endpoint="balancesheet",
-        source_column="total_liab",
+        endpoint="balancesheet",
+        column="total_liab",
+        period_selection="latest_visible_quarterly_or_annual",
     ),
-    AuthorableField(
-        "equity_parent_latest_reported",
+    _financial_field(
         "equity_parent_latest_reported",
         "latest visible quarterly or annual consolidated equity attributable to parent owners",
-        "CNY",
-        family_id="equity.financial_pit",
-        information_time="next-research-session",
-        reporting_scope="report_type_1_consolidated",
-        report_period_selection="latest_visible_quarterly_or_annual",
-        source_lineage="tushare.balancesheet.total_hldr_eqy_exc_min_int",
-        applicable_company_types=("1", "2", "3", "4"),
-        source_endpoint="balancesheet",
-        source_column="total_hldr_eqy_exc_min_int",
+        endpoint="balancesheet",
+        column="total_hldr_eqy_exc_min_int",
+        period_selection="latest_visible_quarterly_or_annual",
     ),
 )
 
-AUTHORABLE_FIELDS = (*MARKET_FIELDS, *FINANCIAL_FIELDS)
+FIELD_DEFINITIONS = (*MARKET_FIELDS, *FINANCIAL_FIELDS)
 
 
-def authorable_fields() -> tuple[AuthorableField, ...]:
-    return AUTHORABLE_FIELDS
+def field_definitions() -> tuple[FieldDefinition, ...]:
+    return FIELD_DEFINITIONS
 
 
-def authorable_field_bindings() -> dict[str, str]:
-    """Return Data-owned stable field IDs bound to Kernel evaluation names."""
-    return {field.field_id: field.evaluation_name for field in AUTHORABLE_FIELDS}
+def alpha_field_catalog() -> tuple[FieldDefinition, ...]:
+    return tuple(field for field in FIELD_DEFINITIONS if field.alpha is not None)
+
+
+def authorable_fields() -> tuple[FieldDefinition, ...]:
+    return alpha_field_catalog()
+
+
+def alpha_identifier_by_field_id() -> dict[str, str]:
+    return {
+        field.field_id: field.alpha.identifier
+        for field in alpha_field_catalog()
+        if field.alpha is not None
+    }
+
+
+def read_alpha_field_series(
+    field_id: str,
+    rows: Sequence[Mapping[str, object] | None],
+) -> AlphaSeries:
+    field = next(
+        (definition for definition in alpha_field_catalog() if definition.field_id == field_id),
+        None,
+    )
+    if field is None or field.alpha_series_reader is None:
+        raise KeyError(f"unknown Alpha field: {field_id}")
+    return field.alpha_series_reader(rows)

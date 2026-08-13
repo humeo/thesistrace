@@ -1,11 +1,127 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_validator,
+)
+
+from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
+ResearchName = Annotated[str, Field(strict=True, max_length=200)]
+Formula = Annotated[str, Field(strict=True)]
+HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
+RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
+
+
+def _natural_date(value: object) -> date:
+    if type(value) is date:
+        return value
+    if not isinstance(value, str):
+        raise ValueError("natural date must be an ISO YYYY-MM-DD string")
+    try:
+        parsed = date.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError("natural date must be an ISO YYYY-MM-DD string") from error
+    if parsed.isoformat() != value:
+        raise ValueError("natural date must be an ISO YYYY-MM-DD string")
+    return parsed
+
+
+NaturalDate = Annotated[date, BeforeValidator(_natural_date)]
+
+
+class ResearchRunAdmissionCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    request_id: RequestId
+    folder_id: FolderId
+    name: ResearchName | None = None
+    formula: Formula
+    hypothesis: str | None = None
+    start_date: NaturalDate
+    end_date: NaturalDate
+    universe: Literal["top300", "top1000", "top2000", "top3000"]
+    neutralization: Literal["none", "industry"]
+    holdings_count: HoldingsCount
+    rebalance_every_sessions: RebalanceInterval
+
+    @model_validator(mode="after")
+    def validate_research_period(self) -> ResearchRunAdmissionCommand:
+        if self.start_date > self.end_date:
+            raise ValueError("Research end date must not precede start date")
+        return self
+
+
+class ResearchRunAdmissionIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: str
+    field: str
+    message: str
+    severity: Literal["error"] = "error"
+    range: SourceRange | None = None
+    details: DiagnosticDetails | None = None
+
+
+class ResearchRunAdmissionRejection(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    issues: list[ResearchRunAdmissionIssue]
+
+
+class OrganizeResearchRunCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    name: ResearchName | None = None
+    folder_id: FolderId | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Research name must not be blank")
+        return normalized
+
+    @model_validator(mode="after")
+    def require_change(self) -> OrganizeResearchRunCommand:
+        if self.name is None and self.folder_id is None:
+            raise ValueError("Research organization change is required")
+        return self
+
+
+class AlphaAdmissionFacts(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    effective_lookback: int
+    node_count: int
+    depth: int
+    formula_work: int
+    estimated_run_work: int
+
+
+class DataAdmissionFacts(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    generation_manifest_sha256: str
+    data_through_session: NaturalDate
+    coverage_start: NaturalDate
+    coverage_end: NaturalDate
+    first_research_session: NaturalDate
+    last_research_session: NaturalDate
+    calculation_session_count: int
+    universe_instrument_count: int
 
 
 class ImmutableRunInput(BaseModel):
@@ -13,18 +129,21 @@ class ImmutableRunInput(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    definition: dict[str, object]
-    compiled_alpha: dict[str, object]
-    data_generation_manifest_sha256: str
-    data_generation_facts: dict[str, object]
+    formula_source: str
+    alpha_expression: dict[str, object]
+    hypothesis: str | None
     requested_start_date: date
     requested_end_date: date
     field_bindings: dict[str, str]
+    universe: Literal["top300", "top1000", "top2000", "top3000"]
+    neutralization: Literal["none", "industry"]
     strategy: dict[str, object]
     costs: dict[str, str]
     risk_free_rate: str
     numeric_execution_contract: str
     semantic_versions: dict[str, str]
+    alpha_admission: AlphaAdmissionFacts
+    data_admission: DataAdmissionFacts
 
 
 class ResearchRunSummary(BaseModel):
@@ -32,14 +151,29 @@ class ResearchRunSummary(BaseModel):
 
     id: str
     status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
-    definition_id: str
-    definition_revision: int
+    name: str
+    folder_id: str
+    created_at: datetime
     start_date: date
     end_date: date
+    formula_summary: str
     failure_reason: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
     )
+
+
+class ResearchRunAuthorableInput(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    formula: str
+    hypothesis: str | None
+    start_date: date
+    end_date: date
+    universe: Literal["top300", "top1000", "top2000", "top3000"]
+    neutralization: Literal["none", "industry"]
+    holdings_count: int
+    rebalance_every_sessions: int
 
 
 class ResearchRunCancelCommand(BaseModel):
@@ -205,22 +339,8 @@ class ResearchRunResult(BaseModel):
     provenance: ResultProvenance
 
 
-class ResearchRunDraft(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    name: str
-    hypothesis: str | None
-    start_date: date
-    end_date: date
-    alpha: dict[str, object]
-    universe: Literal["top300", "top1000", "top2000", "top3000"]
-    neutralization: Literal["none", "industry"]
-    holdings_count: int
-    rebalance_every_sessions: int
-
-
 class ResearchRunDetail(ResearchRunSummary):
-    draft: ResearchRunDraft
+    input: ResearchRunAuthorableInput
     result: ResearchRunResult | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

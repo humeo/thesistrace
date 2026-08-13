@@ -564,6 +564,41 @@ class MountedGenerationStore:
             financial_observation_through_session=financial_through,
         )
 
+    def count_universe_instruments(
+        self,
+        manifest_sha256: str,
+        *,
+        universe: str,
+        start_session: str,
+        end_session: str,
+    ) -> int:
+        if universe not in _UNIVERSE_NAMES or start_session > end_session:
+            raise ValueError("Universe calculation window is invalid")
+        root = self._read_family_generation_root(manifest_sha256)
+        spec, reference = self._family_table_reference(
+            root,
+            "equity.liquidity_universe",
+            "liquidity_universes",
+        )
+        rows = self._open_table_sessions(
+            spec,
+            reference,
+            selected_sessions={
+                session
+                for session in root["research_sessions"]
+                if start_session <= str(session) <= end_session
+            },
+            columns={"session", "universe", "instrument_ids"},
+        )
+        return len(
+            {
+                str(instrument_id)
+                for row in rows
+                if row["universe"] == universe
+                for instrument_id in row["instrument_ids"]
+            }
+        )
+
     def open_refresh_base(
         self,
         manifest_sha256: str,

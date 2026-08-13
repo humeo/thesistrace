@@ -303,7 +303,7 @@ CREATE UNIQUE INDEX daily_tracks_one_unresolved_session_progression_idx ON daily
 --
 
 ALTER TABLE ONLY daily_tracks.retry_receipts
-    ADD CONSTRAINT retry_receipts_progression_id_fkey FOREIGN KEY (progression_id) REFERENCES daily_tracks.session_progressions(id);
+    ADD CONSTRAINT retry_receipts_progression_id_fkey FOREIGN KEY (progression_id) REFERENCES daily_tracks.session_progressions(id) ON DELETE CASCADE;
 
 
 --
@@ -311,7 +311,7 @@ ALTER TABLE ONLY daily_tracks.retry_receipts
 --
 
 ALTER TABLE ONLY daily_tracks.retry_receipts
-    ADD CONSTRAINT retry_receipts_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id);
+    ADD CONSTRAINT retry_receipts_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
 
 
 --
@@ -319,7 +319,7 @@ ALTER TABLE ONLY daily_tracks.retry_receipts
 --
 
 ALTER TABLE ONLY daily_tracks.session_checkpoints
-    ADD CONSTRAINT session_checkpoint_progression_fk FOREIGN KEY (track_id, progression_id, boundary_session) REFERENCES daily_tracks.session_progressions(track_id, id, target_end_session);
+    ADD CONSTRAINT session_checkpoint_progression_fk FOREIGN KEY (track_id, progression_id, boundary_session) REFERENCES daily_tracks.session_progressions(track_id, id, target_end_session) ON DELETE CASCADE;
 
 
 --
@@ -327,7 +327,7 @@ ALTER TABLE ONLY daily_tracks.session_checkpoints
 --
 
 ALTER TABLE ONLY daily_tracks.session_checkpoints
-    ADD CONSTRAINT session_checkpoints_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id);
+    ADD CONSTRAINT session_checkpoints_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
 
 
 --
@@ -343,7 +343,7 @@ ALTER TABLE ONLY daily_tracks.session_checkpoints
 --
 
 ALTER TABLE ONLY daily_tracks.session_progression_attempts
-    ADD CONSTRAINT session_progression_attempts_track_id_progression_id_fkey FOREIGN KEY (track_id, progression_id) REFERENCES daily_tracks.session_progressions(track_id, id);
+    ADD CONSTRAINT session_progression_attempts_track_id_progression_id_fkey FOREIGN KEY (track_id, progression_id) REFERENCES daily_tracks.session_progressions(track_id, id) ON DELETE CASCADE;
 
 
 --
@@ -359,7 +359,7 @@ ALTER TABLE ONLY daily_tracks.session_progressions
 --
 
 ALTER TABLE ONLY daily_tracks.session_progressions
-    ADD CONSTRAINT session_progressions_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id);
+    ADD CONSTRAINT session_progressions_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
 
 
 --
@@ -383,7 +383,7 @@ ALTER TABLE ONLY daily_tracks.session_tracking_states
 --
 
 ALTER TABLE ONLY daily_tracks.session_tracking_states
-    ADD CONSTRAINT session_tracking_states_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id);
+    ADD CONSTRAINT session_tracking_states_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
 
 
 --
@@ -399,7 +399,7 @@ ALTER TABLE ONLY daily_tracks.session_tracking_states
 --
 
 ALTER TABLE ONLY daily_tracks.stop_receipts
-    ADD CONSTRAINT stop_receipts_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id);
+    ADD CONSTRAINT stop_receipts_track_id_fkey FOREIGN KEY (track_id) REFERENCES daily_tracks.tracks(id) ON DELETE CASCADE;
 
 
 --

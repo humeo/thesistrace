@@ -1,0 +1,33 @@
+{
+  "benchmark": "alpha-series-plan",
+  "formula": "ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252) + ts_mean(close_adj, 252)",
+  "limits": {
+    "effective_lookback": 252,
+    "alpha_run_estimated_work": 15000000,
+    "estimated_work": 4096,
+    "expression_depth": 32,
+    "expression_nodes": 256,
+    "source_characters": 4096
+  },
+  "observed": {
+    "compile_ms": 6.632,
+    "effective_lookback": 251,
+    "estimated_work": 4095,
+    "evaluate_ms": 3856.661,
+    "expression_nodes": 63,
+    "peak_bytes": 5487163,
+    "plan_nodes": 63,
+    "source_characters": 413
+  },
+  "maximum_universe_date_shape": {
+    "evaluate_ms": 3035.362,
+    "formula": "close_adj",
+    "formula_work": 1,
+    "peak_bytes": 120480054,
+    "series_points": 15000000,
+    "sessions": 5000,
+    "universe_instruments": 3000
+  },
+  "python": "3.12.11",
+  "sessions": 5000
+}

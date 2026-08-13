@@ -2,6 +2,7 @@ import copy
 from decimal import Decimal
 
 import pytest
+from contracts import CLOSE_ADJUSTED, field, literal, operation
 from fixture_sessions import append_fixture_session
 from series import aligned_market_data
 
@@ -20,6 +21,7 @@ from thesistrace.research_kernel import (
     empty_continuation,
     run,
 )
+from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 from thesistrace.research_series import AlignedResearchData, slice_research_sessions
 
@@ -200,7 +202,7 @@ def test_kernel_advance_uses_bounded_continuation_with_compact_prior_state(
 def test_compact_advance_retains_exact_latest_504_factor_sessions() -> None:
     _, canonical = build_fixture(session_count=525)
     definition = {
-        "alpha": {"expression": {"field_id": "price.close.adjusted"}},
+        "alpha": {"expression": CLOSE_ADJUSTED},
         "neutralization": "none",
         "universe": "top300",
         "strategy": {
@@ -215,7 +217,7 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions() -> None:
             "transfer_fee_rate": "0.00001",
         },
     }
-    definition["alpha"] = {"expression": {"field_id": "price.close.adjusted"}}
+    definition["alpha"] = {"expression": CLOSE_ADJUSTED}
     calendar = list(canonical["research_calendar"])
     complete_research_data = _research_data(canonical, definition)
     seed_research_data = slice_research_sessions(complete_research_data, calendar[:21])
@@ -269,7 +271,7 @@ def test_compact_advance_retains_exact_latest_504_factor_sessions() -> None:
 def test_warm_continuation_keeps_504_factor_sessions_with_a_short_data_slice() -> None:
     _, canonical = build_fixture(session_count=526)
     definition = {
-        "alpha": {"expression": {"field_id": "price.close.adjusted"}},
+        "alpha": {"expression": CLOSE_ADJUSTED},
         "neutralization": "none",
         "universe": "top300",
         "strategy": {
@@ -322,13 +324,11 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
     _, canonical = build_fixture(session_count=756)
     definition = {
         "alpha": {
-            "expression": {
-                "operator_id": "ts_mean",
-                "operands": [
-                    {"field_id": "price.close.adjusted"},
-                    {"literal": 252},
-                ],
-            }
+            "expression": operation(
+                "ts_mean",
+                field("price.close.adjusted"),
+                literal(252),
+            )
         },
         "neutralization": "none",
         "universe": "top300",
@@ -500,11 +500,12 @@ def test_daily_track_owns_minimal_tracking_checkpoint_projection_and_restoration
         advanced,
         retained_strategy_sessions=[prior.boundary_session, advanced.boundary_session],
     )
+    frozen_input = advanced.run_input_with_research_data(advanced.research_data_snapshot())
+    assert checkpoint["run_input"]["alpha_expression"] == frozen_input.alpha_expression_snapshot()
+    assert checkpoint["run_input"]["field_bindings"] == frozen_input.field_bindings_snapshot()
     assert (
-        checkpoint["run_input"]["compiled_alpha"]
-        == advanced.run_input_with_research_data(
-            advanced.research_data_snapshot()
-        ).compiled_alpha_snapshot()
+        checkpoint["run_input"]["effective_alpha_lookback"]
+        == frozen_input.alpha_execution_plan().effective_lookback
     )
     delta = checkpoint["strategy_state"]["retained_delta"]
     assert len(delta) == 2
@@ -678,6 +679,9 @@ def _run_input(
         research_data=research_data,
         alpha_expression=alpha["expression"],
         field_bindings=FIELD_BINDINGS,
+        effective_alpha_lookback=validate_normalized_alpha(
+            alpha["expression"], field_bindings=FIELD_BINDINGS
+        ).effective_lookback,
         universe=str(definition["universe"]),
         neutralization=str(definition["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),

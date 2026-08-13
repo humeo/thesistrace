@@ -52,7 +52,7 @@ export function DataOverviewView({
           <p className="hero-copy">The current market and financial data available to research.</p>
         </div>
         <div className="hero-actions">
-          <button className="button button-quiet" onClick={onRefresh}>Refresh ↻</button>
+          <button className="button button-quiet" onClick={onRefresh}>Reload ↻</button>
         </div>
       </header>
       <div className="signal-strip" aria-label="Data readiness">

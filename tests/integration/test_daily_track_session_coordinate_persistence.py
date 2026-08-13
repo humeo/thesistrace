@@ -546,8 +546,6 @@ def test_relational_coordinates_cannot_disagree_with_checkpoint_ancestry() -> No
 def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
     origin = {
         "seed_run_id": f"run_{track_id}",
-        "definition_id": f"definition_{track_id}",
-        "definition_revision": 1,
         "immutable_input": {},
         "seed_data_generation_id": "generation_seed",
         "seed_data_through_session": "2026-08-03",

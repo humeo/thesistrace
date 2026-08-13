@@ -3,9 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from binascii import Error as Base64DecodeError
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from threading import Event, Thread
 from uuid import uuid4
 
@@ -16,35 +19,48 @@ from psycopg_pool import PoolTimeout
 from pydantic import ValidationError
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
+from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError
 from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
 from thesistrace.data import (
+    FINANCIAL_FIELDS,
+    DatasetAdmissionSnapshot,
     DatasetLifecycle,
+    DatasetWarmupUnavailable,
     GenerationStoreError,
-    MountedFamilyGenerationDescriptor,
     MountedGenerationStore,
 )
 from thesistrace.publication import (
     PreparedPublication,
     Publication,
     PublicationNotFoundError,
+    PublicationPreparationError,
     PublicationUnavailableError,
     PublicationVerificationError,
     PublishedRef,
     lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_kernel.alpha_expression import restore_compiled_alpha
+from thesistrace.research_kernel.alpha_expression import (
+    MAX_ALPHA_RUN_ESTIMATED_WORK,
+    estimate_alpha_run_work,
+)
 from thesistrace.research_kernel.kernel_run import (
     InsufficientCalculationWarmupError,
     KernelRunError,
     RunInput,
 )
 from thesistrace.research_kernel.kernel_run import run as run_kernel
+from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_run.models import (
+    AlphaAdmissionFacts,
+    DataAdmissionFacts,
     ImmutableRunInput,
+    OrganizeResearchRunCommand,
+    ResearchRunAdmissionCommand,
+    ResearchRunAdmissionIssue,
+    ResearchRunAuthorableInput,
     ResearchRunCancelCommand,
     ResearchRunDetail,
-    ResearchRunDraft,
     ResearchRunList,
     ResearchRunResult,
     ResearchRunSummary,
@@ -74,13 +90,18 @@ PERMANENT_FAILURE_PUBLIC_REASON = "Research execution failed."
 INSUFFICIENT_WARMUP_PUBLIC_REASON = (
     "Selected data does not contain the complete Calculation Warm-up."
 )
-SELECTED_DATA_INVALID_PUBLIC_REASON = "Current data cannot execute the requested Research Period."
+SELECTED_DATA_INVALID_PUBLIC_REASON = (
+    "Current data cannot execute the requested Research Period."
+)
 RETRYABLE_FAILURES = (
     INFRASTRUCTURE_FAILURE,
     RESOURCE_EXHAUSTED_FAILURE,
     WORKER_LOST_FAILURE,
 )
 Progress = Callable[[str, str], None]
+CompileFormula = Callable[[str], CompiledAlpha]
+CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
+TrackReferencesResult = Callable[[PostgresTransaction, str], bool]
 ActivateTrack = Callable[
     [PostgresTransaction, TrackingOrigin],
     DailyTrackSummary,
@@ -119,6 +140,40 @@ class ResearchRunInputInvalid(ValueError):
     pass
 
 
+class ResearchRunAdmissionConflict(RuntimeError):
+    pass
+
+
+class ResearchRunOrganizationConflict(RuntimeError):
+    pass
+
+
+class ResearchRunDeleteConflict(RuntimeError):
+    pass
+
+
+class ResearchRunAdmissionRejected(ValueError):
+    def __init__(self, issues: list[ResearchRunAdmissionIssue]) -> None:
+        super().__init__("ResearchRun admission rejected")
+        self.issues = issues
+
+
+FIXED_STRATEGY_KIND = "long_only_top_n_equal_weight"
+FIXED_INITIAL_CASH_CNY = "10000000"
+FIXED_EXECUTION = "next_open_full_fill"
+FIXED_COSTS = {
+    "commission_rate_all_in": "0.0003",
+    "commission_min_cny": "5",
+    "stamp_duty_sell_rate": "0.0005",
+    "transfer_fee_rate": "0.00001",
+}
+SEMANTIC_VERSIONS = {
+    "factor": "factor-v1",
+    "strategy": "strategy-v1",
+    "kernel": "kernel-v1",
+}
+
+
 @dataclass(frozen=True)
 class _ExecutionClaim:
     run_id: str
@@ -150,6 +205,9 @@ class ResearchRunService:
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         activate_track: ActivateTrack | None = None,
+        compile_formula: CompileFormula | None = None,
+        current_dataset: CurrentDataset | None = None,
+        track_references_result: TrackReferencesResult | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -161,43 +219,111 @@ class ResearchRunService:
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._activate_track = activate_track
+        self._compile_formula = compile_formula
+        self._current_dataset = current_dataset
+        self._track_references_result = track_references_result
 
     def admit(
         self,
-        transaction: PostgresTransaction,
-        immutable_input: ImmutableRunInput,
+        command: ResearchRunAdmissionCommand,
     ) -> ResearchRunSummary:
-        """Admit one Run in the caller's transaction without committing it."""
-        definition = immutable_input.definition
+        if self._compile_formula is None or self._current_dataset is None:
+            raise RuntimeError("ResearchRun admission dependencies are not configured")
+        fingerprint = _admission_fingerprint(command)
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.admit:{command.request_id}",),
+            ).fetchone()
+            receipt = _admission_receipt(transaction, command.request_id)
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise ResearchRunAdmissionConflict(
+                        "ResearchRun request_id conflicts"
+                    )
+                return _summary(receipt)
+        try:
+            compiled = self._compile_formula(command.formula)
+        except FormulaCompilationError as error:
+            raise ResearchRunAdmissionRejected(
+                [
+                    ResearchRunAdmissionIssue(
+                        code=diagnostic.code,
+                        field="formula",
+                        message=diagnostic.message,
+                        range=diagnostic.range,
+                        details=diagnostic.details,
+                    )
+                    for diagnostic in error.diagnostics
+                ]
+            ) from error
+        snapshot = self._current_dataset()
+        immutable_input = _admitted_input(command, compiled, snapshot)
         run_id = f"run_{uuid4().hex[:20]}"
-        row = transaction.execute(
-            """
-            INSERT INTO research_runs.runs (
-                id, definition_id, definition_revision,
-                requested_start_date, requested_end_date, status, immutable_input
-            ) VALUES (%s, %s, %s, %s, %s, 'queued', %s)
-            RETURNING id, status, definition_id, definition_revision,
-                      requested_start_date, requested_end_date
-            """,
-            (
-                run_id,
-                str(definition["id"]),
-                int(definition["revision"]),
-                immutable_input.requested_start_date,
-                immutable_input.requested_end_date,
-                Jsonb(immutable_input.model_dump(mode="json")),
-            ),
-        ).fetchone()
-        assert row is not None
-        if self._dataset_lifecycle is not None:
-            self._dataset_lifecycle.retain_generation_in_transaction(
-                transaction,
-                retention_id=f"queued-research-run:{run_id}",
-                generation_manifest_sha256=(
-                    immutable_input.data_generation_manifest_sha256
+        submitted_name = (command.name or "").strip()
+        name = submitted_name or f"Research {run_id[-8:].upper()}"
+        with self._database.transaction() as transaction:
+            transaction.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                (f"research_runs.admit:{command.request_id}",),
+            ).fetchone()
+            receipt = _admission_receipt(transaction, command.request_id)
+            if receipt is not None:
+                if receipt["request_fingerprint"] != fingerprint:
+                    raise ResearchRunAdmissionConflict(
+                        "ResearchRun request_id conflicts"
+                    )
+                return _summary(receipt)
+            folder = transaction.execute(
+                "SELECT id FROM research_folders.folders WHERE id = %s FOR KEY SHARE",
+                (command.folder_id,),
+            ).fetchone()
+            if folder is None:
+                raise ResearchRunAdmissionRejected(
+                    [
+                        ResearchRunAdmissionIssue(
+                            code="FOLDER_NOT_FOUND",
+                            field="folder_id",
+                            message="Research Folder does not exist",
+                        )
+                    ]
+                )
+            row = transaction.execute(
+                """
+                INSERT INTO research_runs.runs (
+                    id, folder_id, name, requested_start_date,
+                    requested_end_date, status, immutable_input
+                ) VALUES (%s, %s, %s, %s, %s, 'queued', %s)
+                RETURNING id, name, folder_id, status, requested_start_date,
+                          requested_end_date, created_at, immutable_input, failure_reason
+                """,
+                (
+                    run_id,
+                    command.folder_id,
+                    name,
+                    immutable_input.requested_start_date,
+                    immutable_input.requested_end_date,
+                    Jsonb(immutable_input.model_dump(mode="json")),
                 ),
-                lease_seconds=self._lease_seconds,
+            ).fetchone()
+            transaction.execute(
+                """
+                INSERT INTO research_runs.admission_requests (
+                    request_id, request_fingerprint, run_id
+                ) VALUES (%s, %s, %s)
+                """,
+                (command.request_id, fingerprint, run_id),
             )
+            if self._dataset_lifecycle is not None:
+                self._dataset_lifecycle.retain_generation_in_transaction(
+                    transaction,
+                    retention_id=f"queued-research-run:{run_id}",
+                    generation_manifest_sha256=(
+                        immutable_input.data_admission.generation_manifest_sha256
+                    ),
+                    lease_seconds=self._lease_seconds,
+                )
+        assert row is not None
         return _summary(row)
 
     def process_next(self) -> bool:
@@ -225,30 +351,159 @@ class ResearchRunService:
                 )
         return True
 
-    def list(self) -> ResearchRunList:
+    def list(
+        self,
+        *,
+        folder_id: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+    ) -> ResearchRunList:
+        cursor_created_at, cursor_id = _decode_list_cursor(cursor)
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       failure_reason
                 FROM research_runs.runs
+                WHERE (%s::text IS NULL OR folder_id = %s::text)
+                  AND (
+                    %s::timestamptz IS NULL
+                    OR created_at < %s::timestamptz
+                    OR (created_at = %s::timestamptz AND id > %s::text)
+                  )
                 ORDER BY created_at DESC, id
-                """
+                LIMIT %s::integer
+                """,
+                (
+                    folder_id,
+                    folder_id,
+                    cursor_created_at,
+                    cursor_created_at,
+                    cursor_created_at,
+                    cursor_id,
+                    limit + 1,
+                ),
             ).fetchall()
-        return ResearchRunList(items=[_summary(row) for row in rows], next_cursor=None)
+        has_more = len(rows) > limit
+        selected = rows[:limit]
+        next_cursor = _encode_list_cursor(selected[-1]) if has_more else None
+        return ResearchRunList(
+            items=[_summary(row) for row in selected],
+            next_cursor=next_cursor,
+        )
 
     def get(self, run_id: str) -> ResearchRunSummary | None:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
                 (run_id,),
             ).fetchone()
         return None if row is None else _summary(row)
+
+    def organize(
+        self,
+        run_id: str,
+        command: OrganizeResearchRunCommand,
+    ) -> ResearchRunSummary | None:
+        with self._database.transaction() as transaction:
+            if command.folder_id is not None:
+                folder = transaction.execute(
+                    """
+                    SELECT id
+                    FROM research_folders.folders
+                    WHERE id = %s
+                    FOR KEY SHARE
+                    """,
+                    (command.folder_id,),
+                ).fetchone()
+                if folder is None:
+                    raise ResearchRunOrganizationConflict(
+                        "Research Folder does not exist"
+                    )
+            row = transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET name = CASE WHEN %s THEN %s ELSE name END,
+                    folder_id = CASE WHEN %s THEN %s ELSE folder_id END,
+                    updated_at = now()
+                WHERE id = %s
+                RETURNING id, name, folder_id, status, requested_start_date,
+                          requested_end_date, created_at, immutable_input,
+                          failure_reason
+                """,
+                (
+                    command.name is not None,
+                    command.name,
+                    command.folder_id is not None,
+                    command.folder_id,
+                    run_id,
+                ),
+            ).fetchone()
+        return None if row is None else _summary(row)
+
+    def delete(self, run_id: str) -> bool:
+        if self._publication is None:
+            raise RuntimeError("ResearchRun deletion is not configured")
+        with self._database.transaction() as transaction:
+            lock_publication_mutation(transaction)
+            row = transaction.execute(
+                """
+                SELECT status, result_manifest_sha256
+                FROM research_runs.runs
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["status"] not in {"succeeded", "failed", "cancelled"}:
+                raise ResearchRunDeleteConflict(
+                    "ResearchRun deletion requires terminal status"
+                )
+            manifest_sha256 = row.get("result_manifest_sha256")
+            transaction.execute(
+                "DELETE FROM research_runs.start_tracking_receipts WHERE seed_run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.cancel_receipts WHERE run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.admission_requests WHERE run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.attempts WHERE run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.runs WHERE id = %s",
+                (run_id,),
+            )
+            if isinstance(manifest_sha256, str):
+                still_referenced = research_result_manifest_is_referenced(
+                    transaction,
+                    manifest_sha256,
+                ) or (
+                    self._track_references_result is not None
+                    and self._track_references_result(transaction, manifest_sha256)
+                )
+                self._publication.release_manifest_in_transaction(
+                    transaction,
+                    manifest_sha256,
+                    still_referenced=still_referenced,
+                )
+        _collect_publication_deletions(self._publication)
+        return True
 
     def cancel(
         self,
@@ -279,8 +534,9 @@ class ResearchRunService:
 
             row = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 FOR UPDATE
@@ -290,11 +546,6 @@ class ResearchRunService:
             if row is None:
                 return None
             if row["status"] in {"queued", "running"}:
-                if self._dataset_lifecycle is not None:
-                    self._dataset_lifecycle.release_retention_in_transaction(
-                        transaction,
-                        retention_id=f"queued-research-run:{run_id}",
-                    )
                 cancelled_attempt = transaction.execute(
                     """
                     UPDATE research_runs.attempts
@@ -320,14 +571,20 @@ class ResearchRunService:
                         execution_fence = execution_fence + 1,
                         failure_reason = NULL, updated_at = now()
                     WHERE id = %s AND status IN ('queued', 'running')
-                    RETURNING id, status, definition_id, definition_revision,
-                              requested_start_date, requested_end_date, failure_reason
+                    RETURNING id, name, folder_id, status,
+                              requested_start_date, requested_end_date,
+                              created_at, immutable_input, failure_reason
                     """,
                     (run_id,),
                 ).fetchone()
                 if updated is None:
                     raise ResearchRunFenced
                 row = updated
+                if self._dataset_lifecycle is not None:
+                    self._dataset_lifecycle.release_retention_in_transaction(
+                        transaction,
+                        retention_id=f"queued-research-run:{run_id}",
+                    )
             outcome = _summary(row)
             transaction.execute(
                 """
@@ -378,8 +635,9 @@ class ResearchRunService:
                     return DailyTrackSummary.model_validate(receipt["outcome"])
                 row = transaction.execute(
                     """
-                    SELECT id, status, definition_id, definition_revision,
-                           requested_start_date, requested_end_date, immutable_input,
+                    SELECT id, name, folder_id, status,
+                           requested_start_date, requested_end_date, created_at,
+                           immutable_input,
                            result_manifest_sha256, result_provenance
                     FROM research_runs.runs
                     WHERE id = %s
@@ -443,10 +701,9 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT id, status, definition_id, definition_revision,
-                       requested_start_date, requested_end_date,
-                       immutable_input, result_manifest_sha256,
-                       result_provenance, failure_reason
+                SELECT id, name, folder_id, status, requested_start_date,
+                       requested_end_date, created_at, immutable_input,
+                       result_manifest_sha256, result_provenance, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -455,9 +712,12 @@ class ResearchRunService:
         if row is None:
             return None
         summary = _summary(row)
-        draft = _draft_from_immutable_input(row["immutable_input"])
+        authorable_input = _authorable_input(row)
         if summary.status != "succeeded":
-            return ResearchRunDetail(**summary.model_dump(), draft=draft)
+            return ResearchRunDetail(
+                **summary.model_dump(),
+                input=authorable_input,
+            )
         manifest_sha256 = row.get("result_manifest_sha256")
         provenance = row.get("result_provenance")
         if (
@@ -482,7 +742,11 @@ class ResearchRunService:
                 extra={"run_id": run_id, "error_type": type(error).__name__},
             )
             raise ResearchRunResultUnavailable from error
-        return ResearchRunDetail(**summary.model_dump(), draft=draft, result=result)
+        return ResearchRunDetail(
+            **summary.model_dump(),
+            input=authorable_input,
+            result=result,
+        )
 
     def _tracking_origin(
         self,
@@ -532,8 +796,6 @@ class ResearchRunService:
             raise ResearchRunTrackingUnavailable
         return TrackingOrigin(
             seed_run_id=str(row["id"]),
-            definition_id=str(row["definition_id"]),
-            definition_revision=int(row["definition_revision"]),
             immutable_input=immutable_input.model_dump(mode="json"),
             seed_data_generation_id=data_generation_id,
             seed_data_through_session=data_through_session,
@@ -667,7 +929,7 @@ class ResearchRunService:
             pinned = self._dataset_lifecycle.pin_generation_in_transaction(
                 transaction,
                 generation_manifest_sha256=(
-                    immutable_input.data_generation_manifest_sha256
+                    immutable_input.data_admission.generation_manifest_sha256
                 ),
                 owner_kind="research_run_attempt",
                 owner_id=attempt_id,
@@ -810,27 +1072,25 @@ class ResearchRunService:
             research_sessions=calendar,
             available_field_ids=frozenset(admission.generation.field_availability),
         )
-        content = immutable_input.definition.get("content")
-        if not isinstance(content, Mapping) or not isinstance(content.get("alpha"), Mapping):
-            raise ResearchRunInputInvalid("ResearchRun Alpha is invalid")
-        try:
-            parsed = restore_compiled_alpha(immutable_input.compiled_alpha)
-        except ValueError as error:
-            raise ResearchRunInputInvalid("compiled ResearchRun Alpha is invalid") from error
         start_index = calendar.index(start_session)
-        warmup_start = start_index - parsed.effective_lookback
+        warmup_start = start_index - immutable_input.alpha_admission.effective_lookback
         if warmup_start < 0:
             raise ResearchRunInsufficientWarmup(
                 "insufficient Calculation Warm-up for selected Research Period"
             )
         calculation_sessions = calendar[warmup_start : calendar.index(end_session) + 1]
-        generation = self._generation_store.read_composite_slice(
-            claim.data_generation_id,
-            sessions=calculation_sessions,
-            universe_name=str(content["universe"]),
-            neutralization=str(content["neutralization"]),
-            field_bindings=immutable_input.field_bindings,
-        )
+        try:
+            generation = self._generation_store.read_composite_slice(
+                claim.data_generation_id,
+                sessions=calculation_sessions,
+                universe_name=immutable_input.universe,
+                neutralization=immutable_input.neutralization,
+                field_bindings=immutable_input.field_bindings,
+            )
+        except GenerationStoreError as error:
+            raise ResearchRunInputInvalid(
+                "selected Data Generation cannot resolve Formula"
+            ) from error
         kernel_input = _kernel_input(
             immutable_input,
             generation.research_data,
@@ -843,13 +1103,10 @@ class ResearchRunService:
             raise ResearchRunInsufficientWarmup(str(error)) from error
         except KernelRunError as error:
             raise ResearchRunInputInvalid(str(error)) from error
-        definition_content = immutable_input.definition.get("content")
-        if not isinstance(definition_content, Mapping):
-            raise ResearchRunInputInvalid("ResearchRun Definition content is invalid")
         result = build_result_payload(
             output,
             rebalance_interval=int(immutable_input.strategy["rebalance_every_sessions"]),
-            universe=str(definition_content["universe"]),
+            universe=immutable_input.universe,
         )
         provenance = _result_provenance(claim)
         prepared = self._publication.prepare(
@@ -882,11 +1139,7 @@ class ResearchRunService:
                 """,
                 (claim.run_id,),
             ).fetchone()
-            if (
-                current is None
-                or current["status"] != "running"
-                or current["execution_fence"] != claim.fence
-            ):
+            if current != {"status": "running", "execution_fence": claim.fence}:
                 raise ResearchRunFenced
             published = self._publication.record(transaction, prepared)
             attempt = transaction.execute(
@@ -929,18 +1182,14 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             current = transaction.execute(
                 """
-                SELECT status, execution_fence, immutable_input
+                SELECT status, execution_fence
                 FROM research_runs.runs
                 WHERE id = %s
                 FOR UPDATE
                 """,
                 (claim.run_id,),
             ).fetchone()
-            if (
-                current is None
-                or current["status"] != "running"
-                or current["execution_fence"] != claim.fence
-            ):
+            if current != {"status": "running", "execution_fence": claim.fence}:
                 return
             attempt = transaction.execute(
                 """
@@ -1014,12 +1263,11 @@ class ResearchRunService:
                 ),
             )
             if retry:
-                immutable_input = ImmutableRunInput.model_validate(current["immutable_input"])
                 self._dataset_lifecycle.retain_generation_in_transaction(
                     transaction,
                     retention_id=f"queued-research-run:{claim.run_id}",
                     generation_manifest_sha256=(
-                        immutable_input.data_generation_manifest_sha256
+                        claim.immutable_input.data_admission.generation_manifest_sha256
                     ),
                     lease_seconds=self._lease_seconds,
                 )
@@ -1030,17 +1278,230 @@ class ResearchRunService:
             )
 
 
+def _admission_receipt(
+    transaction: PostgresTransaction,
+    request_id: str,
+) -> dict[str, object] | None:
+    return transaction.execute(
+        """
+        SELECT request.request_fingerprint,
+               run.id, run.name, run.folder_id, run.status,
+               run.requested_start_date, run.requested_end_date,
+               run.created_at, run.immutable_input, run.failure_reason
+        FROM research_runs.admission_requests AS request
+        JOIN research_runs.runs AS run ON run.id = request.run_id
+        WHERE request.request_id = %s
+        """,
+        (request_id,),
+    ).fetchone()
+
+
+def _encode_list_cursor(row: Mapping[str, object]) -> str:
+    created_at = row["created_at"]
+    if not isinstance(created_at, datetime):
+        raise TypeError("ResearchRun created_at must be a datetime")
+    payload = json.dumps(
+        {"created_at": created_at.isoformat(), "id": row["id"]},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+
+def _decode_list_cursor(cursor: str | None) -> tuple[datetime | None, str | None]:
+    if cursor is None:
+        return None, None
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        decoded: object = json.loads(urlsafe_b64decode(padded).decode("utf-8"))
+        if not isinstance(decoded, dict) or set(decoded) != {"created_at", "id"}:
+            raise ValueError
+        created_at = datetime.fromisoformat(str(decoded["created_at"]))
+        run_id = decoded["id"]
+        if created_at.tzinfo is None or not isinstance(run_id, str) or not run_id:
+            raise ValueError
+    except (ValueError, UnicodeDecodeError, Base64DecodeError) as error:
+        raise ValueError("ResearchRun cursor is invalid") from error
+    return created_at, run_id
+
+
+def _admitted_input(
+    command: ResearchRunAdmissionCommand,
+    compiled: CompiledAlpha,
+    snapshot: DatasetAdmissionSnapshot | None,
+) -> ImmutableRunInput:
+    if snapshot is None:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="DATA_NOT_READY",
+                    field="data",
+                    message="Current Dataset is not ready",
+                )
+            ]
+        )
+    if command.start_date < snapshot.coverage_start or command.end_date > snapshot.coverage_end:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="RESEARCH_PERIOD_OUTSIDE_COVERAGE",
+                    field="start_date",
+                    message="Requested Research Dates must be inside current Dataset Coverage",
+                )
+            ]
+        )
+    sessions = snapshot.research_period(command.start_date, command.end_date)
+    if not sessions:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="RESEARCH_PERIOD_HAS_NO_SESSIONS",
+                    field="start_date",
+                    message="Requested Research Dates contain no Research Session",
+                )
+            ]
+        )
+    field_ids = frozenset(compiled.field_ids_by_identifier.values())
+    if not field_ids <= snapshot.available_field_ids:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="FIELD_UNAVAILABLE_IN_CURRENT_DATA",
+                    field="formula",
+                    message="Alpha field is unavailable in current Data",
+                )
+            ]
+        )
+    financial_field_ids = {field.field_id for field in FINANCIAL_FIELDS}
+    if field_ids & financial_field_ids:
+        first_index = snapshot.research_sessions.index(sessions[0])
+        warmup_index = first_index - compiled.effective_lookback
+        financial_start = snapshot.financial_coverage_start
+        financial_end = snapshot.financial_coverage_end
+        if (
+            financial_start is None
+            or financial_end is None
+            or warmup_index < 0
+            or snapshot.research_sessions[warmup_index] < financial_start
+            or sessions[-1] > financial_end
+        ):
+            available = (
+                "not ready"
+                if financial_start is None or financial_end is None
+                else f"{financial_start.isoformat()} to {financial_end.isoformat()}"
+            )
+            raise ResearchRunAdmissionRejected(
+                [
+                    ResearchRunAdmissionIssue(
+                        code="FINANCIAL_CALCULATION_OUTSIDE_COVERAGE",
+                        field="formula",
+                        message=(
+                            "Financial Formula needs its requested period and lookback inside "
+                            f"Financial Coverage; current Financial Coverage is {available}."
+                        ),
+                    )
+                ]
+            )
+    try:
+        calculation_session_count, universe_instrument_count = snapshot.calculation_shape(
+            start=sessions[0],
+            end=sessions[-1],
+            lookback=compiled.effective_lookback,
+            universe=command.universe,
+        )
+    except DatasetWarmupUnavailable as error:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="INSUFFICIENT_CALCULATION_WARMUP",
+                    field="start_date",
+                    message=str(error),
+                )
+            ]
+        ) from error
+    estimated_run_work = estimate_alpha_run_work(
+        compiled.estimated_work,
+        research_session_count=calculation_session_count,
+        universe_instrument_count=universe_instrument_count,
+    )
+    if estimated_run_work > MAX_ALPHA_RUN_ESTIMATED_WORK:
+        raise ResearchRunAdmissionRejected(
+            [
+                ResearchRunAdmissionIssue(
+                    code="ALPHA_RUN_WORK_EXCEEDS_LIMIT",
+                    field="formula",
+                    message=(
+                        "Alpha Formula, Research Dates, and Universe exceed the Run work budget"
+                    ),
+                )
+            ]
+        )
+    return ImmutableRunInput(
+        formula_source=command.formula,
+        alpha_expression=compiled.expression,
+        hypothesis=command.hypothesis,
+        requested_start_date=command.start_date,
+        requested_end_date=command.end_date,
+        field_bindings={
+            field_id: identifier
+            for identifier, field_id in compiled.field_ids_by_identifier.items()
+        },
+        universe=command.universe,
+        neutralization=command.neutralization,
+        strategy={
+            "kind": FIXED_STRATEGY_KIND,
+            "holdings_count": command.holdings_count,
+            "rebalance_every_sessions": command.rebalance_every_sessions,
+            "initial_cash_cny": FIXED_INITIAL_CASH_CNY,
+            "execution": FIXED_EXECUTION,
+        },
+        costs=FIXED_COSTS,
+        risk_free_rate="0",
+        numeric_execution_contract=NUMERIC_CONTRACT_ID,
+        semantic_versions=SEMANTIC_VERSIONS,
+        alpha_admission=AlphaAdmissionFacts(
+            effective_lookback=compiled.effective_lookback,
+            node_count=compiled.node_count,
+            depth=compiled.depth,
+            formula_work=compiled.estimated_work,
+            estimated_run_work=estimated_run_work,
+        ),
+        data_admission=DataAdmissionFacts(
+            generation_manifest_sha256=snapshot.generation_manifest_sha256,
+            data_through_session=snapshot.data_through_session,
+            coverage_start=snapshot.coverage_start,
+            coverage_end=snapshot.coverage_end,
+            first_research_session=sessions[0],
+            last_research_session=sessions[-1],
+            calculation_session_count=calculation_session_count,
+            universe_instrument_count=universe_instrument_count,
+        ),
+    )
+
+
+def _admission_fingerprint(command: ResearchRunAdmissionCommand) -> str:
+    value = {
+        "action": "research-runs.admit/v1",
+        "command": command.model_dump(mode="json", exclude={"request_id"}),
+    }
+    serialized = json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(serialized).hexdigest()
+
+
 def _generation_matches_frozen_facts(
-    generation: MountedFamilyGenerationDescriptor,
+    generation: object,
     immutable_input: ImmutableRunInput,
 ) -> bool:
-    facts = immutable_input.data_generation_facts
+    facts = immutable_input.data_admission
     return (
-        generation.manifest_sha256 == immutable_input.data_generation_manifest_sha256
-        and facts.get("data_identity") == generation.data_identity
-        and facts.get("coverage_start") == generation.research_sessions[0]
-        and facts.get("coverage_end") == generation.research_sessions[-1]
-        and facts.get("available_field_ids") == sorted(generation.field_availability)
+        getattr(generation, "manifest_sha256", None) == facts.generation_manifest_sha256
+        and getattr(generation, "data_through_session", None)
+        == facts.data_through_session.isoformat()
+        and tuple(getattr(generation, "research_sessions", ()))
+        and generation.research_sessions[0] == facts.coverage_start.isoformat()
+        and generation.research_sessions[-1] == facts.coverage_end.isoformat()
+        and set(immutable_input.field_bindings)
+        <= set(getattr(generation, "field_availability", ()))
     )
 
 
@@ -1057,7 +1518,9 @@ def _selected_research_period(
     requested_end = immutable_input.requested_end_date.isoformat()
     if requested_start < sessions[0] or requested_end > sessions[-1]:
         raise ResearchRunInputInvalid("requested Research Period is outside Dataset Coverage")
-    selected = [session for session in sessions if requested_start <= session <= requested_end]
+    selected = [
+        session for session in sessions if requested_start <= session <= requested_end
+    ]
     if not selected:
         raise ResearchRunInputInvalid("requested dates contain no Research Session")
     missing_fields = set(immutable_input.field_bindings) - available_field_ids
@@ -1073,22 +1536,15 @@ def _kernel_input(
     research_start_session: str,
     research_end_session: str,
 ) -> RunInput:
-    definition = immutable_input.definition
-    content = definition.get("content")
-    if not isinstance(content, Mapping):
-        raise ResearchRunInputInvalid("ResearchRun Definition content is invalid")
-    alpha = content.get("alpha")
-    if not isinstance(alpha, Mapping):
-        raise ResearchRunInputInvalid("ResearchRun Alpha is invalid")
     strategy = immutable_input.strategy
     costs = immutable_input.costs
     return RunInput(
         research_data=research_data,
-        alpha_expression=dict(alpha),
-        compiled_alpha=immutable_input.compiled_alpha,
+        alpha_expression=immutable_input.alpha_expression,
         field_bindings=immutable_input.field_bindings,
-        universe=str(content["universe"]),
-        neutralization=str(content["neutralization"]),
+        effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
+        universe=immutable_input.universe,
+        neutralization=immutable_input.neutralization,
         holdings_count=int(strategy["holdings_count"]),
         rebalance_interval=int(strategy["rebalance_every_sessions"]),
         initial_cash_cny=str(strategy["initial_cash_cny"]),
@@ -1106,7 +1562,9 @@ def _result_provenance(claim: _ExecutionClaim) -> dict[str, object]:
     return {
         "schema_version": "research-result-v1",
         "research_run_id": claim.run_id,
-        "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
+        "immutable_input_sha256": hashlib.sha256(
+            canonical_json_bytes(value)
+        ).hexdigest(),
         "data_generation_id": claim.data_generation_id,
         "data_through_session": claim.data_through_session,
         "calculation_contracts": {
@@ -1180,43 +1638,42 @@ def _start_tracking_fingerprint(run_id: str) -> str:
 
 def _summary(row: object) -> ResearchRunSummary:
     assert isinstance(row, dict)
-    summary = {
-        name: row[name]
-        for name in (
-            "id",
-            "status",
-            "definition_id",
-            "definition_revision",
-            "requested_start_date",
-            "requested_end_date",
-        )
-    }
-    summary["start_date"] = summary.pop("requested_start_date")
-    summary["end_date"] = summary.pop("requested_end_date")
-    summary["failure_reason"] = row.get("failure_reason")
-    return ResearchRunSummary.model_validate(summary)
-
-
-def _draft_from_immutable_input(value: object) -> ResearchRunDraft:
-    immutable_input = ImmutableRunInput.model_validate(value)
-    content = immutable_input.definition.get("content")
-    if not isinstance(content, Mapping):
-        raise ValueError("ResearchRun immutable Definition content is invalid")
-    return ResearchRunDraft.model_validate(
+    immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+    compact_formula = " ".join(immutable_input.formula_source.split())
+    formula_summary = (
+        compact_formula
+        if len(compact_formula) <= 120
+        else f"{compact_formula[:117]}..."
+    )
+    return ResearchRunSummary.model_validate(
         {
-            key: content[key]
-            for key in (
-                "name",
-                "hypothesis",
-                "start_date",
-                "end_date",
-                "alpha",
-                "universe",
-                "neutralization",
-                "holdings_count",
-                "rebalance_every_sessions",
-            )
+            "id": row["id"],
+            "status": row["status"],
+            "name": row["name"],
+            "folder_id": row["folder_id"],
+            "created_at": row["created_at"],
+            "start_date": row["requested_start_date"],
+            "end_date": row["requested_end_date"],
+            "formula_summary": formula_summary,
+            "failure_reason": row.get("failure_reason"),
         }
+    )
+
+
+def _authorable_input(row: object) -> ResearchRunAuthorableInput:
+    assert isinstance(row, dict)
+    immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+    return ResearchRunAuthorableInput(
+        formula=immutable_input.formula_source,
+        hypothesis=immutable_input.hypothesis,
+        start_date=immutable_input.requested_start_date,
+        end_date=immutable_input.requested_end_date,
+        universe=immutable_input.universe,
+        neutralization=immutable_input.neutralization,
+        holdings_count=int(immutable_input.strategy["holdings_count"]),
+        rebalance_every_sessions=int(
+            immutable_input.strategy["rebalance_every_sessions"]
+        ),
     )
 
 
@@ -1293,3 +1750,36 @@ def _public_result(
             },
         }
     )
+
+
+def _collect_publication_deletions(publication: Publication) -> None:
+    try:
+        while publication.collect_one_pending_deletion():
+            pass
+    except (PublicationPreparationError, PublicationUnavailableError) as error:
+        logger.warning(
+            "ResearchRun publication cleanup remains pending",
+            extra={"error_type": type(error).__name__},
+        )
+
+
+def research_run_exists(transaction: PostgresTransaction, run_id: str) -> bool:
+    return transaction.execute(
+        "SELECT 1 FROM research_runs.runs WHERE id = %s",
+        (run_id,),
+    ).fetchone() is not None
+
+
+def research_result_manifest_is_referenced(
+    transaction: PostgresTransaction,
+    manifest_sha256: str,
+) -> bool:
+    return transaction.execute(
+        """
+        SELECT 1
+        FROM research_runs.runs
+        WHERE result_manifest_sha256 = %s
+        LIMIT 1
+        """,
+        (manifest_sha256,),
+    ).fetchone() is not None

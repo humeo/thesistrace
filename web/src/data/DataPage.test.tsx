@@ -41,7 +41,7 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("complete");
     expect(markup).toContain("Last financial refresh");
     expect(markup).toContain("Finance ready");
-    expect(markup).toContain("Refresh");
+    expect(markup).toContain("Reload");
     expect(markup).not.toMatch(/Update data|Release|Generation|history|operator/i);
   });
 

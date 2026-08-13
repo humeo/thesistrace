@@ -158,10 +158,12 @@ def test_terminal_run_wins_over_late_cancel(tmp_path: Path) -> None:
             for key in (
                 "id",
                 "status",
-                "definition_id",
-                "definition_revision",
+                "name",
+                "folder_id",
+                "created_at",
                 "start_date",
                 "end_date",
+                "formula_summary",
             )
         }
         assert client.get(f"/api/research-runs/{run_id}").json() == before

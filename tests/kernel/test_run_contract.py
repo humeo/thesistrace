@@ -5,6 +5,7 @@ import pytest
 from series import aligned_market_data
 
 from thesistrace.research_kernel import KernelRunError, KernelState, RunInput, RunOutput, run
+from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.result import build_result_payload
 
@@ -94,10 +95,11 @@ def test_kernel_run_input_does_not_expose_mutable_expression_state(
     assert isinstance(definition, dict)
     definition["alpha"] = {
         "expression": {
-            "operator_id": "pct_change",
-            "operands": [
-                {"field_id": "price.close.adjusted"},
-                {"literal": 20},
+            "kind": "call",
+            "identifier": "pct_change",
+            "arguments": [
+                {"kind": "field", "field_id": "price.close.adjusted"},
+                {"kind": "number", "value": 20},
             ],
         }
     }
@@ -126,6 +128,7 @@ def test_kernel_run_input_rejects_string_alpha_expression(
             research_data=accepted_calculation_case["research_data"],
             alpha_expression="pct_change($close_adj, 20)",  # type: ignore[arg-type]
             field_bindings=FIELD_BINDINGS,
+            effective_alpha_lookback=20,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
             holdings_count=int(strategy["holdings_count"]),
@@ -180,6 +183,9 @@ def _run_input(
         ),
         alpha_expression=alpha["expression"],
         field_bindings=FIELD_BINDINGS,
+        effective_alpha_lookback=validate_normalized_alpha(
+            alpha["expression"], field_bindings=FIELD_BINDINGS
+        ).effective_lookback,
         universe=str(definition["universe"]),
         neutralization=str(definition["neutralization"]),
         holdings_count=int(strategy["holdings_count"]),
