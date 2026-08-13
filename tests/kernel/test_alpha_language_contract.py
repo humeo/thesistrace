@@ -206,6 +206,36 @@ def test_compile_accepts_the_documented_expression_language(
     assert compiled.field_ids_by_identifier
 
 
+def test_compile_maps_financial_identifier_to_namespaced_field_reference() -> None:
+    compiled = alpha_language.compile(
+        "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)"
+    )
+
+    assert compiled.field_ids_by_identifier == {
+        "close_adj": "price.close.adjusted",
+        "total_revenue_latest_fy": "financial.income.total_revenue.latest_fy",
+    }
+    assert compiled.expression == {
+        "kind": "binary",
+        "operator": "add",
+        "left": {
+            "kind": "call",
+            "identifier": "cs_rank",
+            "arguments": [{"kind": "field", "field_id": "price.close.adjusted"}],
+        },
+        "right": {
+            "kind": "call",
+            "identifier": "cs_rank",
+            "arguments": [
+                {
+                    "kind": "field",
+                    "field_id": "financial.income.total_revenue.latest_fy",
+                }
+            ],
+        },
+    }
+
+
 def test_compile_estimates_builtin_work_from_its_definition() -> None:
     short = alpha_language.compile("ts_mean(close_adj, 2)")
     long = alpha_language.compile("ts_mean(close_adj, 20)")

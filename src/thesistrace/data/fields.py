@@ -127,6 +127,7 @@ MARKET_FIELDS = (
 
 def _financial_field(
     field_id: str,
+    identifier: str,
     description: str,
     *,
     endpoint: str,
@@ -142,13 +143,13 @@ def _financial_field(
         grain="instrument_by_research_session",
         missingness="missing_when_no_visible_eligible_fact",
         family_id="equity.financial_pit",
-        alpha=AlphaFieldCapability(field_id),
+        alpha=AlphaFieldCapability(identifier),
         alpha_series_reader=_row_series(field_id),
         reporting_scope="report_type_1_consolidated",
         report_period_selection=period_selection,
         source_lineage=f"tushare.{endpoint}.{column}",
         applicable_company_types=("1", "2", "3", "4"),
-        authoring_example=f"cs_rank({field_id})",
+        authoring_example=f"cs_rank({identifier})",
         source_endpoint=endpoint,
         source_column=column,
     )
@@ -156,6 +157,7 @@ def _financial_field(
 
 FINANCIAL_FIELDS = (
     _financial_field(
+        "financial.income.total_revenue.latest_fy",
         "total_revenue_latest_fy",
         "latest visible full-year consolidated total revenue",
         endpoint="income",
@@ -163,6 +165,7 @@ FINANCIAL_FIELDS = (
         period_selection="latest_visible_full_year",
     ),
     _financial_field(
+        "financial.income.net_profit_parent.latest_fy",
         "net_profit_parent_latest_fy",
         "latest visible full-year consolidated net profit attributable to parent owners",
         endpoint="income",
@@ -170,6 +173,7 @@ FINANCIAL_FIELDS = (
         period_selection="latest_visible_full_year",
     ),
     _financial_field(
+        "financial.cashflow.operating_cash_flow.latest_fy",
         "operating_cash_flow_latest_fy",
         "latest visible full-year consolidated net operating cash flow",
         endpoint="cashflow",
@@ -177,6 +181,7 @@ FINANCIAL_FIELDS = (
         period_selection="latest_visible_full_year",
     ),
     _financial_field(
+        "financial.balance_sheet.total_assets.latest_reported",
         "total_assets_latest_reported",
         "latest visible quarterly or annual consolidated total assets",
         endpoint="balancesheet",
@@ -184,6 +189,7 @@ FINANCIAL_FIELDS = (
         period_selection="latest_visible_quarterly_or_annual",
     ),
     _financial_field(
+        "financial.balance_sheet.total_liabilities.latest_reported",
         "total_liabilities_latest_reported",
         "latest visible quarterly or annual consolidated total liabilities",
         endpoint="balancesheet",
@@ -191,6 +197,7 @@ FINANCIAL_FIELDS = (
         period_selection="latest_visible_quarterly_or_annual",
     ),
     _financial_field(
+        "financial.balance_sheet.equity_parent.latest_reported",
         "equity_parent_latest_reported",
         "latest visible quarterly or annual consolidated equity attributable to parent owners",
         endpoint="balancesheet",

@@ -102,7 +102,11 @@ def _run(mount_root: Path, profile: dict[str, object]) -> dict[str, object]:
                 sessions=execution_sessions,
                 universe_name="top300",
                 neutralization="none",
-                field_bindings={"total_assets_latest_reported": "total_assets_latest_reported"},
+                field_bindings={
+                    "financial.balance_sheet.total_assets.latest_reported": (
+                        "total_assets_latest_reported"
+                    )
+                },
             )
         if name == "mixed":
             return store.read_composite_slice(
@@ -112,7 +116,9 @@ def _run(mount_root: Path, profile: dict[str, object]) -> dict[str, object]:
                 neutralization="none",
                 field_bindings={
                     "price.close.adjusted": "close_adj",
-                    "total_assets_latest_reported": "total_assets_latest_reported",
+                    "financial.balance_sheet.total_assets.latest_reported": (
+                        "total_assets_latest_reported"
+                    ),
                 },
             )
         raise AssertionError(f"unknown benchmark scenario: {name}")

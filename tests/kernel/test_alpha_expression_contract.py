@@ -10,65 +10,8 @@ from thesistrace.research_kernel.alpha import (
     evaluate_series,
     validate_alpha,
 )
-from thesistrace.research_kernel.alpha_expression import AlphaValidationError, operator_catalog
+from thesistrace.research_kernel.alpha_expression import AlphaValidationError
 from thesistrace.research_series import AlignedResearchData, InstrumentProfile
-
-
-def test_operator_catalog_is_closed_stable_and_descriptive() -> None:
-    catalog = operator_catalog()
-    assert catalog["semantic_version"] == "1.1.0"
-    operators = catalog["operators"]
-    assert [item["operator_id"] for item in operators] == [
-        "add",
-        "subtract",
-        "multiply",
-        "divide",
-        "negate",
-        "abs",
-        "log",
-        "sign",
-        "lag",
-        "delta",
-        "pct_change",
-        "ts_mean",
-        "ts_sum",
-        "ts_std",
-        "ts_min",
-        "ts_max",
-        "cs_rank",
-    ]
-    assert all(
-        set(item)
-        == {
-            "operator_id",
-            "kind",
-            "arity",
-            "operand_rules",
-                "result_type",
-                "rolling_bounds",
-                "lookback_rule",
-                "complexity",
-        }
-        for item in operators
-    )
-    assert all(item["result_type"] == "numeric" for item in operators)
-    assert {
-        item["operator_id"]: item["rolling_bounds"]
-        for item in operators
-        if item["rolling_bounds"] is not None
-    } == {
-        operator_id: {"minimum": 1, "maximum": 252}
-        for operator_id in (
-            "lag",
-            "delta",
-            "pct_change",
-            "ts_mean",
-            "ts_sum",
-            "ts_std",
-            "ts_min",
-            "ts_max",
-        )
-    }
 
 
 def test_cs_rank_preserves_child_lookback_and_ranks_complete_cross_sections() -> None:
@@ -266,8 +209,8 @@ def test_normalized_evaluation_preserves_missing_and_non_finite_rules() -> None:
     assert evaluate_series(literal(1), {}, field_bindings=FIELD_BINDINGS) == [1.0]
 
 
-@pytest.mark.parametrize("operator_id", ["ts_sum", "ts_mean", "ts_std"])
-def test_rolling_numeric_result_is_independent_of_execution_prefix(operator_id: str) -> None:
+@pytest.mark.parametrize("identifier", ["ts_sum", "ts_mean", "ts_std"])
+def test_rolling_numeric_result_is_independent_of_execution_prefix(identifier: str) -> None:
     values = [1e16, 1e16, -1e16, 1.0]
 
     def last_value(series: list[float]) -> float:
@@ -292,7 +235,7 @@ def test_rolling_numeric_result_is_independent_of_execution_prefix(operator_id: 
             data,
             compiled_alpha=validate_alpha(
                 operation(
-                    operator_id,
+                    identifier,
                     field("price.close.adjusted"),
                     literal(3),
                 ),

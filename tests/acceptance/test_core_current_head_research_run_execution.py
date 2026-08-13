@@ -88,19 +88,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "/api/research-runs",
             json=_run_command(
                 "composite-formula",
-                alpha={
-                    "operator_id": "add",
-                    "operands": [
-                        {
-                            "operator_id": "cs_rank",
-                            "operands": [{"field_id": "price.close.adjusted"}],
-                        },
-                        {
-                            "operator_id": "cs_rank",
-                            "operands": [{"field_id": "total_revenue_latest_fy"}],
-                        },
-                    ],
-                },
+                formula="cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
             ),
         )
         assert accepted.status_code == 202
@@ -132,17 +120,11 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         "2026-08-03", "2026-08-04", "2026-08-05",
     )
     seed_head = _publish_composite_head(settings, sessions=seed_sessions)
-    alpha = {
-        "operator_id": "add",
-        "operands": [
-            {"operator_id": "cs_rank", "operands": [{"field_id": "price.close.adjusted"}]},
-            {"operator_id": "cs_rank", "operands": [{"field_id": "total_revenue_latest_fy"}]},
-        ],
-    }
+    formula = "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)"
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",
-            json=_run_command("financial-track-seed", alpha=alpha),
+            json=_run_command("financial-track-seed", formula=formula),
         )
         run_id = accepted.json()["id"]
         assert client.app.state.core_runtime.research_runs.process_next() is True
@@ -213,7 +195,7 @@ def test_financial_admission_explains_coverage_without_blocking_market_only_form
             "/api/research-runs",
             json=_run_command(
                 "financial-outside-coverage",
-                alpha={"field_id": "total_revenue_latest_fy"},
+                formula="total_revenue_latest_fy",
                 start_date="2026-08-07",
                 end_date="2026-08-07",
             ),
@@ -1439,18 +1421,10 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         seed_canonical,
         operation_id="forward-only-seed",
     )
-    alpha = {
-        "operator_id": "ts_mean",
-        "operands": [
-            {"field_id": "price.close.adjusted"},
-            {"literal": 2},
-        ],
-    }
-
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",
-            json=_run_command("forward-only-seed-run", alpha=alpha),
+            json=_run_command("forward-only-seed-run", formula="ts_mean(close_adj, 2)"),
         )
         assert accepted.status_code == 202
         run_id = str(accepted.json()["id"])
@@ -1745,13 +1719,7 @@ def test_insufficient_warmup_is_rejected_before_run_creation(tmp_path: Path) -> 
             "/api/research-runs",
             json=_run_command(
                 "attempt-insufficient-warmup",
-                alpha={
-                    "operator_id": "ts_mean",
-                    "operands": [
-                        {"field_id": "price.close.adjusted"},
-                        {"literal": 2},
-                    ],
-                },
+                formula="ts_mean(close_adj, 2)",
             ),
         )
         assert rejected.status_code == 422
@@ -2033,7 +2001,7 @@ def test_result_read_failure_stays_sanitized(tmp_path: Path) -> None:
 def _run_command(
     request_id: str,
     *,
-    alpha: dict[str, object] | None = None,
+    formula: str = "close_adj",
     start_date: str = "2026-08-03",
     end_date: str = "2026-08-05",
 ) -> dict[str, object]:
@@ -2043,32 +2011,12 @@ def _run_command(
         "name": "Attempt-scoped current data",
         "start_date": start_date,
         "end_date": end_date,
-        "formula": _formula(alpha or {"field_id": "price.close.adjusted"}),
+        "formula": formula,
         "universe": "top300",
         "neutralization": "none",
         "holdings_count": 1,
         "rebalance_every_sessions": 1,
     }
-
-
-def _formula(node: dict[str, object]) -> str:
-    if set(node) == {"field_id"}:
-        field_id = str(node["field_id"])
-        return {"price.close.adjusted": "close_adj"}.get(field_id, field_id)
-    if set(node) == {"literal"}:
-        return str(node["literal"])
-    operator = str(node["operator_id"])
-    operands = node["operands"]
-    assert isinstance(operands, list)
-    rendered = [_formula(operand) for operand in operands if isinstance(operand, dict)]
-    if operator in {"add", "subtract", "multiply", "divide"}:
-        symbol = {"add": "+", "subtract": "-", "multiply": "*", "divide": "/"}[
-            operator
-        ]
-        return f"({rendered[0]} {symbol} {rendered[1]})"
-    if operator == "negate":
-        return f"-({rendered[0]})"
-    return f"{operator}({', '.join(rendered)})"
 
 
 def _canonical(

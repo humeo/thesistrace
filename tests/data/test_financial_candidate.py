@@ -297,12 +297,12 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
     assert composite.families[-1].family_id == "equity.financial_pit"
     assert composite.families[-1].manifest_sha256 == complete.manifest_sha256
     assert {
-        "total_revenue_latest_fy",
-        "net_profit_parent_latest_fy",
-        "operating_cash_flow_latest_fy",
-        "total_assets_latest_reported",
-        "total_liabilities_latest_reported",
-        "equity_parent_latest_reported",
+        "financial.income.total_revenue.latest_fy",
+        "financial.income.net_profit_parent.latest_fy",
+        "financial.cashflow.operating_cash_flow.latest_fy",
+        "financial.balance_sheet.total_assets.latest_reported",
+        "financial.balance_sheet.total_liabilities.latest_reported",
+        "financial.balance_sheet.equity_parent.latest_reported",
     } <= set(composite.field_availability)
     def reject_child_manifest(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("admission opened the child Financial manifest")
@@ -315,9 +315,13 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
         sessions=["2026-08-13"],
         universe_name="top300",
         neutralization="none",
-        field_bindings={"total_revenue_latest_fy": "total_revenue_latest_fy"},
+        field_bindings={
+            "financial.income.total_revenue.latest_fy": "total_revenue_latest_fy"
+        },
     )
-    assert resolved.research_data.fields == {"total_revenue_latest_fy": {}}
+    assert resolved.research_data.fields == {
+        "financial.income.total_revenue.latest_fy": {}
+    }
     retained = generation_store.referenced_files(composite.manifest_sha256)
     assert retained <= generation_store.inventory()
     assert (

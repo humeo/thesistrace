@@ -1,7 +1,6 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from thesistrace.research_kernel.alpha_expression import operator_catalog
     from thesistrace.research_kernel.equivalence import equivalence_bytes, first_divergence
     from thesistrace.research_kernel.kernel_advance import (
         AdvanceInput,
@@ -32,16 +31,11 @@ __all__ = [
     "empty_continuation",
     "equivalence_bytes",
     "first_divergence",
-    "operator_catalog",
     "run",
 ]
 
 
 def __getattr__(name: str) -> object:
-    if name == "operator_catalog":
-        from thesistrace.research_kernel.alpha_expression import operator_catalog
-
-        return operator_catalog
     if name in {
         "AdvanceInput",
         "advance",

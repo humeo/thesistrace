@@ -1069,9 +1069,11 @@ changing meaning requires a new `field_id`.
 _Avoid_: Mutable field meaning, source column name, corrected data value
 
 **Field Reference**:
-One stable `field_id` selected from the Alpha-authorable Canonical Market Data
-subset. An Alpha Formula uses its short Field Catalog name, while the compiled
-Alpha Expression stores the stable reference directly.
+One stable namespaced `field_id` selected from Alpha-authorable Canonical Data.
+An Alpha Formula uses its short Field Catalog name, while the compiled Alpha
+Expression stores the stable reference directly. Market and financial Field
+References share this internal naming rule without exposing namespaces in the
+Formula.
 _Avoid_: Vendor field name, manually typed identifier, compiled plan
 
 **Dataset Schema**:

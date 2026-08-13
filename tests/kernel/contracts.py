@@ -16,21 +16,21 @@ def literal(value: int | float) -> dict[str, object]:
     return {"kind": "number", "value": value}
 
 
-def operation(operator_id: str, *operands: dict[str, object]) -> dict[str, object]:
-    if operator_id == "negate":
+def operation(identifier: str, *arguments: dict[str, object]) -> dict[str, object]:
+    if identifier == "negate":
         return {
             "kind": "unary",
-            "operator": operator_id,
-            "operand": operands[0] if operands else None,
+            "operator": identifier,
+            "operand": arguments[0] if arguments else None,
         }
-    if operator_id in {"add", "subtract", "multiply", "divide"}:
+    if identifier in {"add", "subtract", "multiply", "divide"}:
         return {
             "kind": "binary",
-            "operator": operator_id,
-            "left": operands[0] if operands else None,
-            "right": operands[1] if len(operands) > 1 else None,
+            "operator": identifier,
+            "left": arguments[0] if arguments else None,
+            "right": arguments[1] if len(arguments) > 1 else None,
         }
-    return {"kind": "call", "identifier": operator_id, "arguments": list(operands)}
+    return {"kind": "call", "identifier": identifier, "arguments": list(arguments)}
 
 
 CLOSE_ADJUSTED = field("price.close.adjusted")

@@ -729,9 +729,15 @@ def _financial_value(store: MountedGenerationStore, generation: str) -> str:
         sessions=["2026-08-07"],
         universe_name="top300",
         neutralization="none",
-        field_bindings={"total_revenue_latest_fy": "total_revenue_latest_fy"},
+        field_bindings={
+            "financial.income.total_revenue.latest_fy": "total_revenue_latest_fy"
+        },
     ).research_data
-    return str(data.fields["total_revenue_latest_fy"][("2026-08-07", "equity:000001.SZ")])
+    return str(
+        data.fields["financial.income.total_revenue.latest_fy"][
+            ("2026-08-07", "equity:000001.SZ")
+        ]
+    )
 
 
 def _install_head(lifecycle: DatasetLifecycle, manifest: str, *, operation_id: str) -> None:

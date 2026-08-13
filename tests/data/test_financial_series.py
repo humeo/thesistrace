@@ -29,6 +29,14 @@ class RecordingReader:
 
 def test_catalog_declares_six_complete_financial_field_meanings() -> None:
     assert [field.field_id for field in FINANCIAL_FIELDS] == [
+        "financial.income.total_revenue.latest_fy",
+        "financial.income.net_profit_parent.latest_fy",
+        "financial.cashflow.operating_cash_flow.latest_fy",
+        "financial.balance_sheet.total_assets.latest_reported",
+        "financial.balance_sheet.total_liabilities.latest_reported",
+        "financial.balance_sheet.equity_parent.latest_reported",
+    ]
+    assert [field.alpha.identifier for field in FINANCIAL_FIELDS if field.alpha is not None] == [
         "total_revenue_latest_fy",
         "net_profit_parent_latest_fy",
         "operating_cash_flow_latest_fy",
@@ -117,18 +125,24 @@ def test_resolves_annual_and_latest_reported_fields_without_fallback() -> None:
         instrument_ids=tuple(sorted(instruments)),
     )
 
-    revenue = values["total_revenue_latest_fy"]
+    revenue = values["financial.income.total_revenue.latest_fy"]
     assert revenue[("2010-01-04", "equity:000001.SZ")] == "80"
     assert revenue[("2010-04-21", "equity:000001.SZ")] == "100"
     assert revenue[("2010-04-22", "equity:000001.SZ")] == "101"
     assert ("2011-04-25", "equity:000001.SZ") not in revenue
     assert revenue[("2011-04-25", "equity:000002.SZ")] == "200"
-    assert values["operating_cash_flow_latest_fy"][("2011-04-25", "equity:000001.SZ")] == "30"
-    assets = values["total_assets_latest_reported"]
+    assert values["financial.cashflow.operating_cash_flow.latest_fy"][
+        ("2011-04-25", "equity:000001.SZ")
+    ] == "30"
+    assets = values["financial.balance_sheet.total_assets.latest_reported"]
     assert assets[("2010-04-21", "equity:000001.SZ")] == "500"
     assert assets[("2010-04-22", "equity:000001.SZ")] == "550"
-    assert ("2010-04-22", "equity:000001.SZ") not in values["total_liabilities_latest_reported"]
-    assert values["equity_parent_latest_reported"][("2010-04-22", "equity:000001.SZ")] == "300"
+    assert ("2010-04-22", "equity:000001.SZ") not in values[
+        "financial.balance_sheet.total_liabilities.latest_reported"
+    ]
+    assert values["financial.balance_sheet.equity_parent.latest_reported"][
+        ("2010-04-22", "equity:000001.SZ")
+    ] == "300"
     assert len(reader.requests) == 3
     assert all(
         request[2] == sessions[-1] and request[3] == instruments for request in reader.requests
@@ -163,12 +177,14 @@ def test_all_supported_company_types_resolve_without_promising_non_null(
 
     values = FinancialSeriesResolver(reader).resolve(
         manifest_sha256="a" * 64,
-        field_ids=("total_revenue_latest_fy",),
+        field_ids=("financial.income.total_revenue.latest_fy",),
         sessions=("2010-04-20", "2010-04-21"),
         instrument_ids=("equity:000001.SZ",),
     )
 
-    assert values["total_revenue_latest_fy"] == {("2010-04-21", "equity:000001.SZ"): "10"}
+    assert values["financial.income.total_revenue.latest_fy"] == {
+        ("2010-04-21", "equity:000001.SZ"): "10"
+    }
 
 
 def test_rejects_unapproved_fields_and_noncanonical_request_axes() -> None:
@@ -184,7 +200,7 @@ def test_rejects_unapproved_fields_and_noncanonical_request_axes() -> None:
     with pytest.raises(FinancialSeriesError, match="FINANCIAL_SERIES_REQUEST_INVALID"):
         resolver.resolve(
             manifest_sha256="a" * 64,
-            field_ids=("total_revenue_latest_fy",),
+            field_ids=("financial.income.total_revenue.latest_fy",),
             sessions=("2010-01-05", "2010-01-04"),
             instrument_ids=("equity:000001.SZ",),
         )

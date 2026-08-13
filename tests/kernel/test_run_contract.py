@@ -108,7 +108,7 @@ def test_kernel_run_input_does_not_expose_mutable_expression_state(
 
     exposed = run_input.alpha_expression_snapshot()
     assert isinstance(exposed, dict)
-    exposed["operator_id"] = "add"
+    exposed["kind"] = "number"
 
     assert run(run_input).artifacts_snapshot() == expected
 

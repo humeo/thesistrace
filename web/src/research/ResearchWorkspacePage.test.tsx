@@ -44,7 +44,7 @@ const catalog = {
     },
     {
       identifier: "total_revenue_latest_fy",
-      field_id: "total_revenue_latest_fy",
+      field_id: "financial.income.total_revenue.latest_fy",
       value_type: "numeric_series" as const,
       description: "Latest visible full-year consolidated total revenue",
       unit: "CNY",

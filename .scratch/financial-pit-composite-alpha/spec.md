@@ -44,7 +44,8 @@ permanently expanded into daily rows.
 
 Add a Data-owned point-in-time Series reader that resolves requested stable
 Field References for the pinned Data Generation, selected instruments, and
-Research Sessions. It will expose six initial Session-Aligned Financial Fields:
+Research Sessions. The six initial Session-Aligned Financial Fields use
+namespaced stable Field References and expose these short Alpha Identifiers:
 
 - total_revenue_latest_fy;
 - net_profit_parent_latest_fy;
@@ -438,11 +439,19 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
 
 ### Initial financial fields
 
-- The first three flow fields are total_revenue_latest_fy,
+- Their stable Field References are
+  `financial.income.total_revenue.latest_fy`,
+  `financial.income.net_profit_parent.latest_fy`,
+  `financial.cashflow.operating_cash_flow.latest_fy`,
+  `financial.balance_sheet.total_assets.latest_reported`,
+  `financial.balance_sheet.total_liabilities.latest_reported`, and
+  `financial.balance_sheet.equity_parent.latest_reported`. Formulae use the
+  corresponding short names below.
+- The first three flow Alpha Identifiers are total_revenue_latest_fy,
   net_profit_parent_latest_fy, and operating_cash_flow_latest_fy. They select
   the latest visible full-year report_type 1 consolidated facts from income and
   cash-flow statements.
-- The first three stock fields are total_assets_latest_reported,
+- The first three stock Alpha Identifiers are total_assets_latest_reported,
   total_liabilities_latest_reported, and equity_parent_latest_reported. They
   select the latest visible quarterly or annual report_type 1 consolidated
   balance-sheet facts.
