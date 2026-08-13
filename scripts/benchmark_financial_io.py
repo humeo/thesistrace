@@ -63,6 +63,11 @@ def main() -> None:
     else:
         arguments.mount_root.mkdir(parents=True, exist_ok=True)
         results = _run(arguments.mount_root.resolve(), profile)
+    content = json.dumps(results, indent=2, sort_keys=True) + "\n"
+    if arguments.output is None:
+        print(content, end="")
+    else:
+        arguments.output.write_text(content, encoding="utf-8")
     if not arguments.skip_budgets:
         assert_benchmark_budgets(results, _read_json(_BUDGET_PATH))
     if arguments.update_budgets:
@@ -72,11 +77,6 @@ def main() -> None:
             json.dumps(derive_repository_budgets(results), indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-    content = json.dumps(results, indent=2, sort_keys=True) + "\n"
-    if arguments.output is None:
-        print(content, end="")
-    else:
-        arguments.output.write_text(content, encoding="utf-8")
 
 
 def _run(mount_root: Path, profile: dict[str, object]) -> dict[str, object]:
@@ -215,21 +215,17 @@ def _tracking_advance_benchmark(
 
 
 def _activate_benchmark_track(runtime: object, sessions: tuple[str, ...], suffix: str) -> str:
-    from thesistrace.definition.models import DefinitionRunCommand
-    from thesistrace.research_run.models import StartTrackingCommand
+    from thesistrace.research_run.models import (
+        ResearchRunAdmissionCommand,
+        StartTrackingCommand,
+    )
 
-    outcome = runtime.definitions.run(
-        None,
-        DefinitionRunCommand(
+    outcome = runtime.research_runs.admit(
+        ResearchRunAdmissionCommand(
             request_id=f"financial-io-benchmark-run-{suffix}",
+            folder_id="folder_default",
             name=f"Financial I/O benchmark {suffix}",
-            alpha={
-                "operator_id": "add",
-                "operands": [
-                    {"field_id": "price.close.adjusted"},
-                    {"field_id": "total_assets_latest_reported"},
-                ],
-            },
+            formula="close_adj + total_assets_latest_reported",
             universe="top300",
             neutralization="none",
             holdings_count=10,
@@ -238,12 +234,10 @@ def _activate_benchmark_track(runtime: object, sessions: tuple[str, ...], suffix
             end_date=sessions[-2],
         ),
     )
-    if outcome.outcome != "accepted" or outcome.run is None:
-        raise RuntimeError("tracking benchmark seed Run was rejected")
     if runtime.research_runs.process_next() is not True:
         raise RuntimeError("tracking benchmark seed Run was not processed")
     track = runtime.research_runs.start_tracking(
-        outcome.run.id,
+        outcome.id,
         StartTrackingCommand(request_id=f"financial-io-benchmark-track-{suffix}"),
     )
     if track is None:

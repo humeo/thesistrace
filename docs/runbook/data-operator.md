@@ -80,6 +80,28 @@ Collection retains the current Head, live candidates, and active execution
 pins. It does not make completed ResearchRuns depend on permanently retained
 market-data Generations.
 
+Financial collection and refresh require the live capability report and token
+in deployment. Deterministic acceptance may replace only the remote transport
+with the versioned product replay while exercising the same collection,
+candidate, publication, and Head compare-and-swap path:
+
+```sh
+thesistrace-data-operator refresh-financial \
+  --idempotency-key financial-replay-1 \
+  --generation-manifest-sha256 "$GENERATION" \
+  --observation-through-session 2026-08-11 \
+  --capability-report /private/operator/financial-capability.json \
+  --replay /private/operator/tushare-financial-product-replay.json
+```
+
+Omit `--prior-candidate-manifest-sha256` only for the first Financial Refresh
+of a market-only Head. Every later refresh supplies the current financial
+candidate so accepted historical versions are retained when the source no
+longer returns them.
+
+Replay is an explicit test/incident-reproduction input, never an automatic
+fallback from a failed live provider.
+
 The narrow Production Image smoke builds the backend image, runs the versioned
 operator twice through the shared named mount, and then starts and restarts the
 API and Worker without source credentials:

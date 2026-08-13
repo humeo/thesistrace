@@ -1,0 +1,399 @@
+{
+  "format": "thesistrace-financial-capability",
+  "version": 1,
+  "probed_at": "2026-08-13T00:00:00+00:00",
+  "reference_instrument": "000001.SZ",
+  "comparison_shards": [
+    {
+      "name": "1990",
+      "start_date": "19900101",
+      "end_date": "19901231"
+    },
+    {
+      "name": "1991",
+      "start_date": "19910101",
+      "end_date": "19911231"
+    },
+    {
+      "name": "1992",
+      "start_date": "19920101",
+      "end_date": "19921231"
+    },
+    {
+      "name": "1993",
+      "start_date": "19930101",
+      "end_date": "19931231"
+    },
+    {
+      "name": "1994",
+      "start_date": "19940101",
+      "end_date": "19941231"
+    },
+    {
+      "name": "1995",
+      "start_date": "19950101",
+      "end_date": "19951231"
+    },
+    {
+      "name": "1996",
+      "start_date": "19960101",
+      "end_date": "19961231"
+    },
+    {
+      "name": "1997",
+      "start_date": "19970101",
+      "end_date": "19971231"
+    },
+    {
+      "name": "1998",
+      "start_date": "19980101",
+      "end_date": "19981231"
+    },
+    {
+      "name": "1999",
+      "start_date": "19990101",
+      "end_date": "19991231"
+    },
+    {
+      "name": "2000",
+      "start_date": "20000101",
+      "end_date": "20001231"
+    },
+    {
+      "name": "2001",
+      "start_date": "20010101",
+      "end_date": "20011231"
+    },
+    {
+      "name": "2002",
+      "start_date": "20020101",
+      "end_date": "20021231"
+    },
+    {
+      "name": "2003",
+      "start_date": "20030101",
+      "end_date": "20031231"
+    },
+    {
+      "name": "2004",
+      "start_date": "20040101",
+      "end_date": "20041231"
+    },
+    {
+      "name": "2005",
+      "start_date": "20050101",
+      "end_date": "20051231"
+    },
+    {
+      "name": "2006",
+      "start_date": "20060101",
+      "end_date": "20061231"
+    },
+    {
+      "name": "2007",
+      "start_date": "20070101",
+      "end_date": "20071231"
+    },
+    {
+      "name": "2008",
+      "start_date": "20080101",
+      "end_date": "20081231"
+    },
+    {
+      "name": "2009",
+      "start_date": "20090101",
+      "end_date": "20091231"
+    },
+    {
+      "name": "2010",
+      "start_date": "20100101",
+      "end_date": "20101231"
+    },
+    {
+      "name": "2011",
+      "start_date": "20110101",
+      "end_date": "20111231"
+    },
+    {
+      "name": "2012",
+      "start_date": "20120101",
+      "end_date": "20121231"
+    },
+    {
+      "name": "2013",
+      "start_date": "20130101",
+      "end_date": "20131231"
+    },
+    {
+      "name": "2014",
+      "start_date": "20140101",
+      "end_date": "20141231"
+    },
+    {
+      "name": "2015",
+      "start_date": "20150101",
+      "end_date": "20151231"
+    },
+    {
+      "name": "2016",
+      "start_date": "20160101",
+      "end_date": "20161231"
+    },
+    {
+      "name": "2017",
+      "start_date": "20170101",
+      "end_date": "20171231"
+    },
+    {
+      "name": "2018",
+      "start_date": "20180101",
+      "end_date": "20181231"
+    },
+    {
+      "name": "2019",
+      "start_date": "20190101",
+      "end_date": "20191231"
+    },
+    {
+      "name": "2020",
+      "start_date": "20200101",
+      "end_date": "20201231"
+    },
+    {
+      "name": "2021",
+      "start_date": "20210101",
+      "end_date": "20211231"
+    },
+    {
+      "name": "2022",
+      "start_date": "20220101",
+      "end_date": "20221231"
+    },
+    {
+      "name": "2023",
+      "start_date": "20230101",
+      "end_date": "20231231"
+    },
+    {
+      "name": "2024",
+      "start_date": "20240101",
+      "end_date": "20241231"
+    },
+    {
+      "name": "2025",
+      "start_date": "20250101",
+      "end_date": "20251231"
+    },
+    {
+      "name": "2026",
+      "start_date": "20260101",
+      "end_date": "20260813"
+    }
+  ],
+  "endpoints": [
+    {
+      "endpoint": "income",
+      "permission": "available",
+      "failure_code": null,
+      "returned_fields": [
+        "ts_code",
+        "ann_date",
+        "f_ann_date",
+        "end_date",
+        "report_type",
+        "comp_type",
+        "end_type",
+        "total_revenue",
+        "n_income_attr_p",
+        "update_flag"
+      ],
+      "null_value_count": 1,
+      "duplicate_row_count": 0,
+      "full_history_row_count": 1,
+      "source_date_extent": [
+        "20260425",
+        "20260425"
+      ],
+      "observed_response_row_counts": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "suspected_truncation_row_count": null,
+      "observed_rate_limit_events": 0,
+      "observed_rate_limit_retry_seconds": [],
+      "full_history_proven": true
+    },
+    {
+      "endpoint": "balancesheet",
+      "permission": "available",
+      "failure_code": null,
+      "returned_fields": [
+        "ts_code",
+        "ann_date",
+        "f_ann_date",
+        "end_date",
+        "report_type",
+        "comp_type",
+        "end_type",
+        "total_assets",
+        "total_liab",
+        "total_hldr_eqy_exc_min_int",
+        "update_flag"
+      ],
+      "null_value_count": 1,
+      "duplicate_row_count": 0,
+      "full_history_row_count": 1,
+      "source_date_extent": [
+        "20260425",
+        "20260425"
+      ],
+      "observed_response_row_counts": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "suspected_truncation_row_count": null,
+      "observed_rate_limit_events": 0,
+      "observed_rate_limit_retry_seconds": [],
+      "full_history_proven": true
+    },
+    {
+      "endpoint": "cashflow",
+      "permission": "available",
+      "failure_code": null,
+      "returned_fields": [
+        "ts_code",
+        "ann_date",
+        "f_ann_date",
+        "end_date",
+        "report_type",
+        "comp_type",
+        "end_type",
+        "n_cashflow_act",
+        "update_flag"
+      ],
+      "null_value_count": 1,
+      "duplicate_row_count": 0,
+      "full_history_row_count": 1,
+      "source_date_extent": [
+        "20260425",
+        "20260425"
+      ],
+      "observed_response_row_counts": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "suspected_truncation_row_count": null,
+      "observed_rate_limit_events": 0,
+      "observed_rate_limit_retry_seconds": [],
+      "full_history_proven": true
+    }
+  ]
+}

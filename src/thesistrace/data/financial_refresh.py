@@ -77,7 +77,7 @@ class FinancialRefreshService:
         idempotency_key: str,
         generation_manifest_sha256: str,
         contract: FinancialCollectionContract,
-        prior_candidate_manifest_sha256: str,
+        prior_candidate_manifest_sha256: str | None,
         observation_through_session: str,
     ) -> FinancialRefreshOutcome:
         fingerprint = _fingerprint(
@@ -90,6 +90,11 @@ class FinancialRefreshService:
         published = self._published_outcome(idempotency_key, fingerprint)
         if published is not None:
             return published
+        source_financial = self._generations.inspect_root(
+            generation_manifest_sha256
+        ).financial_candidate_manifest_sha256
+        if source_financial != prior_candidate_manifest_sha256:
+            raise FinancialRefreshError("FINANCIAL_PRIOR_CANDIDATE_MISMATCH")
         outcome = self.rebuild(
             idempotency_key=idempotency_key,
             generation_manifest_sha256=generation_manifest_sha256,
@@ -335,7 +340,7 @@ class FinancialRefreshService:
         idempotency_key: str,
         generation_manifest_sha256: str,
         contract: FinancialCollectionContract,
-        prior_candidate_manifest_sha256: str,
+        prior_candidate_manifest_sha256: str | None,
         observation_through_session: str,
     ) -> FinancialRefreshOutcome:
         fingerprint = _fingerprint(
@@ -370,12 +375,13 @@ class FinancialRefreshService:
             before = self._collection.inspect(idempotency_key)
             resumed_count = sum(checkpoint.status == "completed" for checkpoint in before)
             try:
-                self._candidates.preflight_rebuild(
-                    prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
-                    generation_manifest_sha256=generation_manifest_sha256,
-                    contract=contract,
-                    observation_through_session=observation_through_session,
-                )
+                if prior_candidate_manifest_sha256 is not None:
+                    self._candidates.preflight_rebuild(
+                        prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+                        generation_manifest_sha256=generation_manifest_sha256,
+                        contract=contract,
+                        observation_through_session=observation_through_session,
+                    )
             except FinancialCandidateError as error:
                 code = (
                     "FINANCIAL_MARKET_GENERATION_INVALID"
@@ -426,10 +432,17 @@ class FinancialRefreshService:
                 }
             )
             try:
-                candidate = self._candidates.rebuild(
-                    snapshot,
-                    prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
-                    observation_through_session=observation_through_session,
+                candidate = (
+                    self._candidates.materialize(
+                        snapshot,
+                        observation_through_session=observation_through_session,
+                    )
+                    if prior_candidate_manifest_sha256 is None
+                    else self._candidates.rebuild(
+                        snapshot,
+                        prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+                        observation_through_session=observation_through_session,
+                    )
                 )
             except FinancialCandidateError as error:
                 self._fail(idempotency_key, str(error))
@@ -477,7 +490,7 @@ class FinancialRefreshService:
         idempotency_key: str,
         fingerprint: str,
         generation_manifest_sha256: str,
-        prior_candidate_manifest_sha256: str,
+        prior_candidate_manifest_sha256: str | None,
         observation_through_session: str,
         allow_create: bool,
     ) -> FinancialRefreshOutcome | None:
@@ -782,14 +795,22 @@ def _fingerprint(
     idempotency_key: str,
     generation_manifest_sha256: str,
     contract: FinancialCollectionContract,
-    prior_candidate_manifest_sha256: str,
+    prior_candidate_manifest_sha256: str | None,
     observation_through_session: str,
 ) -> str:
     if not idempotency_key or idempotency_key != idempotency_key.strip():
         raise FinancialRefreshError("FINANCIAL_REFRESH_REQUEST_INVALID")
-    for value in (generation_manifest_sha256, prior_candidate_manifest_sha256):
+    for value in (generation_manifest_sha256,):
         if len(value) != 64 or any(character not in "0123456789abcdef" for character in value):
             raise FinancialRefreshError("FINANCIAL_REFRESH_REQUEST_INVALID")
+    if prior_candidate_manifest_sha256 is not None and (
+        len(prior_candidate_manifest_sha256) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in prior_candidate_manifest_sha256
+        )
+    ):
+        raise FinancialRefreshError("FINANCIAL_REFRESH_REQUEST_INVALID")
     try:
         through = date.fromisoformat(observation_through_session).isoformat()
         normalized_contract = FinancialCollectionContract.from_descriptor(contract.descriptor())

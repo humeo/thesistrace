@@ -145,7 +145,7 @@ CREATE TABLE data.financial_refresh_operations (
     idempotency_key text NOT NULL,
     fingerprint text NOT NULL,
     generation_manifest_sha256 text NOT NULL,
-    prior_candidate_manifest_sha256 text NOT NULL,
+    prior_candidate_manifest_sha256 text,
     observation_through_session date NOT NULL,
     status text NOT NULL,
     candidate_manifest_sha256 text,

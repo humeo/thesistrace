@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.error
@@ -13,16 +14,26 @@ from threading import Event
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_run.result import read_result_bundle
 
 EXPECTED_OVERVIEW = {
-    "dataset_coverage": {"start": "2026-08-03", "end": "2026-08-11"},
-    "data_through_session": "2026-08-11",
-    "last_refresh_at": None,
-    "readiness": True,
+    "market_coverage": {"start": "2010-01-04", "end": "2026-08-05"},
+    "financial_coverage": {
+        "start": "2010-01-04",
+        "observation_through_session": "2026-08-05",
+        "reconciliation_status": "complete",
+        "historical_reconciliation_watermark": "2026-08-05",
+        "revision_coverage": "source-dated-and-first-observed-corrections",
+        "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+        "sparse_facts": True,
+    },
+    "data_through_session": "2026-08-05",
+    "last_market_refresh_at": None,
+    "market_research_readiness": True,
+    "financial_research_readiness": True,
 }
 
 
@@ -54,16 +65,20 @@ def _before_restart(
     *,
     mounted_data_sha256: str,
 ) -> dict[str, object]:
-    assert _request_json(api_origin, "GET", "/api/data") == EXPECTED_OVERVIEW
+    overview = _request_json(api_origin, "GET", "/api/data")
+    _assert_expected_overview(overview)
     catalog = _request_json(api_origin, "GET", "/api/alpha/catalog")
-    assert {field["identifier"] for field in catalog["fields"]} >= {
-        "close_adj",
-        "volume_shares",
+    identifiers = {field["identifier"] for field in catalog["fields"]}
+    assert identifiers >= {
+        "close_adj", "volume_shares", "total_revenue_latest_fy",
+        "net_profit_parent_latest_fy", "operating_cash_flow_latest_fy",
+        "total_assets_latest_reported", "total_liabilities_latest_reported",
+        "equity_parent_latest_reported",
     }
     assert {builtin["identifier"] for builtin in catalog["builtins"]} >= {
-        "lag",
-        "ts_mean",
+        "cs_rank", "lag", "ts_mean",
     }
+    _assert_private_operator_installed()
     folders = _request_json(api_origin, "GET", "/api/research-folders")
     assert folders["items"] == [
         {
@@ -89,7 +104,7 @@ def _before_restart(
             "hypothesis": "Prepared mounted data remains executable offline.",
             "start_date": "2026-08-03",
             "end_date": "2026-08-05",
-            "formula": "-close_adj",
+            "formula": "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
             "universe": "top300",
             "neutralization": "none",
             "holdings_count": 1,
@@ -112,15 +127,43 @@ def _before_restart(
         {"request_id": "production-image-smoke-track"},
     )
     assert track["status"] == "active"
+    market_run = _request_json(
+        api_origin,
+        "POST",
+        "/api/research-runs",
+        {
+            "request_id": "production-image-smoke-market-run",
+            "folder_id": "folder_default",
+            "name": "Production Image Smoke Market Alpha",
+            "hypothesis": "Market-only tracking remains independent of finance.",
+            "start_date": "2026-08-03",
+            "end_date": "2026-08-05",
+            "formula": "close_adj",
+            "universe": "top300",
+            "neutralization": "none",
+            "holdings_count": 1,
+            "rebalance_every_sessions": 1,
+        },
+    )
+    market_detail = _wait_for_run(api_origin, str(market_run["id"]))
+    assert market_detail["status"] == "succeeded"
+    market_track = _request_json(
+        api_origin,
+        "POST",
+        f"/api/research-runs/{market_run['id']}/daily-tracks",
+        {"request_id": "production-image-smoke-market-track"},
+    )
+    assert market_track["status"] == "active"
     durable = _durable_result(settings, run_id)
     return {
         "run_id": run_id,
         "track_id": track["id"],
+        "market_track_id": market_track["id"],
         "public_result_sha256": hashlib.sha256(canonical_json_bytes(detail)).hexdigest(),
         "result_manifest_sha256": durable["manifest_sha256"],
         "attempt_count": durable["attempt_count"],
         "execution_snapshot": durable["execution_snapshot"],
-        "overview": EXPECTED_OVERVIEW,
+        "overview": overview,
         "mounted_data_sha256": mounted_data_sha256,
     }
 
@@ -131,7 +174,8 @@ def _after_restart(
     expected: dict[str, object],
 ) -> dict[str, object]:
     overview = _request_json(api_origin, "GET", "/api/data")
-    assert overview == expected["overview"] == EXPECTED_OVERVIEW
+    assert overview == expected["overview"]
+    _assert_expected_overview(overview)
     run_id = str(expected["run_id"])
     detail = _request_json(api_origin, "GET", f"/api/research-runs/{run_id}")
     assert detail["status"] == "succeeded"
@@ -146,6 +190,46 @@ def _after_restart(
     track_id = str(expected["track_id"])
     track = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
     assert track["status"] == "active"
+    assert track["strategy_session"] == "2026-08-05"
+    subprocess.run(
+        [
+            sys.executable,
+            "/smoke/browser/publish_financial_track_head.py",
+            "lagged",
+        ],
+        check=True,
+        timeout=60,
+    )
+    blocked = _wait_for_track_status(api_origin, track_id, "blocked")
+    assert blocked["blocked_reason"] == (
+        "Financial Coverage ends before the next Research Session."
+    )
+    market_track_id = str(expected["market_track_id"])
+    market_advanced = _wait_for_track(api_origin, market_track_id, "2026-08-11")
+    assert market_advanced["status"] == "active"
+    subprocess.run(
+        [
+            sys.executable,
+            "/smoke/browser/publish_financial_track_head.py",
+            "recovered",
+        ],
+        check=True,
+        timeout=60,
+    )
+    retried = _request_json(
+        api_origin,
+        "POST",
+        f"/api/daily-tracks/{track_id}/retry",
+        {"request_id": "production-image-smoke-financial-retry"},
+    )
+    assert retried["status"] in {"active", "catching_up"}
+    advanced = _wait_for_track(api_origin, track_id, "2026-08-11")
+    assert advanced["status"] == "active"
+    assert advanced["blocked_reason"] is None
+    with open_core_runtime(settings) as runtime:
+        equivalence = runtime.daily_tracks.verify_persisted_equivalence(track_id)
+    assert equivalence.status == "equivalent"
+    assert equivalence.head_session == "2026-08-11"
     stopped = _request_json(
         api_origin,
         "POST",
@@ -155,12 +239,25 @@ def _after_restart(
     assert stopped["status"] == "stopped"
     assert _request_status(api_origin, "DELETE", f"/api/daily-tracks/{track_id}") == 204
     assert _request_status(api_origin, "GET", f"/api/daily-tracks/{track_id}") == 404
+    market_stopped = _request_json(
+        api_origin,
+        "POST",
+        f"/api/daily-tracks/{market_track_id}/stop",
+        {"request_id": "production-image-smoke-market-stop"},
+    )
+    assert market_stopped["status"] == "stopped"
+    assert _request_status(
+        api_origin, "DELETE", f"/api/daily-tracks/{market_track_id}"
+    ) == 204
     return {
         "run_id": run_id,
         "status": detail["status"],
         "result_manifest_sha256": durable["manifest_sha256"],
         "attempt_count": durable["attempt_count"],
-        "readiness": overview["readiness"],
+        "financial_research_readiness": overview["financial_research_readiness"],
+        "equivalence": equivalence.status,
+        "strategy_session": advanced["strategy_session"],
+        "market_strategy_session": market_advanced["strategy_session"],
         "track_deleted": True,
     }
 
@@ -184,6 +281,62 @@ def _wait_for_run(api_origin: str, run_id: str) -> dict[str, object]:
             raise AssertionError(last)
         poll_interval.wait(0.1)
     raise AssertionError({"timeout": True, "last_run": last})
+
+
+def _wait_for_track(
+    api_origin: str,
+    track_id: str,
+    expected_session: str,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 60
+    last: dict[str, object] | None = None
+    poll_interval = Event()
+    while time.monotonic() < deadline:
+        last = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
+        if last["status"] == "active" and last["strategy_session"] == expected_session:
+            return last
+        if last["status"] in {"blocked", "stopped"}:
+            raise AssertionError(last)
+        poll_interval.wait(0.1)
+    raise AssertionError({"timeout": True, "last_track": last})
+
+
+def _wait_for_track_status(
+    api_origin: str,
+    track_id: str,
+    expected_status: str,
+) -> dict[str, object]:
+    deadline = time.monotonic() + 60
+    last: dict[str, object] | None = None
+    poll_interval = Event()
+    while time.monotonic() < deadline:
+        last = _request_json(api_origin, "GET", f"/api/daily-tracks/{track_id}")
+        if last["status"] == expected_status:
+            return last
+        if last["status"] == "stopped":
+            raise AssertionError(last)
+        poll_interval.wait(0.1)
+    raise AssertionError({"timeout": True, "last_track": last})
+
+
+def _assert_private_operator_installed() -> None:
+    result = subprocess.run(
+        ["thesistrace-data-operator", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "bootstrap" in result.stdout
+    assert "refresh-financial" in result.stdout
+
+
+def _assert_expected_overview(overview: dict[str, object]) -> None:
+    assert {key: overview[key] for key in EXPECTED_OVERVIEW} == EXPECTED_OVERVIEW
+    refreshed_at = overview.get("last_financial_refresh_at")
+    assert isinstance(refreshed_at, str)
+    assert refreshed_at.endswith(("+00:00", "Z"))
 
 
 def _durable_result(settings: CoreSettings, run_id: str) -> dict[str, object]:

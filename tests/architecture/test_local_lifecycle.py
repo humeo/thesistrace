@@ -632,6 +632,8 @@ def test_production_image_smoke_runs_entirely_inside_an_internal_network() -> No
 
     assert "internal: true" in image_overlay
     assert "tests:/smoke:ro" in image_overlay
+    assert "image-smoke-operator-bootstrap" in test_runtime
+    assert "thesistrace-data-operator bootstrap" in test_runtime
     assert "python /smoke/browser/prepare_current_data.py" in test_runtime
     assert test_runtime.count("python /smoke/production_image_smoke.py") == 2
     assert "compose restart api worker" in test_runtime
@@ -639,6 +641,8 @@ def test_production_image_smoke_runs_entirely_inside_an_internal_network() -> No
     assert 'test "$network_internal" = true' in test_runtime
     assert 'expected["attempt_count"] == 1' in smoke
     assert "read_result_bundle" in smoke
+    assert '"lagged"' in smoke
+    assert '"recovered"' in smoke
 
 
 def test_production_image_smoke_builds_once_and_reuses_the_images(

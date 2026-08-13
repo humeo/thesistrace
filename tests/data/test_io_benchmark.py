@@ -73,7 +73,7 @@ def test_repository_benchmark_contract_is_full_scale_and_budgeted() -> None:
     assert hashlib.sha256(
         (root / "benchmarks/financial-io-2010-baseline.json").read_bytes()
     ).hexdigest() == (
-        "6f053d3a506e0e345a254c6caf0bdd17664500bb6ce812ff5e0b66608608f2e6"
+        "e302a9c03eb600748b9c97adb36ed2ad577fce8b71738482d3cdb1c6bf50fe09"
     )
     assert set(baseline["scenarios"]) == set(budgets["scenarios"])
     assert all(

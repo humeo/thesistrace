@@ -1,6 +1,6 @@
 # Point-in-Time Financial Data and Composite Alpha
 
-**Status:** ready-for-agent
+**Status:** complete
 
 ## Problem Statement
 

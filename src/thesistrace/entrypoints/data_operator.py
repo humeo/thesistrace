@@ -104,13 +104,15 @@ def _run(
     financial_collect.add_argument("--generation-manifest-sha256", required=True)
     financial_collect.add_argument("--capability-report", type=Path, required=True)
     financial_collect.add_argument("--date-shard", action="append", metavar="NAME:START:END")
+    financial_collect.add_argument("--replay", type=Path)
     financial_refresh = subcommands.add_parser("refresh-financial")
     financial_refresh.add_argument("--idempotency-key", required=True)
     financial_refresh.add_argument("--generation-manifest-sha256", required=True)
     financial_refresh.add_argument("--capability-report", type=Path, required=True)
     financial_refresh.add_argument("--date-shard", action="append", metavar="NAME:START:END")
-    financial_refresh.add_argument("--prior-candidate-manifest-sha256", required=True)
+    financial_refresh.add_argument("--prior-candidate-manifest-sha256")
     financial_refresh.add_argument("--observation-through-session", required=True)
+    financial_refresh.add_argument("--replay", type=Path)
     parsed = parser.parse_args(arguments)
 
     transport: HttpTushareTransport | None = None
@@ -174,7 +176,7 @@ def _run(
             )
             return report.descriptor()
         if parsed.command in {"collect-financial", "refresh-financial"}:
-            if live_provider is None:
+            if live_provider is None and replay is None:
                 raise FinancialCollectionError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
             report = _load_financial_capability(parsed.capability_report)
             date_shards = (
@@ -190,7 +192,7 @@ def _run(
                 return FinancialCollectionService(
                     database,
                     mount_root,
-                    live_provider,
+                    provider,
                     progress=_progress,
                 ).collect(
                     idempotency_key=parsed.idempotency_key,
@@ -200,7 +202,7 @@ def _run(
             outcome = FinancialRefreshService(
                 database,
                 mount_root,
-                live_provider,
+                provider,
                 progress=_progress,
             ).publish(
                 idempotency_key=parsed.idempotency_key,

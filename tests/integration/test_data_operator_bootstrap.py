@@ -636,6 +636,106 @@ def test_real_private_command_bootstraps_from_tushare_replay(
     assert "SUPERSECRET" not in database_failed.stderr
 
 
+def test_real_private_financial_command_uses_product_replay(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    request: pytest.FixtureRequest,
+) -> None:
+    replay = Path(__file__).resolve().parents[1] / "fixtures" / (
+        "tushare-financial-product-replay.json"
+    )
+    capability = Path(__file__).resolve().parents[1] / "fixtures" / (
+        "tushare-financial-capability.json"
+    )
+    mount = tmp_path / "financial-command-data"
+    mount.mkdir()
+    environment = {
+        **os.environ,
+        "THESISTRACE_DATABASE_URL": core_settings.database_url,
+        "THESISTRACE_DATA_MOUNT": str(mount),
+    }
+    def cleanup() -> None:
+        database = PostgresDatabase(core_settings.database_url)
+        database.open()
+        try:
+            with database.transaction() as transaction:
+                transaction.execute(
+                    """
+                    TRUNCATE data.financial_refresh_operations,
+                             data.financial_collection_shards,
+                             data.financial_raw_batches,
+                             data.financial_collection_operations,
+                             data.bootstrap_operations,
+                             data.generation_pins,
+                             data.generation_candidates
+                    """
+                )
+                transaction.execute(
+                    """
+                    UPDATE data.current_dataset_state
+                    SET last_market_refresh_at = NULL,
+                        last_financial_refresh_at = NULL
+                    WHERE singleton = 1
+                    """
+                )
+        finally:
+            database.close()
+
+    cleanup()
+    request.addfinalizer(cleanup)
+    bootstrap = subprocess.run(
+        (
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.data_operator",
+            "bootstrap",
+            "--idempotency-key",
+            "financial-cli-bootstrap",
+            "--as-of",
+            "2026-08-05T18:00:00+08:00",
+            "--start-date",
+            "2010-01-04",
+            "--replay",
+            str(replay),
+        ),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert bootstrap.returncode == 0, bootstrap.stderr
+    market_manifest = json.loads(bootstrap.stdout)["generation_manifest_sha256"]
+
+    refresh = subprocess.run(
+        (
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.data_operator",
+            "refresh-financial",
+            "--idempotency-key",
+            "financial-cli-refresh",
+            "--generation-manifest-sha256",
+            market_manifest,
+            "--capability-report",
+            str(capability),
+            "--observation-through-session",
+            "2026-08-05",
+            "--replay",
+            str(replay),
+        ),
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    assert refresh.returncode == 0, refresh.stderr
+    outcome = json.loads(refresh.stdout)
+    assert outcome["status"] == "succeeded"
+    assert outcome["expected_shard_count"] == outcome["completed_shard_count"] == 3
+
+
 def _database(settings: CoreSettings) -> PostgresDatabase:
     initialize_core(settings.database_url)
     database = PostgresDatabase(settings.database_url)

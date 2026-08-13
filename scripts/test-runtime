@@ -359,6 +359,12 @@ case "$command" in
     run_phase e2e-initialization compose wait initialize
     postgres_port=$(mapped_port postgres 5432)
     s3_port=$(mapped_port rustfs 9000)
+    run_phase e2e-operator-bootstrap run_with_environment uv run \
+      thesistrace-data-operator bootstrap \
+      --idempotency-key financial-release-bootstrap \
+      --as-of 2026-08-05T18:00:00+08:00 \
+      --start-date 2010-01-04 \
+      --replay tests/fixtures/tushare-financial-product-replay.json
     run_phase e2e-prepare-data run_with_environment uv run python \
       tests/browser/prepare_current_data.py
     run_phase e2e-application compose up --detach --no-build \
@@ -377,6 +383,12 @@ case "$command" in
       --wait --wait-timeout 300 \
       postgres rustfs initialize
     run_phase image-smoke-initialization compose wait initialize
+    run_phase image-smoke-operator-bootstrap compose run --rm --no-deps -T initialize \
+      thesistrace-data-operator bootstrap \
+      --idempotency-key financial-release-bootstrap \
+      --as-of 2026-08-05T18:00:00+08:00 \
+      --start-date 2010-01-04 \
+      --replay /smoke/fixtures/tushare-financial-product-replay.json
     run_phase image-smoke-prepare-data compose run --rm --no-deps -T initialize \
       python /smoke/browser/prepare_current_data.py
     run_phase image-smoke-application compose up --detach --no-build \

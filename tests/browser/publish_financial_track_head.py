@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import UTC, datetime
-
-from prepare_current_data import CURRENT_SESSIONS, _canonical, _financial_candidate
+import subprocess
+from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
@@ -16,55 +15,69 @@ def main() -> None:
     parser.add_argument("mode", choices=("lagged", "recovered"))
     mode = parser.parse_args().mode
     settings = CoreSettings.from_environment()
-    database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        lifecycle = DatasetLifecycle(database, settings.data_mount)
-        current = lifecycle.current_pointer()
-        if current is None:
-            raise RuntimeError("Browser fixture Head is unavailable")
-        store = MountedGenerationStore(settings.data_mount)
-        market = store.materialize(
-            _canonical(CURRENT_SESSIONS),
-            prepared_at=datetime(2026, 8, 11, 14, tzinfo=UTC),
-            source_name="ticket-11-browser-track-fixture",
-            source_lineage={"contract": "financial-track-browser-v1", "mode": mode},
+    fixture_root = Path(__file__).resolve().parents[1] / "fixtures"
+    if mode == "lagged":
+        _run_operator(
+            "refresh",
+            "--idempotency-key",
+            "financial-release-market-refresh",
+            "--as-of",
+            "2026-08-11T18:00:00+08:00",
         )
-        observation_through = "2026-08-06" if mode == "lagged" else CURRENT_SESSIONS[-1]
-        operation_id = f"ticket-11-browser-{mode}"
-        financial = _financial_candidate(
-            settings,
-            market.manifest_sha256,
-            observation_through_session=observation_through,
-            idempotency_key=operation_id,
+        outcome = _run_operator(
+            "work-refresh",
+            "--replay",
+            str(fixture_root / "tushare-financial-market-refresh-replay.json"),
         )
-        generation = store.compose_financial_candidate(
-            market.manifest_sha256,
-            financial.manifest_sha256,
-            prepared_at=datetime(2026, 8, 11, 15, tzinfo=UTC),
+    else:
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            pointer = DatasetLifecycle(database, settings.data_mount).current_pointer()
+            if pointer is None:
+                raise RuntimeError("financial release Head is unavailable")
+            root = MountedGenerationStore(settings.data_mount).inspect_root(
+                pointer.generation_manifest_sha256
+            )
+        finally:
+            database.close()
+        prior = root.financial_candidate_manifest_sha256
+        if prior is None:
+            raise RuntimeError("financial release candidate is unavailable")
+        outcome = _run_operator(
+            "refresh-financial",
+            "--idempotency-key",
+            "financial-release-financial-refresh",
+            "--generation-manifest-sha256",
+            root.manifest_sha256,
+            "--capability-report",
+            str(fixture_root / "tushare-financial-capability.json"),
+            "--prior-candidate-manifest-sha256",
+            prior,
+            "--observation-through-session",
+            "2026-08-11",
+            "--replay",
+            str(fixture_root / "tushare-financial-product-replay.json"),
         )
-        lifecycle.protect_candidate(
-            operation_id=operation_id,
-            generation_manifest_sha256=generation.manifest_sha256,
-            lease_seconds=60,
-        )
-        lifecycle.compare_and_swap_head(
-            expected_generation_manifest_sha256=current.generation_manifest_sha256,
-            candidate_generation_manifest_sha256=generation.manifest_sha256,
-            operation_id=operation_id,
-        )
-    finally:
-        database.close()
-    print(
-        json.dumps(
-            {
-                "generation_manifest_sha256": generation.manifest_sha256,
-                "mode": mode,
-                "observation_through_session": observation_through,
-            },
-            sort_keys=True,
-        )
+    print(json.dumps({"mode": mode, "operator_outcome": outcome}, sort_keys=True))
+
+
+def _run_operator(*arguments: str) -> dict[str, object]:
+    completed = subprocess.run(
+        ["thesistrace-data-operator", *arguments],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"private Data Operator failed ({completed.returncode}): {completed.stderr}"
+        )
+    outcome = json.loads(completed.stdout)
+    if not isinstance(outcome, dict):
+        raise RuntimeError("private Data Operator returned an invalid outcome")
+    return outcome
 
 
 if __name__ == "__main__":

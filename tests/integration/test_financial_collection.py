@@ -701,6 +701,14 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             idempotency_key="financial-publish-prior",
             contract=contract,
         )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="financial-publish-source",
+            expected=market,
+        )
         service = FinancialRefreshService(
             database,
             tmp_path,
@@ -710,7 +718,7 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
 
         published = service.publish(
             idempotency_key="financial-publish",
-            generation_manifest_sha256=market,
+            generation_manifest_sha256=source_generation,
             contract=contract,
             prior_candidate_manifest_sha256=prior.manifest_sha256,
             observation_through_session="2026-08-13",
@@ -754,11 +762,57 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
         monkeypatch.undo()
         assert service.publish(
             idempotency_key="financial-publish",
-            generation_manifest_sha256=market,
+            generation_manifest_sha256=source_generation,
             contract=contract,
             prior_candidate_manifest_sha256=prior.manifest_sha256,
             observation_through_session="2026-08-13",
         ) == published
+    finally:
+        database.close()
+
+
+def test_financial_refresh_rejects_prior_identity_mismatch_before_collection(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        market = _market_generation(tmp_path)
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="financial-prior-identity",
+            contract=contract,
+        )
+        financial = _financial_generation(tmp_path, market, prior)
+        source = ExecutableStatementSource()
+        service = FinancialRefreshService(database, tmp_path, source)
+
+        for generation, supplied_prior in (
+            (market, prior.manifest_sha256),
+            (financial, None),
+            (financial, "0" * 64),
+        ):
+            with pytest.raises(
+                FinancialRefreshError,
+                match="FINANCIAL_PRIOR_CANDIDATE_MISMATCH",
+            ):
+                service.publish(
+                    idempotency_key=f"invalid-prior-{supplied_prior}",
+                    generation_manifest_sha256=generation,
+                    contract=contract,
+                    prior_candidate_manifest_sha256=supplied_prior,
+                    observation_through_session="2026-08-13",
+                )
+
+        assert source.requests == []
+        with database.transaction() as transaction:
+            assert transaction.execute(
+                "SELECT 1 FROM data.financial_refresh_operations"
+            ).fetchone() is None
     finally:
         database.close()
 
@@ -782,12 +836,22 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
             contract=contract,
         )
         store = MountedGenerationStore(tmp_path)
-        second_market = store.materialize(
-            store.open_refresh_base(
-                first_market,
+        source_generation = _financial_generation(tmp_path, first_market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="financial-rebase-source",
+            expected=first_market,
+        )
+        second_market = store.materialize_refresh(
+            predecessor_manifest_sha256=source_generation,
+            replacement_canonical=store.open_refresh_base(
+                source_generation,
                 overlap_session_count=3,
                 universe_lookback_session_count=0,
             ).canonical,
+            replace_from_session="2010-01-04",
             prepared_at=COLLECTED_AT + timedelta(hours=1),
             source_name="concurrent-market-refresh",
             source_lineage={"fixture": "same-market-content-new-root"},
@@ -807,7 +871,7 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
                     tmp_path,
                     second_market,
                     operation_id="financial-rebase-second",
-                    expected=first_market,
+                    expected=source_generation,
                 )
 
         published = FinancialRefreshService(
@@ -818,7 +882,7 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
             progress=move_market_head,
         ).publish(
             idempotency_key="financial-rebase",
-            generation_manifest_sha256=first_market,
+            generation_manifest_sha256=source_generation,
             contract=contract,
             prior_candidate_manifest_sha256=prior.manifest_sha256,
             observation_through_session="2026-08-13",
@@ -831,7 +895,7 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
         final = store.validate_generation(pointer.generation_manifest_sha256)
         newest_market = store.inspect_root(second_market)
         assert tuple(family.manifest_sha256 for family in final.families[:-1]) == tuple(
-            family.manifest_sha256 for family in newest_market.families
+            family.manifest_sha256 for family in newest_market.families[:-1]
         )
         assert FinancialCandidateStore(tmp_path).source_generation_manifest_sha256(
             final.financial_candidate_manifest_sha256 or ""
@@ -889,20 +953,30 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
         assert collection.status == "succeeded"
         assert original_path.exists()
         assert not published_root_path.exists()
+        source_root_path = (
+            tmp_path
+            / "manifests"
+            / "sha256"
+            / source_generation[:2]
+            / f"{source_generation}.json"
+        )
+        assert not source_root_path.exists()
 
+        replay_source = ExecutableStatementSource()
         replayed = FinancialRefreshService(
             database,
             tmp_path,
-            ExecutableStatementSource(),
+            replay_source,
             clock=lambda: COLLECTED_AT + timedelta(days=2),
         ).publish(
             idempotency_key="financial-rebase",
-            generation_manifest_sha256=first_market,
+            generation_manifest_sha256=source_generation,
             contract=contract,
             prior_candidate_manifest_sha256=prior.manifest_sha256,
             observation_through_session="2026-08-13",
         )
         assert replayed == published
+        assert replay_source.requests == []
     finally:
         database.close()
 
@@ -974,6 +1048,14 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
             idempotency_key="concurrent-market-prior",
             contract=contract,
         )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="concurrent-financial-source",
+            expected=market,
+        )
         financial = FinancialRefreshService(
             database,
             tmp_path,
@@ -981,7 +1063,9 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
             clock=lambda: COLLECTED_AT + timedelta(days=1),
         )
 
-        market_canonical = MountedGenerationStore(tmp_path).open_refresh_base(market).canonical
+        market_canonical = MountedGenerationStore(tmp_path).open_refresh_base(
+            source_generation
+        ).canonical
         prices = market_canonical["prices"]
         assert isinstance(prices, list)
         corrected = next(
@@ -1005,7 +1089,7 @@ def test_market_refresh_completes_while_financial_collection_is_blocked(
             future = executor.submit(
                 financial.publish,
                 idempotency_key="blocked-financial",
-                generation_manifest_sha256=market,
+                generation_manifest_sha256=source_generation,
                 contract=contract,
                 prior_candidate_manifest_sha256=prior.manifest_sha256,
                 observation_through_session="2026-08-13",
@@ -1043,6 +1127,14 @@ def test_financial_publication_reconciles_a_post_cas_completion_failure(
             idempotency_key="financial-reconcile-prior",
             contract=contract,
         )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="financial-reconcile-source",
+            expected=market,
+        )
         service = FinancialRefreshService(
             database,
             tmp_path,
@@ -1067,13 +1159,13 @@ def test_financial_publication_reconciles_a_post_cas_completion_failure(
         with pytest.raises(Exception, match="completion failed"):
             service.publish(
                 idempotency_key="financial-reconcile",
-                generation_manifest_sha256=market,
+                generation_manifest_sha256=source_generation,
                 contract=contract,
                 prior_candidate_manifest_sha256=prior.manifest_sha256,
                 observation_through_session="2026-08-13",
             )
         moved = MountedDatasetHeadStore(tmp_path).current_pointer()
-        assert moved is not None and moved.generation_manifest_sha256 != market
+        assert moved is not None and moved.generation_manifest_sha256 != source_generation
 
         with database.transaction() as transaction:
             transaction.execute(
@@ -1082,7 +1174,7 @@ def test_financial_publication_reconciles_a_post_cas_completion_failure(
             transaction.execute("DROP FUNCTION data.reject_financial_freshness()")
         replayed = service.publish(
             idempotency_key="financial-reconcile",
-            generation_manifest_sha256=market,
+            generation_manifest_sha256=source_generation,
             contract=contract,
             prior_candidate_manifest_sha256=prior.manifest_sha256,
             observation_through_session="2026-08-13",
@@ -1113,6 +1205,14 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
             market,
             idempotency_key="financial-receipt-prior",
             contract=contract,
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="financial-receipt-source",
+            expected=market,
         )
         service = FinancialRefreshService(
             database,
@@ -1147,14 +1247,14 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
         ):
             service.publish(
                 idempotency_key="financial-receipt-crash",
-                generation_manifest_sha256=market,
+                generation_manifest_sha256=source_generation,
                 contract=contract,
                 prior_candidate_manifest_sha256=prior.manifest_sha256,
                 observation_through_session="2026-08-13",
             )
 
         moved = MountedDatasetHeadStore(tmp_path).current_pointer()
-        assert moved is not None and moved.generation_manifest_sha256 != market
+        assert moved is not None and moved.generation_manifest_sha256 != source_generation
         with database.transaction() as transaction:
             state = transaction.execute(
                 """
@@ -1225,7 +1325,7 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
             clock=lambda: COLLECTED_AT + timedelta(days=2),
         ).publish(
             idempotency_key="financial-receipt-crash",
-            generation_manifest_sha256=market,
+            generation_manifest_sha256=source_generation,
             contract=contract,
             prior_candidate_manifest_sha256=prior.manifest_sha256,
             observation_through_session="2026-08-13",
@@ -1291,6 +1391,14 @@ def test_stale_financial_target_cannot_overwrite_a_newer_financial_family(
             idempotency_key="financial-target-prior",
             contract=contract,
         )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="financial-target-source",
+            expected=market,
+        )
 
         def publish_other_financial_target(event: dict[str, object]) -> None:
             nonlocal moved
@@ -1308,7 +1416,7 @@ def test_stale_financial_target_cannot_overwrite_a_newer_financial_family(
                     clock=lambda: COLLECTED_AT + timedelta(hours=12),
                 ).publish(
                     idempotency_key="financial-target-other",
-                    generation_manifest_sha256=market,
+                    generation_manifest_sha256=source_generation,
                     contract=contract,
                     prior_candidate_manifest_sha256=prior.manifest_sha256,
                     observation_through_session="2026-08-13",
@@ -1325,7 +1433,7 @@ def test_stale_financial_target_cannot_overwrite_a_newer_financial_family(
         with pytest.raises(FinancialRefreshError, match="FINANCIAL_TARGET_CHANGED"):
             stale.publish(
                 idempotency_key="financial-target-stale",
-                generation_manifest_sha256=market,
+                generation_manifest_sha256=source_generation,
                 contract=contract,
                 prior_candidate_manifest_sha256=prior.manifest_sha256,
                 observation_through_session="2026-08-13",
@@ -2087,6 +2195,23 @@ def _market_generation(root: Path) -> str:
             prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
             source_name="financial-collection-test",
             source_lineage={"fixture": "historical-identities"},
+        )
+        .manifest_sha256
+    )
+
+
+def _financial_generation(
+    root: Path,
+    market_generation_manifest_sha256: str,
+    candidate: FinancialFamilyCandidate,
+) -> str:
+    return (
+        MountedGenerationStore(root)
+        .compose_financial_candidate(
+            market_generation_manifest_sha256,
+            candidate.manifest_sha256,
+            prepared_at=COLLECTED_AT,
+            publication_coordinate=candidate.manifest_sha256,
         )
         .manifest_sha256
     )
