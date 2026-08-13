@@ -711,7 +711,7 @@ def _update_last_refresh(transaction: PostgresTransaction, completed_at: datetim
     transaction.execute(
         """
         UPDATE data.current_dataset_state
-        SET last_refresh_at = GREATEST(last_refresh_at, %s)
+        SET last_market_refresh_at = GREATEST(last_market_refresh_at, %s)
         WHERE singleton = 1
         """,
         (completed_at,),

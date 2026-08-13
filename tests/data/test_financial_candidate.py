@@ -280,9 +280,20 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
         market_manifest,
         complete.manifest_sha256,
         prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+        publication_coordinate="a" * 64,
+    )
+    same_data_other_publication = generation_store.compose_financial_candidate(
+        market_manifest,
+        complete.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 11, tzinfo=UTC),
+        publication_coordinate="b" * 64,
     )
 
     assert composite.financial_candidate_manifest_sha256 == complete.manifest_sha256
+    assert composite.manifest_sha256 != same_data_other_publication.manifest_sha256
+    assert composite.data_identity == same_data_other_publication.data_identity
+    assert composite.financial_publication_coordinate == "a" * 64
+    assert same_data_other_publication.financial_publication_coordinate == "b" * 64
     assert composite.families[-1].family_id == "equity.financial_pit"
     assert composite.families[-1].manifest_sha256 == complete.manifest_sha256
     assert {
@@ -333,9 +344,10 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
             "schema_contract",
             "data_through_session",
             "research_sessions",
-            "field_availability",
-            "families",
-        )
+                "field_availability",
+                "families",
+                "financial_research_readiness",
+            )
     }
     forged["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
     forged_content = canonical_json_bytes(forged)
@@ -347,6 +359,58 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
 
     with pytest.raises(RuntimeError, match="does not match its manifest"):
         generation_store.validate_generation(forged_sha256)
+
+
+def test_financial_generation_rejects_an_incomplete_research_readiness_slice(
+    tmp_path: Path,
+) -> None:
+    candidate_store, _incomplete, _repeated, _snapshot = _materialized_candidate(tmp_path)
+    market_manifest = candidate_store.source_generation_manifest_sha256(
+        _incomplete.manifest_sha256
+    )
+    complete = candidate_store.materialize(
+        _empty_bounded_snapshot(
+            tmp_path,
+            market_manifest,
+            through="20260813",
+            idempotency_key="readiness-six-fields",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        observation_through_session="2026-08-13",
+    )
+    generation = MountedGenerationStore(tmp_path).compose_financial_candidate(
+        market_manifest,
+        complete.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+    root_path = (
+        tmp_path
+        / "manifests"
+        / "sha256"
+        / generation.manifest_sha256[:2]
+        / f"{generation.manifest_sha256}.json"
+    )
+    root = json.loads(root_path.read_bytes())
+    root["financial_research_readiness"]["daily_track"] = "missing"
+    identity = {
+        key: root[key]
+        for key in (
+            "schema_contract",
+            "data_through_session",
+            "research_sessions",
+            "field_availability",
+            "families",
+            "financial_research_readiness",
+        )
+    }
+    root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    content = canonical_json_bytes(root)
+    sha256 = hashlib.sha256(content).hexdigest()
+    path = tmp_path / "manifests" / "sha256" / sha256[:2] / f"{sha256}.json"
+    AddressedFileStore(tmp_path).store(path, sha256, content)
+
+    with pytest.raises(RuntimeError, match="Financial Research Readiness"):
+        MountedGenerationStore(tmp_path).validate_generation(sha256)
 
 
 def test_financial_series_read_projects_requested_columns_and_instruments(

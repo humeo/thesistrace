@@ -1430,10 +1430,13 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         overview = client.get("/api/data")
         assert overview.status_code == 200
         assert set(overview.json()) == {
-            "dataset_coverage",
+            "market_coverage",
+            "financial_coverage",
             "data_through_session",
-            "last_refresh_at",
-            "readiness",
+            "last_market_refresh_at",
+            "last_financial_refresh_at",
+            "market_research_readiness",
+            "financial_research_readiness",
         }
         assert "correction" not in overview.text.lower()
 

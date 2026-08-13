@@ -134,7 +134,7 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         assert plan.after_session == current["research_calendar"][-1]
         assert plan.completed_through_date.isoformat() == "2026-09-07"
         overview = DatasetOverviewService(database, tmp_path).overview()
-        assert overview.last_refresh_at == FIRST_REFRESH_AT
+        assert overview.last_market_refresh_at == FIRST_REFRESH_AT
         assert overview.data_through_session.isoformat() == candidate["research_calendar"][-1]
     finally:
         database.close()
@@ -270,7 +270,7 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             SECOND_REFRESH_AT
         )
     finally:
@@ -312,7 +312,9 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
     try:
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
-        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        prior_refresh_at = (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+        )
         invalid = copy.deepcopy(current)
         invalid["prices"] = []
         refresh = DataRefreshService(database, tmp_path, clock=lambda: FIRST_REFRESH_AT)
@@ -330,7 +332,7 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         overview = DatasetOverviewService(database, tmp_path).overview()
-        assert overview.last_refresh_at == prior_refresh_at
+        assert overview.last_market_refresh_at == prior_refresh_at
     finally:
         database.close()
 
@@ -387,7 +389,10 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at is not None
+        assert (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            is not None
+        )
     finally:
         database.close()
 
@@ -484,7 +489,9 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
     try:
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
-        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        prior_refresh_at = (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+        )
         refresh = DataRefreshService(database, tmp_path, max_attempts=2)
         refresh.submit(idempotency_key="bounded-retry", as_of=AS_OF)
 
@@ -508,7 +515,7 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         head = DatasetLifecycle(database, tmp_path).current_pointer()
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
     finally:
@@ -566,7 +573,7 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
             assert recovered.attempt_count == 2
             assert recovered.last_failure_code is None
             recovered_freshness = (
-                DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+                DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
             )
 
             resume_old_worker.set()
@@ -576,7 +583,7 @@ def test_late_worker_cannot_renew_or_complete_after_recovery_takes_over(
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert replacement.inspect("lost-worker") == recovered
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             recovered_freshness
         )
     finally:
@@ -594,7 +601,9 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
         _lineage, current = normalize_tushare_snapshot(snapshot)
         manifest = _establish_head(database, tmp_path, current)
         prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
-        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        prior_refresh_at = (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+        )
         malformed = copy.deepcopy(snapshot)
         malformed["daily"] = {"not": "a source table"}
         refresh = DataRefreshService(database, tmp_path, max_attempts=1)
@@ -615,7 +624,7 @@ def test_real_tushare_overlap_merge_failure_keeps_prior_head_and_freshness(
             open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
             == prior_canonical
         )
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
     finally:
@@ -632,7 +641,9 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
         _lineage, current = normalize_tushare_snapshot(snapshot)
         manifest = _establish_head(database, tmp_path, current)
         prior_canonical = open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
-        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        prior_refresh_at = (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+        )
         corrected = copy.deepcopy(snapshot)
         daily = corrected["daily"]
         assert isinstance(daily, list)
@@ -661,7 +672,7 @@ def test_real_tushare_derived_recomputation_failure_keeps_prior_head_and_freshne
             open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest)
             == prior_canonical
         )
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
     finally:
@@ -686,7 +697,9 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
     try:
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
-        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        prior_refresh_at = (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+        )
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         preview_root = tmp_path.with_name(f"{tmp_path.name}-candidate-preview")
@@ -733,7 +746,7 @@ def test_real_generation_write_failure_keeps_the_prior_head_readable(
         assert head is not None
         assert head.generation_manifest_sha256 == manifest
         assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), manifest) == current
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
     finally:
@@ -751,7 +764,9 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
     try:
         current = _twenty_session_canonical()
         original = _establish_head(database, tmp_path, current)
-        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        prior_refresh_at = (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+        )
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         refresh = DataRefreshService(database, tmp_path)
@@ -803,7 +818,7 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
         pending = refresh.inspect("ambiguous-cas")
         assert pending.status == "running"
         assert pending.failure_code is None
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
         manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
@@ -829,7 +844,9 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
     try:
         current = _twenty_session_canonical()
         original = _establish_head(database, tmp_path, current)
-        prior_refresh_at = DatasetOverviewService(database, tmp_path).overview().last_refresh_at
+        prior_refresh_at = (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+        )
         candidate = copy.deepcopy(current)
         _append_session(candidate)
         refresh = DataRefreshService(database, tmp_path)
@@ -871,7 +888,7 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         assert moved.generation_manifest_sha256 != original
         assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), original) == current
         assert refresh.inspect("completion-crash").status == "running"
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at == (
+        assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
         manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
@@ -883,7 +900,10 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         assert terminal.status == "succeeded"
         assert terminal.outcome == "published"
         assert terminal.attempt_count == 1
-        assert DatasetOverviewService(database, tmp_path).overview().last_refresh_at is not None
+        assert (
+            DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
+            is not None
+        )
         assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == manifests_before
     finally:
         database.close()

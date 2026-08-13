@@ -409,6 +409,7 @@ def test_family_generation_rejects_invalid_family_descriptors(
             "research_sessions": root["research_sessions"],
             "field_availability": root["field_availability"],
             "families": root["families"],
+            "financial_research_readiness": root["financial_research_readiness"],
         }
         root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
         replacement_bytes = canonical_json_bytes(root)
@@ -1333,6 +1334,7 @@ def _write_candidate_root(storage_root: Path, root: dict[str, object]) -> str:
         "research_sessions": root["research_sessions"],
         "field_availability": root["field_availability"],
         "families": root["families"],
+        "financial_research_readiness": root["financial_research_readiness"],
     }
     root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
     sha256, _ = _write_manifest(storage_root, root)

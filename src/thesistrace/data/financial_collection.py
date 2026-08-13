@@ -812,12 +812,14 @@ class FinancialCollectionService:
             if row is None:
                 if not allow_create:
                     raise RuntimeError("Financial collection claim disappeared")
-                transaction.execute(
+                created = transaction.execute(
                     """
                     INSERT INTO data.financial_collection_operations (
                         idempotency_key, fingerprint, generation_manifest_sha256,
                         capability_sha256, contract_descriptor, status, target_count
                     ) VALUES (%s, %s, %s, %s, %s, 'running', %s)
+                    ON CONFLICT (idempotency_key) DO NOTHING
+                    RETURNING fingerprint, status, target_count, completed_count
                     """,
                     (
                         idempotency_key,
@@ -827,7 +829,31 @@ class FinancialCollectionService:
                         Jsonb(contract.descriptor()),
                         target_count,
                     ),
-                )
+                ).fetchone()
+                if created is None:
+                    row = transaction.execute(
+                        """
+                        SELECT fingerprint, status, target_count, completed_count
+                        FROM data.financial_collection_operations
+                        WHERE idempotency_key = %s FOR UPDATE
+                        """,
+                        (idempotency_key,),
+                    ).fetchone()
+                    if row is None:
+                        raise RuntimeError("Financial collection claim disappeared")
+                else:
+                    row = created
+            if row["fingerprint"] != fingerprint or int(row["target_count"]) != target_count:
+                raise FinancialCollectionError("IDEMPOTENCY_KEY_REUSED")
+            target_state = transaction.execute(
+                """
+                SELECT count(*) AS count
+                FROM data.financial_collection_shards
+                WHERE idempotency_key = %s
+                """,
+                (idempotency_key,),
+            ).fetchone()
+            if int(target_state["count"]) == 0:
                 targets: list[tuple[object, ...]] = []
                 ordinal = 0
                 for endpoint, _fields in contract.endpoint_fields:
@@ -855,9 +881,6 @@ class FinancialCollectionService:
                         """,
                         targets,
                     )
-                return FinancialCollectionOutcome(idempotency_key, "running", target_count, 0)
-            if row["fingerprint"] != fingerprint or int(row["target_count"]) != target_count:
-                raise FinancialCollectionError("IDEMPOTENCY_KEY_REUSED")
             return FinancialCollectionOutcome(
                 idempotency_key,
                 str(row["status"]),

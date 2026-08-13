@@ -75,7 +75,10 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
         ordinary_worker = _run_worker_once(settings)
         assert ordinary_worker.returncode == 0, ordinary_worker.stdout + ordinary_worker.stderr
         with TestClient(create_app(settings)) as ordinary_restart:
-            assert ordinary_restart.get("/api/data").json()["readiness"] is True
+            assert (
+                ordinary_restart.get("/api/data").json()["market_research_readiness"]
+                is True
+            )
         assert (
             MountedGenerationStore(tmp_path).validate_generation(retired).manifest_sha256 == retired
         )
@@ -98,7 +101,7 @@ def test_private_collection_removes_retired_input_without_losing_run_or_track(
         assert reopened.get(f"/api/daily-tracks/{track_id}").json() == before_track
         overview = reopened.get("/api/data")
         assert overview.status_code == 200
-        assert overview.json()["readiness"] is True
+        assert overview.json()["market_research_readiness"] is True
         assert overview.json()["data_through_session"] == sessions[-1]
 
 

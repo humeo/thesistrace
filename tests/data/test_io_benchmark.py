@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -69,6 +70,11 @@ def test_repository_benchmark_contract_is_full_scale_and_budgeted() -> None:
         "tracking_advance",
     }
     assert baseline["profile"] == profile
+    assert hashlib.sha256(
+        (root / "benchmarks/financial-io-2010-baseline.json").read_bytes()
+    ).hexdigest() == (
+        "6f053d3a506e0e345a254c6caf0bdd17664500bb6ce812ff5e0b66608608f2e6"
+    )
     assert set(baseline["scenarios"]) == set(budgets["scenarios"])
     assert all(
         phase["sample_count"] == profile["repetitions_per_phase"]

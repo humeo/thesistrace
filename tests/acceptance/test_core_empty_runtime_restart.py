@@ -93,10 +93,13 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
     assert api_command is not None
     assert worker_command is not None
     expected_overview = {
-        "dataset_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+        "market_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+        "financial_coverage": None,
         "data_through_session": "2026-08-07",
-        "last_refresh_at": None,
-        "readiness": True,
+        "last_market_refresh_at": None,
+        "last_financial_refresh_at": None,
+        "market_research_readiness": True,
+        "financial_research_readiness": False,
     }
 
     for _ in range(2):

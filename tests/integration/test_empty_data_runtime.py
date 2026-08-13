@@ -38,13 +38,20 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
     with open_core_runtime(settings) as runtime:
         with runtime.database.transaction() as transaction:
             transaction.execute(
-                "UPDATE data.current_dataset_state SET last_refresh_at = NULL WHERE singleton = 1"
+                """
+                UPDATE data.current_dataset_state
+                SET last_market_refresh_at = NULL
+                WHERE singleton = 1
+                """
             )
     empty = {
-        "dataset_coverage": None,
+        "market_coverage": None,
+        "financial_coverage": None,
         "data_through_session": None,
-        "last_refresh_at": None,
-        "readiness": False,
+        "last_market_refresh_at": None,
+        "last_financial_refresh_at": None,
+        "market_research_readiness": False,
+        "financial_research_readiness": False,
     }
 
     with TestClient(create_app(settings)) as client:
@@ -73,10 +80,13 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
         )
 
     expected = {
-        "dataset_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+        "market_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+        "financial_coverage": None,
         "data_through_session": "2026-08-07",
-        "last_refresh_at": None,
-        "readiness": True,
+        "last_market_refresh_at": None,
+        "last_financial_refresh_at": None,
+        "market_research_readiness": True,
+        "financial_research_readiness": False,
     }
     for _ in range(2):
         with TestClient(create_app(settings)) as client:
@@ -87,14 +97,14 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
             transaction.execute(
                 """
                 UPDATE data.current_dataset_state
-                SET last_refresh_at = '2026-08-09T01:02:03+00:00'
+                SET last_market_refresh_at = '2026-08-09T01:02:03+00:00'
                 WHERE singleton = 1
                 """
             )
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/data").json() == {
             **expected,
-            "last_refresh_at": "2026-08-09T01:02:03Z",
+            "last_market_refresh_at": "2026-08-09T01:02:03Z",
         }
 
 
@@ -133,7 +143,7 @@ def test_data_overview_does_not_open_generation_parquet(
             transaction.execute(
                 """
                 UPDATE data.current_dataset_state
-                SET last_refresh_at = NULL
+                SET last_market_refresh_at = NULL
                 WHERE singleton = 1
                 """
             )
@@ -142,10 +152,13 @@ def test_data_overview_does_not_open_generation_parquet(
 
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/data").json() == {
-            "dataset_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+            "market_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
+            "financial_coverage": None,
             "data_through_session": "2026-08-07",
-            "last_refresh_at": None,
-            "readiness": True,
+            "last_market_refresh_at": None,
+            "last_financial_refresh_at": None,
+            "market_research_readiness": True,
+            "financial_research_readiness": False,
         }
 
 
@@ -186,7 +199,7 @@ def test_same_generation_with_forged_head_projection_is_revalidated(
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id="projection-tamper",
         )
-        assert runtime.data_overview.overview().readiness is True
+        assert runtime.data_overview.overview().market_research_readiness is True
 
         head_path = tmp_path / "HEAD.json"
         head = json.loads(head_path.read_text())

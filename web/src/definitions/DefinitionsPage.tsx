@@ -147,8 +147,8 @@ export function DefinitionsPage({ definitionId }: { definitionId?: string }) {
   const skipNextRouteLoad = useRef(false);
   const draftHydrated = useRef(false);
   const runAttempt = useRef<{ fingerprint: string; requestId: string } | null>(null);
-  const coverage = dataOverview?.readiness
-    ? dataOverview.dataset_coverage
+  const coverage = dataOverview?.market_research_readiness
+    ? dataOverview.market_coverage
     : null;
   const dateIssue = researchDateIssue(
     startDate,

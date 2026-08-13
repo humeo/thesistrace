@@ -97,7 +97,8 @@ CREATE TABLE data.collection_targets (
 
 CREATE TABLE data.current_dataset_state (
     singleton smallint NOT NULL,
-    last_refresh_at timestamp with time zone,
+    last_market_refresh_at timestamp with time zone,
+    last_financial_refresh_at timestamp with time zone,
     CONSTRAINT current_dataset_state_singleton_check CHECK ((singleton = 1))
 );
 
@@ -156,10 +157,21 @@ CREATE TABLE data.financial_refresh_operations (
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     finished_at timestamp with time zone,
     retention_released_at timestamp with time zone,
+    publication_candidate_manifest_sha256 text,
+    composed_generation_manifest_sha256 text,
+    publication_prepared_at timestamp with time zone,
+    publication_head_moved_at timestamp with time zone,
+    published_generation_manifest_sha256 text,
+    published_at timestamp with time zone,
+    published_outcome jsonb,
     CONSTRAINT financial_refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_refresh_operations_generation_check CHECK ((generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_refresh_operations_prior_check CHECK ((prior_candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT financial_refresh_operations_candidate_check CHECK (((candidate_manifest_sha256 IS NULL) OR (candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_refresh_operations_publication_candidate_check CHECK (((publication_candidate_manifest_sha256 IS NULL) OR (publication_candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_refresh_operations_composed_generation_check CHECK (((composed_generation_manifest_sha256 IS NULL) OR (composed_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_refresh_operations_published_generation_check CHECK (((published_generation_manifest_sha256 IS NULL) OR (published_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_refresh_operations_publication_state_check CHECK (((published_generation_manifest_sha256 IS NULL) = (published_at IS NULL)) AND ((published_generation_manifest_sha256 IS NULL) = (published_outcome IS NULL))),
     CONSTRAINT financial_refresh_operations_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
     CONSTRAINT financial_refresh_operations_retention_check CHECK (((retention_released_at IS NULL) OR (status = 'succeeded'::text))),
     CONSTRAINT financial_refresh_operations_counts_check CHECK (((expected_shard_count IS NULL) OR ((expected_shard_count >= 0) AND (completed_shard_count >= 0) AND (completed_shard_count <= expected_shard_count) AND (resumed_shard_count >= 0) AND (resumed_shard_count <= completed_shard_count)))),

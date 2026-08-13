@@ -67,6 +67,10 @@ _TABLE_MANIFEST_FORMAT = "thesistrace-canonical-table"
 _MANIFEST_VERSION = 1
 _UNIVERSE_NAMES = UNIVERSE_NAMES
 _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME = {spec.name: spec for spec in MARKET_CANDIDATE_TABLE_SPECS}
+_FINANCIAL_PERFORMANCE_EVIDENCE = (
+    "financial-io-2010-baseline.json#sha256="
+    "6f053d3a506e0e345a254c6caf0bdd17664500bb6ce812ff5e0b66608608f2e6"
+)
 
 
 class GenerationStoreError(RuntimeError):
@@ -155,6 +159,7 @@ class MountedGenerationStore:
             "research_sessions": [str(session) for session in calendar],
             "field_availability": list(field_availability),
             "families": family_references,
+            "financial_research_readiness": None,
         }
         data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
         preparation = _preparation(prepared_at, source_name, source_lineage)
@@ -163,6 +168,7 @@ class MountedGenerationStore:
             "version": _MANIFEST_VERSION,
             "data_identity": data_identity,
             **identity,
+            "financial_publication_coordinate": None,
             "preparation": preparation,
         }
         root_bytes = _bounded_manifest_bytes(root_manifest)
@@ -246,22 +252,22 @@ class MountedGenerationStore:
         financial_candidate_manifest_sha256: str,
         *,
         prepared_at: datetime,
+        publication_coordinate: str | None = None,
     ) -> MountedFamilyGenerationDescriptor:
         from thesistrace.data.fields import FINANCIAL_FIELDS
         from thesistrace.data.financial_candidate import FinancialCandidateStore
 
         market = self.validate_generation(market_generation_manifest_sha256)
-        if market.financial_candidate_manifest_sha256 is not None:
-            raise GenerationStoreError("Generation already contains Financial Data")
         financial_store = FinancialCandidateStore(self._root)
-        financial = financial_store.validate(financial_candidate_manifest_sha256)
+        financial = financial_store.validate_against_market_generation(
+            financial_candidate_manifest_sha256,
+            market_generation_manifest_sha256,
+        )
         source_fields = financial_store.source_fields_by_endpoint(
             financial_candidate_manifest_sha256
         )
         if (
-            financial_store.source_generation_manifest_sha256(financial_candidate_manifest_sha256)
-            != market_generation_manifest_sha256
-            or financial.coverage_start < market.research_sessions[0]
+            financial.coverage_start < market.research_sessions[0]
             or financial.observation_through_session > market.data_through_session
             or any(
                 field.source_column not in source_fields.get(field.source_endpoint, ())
@@ -270,23 +276,33 @@ class MountedGenerationStore:
         ):
             raise GenerationStoreError("Financial candidate is incompatible with Market Data")
         root = self._read_family_generation_root(market_generation_manifest_sha256)
+        market_families = root["families"][: len(MARKET_FAMILY_SPECS)]
+        market_field_ids = {
+            str(field_id)
+            for field_id in root["field_availability"]
+            if str(field_id) not in {field.field_id for field in FINANCIAL_FIELDS}
+        }
         identity = {
             "schema_contract": root["schema_contract"],
             "data_through_session": root["data_through_session"],
             "research_sessions": root["research_sessions"],
             "field_availability": sorted(
-                {*root["field_availability"], *(field.field_id for field in FINANCIAL_FIELDS)}
+                {*market_field_ids, *(field.field_id for field in FINANCIAL_FIELDS)}
             ),
             "families": [
-                *root["families"],
+                *market_families,
                 financial_store.family_reference(financial_candidate_manifest_sha256),
             ],
+            "financial_research_readiness": _financial_readiness_declaration(),
         }
         manifest = {
             "format": _FAMILY_GENERATION_FORMAT,
             "version": _MANIFEST_VERSION,
             "data_identity": hashlib.sha256(canonical_json_bytes(identity)).hexdigest(),
             **identity,
+            "financial_publication_coordinate": (
+                publication_coordinate or financial_candidate_manifest_sha256
+            ),
             "preparation": _preparation(
                 prepared_at,
                 "financial-composition",
@@ -675,6 +691,7 @@ class MountedGenerationStore:
             "research_sessions": list(new_calendar),
             "field_availability": list(field_availability),
             "families": family_references,
+            "financial_research_readiness": None,
         }
         data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
         preparation = _preparation(prepared_at, source_name, source_lineage)
@@ -683,12 +700,37 @@ class MountedGenerationStore:
             "version": _MANIFEST_VERSION,
             "data_identity": data_identity,
             **identity,
+            "financial_publication_coordinate": None,
             "preparation": preparation,
         }
         root_bytes = _bounded_manifest_bytes(root_manifest)
         root_sha256 = hashlib.sha256(root_bytes).hexdigest()
         self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
-        return _family_generation_descriptor_from_root(root_sha256, root_manifest)
+        market_generation = _family_generation_descriptor_from_root(root_sha256, root_manifest)
+        prior_financial_reference = (
+            predecessor_root["families"][-1]
+            if len(predecessor_root["families"]) > len(MARKET_FAMILY_SPECS)
+            else None
+        )
+        if prior_financial_reference is None:
+            return market_generation
+        if not isinstance(prior_financial_reference, Mapping):
+            raise GenerationStoreError("Financial Dataset Family reference is incompatible")
+        from thesistrace.data.financial_candidate import FinancialCandidateStore
+
+        prior_candidate = str(prior_financial_reference["manifest_sha256"])
+        financial = FinancialCandidateStore(self._root).validate_against_market_generation(
+            prior_candidate,
+            market_generation.manifest_sha256,
+        )
+        return self.compose_financial_candidate(
+            market_generation.manifest_sha256,
+            financial.manifest_sha256,
+            prepared_at=prepared_at,
+            publication_coordinate=str(
+                predecessor_root["financial_publication_coordinate"]
+            ),
+        )
 
     def _family_table_reference(
         self,
@@ -869,6 +911,8 @@ class MountedGenerationStore:
             "research_sessions",
             "field_availability",
             "families",
+            "financial_research_readiness",
+            "financial_publication_coordinate",
             "preparation",
         }:
             raise GenerationStoreError("Family Generation candidate schema is incompatible")
@@ -889,6 +933,7 @@ class MountedGenerationStore:
             "research_sessions": root["research_sessions"],
             "field_availability": root["field_availability"],
             "families": families,
+            "financial_research_readiness": root["financial_research_readiness"],
         }
         if root["data_identity"] != hashlib.sha256(canonical_json_bytes(identity)).hexdigest():
             raise GenerationStoreError("Family Generation candidate identity is invalid")
@@ -1531,6 +1576,19 @@ def _family_generation_descriptor_from_root(
         financial_family = _financial_family_descriptor_from_reference(reference)
         financial_candidate = financial_family.manifest_sha256
         families.append(financial_family)
+    readiness = root.get("financial_research_readiness")
+    coordinate = root.get("financial_publication_coordinate")
+    if financial_candidate is None:
+        readiness_valid = readiness is None and coordinate is None
+    else:
+        readiness_valid = (
+            readiness == _financial_readiness_declaration()
+            and isinstance(coordinate, str)
+            and len(coordinate) == 64
+            and all(character in "0123456789abcdef" for character in coordinate)
+        )
+    if not readiness_valid:
+        raise GenerationStoreError("Financial Research Readiness is incompatible")
     try:
         validate_synchronized_coverages(
             tuple(families[: len(MARKET_FAMILY_SPECS)]),
@@ -1557,7 +1615,26 @@ def _family_generation_descriptor_from_root(
         financial_candidate_manifest_sha256=(
             None if financial_candidate is None else str(financial_candidate)
         ),
+        financial_research_readiness=(
+            None if readiness is None else dict(readiness)
+        ),
+        financial_publication_coordinate=(
+            None if coordinate is None else str(coordinate)
+        ),
     )
+
+
+def _financial_readiness_declaration() -> dict[str, object]:
+    from thesistrace.data.fields import FINANCIAL_FIELDS
+
+    return {
+        "status": "ready",
+        "field_ids": sorted(field.field_id for field in FINANCIAL_FIELDS),
+        "series_reader": "session-aligned-financial-fields",
+        "research_run": "composite-alpha",
+        "daily_track": "batch-incremental-composite-alpha",
+        "performance_evidence": _FINANCIAL_PERFORMANCE_EVIDENCE,
+    }
 
 
 def _family_descriptor_from_reference(

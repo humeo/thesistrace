@@ -19,10 +19,13 @@ from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_run.result import read_result_bundle
 
 EXPECTED_OVERVIEW = {
-    "dataset_coverage": {"start": "2026-08-03", "end": "2026-08-11"},
+    "market_coverage": {"start": "2026-08-03", "end": "2026-08-11"},
+    "financial_coverage": None,
     "data_through_session": "2026-08-11",
-    "last_refresh_at": None,
-    "readiness": True,
+    "last_market_refresh_at": None,
+    "last_financial_refresh_at": None,
+    "market_research_readiness": True,
+    "financial_research_readiness": False,
 }
 
 
@@ -113,7 +116,7 @@ def _after_restart(
         "status": detail["status"],
         "result_manifest_sha256": durable["manifest_sha256"],
         "attempt_count": durable["attempt_count"],
-        "readiness": overview["readiness"],
+        "market_research_readiness": overview["market_research_readiness"],
     }
 
 

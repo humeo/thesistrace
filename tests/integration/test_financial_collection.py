@@ -12,15 +12,19 @@ from psycopg.errors import CheckViolation
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_provider import TushareSourceError
 from thesistrace.data import (
+    CanonicalSourceBatch,
     DataCollectionError,
     DataGarbageCollector,
+    DataRefreshService,
     DatasetLifecycle,
+    DatasetOverviewService,
     FinancialCandidateError,
     FinancialCandidateStore,
     FinancialFamilyCandidate,
     FinancialRefreshError,
     FinancialRefreshOutcome,
     FinancialRefreshService,
+    MountedDatasetHeadStore,
     MountedGenerationStore,
 )
 from thesistrace.data.financial_collection import (
@@ -50,6 +54,18 @@ FIELDS = (
     "update_flag",
 )
 
+EXECUTABLE_FIELDS = {
+    "income": (*FIELDS[:7], "total_revenue", "n_income_attr_p", "update_flag"),
+    "balancesheet": (
+        *FIELDS[:7],
+        "total_assets",
+        "total_liab",
+        "total_hldr_eqy_exc_min_int",
+        "update_flag",
+    ),
+    "cashflow": (*FIELDS[:7], "n_cashflow_act", "update_flag"),
+}
+
 
 class StatementSource:
     def __init__(self, *, interrupt_after: int | None = None) -> None:
@@ -75,6 +91,40 @@ class StatementSource:
             (
                 (ts_code, "20260425", "", "20260331", "1", "1", "1", None, "0"),
                 (ts_code, "20260425", "", "20260331", "1", "1", "1", None, "0"),
+            ),
+        )
+
+
+class ExecutableStatementSource(StatementSource):
+    def query_raw(
+        self,
+        endpoint: str,
+        *,
+        params: dict[str, object],
+        fields: tuple[str, ...],
+    ) -> RawSourceResponse:
+        assert fields == EXECUTABLE_FIELDS[endpoint]
+        ts_code = str(params["ts_code"])
+        self.requests.append((endpoint, ts_code, "complete-history"))
+        values = {
+            "income": ("10", "4"),
+            "balancesheet": ("20", "8", "12"),
+            "cashflow": ("6",),
+        }[endpoint]
+        return RawSourceResponse(
+            fields,
+            (
+                (
+                    ts_code,
+                    "20100420",
+                    "",
+                    "20091231",
+                    "1",
+                    "1",
+                    "4",
+                    *values,
+                    "0",
+                ),
             ),
         )
 
@@ -629,6 +679,665 @@ def test_refresh_rebuild_retains_absent_versions_and_reports_progress(
                 prior_candidate_manifest_sha256=first.manifest_sha256,
                 observation_through_session="2026-08-07",
             )
+    finally:
+        database.close()
+
+
+def test_financial_refresh_publishes_executable_family_under_the_one_dataset_head(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = _database(core_settings)
+    try:
+        market = _market_generation(tmp_path)
+        _establish_head(database, tmp_path, market, operation_id="financial-publish-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="financial-publish-prior",
+            contract=contract,
+        )
+        service = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+
+        published = service.publish(
+            idempotency_key="financial-publish",
+            generation_manifest_sha256=market,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+        pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert pointer is not None
+        assert pointer.generation_manifest_sha256 == published.generation_manifest_sha256
+        generation = MountedGenerationStore(tmp_path).validate_generation(
+            pointer.generation_manifest_sha256
+        )
+        assert generation.financial_candidate_manifest_sha256 == (
+            published.candidate.manifest_sha256
+        )
+        assert tuple(family.manifest_sha256 for family in generation.families[:-1]) == tuple(
+            family.manifest_sha256
+            for family in MountedGenerationStore(tmp_path).inspect_root(market).families
+        )
+
+        def reject_parquet(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("Data Overview opened Parquet")
+
+        monkeypatch.setattr("thesistrace.data.generation_store.pq.read_table", reject_parquet)
+        overview = DatasetOverviewService(database, tmp_path).overview()
+        assert overview.market_coverage.model_dump(mode="json") == {
+            "start": "2010-01-04",
+            "end": "2026-08-13",
+        }
+        assert overview.financial_coverage is not None
+        assert overview.financial_coverage.model_dump(mode="json") == {
+            "start": "2010-01-04",
+            "observation_through_session": "2026-08-13",
+            "reconciliation_status": "complete",
+            "historical_reconciliation_watermark": "2026-08-13",
+            "revision_coverage": "source-dated-and-first-observed-corrections",
+            "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "sparse_facts": True,
+        }
+        assert overview.last_financial_refresh_at == COLLECTED_AT + timedelta(days=1)
+        assert overview.financial_research_readiness is True
+        monkeypatch.undo()
+        assert service.publish(
+            idempotency_key="financial-publish",
+            generation_manifest_sha256=market,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        ) == published
+    finally:
+        database.close()
+
+
+def test_financial_publication_recomposes_against_a_newer_market_head(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    moved = False
+    try:
+        first_market = _market_generation(tmp_path)
+        _establish_head(database, tmp_path, first_market, operation_id="financial-rebase-first")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            first_market,
+            idempotency_key="financial-rebase-prior",
+            contract=contract,
+        )
+        store = MountedGenerationStore(tmp_path)
+        second_market = store.materialize(
+            store.open_refresh_base(
+                first_market,
+                overlap_session_count=3,
+                universe_lookback_session_count=0,
+            ).canonical,
+            prepared_at=COLLECTED_AT + timedelta(hours=1),
+            source_name="concurrent-market-refresh",
+            source_lineage={"fixture": "same-market-content-new-root"},
+        ).manifest_sha256
+
+        def move_market_head(event: dict[str, object]) -> None:
+            nonlocal moved
+            if (
+                not moved
+                and event.get("event") == "financial_refresh"
+                and event.get("phase") == "candidate"
+                and event.get("status") == "completed"
+            ):
+                moved = True
+                _establish_head(
+                    database,
+                    tmp_path,
+                    second_market,
+                    operation_id="financial-rebase-second",
+                    expected=first_market,
+                )
+
+        published = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+            progress=move_market_head,
+        ).publish(
+            idempotency_key="financial-rebase",
+            generation_manifest_sha256=first_market,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+        assert moved is True
+        pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert pointer is not None
+        assert pointer.generation_manifest_sha256 == published.generation_manifest_sha256
+        final = store.validate_generation(pointer.generation_manifest_sha256)
+        newest_market = store.inspect_root(second_market)
+        assert tuple(family.manifest_sha256 for family in final.families[:-1]) == tuple(
+            family.manifest_sha256 for family in newest_market.families
+        )
+        assert FinancialCandidateStore(tmp_path).source_generation_manifest_sha256(
+            final.financial_candidate_manifest_sha256 or ""
+        ) == first_market
+
+        with database.transaction() as transaction:
+            operation = transaction.execute(
+                """
+                SELECT candidate_manifest_sha256
+                FROM data.financial_refresh_operations
+                WHERE idempotency_key = 'financial-rebase'
+                """
+            ).fetchone()
+        assert operation is not None
+        original_candidate = str(operation["candidate_manifest_sha256"])
+        assert original_candidate == final.financial_candidate_manifest_sha256
+        original_path = (
+            tmp_path
+            / "manifests"
+            / "sha256"
+            / original_candidate[:2]
+            / f"{original_candidate}.json"
+        )
+        assert original_path.exists()
+        published_root = str(published.generation_manifest_sha256)
+        published_root_path = (
+            tmp_path
+            / "manifests"
+            / "sha256"
+            / published_root[:2]
+            / f"{published_root}.json"
+        )
+        assert published_root_path.exists()
+
+        successor_base = store.open_refresh_base(published.generation_manifest_sha256)
+        successor = store.materialize_refresh(
+            predecessor_manifest_sha256=published.generation_manifest_sha256,
+            replacement_canonical=successor_base.canonical,
+            replace_from_session="2026-08-07",
+            prepared_at=COLLECTED_AT + timedelta(days=2),
+            source_name="later-market-refresh",
+            source_lineage={"fixture": "later-market-refresh"},
+        )
+        _establish_head(
+            database,
+            tmp_path,
+            successor.manifest_sha256,
+            operation_id="financial-rebase-successor",
+            expected=published.generation_manifest_sha256,
+        )
+
+        collection = DataGarbageCollector(database, tmp_path).collect(
+            idempotency_key="financial-rebase-gc"
+        )
+        assert collection.status == "succeeded"
+        assert original_path.exists()
+        assert not published_root_path.exists()
+
+        replayed = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=2),
+        ).publish(
+            idempotency_key="financial-rebase",
+            generation_manifest_sha256=first_market,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+        assert replayed == published
+    finally:
+        database.close()
+
+
+def test_market_refresh_completes_while_financial_collection_is_blocked(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    started = threading.Event()
+    release = threading.Event()
+
+    class BlockingFinancialSource(ExecutableStatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            started.set()
+            assert release.wait(timeout=20)
+            return super().query_raw(endpoint, params=params, fields=fields)
+
+    class MarketSource:
+        def __init__(self, canonical: dict[str, object]) -> None:
+            self.canonical = canonical
+
+        def collect(self, _plan: object) -> CanonicalSourceBatch:
+            calendar = self.canonical["research_calendar"]
+            assert isinstance(calendar, list)
+            return CanonicalSourceBatch(
+                source_name="concurrent-market-refresh",
+                collection_kind="refresh",
+                source_lineage={"fixture": "financial-collection-blocked"},
+                canonical=self.canonical,
+                covered_session_range=(str(calendar[0]), str(calendar[-1])),
+            )
+
+    database = _database(core_settings)
+    try:
+        initial_market = _market_generation(tmp_path)
+        initial_canonical = MountedGenerationStore(tmp_path).open_refresh_base(
+            initial_market
+        ).canonical
+        instruments = initial_canonical["instruments"]
+        assert isinstance(instruments, list)
+        initial_canonical["instruments"] = [
+            row
+            for row in instruments
+            if isinstance(row, dict) and row["instrument_id"] == "equity:000001.SZ"
+        ]
+        market = (
+            MountedGenerationStore(tmp_path)
+            .materialize(
+                initial_canonical,
+                prepared_at=COLLECTED_AT,
+                source_name="concurrent-market-base",
+                source_lineage={"fixture": "single-instrument"},
+            )
+            .manifest_sha256
+        )
+        _establish_head(database, tmp_path, market, operation_id="concurrent-market-head")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="concurrent-market-prior",
+            contract=contract,
+        )
+        financial = FinancialRefreshService(
+            database,
+            tmp_path,
+            BlockingFinancialSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+
+        market_canonical = MountedGenerationStore(tmp_path).open_refresh_base(market).canonical
+        prices = market_canonical["prices"]
+        assert isinstance(prices, list)
+        corrected = next(
+            row
+            for row in prices
+            if isinstance(row, dict) and row["session"] == "2026-08-13"
+        )
+        corrected["turnover_cny"] = "100001.00"
+        market_refresh = DataRefreshService(
+            database,
+            tmp_path,
+            clock=lambda: COLLECTED_AT + timedelta(days=1, hours=12),
+            heartbeat_seconds=1,
+        )
+        market_refresh.submit(
+            idempotency_key="market-during-financial",
+            as_of=COLLECTED_AT + timedelta(days=1, hours=12),
+        )
+
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                financial.publish,
+                idempotency_key="blocked-financial",
+                generation_manifest_sha256=market,
+                contract=contract,
+                prior_candidate_manifest_sha256=prior.manifest_sha256,
+                observation_through_session="2026-08-13",
+            )
+            assert started.wait(timeout=20)
+            assert market_refresh.process_next(MarketSource(market_canonical)) is True
+            market_outcome = market_refresh.inspect("market-during-financial")
+            assert market_outcome.status == "succeeded"
+            release.set()
+            published = future.result(timeout=30)
+
+        assert published.generation_manifest_sha256 is not None
+        head = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == published.generation_manifest_sha256
+    finally:
+        release.set()
+        database.close()
+
+
+def test_financial_publication_reconciles_a_post_cas_completion_failure(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        market = _market_generation(tmp_path)
+        _establish_head(database, tmp_path, market, operation_id="financial-reconcile-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="financial-reconcile-prior",
+            contract=contract,
+        )
+        service = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_financial_freshness() RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'completion failed'; END $$
+                """
+            )
+            transaction.execute(
+                """
+                CREATE TRIGGER reject_financial_freshness
+                BEFORE UPDATE OF last_financial_refresh_at ON data.current_dataset_state
+                FOR EACH ROW EXECUTE FUNCTION data.reject_financial_freshness()
+                """
+            )
+
+        with pytest.raises(Exception, match="completion failed"):
+            service.publish(
+                idempotency_key="financial-reconcile",
+                generation_manifest_sha256=market,
+                contract=contract,
+                prior_candidate_manifest_sha256=prior.manifest_sha256,
+                observation_through_session="2026-08-13",
+            )
+        moved = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert moved is not None and moved.generation_manifest_sha256 != market
+
+        with database.transaction() as transaction:
+            transaction.execute(
+                "DROP TRIGGER reject_financial_freshness ON data.current_dataset_state"
+            )
+            transaction.execute("DROP FUNCTION data.reject_financial_freshness()")
+        replayed = service.publish(
+            idempotency_key="financial-reconcile",
+            generation_manifest_sha256=market,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+        assert replayed.generation_manifest_sha256 == moved.generation_manifest_sha256
+        assert MountedDatasetHeadStore(tmp_path).current_pointer() == moved
+        assert DatasetOverviewService(database, tmp_path).overview().last_financial_refresh_at == (
+            COLLECTED_AT + timedelta(days=1)
+        )
+    finally:
+        database.close()
+
+
+def test_financial_publication_recovers_head_move_before_receipt_commit(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        market = _market_generation(tmp_path)
+        _establish_head(database, tmp_path, market, operation_id="financial-receipt-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="financial-receipt-prior",
+            contract=contract,
+        )
+        service = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+        )
+        prior_refresh_at = DatasetOverviewService(
+            database, tmp_path
+        ).overview().last_financial_refresh_at
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION data.reject_financial_publication_receipt() RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'receipt commit failed'; END $$
+                """
+            )
+            transaction.execute(
+                """
+                CREATE TRIGGER reject_financial_publication_receipt
+                BEFORE UPDATE OF publication_head_moved_at
+                ON data.financial_refresh_operations
+                FOR EACH ROW
+                WHEN (NEW.idempotency_key = 'financial-receipt-crash')
+                EXECUTE FUNCTION data.reject_financial_publication_receipt()
+                """
+            )
+
+        with pytest.raises(
+            FinancialRefreshError,
+            match="FINANCIAL_PUBLICATION_COMPLETION_PENDING",
+        ):
+            service.publish(
+                idempotency_key="financial-receipt-crash",
+                generation_manifest_sha256=market,
+                contract=contract,
+                prior_candidate_manifest_sha256=prior.manifest_sha256,
+                observation_through_session="2026-08-13",
+            )
+
+        moved = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert moved is not None and moved.generation_manifest_sha256 != market
+        with database.transaction() as transaction:
+            state = transaction.execute(
+                """
+                SELECT publication_head_moved_at, published_generation_manifest_sha256
+                FROM data.financial_refresh_operations
+                WHERE idempotency_key = 'financial-receipt-crash'
+                """
+            ).fetchone()
+            transaction.execute(
+                """
+                DROP TRIGGER reject_financial_publication_receipt
+                ON data.financial_refresh_operations;
+                DROP FUNCTION data.reject_financial_publication_receipt();
+                """
+            )
+        assert state == {
+            "publication_head_moved_at": None,
+            "published_generation_manifest_sha256": None,
+        }
+        assert DatasetOverviewService(
+            database, tmp_path
+        ).overview().last_financial_refresh_at == prior_refresh_at
+
+        store = MountedGenerationStore(tmp_path)
+        successor_base = store.open_refresh_base(moved.generation_manifest_sha256)
+        successor = store.materialize_refresh(
+            predecessor_manifest_sha256=moved.generation_manifest_sha256,
+            replacement_canonical=successor_base.canonical,
+            replace_from_session="2026-08-07",
+            prepared_at=COLLECTED_AT + timedelta(days=1, hours=1),
+            source_name="market-after-receipt-loss",
+            source_lineage={"fixture": "market-after-receipt-loss"},
+        )
+        _establish_head(
+            database,
+            tmp_path,
+            successor.manifest_sha256,
+            operation_id="financial-receipt-successor",
+            expected=moved.generation_manifest_sha256,
+        )
+        successor_head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert successor_head is not None
+        assert successor_head.generation_manifest_sha256 == successor.manifest_sha256
+
+        later_financial = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1, hours=2),
+        ).publish(
+            idempotency_key="financial-after-receipt-loss",
+            generation_manifest_sha256=successor.manifest_sha256,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+        assert later_financial.generation_manifest_sha256 is not None
+        later_head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert later_head is not None
+        assert later_head.generation_manifest_sha256 == (
+            later_financial.generation_manifest_sha256
+        )
+
+        replayed = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=2),
+        ).publish(
+            idempotency_key="financial-receipt-crash",
+            generation_manifest_sha256=market,
+            contract=contract,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+        assert replayed.generation_manifest_sha256 == moved.generation_manifest_sha256
+        assert MountedDatasetHeadStore(tmp_path).current_pointer() == later_head
+        with database.transaction() as transaction:
+            recovered_operation = transaction.execute(
+                """
+                SELECT published_at FROM data.financial_refresh_operations
+                WHERE idempotency_key = 'financial-receipt-crash'
+                """
+            ).fetchone()
+        assert recovered_operation == {
+            "published_at": COLLECTED_AT + timedelta(days=1)
+        }
+        assert DatasetOverviewService(
+            database, tmp_path
+        ).overview().last_financial_refresh_at == COLLECTED_AT + timedelta(
+            days=1, hours=2
+        )
+        with database.transaction() as transaction:
+            active_candidate = transaction.execute(
+                """
+                SELECT 1 FROM data.generation_candidates
+                WHERE generation_manifest_sha256 = %s AND status = 'live'
+                """,
+                (moved.generation_manifest_sha256,),
+            ).fetchone()
+        assert active_candidate is None
+    finally:
+        database.close()
+
+
+def test_stale_financial_target_cannot_overwrite_a_newer_financial_family(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    class ChangedExecutableStatementSource(ExecutableStatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            response = super().query_raw(endpoint, params=params, fields=fields)
+            row = list(response.items[0])
+            row[7] = str(int(str(row[7])) + 1)
+            return RawSourceResponse(response.fields, (tuple(row),))
+
+    database = _database(core_settings)
+    moved = False
+    try:
+        market = _market_generation(tmp_path)
+        _establish_head(database, tmp_path, market, operation_id="financial-target-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="financial-target-prior",
+            contract=contract,
+        )
+
+        def publish_other_financial_target(event: dict[str, object]) -> None:
+            nonlocal moved
+            if (
+                not moved
+                and event.get("event") == "financial_refresh"
+                and event.get("phase") == "candidate"
+                and event.get("status") == "completed"
+            ):
+                moved = True
+                other = FinancialRefreshService(
+                    database,
+                    tmp_path,
+                    ChangedExecutableStatementSource(),
+                    clock=lambda: COLLECTED_AT + timedelta(hours=12),
+                ).publish(
+                    idempotency_key="financial-target-other",
+                    generation_manifest_sha256=market,
+                    contract=contract,
+                    prior_candidate_manifest_sha256=prior.manifest_sha256,
+                    observation_through_session="2026-08-13",
+                )
+                assert other.generation_manifest_sha256 is not None
+
+        stale = FinancialRefreshService(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            clock=lambda: COLLECTED_AT + timedelta(days=1),
+            progress=publish_other_financial_target,
+        )
+        with pytest.raises(FinancialRefreshError, match="FINANCIAL_TARGET_CHANGED"):
+            stale.publish(
+                idempotency_key="financial-target-stale",
+                generation_manifest_sha256=market,
+                contract=contract,
+                prior_candidate_manifest_sha256=prior.manifest_sha256,
+                observation_through_session="2026-08-13",
+            )
+
+        head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert moved is True and head is not None
+        published = MountedGenerationStore(tmp_path).inspect_root(
+            head.generation_manifest_sha256
+        )
+        assert published.financial_candidate_manifest_sha256 is not None
+        assert published.financial_candidate_manifest_sha256 != prior.manifest_sha256
     finally:
         database.close()
 
@@ -1299,6 +2008,19 @@ def _contract(
     )
 
 
+def _executable_contract() -> FinancialCollectionContract:
+    return FinancialCollectionContract(
+        capability_sha256="e" * 64,
+        endpoint_fields=tuple(
+            (endpoint, EXECUTABLE_FIELDS[endpoint]) for endpoint in FINANCIAL_ENDPOINTS
+        ),
+        suspected_truncation_row_counts=tuple(
+            (endpoint, None) for endpoint in FINANCIAL_ENDPOINTS
+        ),
+        shards=(FinancialDateShard("complete-history"),),
+    )
+
+
 def _initial_candidate(
     database: PostgresDatabase,
     root: Path,
@@ -1367,6 +2089,27 @@ def _market_generation(root: Path) -> str:
             source_lineage={"fixture": "historical-identities"},
         )
         .manifest_sha256
+    )
+
+
+def _establish_head(
+    database: PostgresDatabase,
+    root: Path,
+    generation_manifest_sha256: str,
+    *,
+    operation_id: str,
+    expected: str | None = None,
+) -> None:
+    lifecycle = DatasetLifecycle(database, root)
+    lifecycle.protect_candidate(
+        operation_id=operation_id,
+        generation_manifest_sha256=generation_manifest_sha256,
+        lease_seconds=60,
+    )
+    lifecycle.compare_and_swap_head(
+        expected_generation_manifest_sha256=expected,
+        candidate_generation_manifest_sha256=generation_manifest_sha256,
+        operation_id=operation_id,
     )
 
 

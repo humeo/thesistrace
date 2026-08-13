@@ -480,6 +480,41 @@ class FinancialCandidateStore:
         _require_sha256(source)
         return str(source)
 
+    def validate_against_market_generation(
+        self,
+        manifest_sha256: str,
+        generation_manifest_sha256: str,
+    ) -> FinancialFamilyCandidate:
+        """Validate one immutable financial family against a compatible Market root."""
+        candidate = self.validate(manifest_sha256)
+        if self.source_generation_manifest_sha256(manifest_sha256) == (
+            generation_manifest_sha256
+        ):
+            return candidate
+        manifest = self._read_family(manifest_sha256)
+        current_sessions = self._validated_market_sessions(
+            generation_manifest_sha256,
+            candidate.observation_through_session,
+        )
+        prior_sessions = self._validated_market_sessions(
+            str(manifest["source_generation_manifest_sha256"]),
+            candidate.observation_through_session,
+        )
+        if current_sessions != prior_sessions:
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
+        current_lifecycles = self._market.read_historical_ordinary_a_share_lifecycles(
+            generation_manifest_sha256
+        )
+        checkpoints = tuple(
+            _checkpoint_from_evidence(item)
+            for item in self._read_evidence_index(manifest["raw_evidence"])
+        )
+        self._validate_historical_identities(
+            checkpoints,
+            {item.instrument_id: item.ts_code for item in current_lifecycles},
+        )
+        return candidate
+
     def source_fields_by_endpoint(
         self,
         manifest_sha256: str,

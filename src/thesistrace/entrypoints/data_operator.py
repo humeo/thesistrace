@@ -202,7 +202,7 @@ def _run(
                 mount_root,
                 live_provider,
                 progress=_progress,
-            ).rebuild(
+            ).publish(
                 idempotency_key=parsed.idempotency_key,
                 generation_manifest_sha256=parsed.generation_manifest_sha256,
                 contract=contract,
@@ -213,6 +213,7 @@ def _run(
                 "idempotency_key": outcome.idempotency_key,
                 "status": "succeeded",
                 "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
+                "generation_manifest_sha256": outcome.generation_manifest_sha256,
                 "expected_shard_count": outcome.expected_shard_count,
                 "completed_shard_count": outcome.completed_shard_count,
                 "resumed_shard_count": outcome.resumed_shard_count,
