@@ -15,6 +15,12 @@ export type AlphaCatalog = {
     value_type: "numeric_series";
     description: string;
     unit: string;
+    family_id: string;
+    availability: string;
+    report_period_selection: string;
+    applicable_company_types: string[];
+    missingness: string;
+    example: string;
   }>;
   builtins: Array<{
     identifier: string;

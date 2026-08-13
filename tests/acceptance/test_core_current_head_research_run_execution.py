@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import subprocess
@@ -35,10 +36,19 @@ from thesistrace.daily_track.checkpoint import (
     terminal_strategy_state,
 )
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.financial_candidate import FinancialCandidateStore
+from thesistrace.data.financial_collection import (
+    CompletedFinancialCollection,
+    FinancialCollectionContract,
+    FinancialDateShard,
+    FinancialShardCheckpoint,
+    RawFinancialBatchStore,
+)
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
+from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
     KernelRunError,
@@ -51,6 +61,183 @@ from thesistrace.research_kernel import (
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 from thesistrace.research_series import research_sessions, slice_research_sessions
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = (
+        "2010-01-04",
+        "2010-04-20",
+        "2010-04-21",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+    generation_id = _publish_composite_head(settings, sessions=sessions)
+
+    with TestClient(create_app(settings)) as client:
+        catalog = client.get("/api/alpha/catalog").json()
+        assert "cs_rank" in {item["identifier"] for item in catalog["builtins"]}
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "composite-formula",
+                alpha={
+                    "operator_id": "add",
+                    "operands": [
+                        {
+                            "operator_id": "cs_rank",
+                            "operands": [{"field_id": "price.close.adjusted"}],
+                        },
+                        {
+                            "operator_id": "cs_rank",
+                            "operands": [{"field_id": "total_revenue_latest_fy"}],
+                        },
+                    ],
+                },
+            ),
+        )
+        assert accepted.status_code == 202
+        run_id = accepted.json()["id"]
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "queued"
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded"
+        stored = _stored_execution(settings, run_id)
+        assert stored["attempt_data_generation_id"] == generation_id
+        started = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "composite-track"},
+        )
+        assert started.status_code == 201
+        assert started.json()["status"] == "active"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = (
+        "2010-01-04", "2010-04-20", "2010-04-21",
+        "2026-08-03", "2026-08-04", "2026-08-05",
+    )
+    seed_head = _publish_composite_head(settings, sessions=seed_sessions)
+    alpha = {
+        "operator_id": "add",
+        "operands": [
+            {"operator_id": "cs_rank", "operands": [{"field_id": "price.close.adjusted"}]},
+            {"operator_id": "cs_rank", "operands": [{"field_id": "total_revenue_latest_fy"}]},
+        ],
+    }
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("financial-track-seed", alpha=alpha),
+        )
+        run_id = accepted.json()["id"]
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "financial-track-activation"},
+        ).json()["id"]
+
+        lagged_sessions = (*seed_sessions, "2026-08-06", "2026-08-07")
+        lagged_head = _publish_composite_head(
+            settings,
+            sessions=lagged_sessions,
+            financial_through="2026-08-06",
+            expected_manifest=seed_head,
+            operation_id="financial-track-lagged",
+        )
+        assert client.app.state.core_runtime.daily_tracks.process_next() is True
+        covered = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert covered["status"] == "active"
+        assert covered["strategy_session"] == "2026-08-06"
+
+        assert client.app.state.core_runtime.daily_tracks.process_next() is True
+        blocked = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert blocked["status"] == "blocked"
+        assert blocked["strategy_session"] == "2026-08-06"
+        assert blocked["blocked_reason"] == (
+            "Financial Coverage ends before the next Research Session."
+        )
+        before = _tracking_checkpoint_history(settings, track_id)
+
+        recovered_sessions = (*lagged_sessions, "2026-08-10")
+        _publish_composite_head(
+            settings,
+            sessions=recovered_sessions,
+            expected_manifest=lagged_head,
+            operation_id="financial-track-recovered",
+        )
+        retry = client.post(
+            f"/api/daily-tracks/{track_id}/retry",
+            json={"request_id": "financial-track-retry"},
+        )
+        assert retry.status_code == 202
+        assert client.app.state.core_runtime.daily_tracks.process_next() is True
+        recovered = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert recovered["status"] == "active"
+        assert recovered["strategy_session"] == recovered_sessions[-1]
+        assert _tracking_checkpoint_history(settings, track_id)[: len(before)] == before
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_financial_admission_explains_coverage_without_blocking_market_only_formulae(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = (
+        "2010-01-04", "2010-04-20", "2010-04-21",
+        "2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06", "2026-08-07",
+    )
+    _publish_composite_head(settings, sessions=sessions, financial_through="2026-08-06")
+
+    with TestClient(create_app(settings)) as client:
+        rejected = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "financial-outside-coverage",
+                alpha={"field_id": "total_revenue_latest_fy"},
+                start_date="2026-08-07",
+                end_date="2026-08-07",
+            ),
+        )
+        assert rejected.status_code == 422
+        issues = rejected.json()["issues"]
+        assert len(issues) == 1
+        assert issues[0]["code"] == "FINANCIAL_CALCULATION_OUTSIDE_COVERAGE"
+        assert issues[0]["field"] == "formula"
+        assert issues[0]["message"] == (
+            "Financial Formula needs its requested period and lookback inside "
+            "Financial Coverage; current Financial Coverage is "
+            "2010-01-04 to 2026-08-06."
+        )
+
+        market_only = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "market-only-after-finance-cutoff",
+                start_date="2026-08-07",
+                end_date="2026-08-07",
+            ),
+        )
+        assert market_only.status_code == 202
 
 
 @pytest.mark.skipif(
@@ -1866,7 +2053,8 @@ def _run_command(
 
 def _formula(node: dict[str, object]) -> str:
     if set(node) == {"field_id"}:
-        return {"price.close.adjusted": "close_adj"}[str(node["field_id"])]
+        field_id = str(node["field_id"])
+        return {"price.close.adjusted": "close_adj"}.get(field_id, field_id)
     if set(node) == {"literal"}:
         return str(node["literal"])
     operator = str(node["operator_id"])
@@ -2219,6 +2407,125 @@ def _publish_canonical_head(
     finally:
         database.close()
     return generation.manifest_sha256
+
+
+def _publish_composite_head(
+    settings: CoreSettings,
+    *,
+    sessions: tuple[str, ...],
+    financial_through: str | None = None,
+    expected_manifest: str | None = None,
+    operation_id: str = "composite-e2e",
+) -> str:
+    observation_through = financial_through or sessions[-1]
+    finished_date = max(observation_through, "2026-08-05")
+    store = MountedGenerationStore(settings.data_mount)
+    market = store.materialize(
+        _two_instrument_canonical(sessions, corrected=False),
+        prepared_at=datetime(2026, 8, 5, 10, tzinfo=UTC),
+        source_name="composite-alpha-test",
+        source_lineage={"fixture": "composite-alpha"},
+    )
+    endpoint_fields = {
+        "income": (
+            "ts_code", "ann_date", "f_ann_date", "end_date", "report_type",
+            "comp_type", "end_type", "total_revenue", "n_income_attr_p", "update_flag",
+        ),
+        "balancesheet": (
+            "ts_code", "ann_date", "f_ann_date", "end_date", "report_type",
+            "comp_type", "end_type", "total_assets", "total_liab",
+            "total_hldr_eqy_exc_min_int", "update_flag",
+        ),
+        "cashflow": (
+            "ts_code", "ann_date", "f_ann_date", "end_date", "report_type",
+            "comp_type", "end_type", "n_cashflow_act", "update_flag",
+        ),
+    }
+    values = {
+        "income": (("100", "10"), ("200", "20")),
+        "balancesheet": (("1000", "400", "600"), ("2000", "800", "1200")),
+        "cashflow": (("30",), ("60",)),
+    }
+    raw = RawFinancialBatchStore(settings.data_mount)
+    checkpoints: list[FinancialShardCheckpoint] = []
+    for endpoint in ("income", "balancesheet", "cashflow"):
+        fields = endpoint_fields[endpoint]
+        for index, (instrument_id, ts_code) in enumerate(
+            (("equity:000001.SZ", "000001.SZ"), ("equity:000002.SZ", "000002.SZ"))
+        ):
+            item = [
+                ts_code, "20100420", "", "20091231", "1", "1", "4",
+                *values[endpoint][index], "0",
+            ]
+            payload_sha256 = hashlib.sha256(
+                canonical_json_bytes({"fields": list(fields), "items": [item]})
+            ).hexdigest()
+            payload = {
+                "format": "thesistrace-raw-financial-batch",
+                "version": 1,
+                "source_contract_version": "tushare-financial-ordinary-v1",
+                "endpoint": endpoint,
+                "parameters": {"ts_code": ts_code},
+                "returned_fields": list(fields),
+                "items": [item],
+                "row_count": 1,
+                "source_date_extent": ["20100420", "20100420"],
+                "payload_sha256": payload_sha256,
+            }
+            checkpoints.append(
+                FinancialShardCheckpoint(
+                    ordinal=len(checkpoints),
+                    endpoint=endpoint,
+                    instrument_id=instrument_id,
+                    ts_code=ts_code,
+                    shard="complete-history",
+                    status="completed",
+                    batch_sha256=raw.store(canonical_json_bytes(payload)),
+                    collected_at="2026-08-05T09:00:00+00:00",
+                    first_observed_at="2026-08-05T09:00:00+00:00",
+                )
+            )
+    contract = FinancialCollectionContract(
+        capability_sha256="e" * 64,
+        endpoint_fields=tuple(endpoint_fields.items()),
+        suspected_truncation_row_counts=(
+            ("income", None), ("balancesheet", None), ("cashflow", None)
+        ),
+        shards=(FinancialDateShard("complete-history"),),
+    )
+    financial = FinancialCandidateStore(settings.data_mount).materialize(
+        CompletedFinancialCollection(
+            idempotency_key=operation_id,
+            generation_manifest_sha256=market.manifest_sha256,
+            contract=contract,
+            finished_at=f"{finished_date}T10:00:00+00:00",
+            target_count=len(checkpoints),
+            shards=tuple(checkpoints),
+        ),
+        observation_through_session=observation_through,
+    )
+    composite = store.compose_financial_candidate(
+        market.manifest_sha256,
+        financial.manifest_sha256,
+        prepared_at=datetime.fromisoformat(f"{finished_date}T11:00:00+00:00"),
+    )
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        lifecycle = DatasetLifecycle(database, settings.data_mount)
+        lifecycle.protect_candidate(
+            operation_id=operation_id,
+            generation_manifest_sha256=composite.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=expected_manifest,
+            candidate_generation_manifest_sha256=composite.manifest_sha256,
+            operation_id=operation_id,
+        )
+    finally:
+        database.close()
+    return composite.manifest_sha256
 
 
 def _publish_head(

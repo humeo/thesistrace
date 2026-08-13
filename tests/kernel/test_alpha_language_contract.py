@@ -30,6 +30,12 @@ def test_catalog_composes_only_capable_fields_and_public_builtins() -> None:
             "value_type": "numeric_series",
             "description": field.description,
             "unit": field.unit,
+            "family_id": field.family_id,
+            "availability": field.availability,
+            "report_period_selection": field.report_period_selection,
+            "applicable_company_types": list(field.applicable_company_types),
+            "missingness": field.missingness,
+            "example": field.authoring_example,
         }
         for field in alpha_field_catalog()
         if field.alpha is not None

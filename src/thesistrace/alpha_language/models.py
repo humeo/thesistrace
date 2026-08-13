@@ -69,6 +69,12 @@ class AlphaFieldCatalogEntry(BaseModel):
     value_type: Literal[ValueType.NUMERIC_SERIES] = ValueType.NUMERIC_SERIES
     description: str
     unit: str
+    family_id: str
+    availability: str
+    report_period_selection: str
+    applicable_company_types: list[str]
+    missingness: str
+    example: str
 
 
 class BuiltinParameter(BaseModel):

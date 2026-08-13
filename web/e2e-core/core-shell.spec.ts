@@ -1,4 +1,5 @@
 import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
 test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
@@ -17,7 +18,9 @@ test("Default Folder retains one local Research Draft with authoritative Formula
   try {
     await page.goto("/data");
     await expect(page.getByRole("heading", { name: "Data overview" })).toBeVisible();
-    await expect(page.getByText("Ready for research")).toBeVisible();
+    await expect(page.getByText("Market ready")).toBeVisible();
+    await expect(page.getByText("Finance ready")).toBeVisible();
+    await expect(page.getByText("Coverage describes the dataset")).toBeVisible();
     await expectRemovedAuthoringControlsToBeAbsent(page);
 
     await page.getByRole("link", { name: "New Research", exact: true }).click();
@@ -134,6 +137,161 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     expect(externalRequests, "browser journey must remain local-only").toEqual([]);
   } finally {
     await attachResponses(testInfo, responses);
+  }
+});
+
+test("Financial catalog composes one Formula and starts its DailyTrack", async ({ page }, testInfo) => {
+  test.setTimeout(180_000);
+  const responses: string[] = [];
+  let runId: string | undefined;
+  let trackId: string | undefined;
+  let workerPaused = false;
+  let controlledWorker: ChildProcess | undefined;
+  page.on("response", (response) => {
+    if (response.url().includes("/api/")) {
+      responses.push(`${response.status()} ${response.request().method()} ${response.url()}`);
+    }
+  });
+
+  try {
+    controlWorker("pause");
+    workerPaused = true;
+    await page.goto("/research?new");
+    const financialHelp = page.getByText("Financial fields", { exact: true });
+    await expect(financialHelp).toBeVisible();
+    await financialHelp.click();
+    await expect(page.getByText("total_revenue_latest_fy", { exact: true })).toBeVisible();
+    await expect(page.getByText("Latest full year visible on each Research Session").first()).toBeVisible();
+    await fillCompleteDraft(page, {
+      name: "Composite financial browser run",
+      formula: "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
+    });
+    let captureRun: ((value: { id: string; status: number }) => void) | undefined;
+    const runCapture = new Promise<{ id: string; status: number }>((resolve) => {
+      captureRun = resolve;
+    });
+    await page.route("**/api/research-runs", async (route) => {
+      if (route.request().method() !== "POST") {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = await response.json() as { id: string };
+      captureRun?.({ id: body.id, status: response.status() });
+      await route.fulfill({ response });
+    });
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    const acceptedRun = await runCapture;
+    await page.unroute("**/api/research-runs");
+    expect(acceptedRun.status).toBe(202);
+    runId = acceptedRun.id;
+    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+queued/)).toBeVisible();
+    const barrier = startControlledResearchRun(runId);
+    controlledWorker = barrier.process;
+    await barrier.claimed;
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+running/)).toBeVisible();
+    controlledWorker.stdin?.end("1");
+    await controlledWorkerExit(controlledWorker);
+    controlledWorker = undefined;
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({
+      timeout: 90_000,
+    });
+    controlWorker("unpause");
+    workerPaused = false;
+    const startTrackingPath = `**/api/research-runs/${runId}/daily-tracks`;
+    let captureTrack: ((value: { id: string; status: number }) => void) | undefined;
+    const trackCapture = new Promise<{ id: string; status: number }>((resolve) => {
+      captureTrack = resolve;
+    });
+    await page.route(startTrackingPath, async (route) => {
+      const response = await route.fetch();
+      const body = await response.json() as { id: string };
+      captureTrack?.({ id: body.id, status: response.status() });
+      await route.fulfill({ response });
+    });
+    await page.getByRole("button", { name: "Start Tracking" }).click();
+    const acceptedTrack = await trackCapture;
+    await page.unroute(startTrackingPath);
+    expect(acceptedTrack.status).toBe(201);
+    trackId = acceptedTrack.id;
+    await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
+    await expect(page.locator(".research-run-facts").first()).toContainText("Status active");
+
+    publishFinancialTrackHead("lagged");
+    await expect.poll(async () => (
+      (await (await page.request.get(`/api/daily-tracks/${trackId}`)).json() as { status: string }).status
+    ), { timeout: 90_000 }).toBe("blocked");
+    await page.getByRole("button", { name: "Reload" }).click();
+    await expect(page.locator(".research-run-facts").first()).toContainText("Status blocked");
+    await expect(page.getByText("Financial Coverage ends before the next Research Session.")).toBeVisible();
+
+    publishFinancialTrackHead("recovered");
+    await page.getByRole("button", { name: "Retry blocked target" }).click();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/daily-tracks/${trackId}`);
+      const track = await response.json() as { status: string; strategy_session: string };
+      return `${track.status}:${track.strategy_session}`;
+    }, { timeout: 90_000 }).toBe("active:2026-08-11");
+    await page.getByRole("button", { name: "Reload" }).click();
+    await expect(page.locator(".research-run-facts").first()).toContainText("Status active");
+    await expect(page.locator(".research-run-facts").first()).toContainText("Strategy session 2026-08-11");
+  } finally {
+    const cleanupErrors: unknown[] = [];
+    const cleanup = async (action: () => void | Promise<void>) => {
+      try {
+        await action();
+      } catch (error) {
+        cleanupErrors.push(error);
+      }
+    };
+    try {
+      await cleanup(() => {
+        if (workerPaused) controlWorker("unpause");
+        workerPaused = false;
+      });
+      await cleanup(async () => {
+        if (controlledWorker !== undefined) {
+          controlledWorker.kill("SIGTERM");
+          await controlledWorkerExit(controlledWorker, true);
+          controlledWorker = undefined;
+        }
+      });
+      await cleanup(async () => {
+        if (trackId === undefined) return;
+        const stop = await page.request.post(`/api/daily-tracks/${trackId}/stop`, {
+          data: { request_id: `financial-e2e-stop-${trackId}` },
+        });
+        expect(stop.status()).toBe(202);
+      });
+      await cleanup(async () => {
+        if (trackId === undefined) return;
+        expect((await page.request.delete(`/api/daily-tracks/${trackId}`)).status()).toBe(204);
+      });
+      let runStatus: string | undefined;
+      await cleanup(async () => {
+        if (runId === undefined) return;
+        const detail = await page.request.get(`/api/research-runs/${runId}`);
+        if (detail.status() === 404) return;
+        expect(detail.status()).toBe(200);
+        runStatus = ((await detail.json()) as { status: string }).status;
+      });
+      await cleanup(async () => {
+        if (runId === undefined || (runStatus !== "queued" && runStatus !== "running")) return;
+        const cancel = await page.request.post(`/api/research-runs/${runId}/cancel`, {
+          data: { request_id: `financial-e2e-cancel-${runId}` },
+        });
+        expect(cancel.status()).toBe(200);
+      });
+      await cleanup(async () => {
+        if (runId === undefined) return;
+        const deleted = await page.request.delete(`/api/research-runs/${runId}`);
+        expect([204, 404]).toContain(deleted.status());
+      });
+      if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors, "E2E cleanup failed");
+    } finally {
+      await attachResponses(testInfo, responses);
+    }
   }
 });
 
@@ -425,8 +583,11 @@ async function replaceFormula(page: Page, formula: string): Promise<void> {
 }
 
 async function expectRemovedAuthoringControlsToBeAbsent(page: Page): Promise<void> {
-  const body = await page.locator("body").innerText();
-  expect(body).not.toMatch(/\bDefinitions\b|\bRevision\b|\bSave\b|\bRefresh\b|\bRerun\b|\bAdd Alpha\b/);
+  await expect(page.getByRole("link", { name: "Definitions", exact: true })).toHaveCount(0);
+  await expect(page.getByText("Revision", { exact: true })).toHaveCount(0);
+  for (const name of ["Save", "Refresh", "Rerun", "Add Alpha"]) {
+    await expect(page.getByRole("button", { name, exact: true })).toHaveCount(0);
+  }
 }
 
 async function attachResponses(testInfo: TestInfo, responses: string[]): Promise<void> {
@@ -434,4 +595,68 @@ async function attachResponses(testInfo: TestInfo, responses: string[]): Promise
     body: Buffer.from(`${responses.join("\n")}\n`, "utf8"),
     contentType: "text/plain",
   });
+}
+
+function testContainer(service: "postgres" | "worker"): string {
+  const project = process.env.THESISTRACE_TEST_PROJECT_NAME;
+  if (!project?.startsWith("thesistrace-test-")) {
+    throw new Error("Browser acceptance requires an isolated ThesisTrace Test project");
+  }
+  return `${project}-${service}-1`;
+}
+
+function controlWorker(action: "pause" | "unpause"): void {
+  execFileSync("docker", [action, testContainer("worker")], { stdio: "pipe" });
+}
+
+function startControlledResearchRun(runId: string) {
+  const process = spawn(
+    "uv",
+    [
+      "run", "python", "../tests/browser/process_research_run_with_barrier.py",
+      runId,
+    ],
+    { cwd: globalThis.process.cwd(), env: globalThis.process.env, stdio: "pipe" },
+  );
+  const claimed = new Promise<void>((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    process.stdout?.setEncoding("utf8");
+    process.stderr?.setEncoding("utf8");
+    process.stderr?.on("data", (chunk: string) => { stderr += chunk; });
+    process.stdout?.on("data", (chunk: string) => {
+      stdout += chunk;
+      if (stdout.includes(`claimed:${runId}`)) resolve();
+    });
+    process.once("error", reject);
+    process.once("exit", (code) => {
+      if (!stdout.includes(`claimed:${runId}`)) {
+        reject(new Error(`Controlled ResearchRun worker exited ${code}: ${stderr}`));
+      }
+    });
+  });
+  return { claimed, process };
+}
+
+function controlledWorkerExit(process: ChildProcess, allowTermination = false): Promise<void> {
+  if (process.exitCode !== null) {
+    return process.exitCode === 0
+      ? Promise.resolve()
+      : Promise.reject(new Error(`Controlled ResearchRun worker exited with ${process.exitCode}`));
+  }
+  return new Promise((resolve, reject) => {
+    process.once("error", reject);
+    process.once("exit", (code, signal) => {
+      if (code === 0 || (allowTermination && (signal === "SIGTERM" || code === 143))) resolve();
+      else reject(new Error(`Controlled ResearchRun worker exited with ${code ?? signal}`));
+    });
+  });
+}
+
+function publishFinancialTrackHead(mode: "lagged" | "recovered"): void {
+  execFileSync(
+    "uv",
+    ["run", "python", "../tests/browser/publish_financial_track_head.py", mode],
+    { cwd: process.cwd(), env: process.env, stdio: "pipe" },
+  );
 }

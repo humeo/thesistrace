@@ -99,6 +99,30 @@ export function DataOverviewView({
           <dd>{overview.last_financial_refresh_at ?? "—"}</dd>
         </div>
       </dl>
+      <div className="data-coverage-note" aria-label="Financial coverage explanation">
+        <p>
+          Coverage describes the dataset family available for research; it is not a property
+          created by an individual Run.
+        </p>
+        <p>
+          A company can have no eligible fact on a Research Session without making the Financial
+          Refresh incomplete. That value remains missing rather than becoming zero.
+        </p>
+        <dl className="data-overview-stats">
+          <div>
+            <dt>Revision coverage</dt>
+            <dd>{financialCoverage?.revision_coverage ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Seed policy</dt>
+            <dd>{financialCoverage?.seed_policy ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>Reconciled through</dt>
+            <dd>{financialCoverage?.historical_reconciliation_watermark ?? "—"}</dd>
+          </div>
+        </dl>
+      </div>
     </section>
   );
 }

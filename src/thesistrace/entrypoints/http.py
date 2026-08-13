@@ -62,7 +62,12 @@ def create_app(settings: CoreSettings | None = None) -> FastAPI:
             yield
 
     app = FastAPI(title="ThesisTrace Core", lifespan=lifespan)
-    install_alpha_http(app)
+    install_alpha_http(
+        app,
+        financial_authoring_ready=lambda request: (
+            _runtime(request).data_overview.overview().financial_research_readiness
+        ),
+    )
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:

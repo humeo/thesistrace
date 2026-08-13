@@ -34,6 +34,7 @@ class FieldDefinition:
     report_period_selection: str = "research-session"
     source_lineage: str = "tushare.daily"
     applicable_company_types: tuple[str, ...] = ()
+    authoring_example: str = ""
     source_endpoint: str = ""
     source_column: str = ""
 
@@ -147,6 +148,7 @@ def _financial_field(
         report_period_selection=period_selection,
         source_lineage=f"tushare.{endpoint}.{column}",
         applicable_company_types=("1", "2", "3", "4"),
+        authoring_example=f"cs_rank({field_id})",
         source_endpoint=endpoint,
         source_column=column,
     )

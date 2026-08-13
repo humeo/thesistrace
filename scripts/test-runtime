@@ -108,6 +108,14 @@ run_with_environment() {
 run_playwright() {
   THESISTRACE_TEST_WEB_ORIGIN="http://127.0.0.1:$web_port" \
   THESISTRACE_TEST_EVIDENCE_DIR="$evidence_dir" \
+  THESISTRACE_TEST_PROJECT_NAME="$project_name" \
+  THESISTRACE_DATABASE_URL="postgresql://thesistrace:thesistrace-test@127.0.0.1:$postgres_port/thesistrace" \
+  THESISTRACE_S3_ENDPOINT_URL="http://127.0.0.1:$s3_port" \
+  THESISTRACE_S3_ACCESS_KEY_ID=rustfsadmin \
+  THESISTRACE_S3_SECRET_ACCESS_KEY=rustfsadmin \
+  THESISTRACE_S3_BUCKET="$bucket_name" \
+  THESISTRACE_S3_REGION=us-east-1 \
+  THESISTRACE_DATA_MOUNT="$data_mount" \
     "$@"
 }
 

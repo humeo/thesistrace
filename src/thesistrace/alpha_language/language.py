@@ -94,14 +94,30 @@ class AlphaLanguage:
                     field_id=field.field_id,
                     description=field.description,
                     unit=field.unit,
+                    family_id=field.family_id,
+                    availability=field.availability,
+                    report_period_selection=field.report_period_selection,
+                    applicable_company_types=list(field.applicable_company_types),
+                    missingness=field.missingness,
+                    example=field.authoring_example,
                 )
                 for identifier, field in field_by_identifier.items()
             ],
             builtins=[_public_builtin(builtin) for builtin in builtins],
         )
 
-    def catalog(self) -> AlphaAuthoringCatalog:
-        return self._catalog
+    def catalog(self, *, financial_authoring_ready: bool = True) -> AlphaAuthoringCatalog:
+        if financial_authoring_ready:
+            return self._catalog
+        return self._catalog.model_copy(
+            update={
+                "fields": [
+                    field
+                    for field in self._catalog.fields
+                    if field.family_id != "equity.financial_pit"
+                ]
+            }
+        )
 
     def diagnose(self, source: str) -> FormulaDiagnostics:
         try:

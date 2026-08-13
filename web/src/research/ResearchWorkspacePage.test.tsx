@@ -28,7 +28,34 @@ class MemoryStorage implements Storage {
 
 const folder = { id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-13T00:00:00Z" };
 const catalog = {
-  fields: [{ identifier: "close_adj", field_id: "price.close_adj", value_type: "numeric_series" as const, description: "Adjusted close", unit: "CNY" }],
+  fields: [
+    {
+      identifier: "close_adj",
+      field_id: "price.close_adj",
+      value_type: "numeric_series" as const,
+      description: "Adjusted close",
+      unit: "CNY",
+      family_id: "equity.eod_price",
+      availability: "after_close",
+      report_period_selection: "research-session",
+      applicable_company_types: [],
+      missingness: "missing_when_no_valid_session_bar",
+      example: "cs_rank(close_adj)",
+    },
+    {
+      identifier: "total_revenue_latest_fy",
+      field_id: "total_revenue_latest_fy",
+      value_type: "numeric_series" as const,
+      description: "Latest visible full-year consolidated total revenue",
+      unit: "CNY",
+      family_id: "equity.financial_pit",
+      availability: "next_research_session_after_source_publication",
+      report_period_selection: "latest_visible_full_year",
+      applicable_company_types: ["1", "2", "3", "4"],
+      missingness: "missing_when_no_visible_eligible_fact",
+      example: "cs_rank(total_revenue_latest_fy)",
+    },
+  ],
   builtins: [{
     identifier: "ts_mean",
     parameters: [{ name: "value", value_type: "numeric_series", minimum: null, maximum: null }],
@@ -235,6 +262,13 @@ describe("browser Research Draft", () => {
     expect(markup).toContain("New Research");
     expect(markup).toContain('disabled="" type="button">Run</button>');
     expect(markup).toContain("Default Folder");
+    expect(markup).toContain("Financial fields");
+    expect(markup).toContain("total_revenue_latest_fy");
+    expect(markup).toContain("Latest visible full-year consolidated total revenue");
+    expect(markup).toContain("Latest full year visible on each Research Session");
+    expect(markup).toContain("Company types 1, 2, 3, 4");
+    expect(markup).toContain("cs_rank(total_revenue_latest_fy)");
+    expect(markup).toContain("Missing when no visible eligible fact");
     for (const removed of ["Save", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
   });
 

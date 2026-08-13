@@ -403,6 +403,7 @@ export function ResearchDraftWorkspace({
             onChange={(formula, editor) => updateDraft((current) => ({ ...current, formula, editor }))}
             selection={draft.editor}
           />
+          <AlphaFieldReference catalog={catalog} />
           {diagnosticState.kind === "complete" && diagnosticState.result.diagnostics.length > 0 ? (
             <ul aria-label="Formula diagnostics" className="formula-diagnostics">
               {diagnosticState.result.diagnostics.map((diagnostic) => (
@@ -476,6 +477,53 @@ export function ResearchDraftWorkspace({
       </footer>
     </section>
   );
+}
+
+function AlphaFieldReference({ catalog }: { catalog: AlphaCatalog }) {
+  const financialFields = catalog.fields.filter(
+    (field) => field.family_id === "equity.financial_pit",
+  );
+  if (financialFields.length === 0) return null;
+  return (
+    <details className="alpha-field-reference">
+      <summary>Financial fields</summary>
+      <div className="alpha-field-reference-list">
+        {financialFields.map((field) => (
+          <article key={field.field_id}>
+            <h3><code>{field.identifier}</code></h3>
+            <p>{field.description}</p>
+            <dl>
+              <div><dt>Unit</dt><dd>{field.unit}</dd></div>
+              <div><dt>Time semantics</dt><dd>{fieldTimeSemantics(field)}</dd></div>
+              <div>
+                <dt>Applicability</dt>
+                <dd>{field.applicable_company_types.length > 0
+                  ? `Company types ${field.applicable_company_types.join(", ")}`
+                  : "All supported instruments"}</dd>
+              </div>
+              <div><dt>Missingness</dt><dd>{humanizeContract(field.missingness)}</dd></div>
+              <div><dt>Example</dt><dd><code>{field.example}</code></dd></div>
+            </dl>
+          </article>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function fieldTimeSemantics(field: AlphaCatalog["fields"][number]): string {
+  if (field.report_period_selection === "latest_visible_full_year") {
+    return "Latest full year visible on each Research Session";
+  }
+  if (field.report_period_selection === "latest_visible_quarterly_or_annual") {
+    return "Latest quarterly or annual report visible on each Research Session";
+  }
+  return humanizeContract(field.report_period_selection);
+}
+
+function humanizeContract(value: string): string {
+  const text = value.replaceAll("_", " ").replaceAll("-", " ");
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 type ResearchRunAdmissionIssue = {
