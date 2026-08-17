@@ -30,14 +30,13 @@ def test_bootstrap_cli_exposes_an_explicit_start_date(
         ),
         (
             "collect-financial",
-            ("--generation-manifest-sha256", "--capability-report", "--date-shard"),
+            ("--generation-manifest-sha256", "--capability-report"),
         ),
         (
             "refresh-financial",
             (
                 "--generation-manifest-sha256",
                 "--capability-report",
-                "--date-shard",
                 "--prior-candidate-manifest-sha256",
                 "--observation-through-session",
             ),
@@ -55,6 +54,50 @@ def test_private_financial_operator_exposes_explicit_contract_inputs(
     assert exit_status.value.code == 0
     output = capsys.readouterr().out
     assert all(item in output for item in expected)
+    if command in {"collect-financial", "refresh-financial"}:
+        assert "--date-shard" not in output
+
+
+def test_financial_probe_does_not_require_database_or_data_mount(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FakeTransport:
+        def close(self) -> None:
+            pass
+
+    class FakeReport:
+        @staticmethod
+        def descriptor() -> dict[str, str]:
+            return {"status": "probed"}
+
+    def reject_database(_url: str) -> object:
+        raise AssertionError("financial probe opened the database")
+
+    monkeypatch.delenv("THESISTRACE_DATABASE_URL", raising=False)
+    monkeypatch.delenv("THESISTRACE_DATA_MOUNT", raising=False)
+    monkeypatch.setenv("THESISTRACE_TUSHARE_TOKEN", "test-token")
+    monkeypatch.setattr(data_operator, "PostgresDatabase", reject_database)
+    monkeypatch.setattr(data_operator, "HttpTushareTransport", lambda **_kwargs: FakeTransport())
+    monkeypatch.setattr(data_operator, "TushareAdapter", lambda **_kwargs: object())
+    monkeypatch.setattr(data_operator, "TushareFinancialSource", lambda provider: provider)
+    monkeypatch.setattr(
+        data_operator,
+        "probe_financial_capability",
+        lambda *_args, **_kwargs: FakeReport(),
+    )
+
+    data_operator.main(
+        [
+            "probe-financial",
+            "--reference-instrument",
+            "000001.SZ",
+            "--comparison-shard",
+            "2026:20260101:20261231",
+        ]
+    )
+
+    assert json.loads(capsys.readouterr().out) == {"status": "probed"}
 
 
 def test_bootstrap_cli_passes_the_explicit_start_date_to_the_operator(

@@ -27,3 +27,10 @@ progression under its own lifecycle; freezing a seed ResearchRun does not pin
 all future Track advances to the seed Generation. ADR-0182 remains the
 authority for user-initiated research reuse through Use as Draft rather than a
 Rerun action.
+
+## Superseded clause
+
+ADR-0195 replaces the permission for a retry to recompute the complete result
+when a valid ResearchRun checkpoint exists. Every retry still uses the frozen
+Generation; it resumes from the latest valid checkpoint and starts from the
+beginning only when the Run has no valid completed checkpoint.

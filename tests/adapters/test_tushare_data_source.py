@@ -10,13 +10,14 @@ import pytest
 from thesistrace.adapters.tushare_data import TushareDataSource, _materialize_increment
 from thesistrace.adapters.tushare_provider import (
     TushareAdapter,
+    TushareBootstrapArchive,
     TushareSourceError,
     merge_incremental_industries,
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
 from thesistrace.data import BootstrapCollectionPlan, CollectionPlan, DataSourceError
-from thesistrace.data.source import refresh_collection_plan
+from thesistrace.data.source import CanonicalBootstrapStream, refresh_collection_plan
 from thesistrace.data.validation import validate_release_batch
 from thesistrace.fixture import build_fixture
 
@@ -167,6 +168,120 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
         canonical["research_calendar"][0],
         canonical["research_calendar"][-1],
     )
+
+
+def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    lineage, expected = normalize_tushare_snapshot(snapshot)
+    market_names = ("daily", "adjustments", "suspensions", "price_limits")
+    market_by_session = {
+        session: {
+            name: [row for row in snapshot[name] if row["trade_date"] == session]
+            for name in market_names
+        }
+        for session in sessions
+    }
+    archive = TushareBootstrapArchive(
+        request_start=date(2026, 8, 3),
+        request_end=date(2026, 8, 5),
+        foundation={
+            name: snapshot[name]
+            for name in ("calendar_sse", "calendar_szse", "stock_basic")
+        },
+        sessions=tuple(sessions),
+        industry_classification=[],
+        industry_membership=snapshot["industry_membership"],
+        source_lineage=lineage,
+        _load_session=market_by_session.__getitem__,
+    )
+
+    class ArchiveProvider(RecordedProvider):
+        def collect_bootstrap_snapshot(
+            self,
+            *,
+            start_date: date,
+            completed_through_date: date,
+        ) -> TushareBootstrapArchive:
+            self.bootstrap_windows.append((start_date, completed_through_date))
+            return archive
+
+    stream = TushareDataSource(provider=ArchiveProvider()).collect_bootstrap(
+        BootstrapCollectionPlan(
+            as_of=datetime(2026, 8, 6, tzinfo=UTC),
+            start_date=date(2026, 8, 3),
+            completed_through_date=date(2026, 8, 5),
+        )
+    )
+
+    assert isinstance(stream, CanonicalBootstrapStream)
+    actual = dict(stream.static)
+    actual.update(
+        {
+            "prices": [],
+            "trading_states": [],
+            "price_limits": [],
+            "base_pool": [],
+            "liquidity_universes": {
+                name: [] for name in expected["liquidity_universes"]
+            },
+        }
+    )
+    for partition in stream.partitions():
+        for name in ("prices", "trading_states", "price_limits", "base_pool"):
+            actual[name].extend(partition.canonical[name])
+        for name, rows in partition.canonical["liquidity_universes"].items():
+            actual["liquidity_universes"][name].extend(rows)
+
+    assert actual == expected
+
+
+def test_tushare_bootstrap_preserves_an_active_instrument_with_missing_market_data() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["daily"] = [
+        row for row in snapshot["daily"] if row["trade_date"] != sessions[0]
+    ]
+    snapshot["adjustments"] = [
+        row for row in snapshot["adjustments"] if row["trade_date"] != sessions[0]
+    ]
+    snapshot["price_limits"] = [
+        row for row in snapshot["price_limits"] if row["trade_date"] != sessions[0]
+    ]
+
+    class MissingMarketDataProvider(RecordedProvider):
+        def collect_bootstrap_snapshot(
+            self,
+            *,
+            start_date: date,
+            completed_through_date: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            self.bootstrap_windows.append((start_date, completed_through_date))
+            return snapshot
+
+    batch = TushareDataSource(provider=MissingMarketDataProvider()).collect_bootstrap(
+        BootstrapCollectionPlan(
+            as_of=datetime(2026, 8, 6, tzinfo=UTC),
+            start_date=date(2026, 8, 3),
+            completed_through_date=date(2026, 8, 5),
+        )
+    )
+
+    assert batch.canonical["trading_states"][0] == {
+        "session": "2026-08-03",
+        "instrument_id": "equity:600000.SH",
+        "state": "data_unavailable",
+    }
+    assert all(
+        row["session"] != "2026-08-03" for row in batch.canonical["prices"]
+    )
+    assert all(
+        row["session"] != "2026-08-03" for row in batch.canonical["price_limits"]
+    )
+    assert batch.canonical["base_pool"][0]["instrument_ids"] == [
+        "equity:600000.SH"
+    ]
+    validate_release_batch(batch, predecessor_session=None)
 
 
 def test_tushare_increment_uses_only_frontier_and_previous_canonical(
@@ -404,6 +519,37 @@ def test_tushare_refresh_applies_an_overlap_only_correction_and_delisting() -> N
         (row["session"], row["instrument_id"]) for row in batch.canonical["trading_states"]
     }
     validate_release_batch(batch, predecessor_session=previous["research_calendar"][-1])
+
+
+def test_tushare_refresh_preserves_a_known_data_unavailable_overlap() -> None:
+    sessions = ["20260803", "20260804", "20260805", "20260806"]
+    previous_snapshot = normalizer_snapshot(sessions[:3])
+    previous_snapshot["daily"] = [
+        row for row in previous_snapshot["daily"] if row["trade_date"] != sessions[0]
+    ]
+    _source, previous = normalize_tushare_snapshot(previous_snapshot)
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["daily"] = [
+        row for row in snapshot["daily"] if row["trade_date"] != sessions[0]
+    ]
+
+    class MissingOverlapProvider(RecordedProvider):
+        def collect_incremental_snapshot(
+            self,
+            *,
+            last_session: str,
+            as_of: date,
+        ) -> dict[str, list[dict[str, object]]]:
+            return copy.deepcopy(snapshot)
+
+    batch = TushareDataSource(provider=MissingOverlapProvider()).collect(
+        refresh_collection_plan(datetime(2026, 8, 6, 18, tzinfo=UTC), previous)
+    )
+
+    assert batch.canonical["trading_states"][0]["state"] == "data_unavailable"
+    assert all(
+        row["session"] != "2026-08-03" for row in batch.canonical["prices"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -816,6 +962,160 @@ def test_tushare_normalizer_maps_null_timing_suspension_to_full_session() -> Non
     _source, canonical = normalize_tushare_snapshot(snapshot)
 
     assert canonical["trading_states"][0]["state"] == "full_session_suspension"
+
+
+def test_tushare_normalizer_preserves_price_when_suspension_timing_is_unavailable() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": sessions[0],
+            "suspend_timing": None,
+            "suspend_type": "S",
+        }
+    ]
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert canonical["trading_states"][0]["state"] == "data_unavailable"
+    assert canonical["prices"][0]["session"] == "2026-08-03"
+    assert canonical["prices"][0]["trading_state"] == "data_unavailable"
+
+
+def test_tushare_normalizer_preserves_price_when_price_limit_is_unavailable() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["price_limits"] = [
+        row for row in snapshot["price_limits"] if row["trade_date"] != sessions[0]
+    ]
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert canonical["trading_states"][0]["state"] == "data_unavailable"
+    assert canonical["prices"][0]["session"] == "2026-08-03"
+    assert canonical["prices"][0]["trading_state"] == "data_unavailable"
+    assert all(
+        row["session"] != "2026-08-03" for row in canonical["price_limits"]
+    )
+
+
+def test_tushare_normalizer_omits_price_when_adjustment_factor_is_unavailable() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["adjustments"] = [
+        row for row in snapshot["adjustments"] if row["trade_date"] != sessions[0]
+    ]
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert canonical["trading_states"][0]["state"] == "data_unavailable"
+    assert all(row["session"] != "2026-08-03" for row in canonical["prices"])
+    assert all(row["session"] != "2026-08-03" for row in canonical["price_limits"])
+
+
+def test_tushare_normalizer_maps_market_open_sentinel_to_full_session() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["daily"] = [
+        row for row in snapshot["daily"] if row["trade_date"] != sessions[0]
+    ]
+    snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": sessions[0],
+            "suspend_timing": "09:30-09:30",
+            "suspend_type": "S",
+        }
+    ]
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert canonical["trading_states"][0]["state"] == "full_session_suspension"
+
+
+def test_tushare_normalizer_carries_full_session_suspension_until_daily_resumes() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["daily"] = [
+        row for row in snapshot["daily"] if row["trade_date"] not in sessions[:2]
+    ]
+    snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": sessions[0],
+            "suspend_timing": "09:30-09:30",
+            "suspend_type": "S",
+        }
+    ]
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert [row["state"] for row in canonical["trading_states"][:3]] == [
+        "full_session_suspension",
+        "full_session_suspension",
+        "normal",
+    ]
+
+
+@pytest.mark.parametrize(
+    "suspend_timing",
+    (
+        "9:31-9:41",
+        "9:35-9:45,9:47-9:57",
+        "9:31-9:41,9:42-9:52",
+        "9:32-9:42,9:44-9:54",
+    ),
+)
+def test_tushare_normalizer_maps_non_padded_intraday_suspension_after_open(
+    suspend_timing: str,
+) -> None:
+    sessions = normalizer_bootstrap_sessions()
+    snapshot = normalizer_snapshot(sessions)
+    snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": sessions[0],
+            "suspend_timing": suspend_timing,
+            "suspend_type": "S",
+        }
+    ]
+
+    _source, canonical = normalize_tushare_snapshot(snapshot)
+
+    assert canonical["trading_states"][0]["state"] == "after_open_suspension"
+
+
+def test_tushare_increment_carries_predecessor_full_session_suspension() -> None:
+    sessions = normalizer_bootstrap_sessions()
+    predecessor_snapshot = normalizer_snapshot(sessions)
+    predecessor_snapshot["daily"] = [
+        row for row in predecessor_snapshot["daily"] if row["trade_date"] != sessions[-1]
+    ]
+    predecessor_snapshot["suspensions"] = [
+        {
+            "ts_code": "600000.SH",
+            "trade_date": sessions[-1],
+            "suspend_timing": "09:30-09:30",
+            "suspend_type": "S",
+        }
+    ]
+    _source, predecessor = normalize_tushare_snapshot(predecessor_snapshot)
+    next_session = (
+        date.fromisoformat(str(predecessor["research_calendar"][-1])) + timedelta(days=1)
+    ).strftime("%Y%m%d")
+    increment = normalizer_snapshot([next_session])
+    increment["daily"] = []
+
+    _lineage, delta = normalize_tushare_increment(increment, predecessor)
+
+    assert delta["trading_states_append"] == [
+        {
+            "session": f"{next_session[:4]}-{next_session[4:6]}-{next_session[6:]}",
+            "instrument_id": "equity:600000.SH",
+            "state": "full_session_suspension",
+        }
+    ]
 
 
 def test_tushare_increment_rejects_historical_reference_changes() -> None:
@@ -1254,10 +1554,11 @@ def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
             return []
 
     provider = WindowRecordingAdapter()
-    snapshot = provider.collect_bootstrap_snapshot(
+    archive = provider.collect_bootstrap_snapshot(
         start_date=date(2025, 8, 4),
         completed_through_date=date(2026, 8, 5),
     )
+    snapshot = archive.materialize()
 
     calendar_calls = [params for api, params in provider.calls if api == "trade_cal"]
     assert calendar_calls == [
@@ -1283,6 +1584,7 @@ def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
             "session": "20260803",
             "completed_sessions": 1,
             "total_sessions": 2,
+            "source": "upstream",
         },
         {
             "event": "collection_progress",
@@ -1290,6 +1592,7 @@ def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
             "session": "20260804",
             "completed_sessions": 2,
             "total_sessions": 2,
+            "source": "upstream",
         },
     ]
     assert "st" not in snapshot
@@ -1308,7 +1611,7 @@ def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
     assert phase_events[-1]["membership_rows"] == 1
 
 
-def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
+def test_tushare_bootstrap_resumes_after_per_session_checkpoint(
     tmp_path: Path,
 ) -> None:
     class CheckpointAdapter(TushareAdapter):
@@ -1341,7 +1644,13 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
                         "cal_date": "20260803",
                         "is_open": "1",
                         "pretrade_date": "20260731",
-                    }
+                    },
+                    {
+                        "exchange": params["exchange"],
+                        "cal_date": "20260804",
+                        "is_open": "1",
+                        "pretrade_date": "20260803",
+                    },
                 ]
             if api_name == "stock_basic":
                 if params["list_status"] != "L":
@@ -1357,8 +1666,6 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
                     }
                 ]
             if api_name == "daily":
-                if self.fail_market_facts:
-                    raise TushareSourceError("UPSTREAM_UNAVAILABLE", source_code=50101)
                 return [
                     {
                         "ts_code": "600000.SH",
@@ -1383,6 +1690,8 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
                     }
                 ]
             if api_name == "stk_limit":
+                if self.fail_market_facts and params["trade_date"] == "20260804":
+                    raise TushareSourceError("UPSTREAM_UNAVAILABLE", source_code=50101)
                 return [
                     {
                         "ts_code": "600000.SH",
@@ -1405,7 +1714,7 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
                 ]
             return []
 
-    checkpoint = tmp_path / "bootstrap-foundation-checkpoint.json"
+    checkpoint = tmp_path / "bootstrap-checkpoint.json"
     first = CheckpointAdapter(checkpoint, fail_market_facts=True)
 
     with pytest.raises(TushareSourceError):
@@ -1417,6 +1726,8 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
     assert checkpoint.is_file()
     checkpoint_payload = json.loads(checkpoint.read_text())
     assert "version" not in checkpoint_payload
+    assert checkpoint_payload["source_contract_version"] == "tushare-v2"
+    assert set(checkpoint_payload["market_sessions"]) == {"20260803"}
     assert "secret" not in checkpoint.read_text()
     assert any(
         event.get("phase") == "bootstrap_checkpoint" and event.get("status") == "saved"
@@ -1424,19 +1735,23 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
     )
 
     resumed = CheckpointAdapter(checkpoint, fail_market_facts=False)
-    snapshot = resumed.collect_bootstrap_snapshot(
+    archive = resumed.collect_bootstrap_snapshot(
         start_date=date(2025, 8, 3),
         completed_through_date=date(2026, 8, 3),
     )
+    snapshot = archive.materialize()
 
-    assert snapshot["adjustments"][0]["trade_date"] == "20260803"
+    assert [row["trade_date"] for row in snapshot["adjustments"]] == [
+        "20260803",
+        "20260804",
+    ]
     assert all(api_name not in {"trade_cal", "stock_basic"} for api_name, _ in resumed.calls)
     for api_name in ("daily", "adj_factor", "stk_limit"):
         assert [params for api, params in resumed.calls if api == api_name] == [
-            {"trade_date": "20260803"}
+            {"trade_date": "20260804"}
         ]
     assert [params for api, params in resumed.calls if api == "suspend_d"] == [
-        {"trade_date": "20260803", "suspend_type": "S"}
+        {"trade_date": "20260804", "suspend_type": "S"}
     ]
     assert resumed.events[0] == {
         "event": "collection_phase",
@@ -1445,8 +1760,41 @@ def test_tushare_bootstrap_resumes_after_foundation_checkpoint(
         "request_start": "2025-08-03",
         "request_end": "2026-08-03",
     }
+    restored_progress = [
+        event for event in resumed.events if event.get("event") == "collection_progress"
+    ]
+    assert [event["source"] for event in restored_progress] == ["checkpoint", "upstream"]
     resumed.clear_bootstrap_checkpoint()
     assert not checkpoint.exists()
+    assert not checkpoint.with_name(f"{checkpoint.name}.market").exists()
+
+
+def test_tushare_bootstrap_rejects_obsolete_checkpoint_format(tmp_path: Path) -> None:
+    checkpoint = tmp_path / "bootstrap-checkpoint.json"
+    checkpoint.write_text(
+        json.dumps(
+            {
+                "format": "thesistrace-tushare-bootstrap-foundation",
+                "request_start": "2025-08-03",
+                "request_end": "2026-08-03",
+                "foundation": {},
+            }
+        )
+    )
+    provider = TushareAdapter(
+        token="secret",
+        transport=RecordingTransport(),
+        throttle_seconds=0,
+        bootstrap_checkpoint=checkpoint,
+    )
+
+    with pytest.raises(TushareSourceError) as failure:
+        provider.collect_bootstrap_snapshot(
+            start_date=date(2025, 8, 3),
+            completed_through_date=date(2026, 8, 3),
+        )
+
+    assert failure.value.reason_code == "INVALID_BOOTSTRAP_CHECKPOINT"
 
 
 def test_tushare_incremental_queries_market_facts_one_session_at_a_time() -> None:

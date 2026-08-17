@@ -81,7 +81,7 @@ def test_capability_probe_freezes_complete_history_statement_contract() -> None:
     assert FinancialCapabilityReport.from_descriptor(report.descriptor()) == report
 
 
-def test_unproven_complete_history_requires_one_preselected_date_contract() -> None:
+def test_unproven_complete_history_fails_closed() -> None:
     class MismatchedSource(ProbeSource):
         def query_raw(
             self,
@@ -111,13 +111,31 @@ def test_unproven_complete_history_requires_one_preselected_date_contract() -> N
     else:
         raise AssertionError("unproven complete history was accepted")
 
-    contract = FinancialCollectionContract.from_capability(report, date_shards=fixed)
-    assert contract.shards == fixed
-    with pytest.raises(ValueError, match="preselected financial date shards are invalid"):
-        FinancialCollectionContract.from_capability(
-            report,
-            date_shards=(FinancialDateShard("partial", "20100101", "20101231"),),
-        )
+
+def test_collection_contract_rejects_executable_date_shards() -> None:
+    required_fields = (
+        "ts_code",
+        "ann_date",
+        "f_ann_date",
+        "end_date",
+        "report_type",
+        "comp_type",
+        "end_type",
+        "update_flag",
+    )
+    bounded = FinancialCollectionContract(
+        capability_sha256="a" * 64,
+        endpoint_fields=tuple(
+            (endpoint, required_fields) for endpoint in FINANCIAL_ENDPOINTS
+        ),
+        suspected_truncation_row_counts=tuple(
+            (endpoint, None) for endpoint in FINANCIAL_ENDPOINTS
+        ),
+        shards=_annual_shards(),
+    )
+
+    with pytest.raises(ValueError, match="financial collection contract is invalid"):
+        FinancialCollectionContract.from_descriptor(bounded.descriptor())
 
 
 def test_capability_probe_reports_permission_failure_at_the_exact_shard() -> None:

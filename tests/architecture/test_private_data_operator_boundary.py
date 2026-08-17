@@ -18,12 +18,12 @@ def test_data_operator_is_unversioned_and_not_registered_in_product_surfaces() -
     assert "data operator" not in web.lower()
 
 
-def test_live_bootstrap_uses_one_unversioned_checkpoint() -> None:
+def test_live_bootstrap_uses_one_current_checkpoint_manifest() -> None:
     root = Path(__file__).resolve().parents[2]
     operator = (root / "src/thesistrace/entrypoints/data_operator.py").read_text()
 
-    assert "tushare-bootstrap-foundation.json" in operator
-    assert "tushare-bootstrap-foundation-v" not in operator
+    assert "tushare-bootstrap-checkpoint.json" in operator
+    assert "tushare-bootstrap-checkpoint-v" not in operator
 
 
 def test_generation_collection_is_only_wired_to_the_private_operator() -> None:

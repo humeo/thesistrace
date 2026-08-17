@@ -20,7 +20,7 @@ from thesistrace.data.source import RawSourceError, RawSourceResponse
 from thesistrace.publication.serialization import canonical_json_bytes
 
 FINANCIAL_ENDPOINTS = ("income", "balancesheet", "cashflow")
-FINANCIAL_SOURCE_CONTRACT_VERSION = "tushare-financial-ordinary-v1"
+FINANCIAL_SOURCE_CONTRACT_VERSION = "tushare-financial-ordinary-v2"
 FINANCIAL_HISTORY_FLOOR = "19900101"
 _REQUIRED_FINANCIAL_FIELDS = {
     "ts_code",
@@ -326,8 +326,6 @@ class FinancialCollectionContract:
     def from_capability(
         cls,
         report: FinancialCapabilityReport,
-        *,
-        date_shards: tuple[FinancialDateShard, ...] | None = None,
     ) -> FinancialCollectionContract:
         try:
             probed_at = datetime.fromisoformat(report.probed_at)
@@ -341,14 +339,8 @@ class FinancialCollectionContract:
             for endpoint in report.endpoints
         ):
             raise ValueError("financial endpoint permission is unavailable")
-        if date_shards is None:
-            if not all(endpoint.full_history_proven for endpoint in report.endpoints):
-                raise ValueError("complete-history response is unproven")
-            shards = (FinancialDateShard("complete-history"),)
-        else:
-            if date_shards != report.comparison_shards:
-                raise ValueError("preselected financial date shards are invalid")
-            shards = date_shards
+        if not all(endpoint.full_history_proven for endpoint in report.endpoints):
+            raise ValueError("complete-history response is unproven")
         return cls(
             capability_sha256=report.sha256,
             endpoint_fields=tuple(
@@ -358,7 +350,7 @@ class FinancialCollectionContract:
                 (endpoint.endpoint, endpoint.suspected_truncation_row_count)
                 for endpoint in report.endpoints
             ),
-            shards=shards,
+            shards=(FinancialDateShard("complete-history"),),
         )
 
 
@@ -1326,8 +1318,7 @@ def _validate_collection_contract(contract: FinancialCollectionContract) -> None
         )
         or tuple(endpoint for endpoint, _count in contract.suspected_truncation_row_counts)
         != FINANCIAL_ENDPOINTS
-        or not contract.shards
-        or len({shard.name for shard in contract.shards}) != len(contract.shards)
+        or contract.shards != (FinancialDateShard("complete-history"),)
     ):
         raise ValueError("financial collection contract is invalid")
 

@@ -25,6 +25,7 @@ from thesistrace.data.lifecycle import (
 from thesistrace.data.source import (
     BootstrapCollectionPlan,
     BootstrapDataSource,
+    CanonicalBootstrapStream,
     CanonicalSourceBatch,
     DataSourceError,
     bootstrap_collection_plan,
@@ -176,17 +177,29 @@ class DataOperator:
                 )
                 heartbeat.assert_owned()
                 self._progress({"phase": "validation", "status": "started"})
-                expanded = _apply_bootstrap_expansion(batch)
-                validate_bootstrap_batch(expanded)
+                expanded = (
+                    batch
+                    if isinstance(batch, CanonicalBootstrapStream)
+                    else _apply_bootstrap_expansion(batch)
+                )
+                if isinstance(expanded, CanonicalSourceBatch):
+                    validate_bootstrap_batch(expanded)
                 self._progress({"phase": "validation", "status": "completed"})
                 heartbeat.assert_owned()
                 materialized_at = self._operator_time()
                 self._progress({"phase": "materialization", "status": "started"})
-                generation = self._generations.materialize(
-                    expanded.canonical,
-                    prepared_at=materialized_at,
-                    source_name=expanded.source_name,
-                    source_lineage=expanded.source_lineage,
+                generation = (
+                    self._generations.materialize_bootstrap_stream(
+                        expanded,
+                        prepared_at=materialized_at,
+                    )
+                    if isinstance(expanded, CanonicalBootstrapStream)
+                    else self._generations.materialize(
+                        expanded.canonical,
+                        prepared_at=materialized_at,
+                        source_name=expanded.source_name,
+                        source_lineage=expanded.source_lineage,
+                    )
                 )
                 self._progress(
                     {

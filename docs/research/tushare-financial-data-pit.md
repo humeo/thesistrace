@@ -80,9 +80,12 @@ TuShare 官方 SDK 的 [`DataApi.query`](https://github.com/waditu/tushare/blob/
 2. 如果 primary key 没包含公告日期、报表口径和内容版本，不同修订会被 `rows_by_key[key] = row` 静默覆盖。
 
 按照 [ADR-0180](../adr/0180-use-one-ordinary-per-instrument-tushare-financial-collector.md)，
-首期财务 collector 固定按普通接口的 `endpoint × ts_code` 分片，不实现
-VIP 或通用 offset 分页。若响应达到实测边界或无法证明完整，shard 必须
-继续按该普通接口明确支持的日期参数拆小，或者 fail closed；不能把疑似
+首期财务 collector 固定按普通接口的 `endpoint × ts_code` 形成一个逻辑
+shard，不实现 VIP 或通用分页器。按照
+[ADR-0192](../adr/0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md)，
+只有 `balancesheet` 使用已经现场验证的固定100行 `limit/offset` 分页，并在
+adapter 内合并成完整逻辑响应；其他报表仍为一次物理请求。分页停滞、schema
+变化、异常页长或无法证明完整都 fail closed，不切换日期分片，也不能把疑似
 截断的响应当成完整历史。
 
 ### 2.2 上线前能力探针
@@ -116,29 +119,37 @@ Financial Coverage Start 固定为 2010 年首个 Research Session。Canonical
 pre-start Financial Seed Facts。Bootstrap 优先由一次完整历史响应在本地选出
 2010 范围与 seed，并把原响应完整保留为 Raw Financial Batch；Canonical
 版本表不接收范围之外的其余旧行。能力探针必须先证明完整历史响应没有截断，
-否则 fail closed，直到固定一个确定性的日期分片合同。请求窗口和 raw batch
-时间范围都不是 Financial Coverage。
+否则 fail closed。执行合同只有 `complete-history`，没有日期分片替代路径。
+请求窗口和 raw batch 时间范围都不是 Financial Coverage。
 
 ### 2.4 Bootstrap 请求量与耗时模型
 
 2026-08-12 本地 Dataset Head 的 `instruments` Manifest 包含 5,541 个历史
 ordinary A-share Instrument Identity。Bootstrap 以历史集合而不是仅当前上市
 集合为 expected instruments，避免幸存者偏差。若能力探针证明每个普通接口
-的一次单股历史响应完整，则三张报表的基线物理调用量为：
+的单股完整历史逻辑响应完整，则三张报表的逻辑 checkpoint 数为：
 
 ```text
-Q = endpoint_count × instrument_count × date_shards × average_attempts
+Q = endpoint_count × instrument_count × logical_shards × average_attempts
   = 3 × 5,541 × 1 × 1
   = 16,623
 ```
 
-每个 API 各调用 5,541 次。TuShare 2000 积分档当前公布 200 次/分钟、
-100,000 次/日/每个 API；分钟限额未明确声明可按 endpoint 独立累加，因此
-collector 应在三类接口间共享 limiter。按 200 次/分钟计算，基线理论下限是
-83.1 分钟。现有 adapter 的默认 `throttle_seconds=0.5` 相当于最多发出
-120 次/分钟，纯节流时间为 138.5 分钟；串行 collector 还会累加 HTTP 与
-JSON 解码时延。若平均请求时延是 0.2、0.5 或 1.0 秒，尚未计最终 Parquet、
-Manifest 和完整性验证时，墙钟估算分别约 3.2、4.6 或 6.9 小时。
+每个 API 各有 5,541 个逻辑 shard。按照
+[ADR-0192](../adr/0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md)，
+`balancesheet` 每100行增加一个物理分页请求；2026-08-14 对
+`000001.SZ` 的实测是100行加62行，因此完整历史逻辑响应为两次物理调用。
+实际全市场物理请求数取决于各标的资产负债表行数，但不再乘以37个年度分片。
+
+TuShare 2000 积分档当前公布 200 次/分钟、100,000 次/日/每个 API；分钟限额
+未明确声明可按 endpoint 独立累加，因此 collector 应在三类接口间共享
+limiter。忽略额外资产负债表页面时，按 200 次/分钟计算的16,623次逻辑请求
+下限是83.1分钟。现有 adapter 的默认 `throttle_seconds=0.5` 相当于最多发出
+120 次/分钟；若把每个标的的 `balancesheet` 暂按两个物理页面估算，则约为
+22,164次物理请求，纯节流时间约184.7分钟。若平均 HTTP 与 JSON 解码时延是
+0.2、0.5 或1.0秒，尚未计最终 Parquet、Manifest 和完整性验证时，墙钟约
+4.3、6.2 或9.2小时。新股可能只有一页，长历史或多版本标的也可能超过两页，
+因此这是容量规划模型，不是硬承诺。
 
 上述数字只包含财务 family。当前本地 Head 的 Market Coverage 是
 2026-07-03 至 2026-08-04，而首次 financial-capable Head 已决定从 2010 年
@@ -150,8 +161,8 @@ Mounted Canonical Data Store 首次构建完整 2010 可执行 Head，财务和�
 约 33,000 次以上逻辑请求；沿用同一串行节流与 0.2、0.5、1.0 秒平均 HTTP
 时延模型，来源采集约 6.4、9.2、13.8 小时。加上 Canonical 映射、Parquet、
 Manifest 和完整性验证，应给首次总构建预留 8–16 小时。若 Market Coverage
-已预先回填到 2010，则仍只按财务的 3.2–6.9 小时预算。准确 session 数和分页
-倍数由 Phase 0 的 `trade_cal` 与 live probe 记录，不能把本估算当硬承诺。
+已预先回填到 2010，则财务部分按约4–10小时预算。准确 session 数和分页倍数
+由 Phase 0 的 `trade_cal` 与 live probe 记录，不能把本估算当硬承诺。
 
 同一 Head 中有 1,696 个 Instrument Identity 在 2010 年首个 Research
 Session 已经上市且尚未退市。已否决的严格 raw-window 方案会把
@@ -161,12 +172,10 @@ Session 已经上市且尚未退市。已否决的严格 raw-window 方案会把
 0.5 秒纯节流时间为 180.9 分钟。该方案增加请求但不提高 Canonical 正确性，
 因此不采用。
 
-官方没有承诺三张普通报表统一的单次行数上限，所以 `date_shards=1` 只是
-待探针验证的基线。若固定拆成两个日期 shard，请求量与节流时间都加倍为
-33,246 次与 277.1 分钟；分片数必须成为 collector contract，不能在运行中
-静默切换。每 API 日限额约束为
-`instrument_count × date_shards × average_attempts <= 100,000`，应为重试保留
-余量并用 per-instrument checkpoint 跨日恢复。
+三张普通报表仍由 live capability probe 用完整历史与年度集合比较。执行合同
+只接受一个 `complete-history` 逻辑 shard；`balancesheet` 的100行分页是固定的
+source contract，不是运行时 fallback。每 API 日限额应按物理分页和重试计算，
+并用 per-instrument checkpoint 跨日恢复。
 
 ### 2.5 V1 Financial Refresh：每次完整重拉
 
@@ -183,8 +192,9 @@ duplicate Raw Financial Batch、Canonical row 和 Parquet object 通过内容寻
 修订版本的并集。来源后来不再返回某个旧版本不构成删除，旧版本及其 raw
 evidence 继续被 Manifest 引用。任何 endpoint 截断、权限变化、shard 失败、
 schema 漂移或跨 family 校验失败都不得移动 Dataset Head，部分成功不能发布。
-当前 5,541 个标的的基线仍为 16,623 次请求和约 3.2–6.9 小时串行墙钟时间；
-标的集合变化后按 `3 × instrument_count` 重新计算。
+当前 5,541 个标的的基线仍为16,623个逻辑 shard；物理请求还要加上
+`balancesheet` 后续页，当前按约4–10小时串行墙钟时间做容量规划。标的集合
+变化后先按 `3 × instrument_count` 计算逻辑 shard，再加入现场分页倍数。
 
 ## 3. 物理模型与版本身份
 

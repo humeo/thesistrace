@@ -37,3 +37,13 @@ a second application topology.
 - The decision defines only local Development and Test.
   Its evidence is not Production readiness and creates no remote environment
   contract.
+
+## Superseded clause
+
+ADR-0207 narrows ordinary `pnpm dev:reset` to PostgreSQL Product State and
+RustFS Research artifacts while preserving the canonical-data volume. Explicit
+`pnpm dev:erase` now owns complete Development volume deletion.
+
+ADR-0208 replaces the single mixed-role Worker service with independently
+scaled fixed-role Research and Tracking Worker pools built from the same
+Production Image. The one-Compose-topology decision remains accepted.

@@ -43,8 +43,8 @@ desktop browser loop before the old runtime is removed.
   explicitly changed by a later accepted decision. The current Data Head,
   user-selected Research Period, Result budget, and private Refresh rules are
   defined by ADR-0153 through ADR-0156.
-- The product keeps a hard limit of ten active or blocked DailyTracks without a
-  quota or tenant abstraction.
+- The product keeps a hard limit of ten non-stopped DailyTracks without a quota
+  or tenant abstraction.
 - Historical Hosted implementation and deployment decisions have no authority
   over Core. Their recoverable snapshot exists only at the documented archive
   ref.
@@ -54,5 +54,10 @@ desktop browser loop before the old runtime is removed.
 ADR-0171 replaces the server-saved Research Definition, visible Revision, and
 Run-saves-Definition authoring lifecycle with one browser-local Draft per
 Research Folder and direct ResearchRun admission. ADR-0182 removes product
-Rerun. The module-first topology, PostgreSQL lifecycle authority, Attempt,
-publication, and independent DailyTrack decisions remain accepted.
+Rerun. ADR-0190 replaces per-Attempt current-Generation selection with one
+Generation frozen at ResearchRun admission, and ADR-0195 replaces whole-Run
+retry with validated private Chunk-checkpoint continuation. The module-first
+topology, PostgreSQL lifecycle authority, Attempt, publication, and independent
+DailyTrack decisions remain accepted.
+ADR-0210 adds non-terminal `stopping`; the limit therefore covers every
+non-stopped DailyTrack rather than only the older `active | blocked` states.

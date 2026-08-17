@@ -75,32 +75,55 @@ def validate_release_batch(
             "full_session_suspension",
             "partial_opening_suspension",
             "after_open_suspension",
+            "data_unavailable",
         }:
             raise ValueError("Bootstrap Trading State coverage is incomplete")
 
     prices = _required_rows(canonical, "prices")
     limits = _required_rows(canonical, "price_limits")
-    expected_trade_count = sum(row["state"] != "full_session_suspension" for row in states)
-    if len(prices) != expected_trade_count or len(limits) != expected_trade_count:
+    state_by_position = {_position(row): row for row in states}
+    required_price_positions = {
+        position
+        for position, row in state_by_position.items()
+        if row["state"] not in {"full_session_suspension", "data_unavailable"}
+    }
+    allowed_price_positions = {
+        position
+        for position, row in state_by_position.items()
+        if row["state"] != "full_session_suspension"
+    }
+    price_positions = [_position(row) for row in prices]
+    limit_positions = [_position(row) for row in limits]
+    price_position_set = set(price_positions)
+    limit_position_set = set(limit_positions)
+    position_order = {position: ordinal for ordinal, position in enumerate(expected_positions)}
+
+    def order_key(position: tuple[str, str]) -> int:
+        return position_order.get(position, len(position_order))
+
+    if (
+        len(price_positions) != len(price_position_set)
+        or len(limit_positions) != len(limit_position_set)
+        or price_positions != sorted(price_positions, key=order_key)
+        or limit_positions != sorted(limit_positions, key=order_key)
+        or not required_price_positions <= price_position_set <= allowed_price_positions
+        or not required_price_positions <= limit_position_set <= price_position_set
+    ):
         raise ValueError("Bootstrap Price coverage is incomplete")
-    price_index = 0
-    for state in states:
-        if state["state"] == "full_session_suspension":
-            continue
-        price = prices[price_index]
-        limit = limits[price_index]
-        expected = _position(state)
-        if _position(price) != expected or _position(limit) != expected:
-            raise ValueError("Bootstrap Price coverage is incomplete")
-        if any(field not in price for field in PRICE_VALUE_FIELDS) or any(
-            field not in limit for field in ("upper", "lower")
+    for price in prices:
+        position = _position(price)
+        if (
+            any(field not in price for field in PRICE_VALUE_FIELDS)
+            or price.get("trading_state") != state_by_position[position]["state"]
         ):
             raise ValueError("Bootstrap Price schema is incomplete")
         for field in PRICE_VALUE_FIELDS:
             _decimal(price[field], f"Price.{field}")
+    for limit in limits:
+        if any(field not in limit for field in ("upper", "lower")):
+            raise ValueError("Bootstrap Price schema is incomplete")
         _decimal(limit["upper"], "Price Limit.upper")
         _decimal(limit["lower"], "Price Limit.lower")
-        price_index += 1
 
     base_pool = _required_rows(canonical, "base_pool")
     if [str(row.get("session", "")) for row in base_pool] != calendar or any(

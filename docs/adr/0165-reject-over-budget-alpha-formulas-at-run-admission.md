@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0194
 ---
 
 # Reject over-budget Alpha Formulae at Run admission

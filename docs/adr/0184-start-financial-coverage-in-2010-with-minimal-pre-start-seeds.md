@@ -17,11 +17,13 @@ first available facts. Seed Facts do not create pre-2010 research support or
 move Financial Coverage Start backward. Collection and validation must use the
 historical Instrument Identity set rather than only currently listed equities,
 so the bootstrap does not introduce survivorship bias. Bootstrap uses one
-complete-history ordinary-interface request for each `endpoint × instrument`
-shard when the deployment capability probe proves that response complete. The
-exact response is retained as a Raw Financial Batch, while Canonical version
-tables materialize only versions inside Financial Coverage plus the required
-Financial Seed Facts. Earlier rows in the Raw Financial Batch are evidence, not
-pre-2010 Financial Coverage. If a complete response cannot be proven, the
-collector fails closed until one deterministic date-shard contract is selected;
-it does not switch request shapes at runtime.
+complete-history logical shard for each `endpoint × instrument` when the
+deployment capability probe proves that response complete. As specified by
+[ADR-0192](0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md),
+the ordinary balance-sheet adapter fulfills that shard with deterministic
+provider pagination. The exact ordered logical response is retained as a Raw
+Financial Batch, while Canonical version tables materialize only versions
+inside Financial Coverage plus the required Financial Seed Facts. Earlier rows
+in the Raw Financial Batch are evidence, not pre-2010 Financial Coverage. If a
+complete response cannot be proven, the collector fails closed; it does not
+switch to date shards at runtime.

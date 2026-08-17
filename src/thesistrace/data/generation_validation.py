@@ -84,6 +84,7 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
             "full_session_suspension",
             "partial_opening_suspension",
             "after_open_suspension",
+            "data_unavailable",
         }
         for row in states
     ):
@@ -94,9 +95,14 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
     expected_trade_positions = {
         position
         for position, row in state_by_position.items()
+        if row["state"] not in {"full_session_suspension", "data_unavailable"}
+    }
+    allowed_price_positions = {
+        position
+        for position, row in state_by_position.items()
         if row["state"] != "full_session_suspension"
     }
-    if set(price_by_position) != expected_trade_positions:
+    if not expected_trade_positions <= set(price_by_position) <= allowed_price_positions:
         raise GenerationValidationError("Canonical Price coverage is invalid")
     for row in price_by_position.values():
         factor = _finite_decimal(row["adjustment_factor"], "Canonical Price.adjustment_factor")
@@ -138,7 +144,7 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
 
     limits = _rows(canonical, "price_limits")
     limit_by_position = _unique_positions(limits, "session", "Canonical Price Limit")
-    if set(limit_by_position) != expected_trade_positions:
+    if not expected_trade_positions <= set(limit_by_position) <= set(price_by_position):
         raise GenerationValidationError("Canonical Price Limit coverage is invalid")
     for row in limits:
         _finite_decimal(row["upper"], "Canonical Price Limit.upper")

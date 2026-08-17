@@ -156,6 +156,8 @@ def market_rejection_reason(
 ) -> str | None:
     if state == "full_session_suspension":
         return "suspension"
+    if state == "data_unavailable":
+        return "data_unavailable"
     if raw_open is None:
         return None
     if side == "buy" and raw_open >= upper:
@@ -407,7 +409,12 @@ def run_strategy(
                     )
                     state = states.get((session, instrument_id))
                     listed_to = instruments[instrument_id].listed_to
-                    if state == "full_session_suspension":
+                    if state in {"full_session_suspension", "data_unavailable"}:
+                        rejection_reason = (
+                            "suspension"
+                            if state == "full_session_suspension"
+                            else "data_unavailable"
+                        )
                         order_id = len(orders)
                         orders.append(
                             {
@@ -427,7 +434,7 @@ def run_strategy(
                                 "instrument_id": instrument_id,
                                 "side": "buy",
                                 "intended_value": canonical_decimal(deficit),
-                                "reason": "suspension",
+                                "reason": rejection_reason,
                             }
                         )
                         event_side_order.append("buy")
@@ -693,7 +700,10 @@ def mark_positions(
             positions[instrument_id].last_adjusted_price = mark
             marks[instrument_id] = mark
             continue
-        if states.get((session, instrument_id)) == "full_session_suspension":
+        if states.get((session, instrument_id)) in {
+            "full_session_suspension",
+            "data_unavailable",
+        }:
             marks[instrument_id] = positions[instrument_id].last_adjusted_price
             events.append(
                 {
@@ -745,7 +755,7 @@ def execute_order(
     limit = limits.get((session, instrument_id))
     state = states.get((session, instrument_id))
     raw_open = Decimal(price.raw_open) if price is not None else None
-    if limit is None and state != "full_session_suspension":
+    if limit is None and state not in {"full_session_suspension", "data_unavailable"}:
         raise StrategyCalculationError(f"missing price limit for {instrument_id} on {session}")
     upper = Decimal(limit.upper) if limit is not None else Decimal(0)
     lower = Decimal(limit.lower) if limit is not None else Decimal(0)
@@ -922,6 +932,8 @@ def equal_weight_benchmark_return(
                     f"missing prior Benchmark mark for {instrument_id} on {entry_session}"
                 )
             entry_open = prior
+        elif states.get((entry_session, instrument_id)) == "data_unavailable":
+            continue
         else:
             listed_to = instruments[instrument_id].listed_to
             if listed_to and listed_to <= entry_session:
@@ -935,6 +947,8 @@ def equal_weight_benchmark_return(
             continue
         if states.get((exit_session, instrument_id)) == "full_session_suspension":
             returns.append(Decimal(0))
+            continue
+        if states.get((exit_session, instrument_id)) == "data_unavailable":
             continue
         listed_to = instruments[instrument_id].listed_to
         if listed_to and listed_to <= exit_session:

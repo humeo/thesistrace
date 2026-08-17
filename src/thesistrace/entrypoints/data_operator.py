@@ -13,6 +13,7 @@ from typing import NoReturn
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_data import TushareDataSource
+from thesistrace.adapters.tushare_financial import TushareFinancialSource
 from thesistrace.adapters.tushare_provider import (
     HttpTushareTransport,
     TushareAdapter,
@@ -103,13 +104,11 @@ def _run(
     financial_collect.add_argument("--idempotency-key", required=True)
     financial_collect.add_argument("--generation-manifest-sha256", required=True)
     financial_collect.add_argument("--capability-report", type=Path, required=True)
-    financial_collect.add_argument("--date-shard", action="append", metavar="NAME:START:END")
     financial_collect.add_argument("--replay", type=Path)
     financial_refresh = subcommands.add_parser("refresh-financial")
     financial_refresh.add_argument("--idempotency-key", required=True)
     financial_refresh.add_argument("--generation-manifest-sha256", required=True)
     financial_refresh.add_argument("--capability-report", type=Path, required=True)
-    financial_refresh.add_argument("--date-shard", action="append", metavar="NAME:START:END")
     financial_refresh.add_argument("--prior-candidate-manifest-sha256")
     financial_refresh.add_argument("--observation-through-session", required=True)
     financial_refresh.add_argument("--replay", type=Path)
@@ -118,6 +117,21 @@ def _run(
     transport: HttpTushareTransport | None = None
     database: PostgresDatabase | None = None
     try:
+        if parsed.command == "probe-financial":
+            rate_limit_events: dict[str, list[float]] = {}
+            transport, live_provider = _create_live_tushare_provider(
+                rate_limit_events=rate_limit_events,
+                bootstrap_checkpoint=None,
+            )
+            report = probe_financial_capability(
+                TushareFinancialSource(live_provider),
+                reference_instrument=parsed.reference_instrument,
+                comparison_shards=tuple(
+                    _parse_financial_shard(value) for value in parsed.comparison_shard
+                ),
+                observed_rate_limit_events=rate_limit_events,
+            )
+            return report.descriptor()
         database_url = _environment("THESISTRACE_DATABASE_URL")
         mount_root = Path(_environment("THESISTRACE_DATA_MOUNT"))
         database = PostgresDatabase(database_url)
@@ -139,60 +153,28 @@ def _run(
         live_provider: TushareAdapter | None = None
         if replay is not None:
             provider = ReplayTushareProvider(replay)
+            financial_source = provider
         else:
-            transport = HttpTushareTransport(
-                endpoint=os.environ.get("THESISTRACE_TUSHARE_ENDPOINT", "https://api.tushare.pro")
-            )
-
-            def financial_progress(event: dict[str, object]) -> None:
-                if event.get("event") == "rate_limited":
-                    api_name = str(event.get("api_name", ""))
-                    retry_seconds = event.get("retry_in_seconds")
-                    if isinstance(retry_seconds, (int, float)):
-                        rate_limit_events.setdefault(api_name, []).append(float(retry_seconds))
-                _progress(event)
-
-            live_provider = TushareAdapter(
-                token=_environment("THESISTRACE_TUSHARE_TOKEN"),
-                transport=transport,
-                progress=financial_progress,
+            transport, live_provider = _create_live_tushare_provider(
+                rate_limit_events=rate_limit_events,
                 bootstrap_checkpoint=(
-                    mount_root / ".operator" / "tushare-bootstrap-foundation.json"
+                    mount_root / ".operator" / "tushare-bootstrap-checkpoint.json"
                     if parsed.command == "bootstrap"
                     else None
                 ),
             )
             provider = live_provider
-        if parsed.command == "probe-financial":
-            if live_provider is None:
-                raise FinancialCollectionError("LIVE_FINANCIAL_PROBE_REQUIRED")
-            report = probe_financial_capability(
-                live_provider,
-                reference_instrument=parsed.reference_instrument,
-                comparison_shards=tuple(
-                    _parse_financial_shard(value) for value in parsed.comparison_shard
-                ),
-                observed_rate_limit_events=rate_limit_events,
-            )
-            return report.descriptor()
+            financial_source = TushareFinancialSource(live_provider)
         if parsed.command in {"collect-financial", "refresh-financial"}:
             if live_provider is None and replay is None:
                 raise FinancialCollectionError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
             report = _load_financial_capability(parsed.capability_report)
-            date_shards = (
-                None
-                if parsed.date_shard is None
-                else tuple(_parse_financial_shard(value) for value in parsed.date_shard)
-            )
-            contract = FinancialCollectionContract.from_capability(
-                report,
-                date_shards=date_shards,
-            )
+            contract = FinancialCollectionContract.from_capability(report)
             if parsed.command == "collect-financial":
                 return FinancialCollectionService(
                     database,
                     mount_root,
-                    provider,
+                    financial_source,
                     progress=_progress,
                 ).collect(
                     idempotency_key=parsed.idempotency_key,
@@ -202,7 +184,7 @@ def _run(
             outcome = FinancialRefreshService(
                 database,
                 mount_root,
-                provider,
+                financial_source,
                 progress=_progress,
             ).publish(
                 idempotency_key=parsed.idempotency_key,
@@ -279,6 +261,36 @@ def _progress(event: dict[str, object]) -> None:
         file=sys.stderr,
         flush=True,
     )
+
+
+def _create_live_tushare_provider(
+    *,
+    rate_limit_events: dict[str, list[float]],
+    bootstrap_checkpoint: Path | None,
+) -> tuple[HttpTushareTransport, TushareAdapter]:
+    transport = HttpTushareTransport(
+        endpoint=os.environ.get("THESISTRACE_TUSHARE_ENDPOINT", "https://api.tushare.pro")
+    )
+
+    def progress(event: dict[str, object]) -> None:
+        if event.get("event") == "rate_limited":
+            api_name = str(event.get("api_name", ""))
+            retry_seconds = event.get("retry_in_seconds")
+            if isinstance(retry_seconds, (int, float)):
+                rate_limit_events.setdefault(api_name, []).append(float(retry_seconds))
+        _progress(event)
+
+    try:
+        provider = TushareAdapter(
+            token=_environment("THESISTRACE_TUSHARE_TOKEN"),
+            transport=transport,
+            progress=progress,
+            bootstrap_checkpoint=bootstrap_checkpoint,
+        )
+    except Exception:
+        transport.close()
+        raise
+    return transport, provider
 
 
 def _failure_diagnostic(error: BaseException) -> dict[str, object] | None:

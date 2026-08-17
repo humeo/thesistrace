@@ -53,6 +53,12 @@ from thesistrace.data.market_series import (
     align_market_research_data,
     market_field_columns,
 )
+from thesistrace.data.source import (
+    CanonicalBootstrapStream,
+    CanonicalSessionPartition,
+    CanonicalSourceBatch,
+)
+from thesistrace.data.validation import validate_bootstrap_batch
 from thesistrace.publication.serialization import (
     ParquetContractError,
     canonical_json_bytes,
@@ -176,6 +182,135 @@ class MountedGenerationStore:
         self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
         return _family_generation_descriptor_from_root(root_sha256, root_manifest)
 
+    def materialize_bootstrap_stream(
+        self,
+        stream: CanonicalBootstrapStream,
+        *,
+        prepared_at: datetime,
+    ) -> MountedFamilyGenerationDescriptor:
+        static = dict(stream.static)
+        if set(static) != {
+            "schema_version",
+            "research_calendar",
+            "instruments",
+            "industry_membership",
+            "field_catalog",
+        }:
+            raise GenerationStoreError("Streaming Bootstrap static table set is incompatible")
+        calendar_value = static["research_calendar"]
+        if not isinstance(calendar_value, list) or not calendar_value:
+            raise GenerationStoreError("Streaming Bootstrap Research Calendar is invalid")
+        calendar = [str(value) for value in calendar_value]
+        if (
+            calendar != sorted(set(calendar))
+            or stream.covered_session_range != (calendar[0], calendar[-1])
+        ):
+            raise GenerationStoreError("Streaming Bootstrap Research Calendar is invalid")
+
+        session_specs = tuple(
+            spec
+            for spec in MARKET_CANDIDATE_TABLE_SPECS
+            if spec.session_field is not None and spec.name != "research_calendar"
+        )
+        table_references: dict[str, dict[str, object]] = {}
+        for spec in MARKET_CANDIDATE_TABLE_SPECS:
+            if spec in session_specs:
+                continue
+            table_references[spec.name] = self._materialize_table(
+                spec,
+                _table_rows(static, spec.name),
+                calendar,
+            )
+
+        objects_by_table: dict[str, list[dict[str, object]]] = {
+            spec.name: [] for spec in session_specs
+        }
+        row_counts = {spec.name: 0 for spec in session_specs}
+        consumed_sessions: list[str] = []
+        for ordinal, partition in enumerate(stream.partitions()):
+            if not isinstance(partition, CanonicalSessionPartition):
+                raise GenerationStoreError("Streaming Bootstrap partition is incompatible")
+            expected_sessions = calendar[
+                ordinal
+                * GENERATION_SESSION_PARTITION_COUNT : (ordinal + 1)
+                * GENERATION_SESSION_PARTITION_COUNT
+            ]
+            if list(partition.sessions) != expected_sessions:
+                raise GenerationStoreError("Streaming Bootstrap partition ordering is invalid")
+            block = {
+                **static,
+                **dict(partition.canonical),
+                "research_calendar": list(partition.sessions),
+            }
+            try:
+                validate_bootstrap_batch(
+                    CanonicalSourceBatch(
+                        source_name=stream.source_name,
+                        collection_kind="bootstrap",
+                        source_lineage=dict(stream.source_lineage),
+                        canonical=block,
+                        covered_session_range=(partition.sessions[0], partition.sessions[-1]),
+                    )
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise GenerationStoreError("Streaming Bootstrap partition is invalid") from error
+            for spec in session_specs:
+                rows = _table_rows(block, spec.name)
+                canonical_rows = canonicalize_parquet_rows(rows, spec.contract)
+                objects_by_table[spec.name].append(
+                    self._materialize_partition(spec, canonical_rows, ordinal)
+                )
+                row_counts[spec.name] += len(canonical_rows)
+            consumed_sessions.extend(partition.sessions)
+        if consumed_sessions != calendar:
+            raise GenerationStoreError("Streaming Bootstrap partition coverage is incomplete")
+        for spec in session_specs:
+            table_references[spec.name] = self._materialize_table_manifest(
+                spec,
+                objects_by_table[spec.name],
+                row_counts[spec.name],
+            )
+
+        family_references = [
+            self._materialize_market_family(
+                family_spec,
+                table_references=table_references,
+                canonical=static,
+                calendar=calendar,
+            )
+            for family_spec in MARKET_FAMILY_SPECS
+        ]
+        field_catalog_value = static["field_catalog"]
+        assert isinstance(field_catalog_value, list)
+        field_availability = tuple(
+            sorted(str(row["field_id"]) for row in field_catalog_value)
+        )
+        identity = {
+            "schema_contract": "canonical-research",
+            "data_through_session": calendar[-1],
+            "research_sessions": calendar,
+            "field_availability": list(field_availability),
+            "families": family_references,
+            "financial_research_readiness": None,
+        }
+        data_identity = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+        root_manifest = {
+            "format": _FAMILY_GENERATION_FORMAT,
+            "version": _MANIFEST_VERSION,
+            "data_identity": data_identity,
+            **identity,
+            "financial_publication_coordinate": None,
+            "preparation": _preparation(
+                prepared_at,
+                stream.source_name,
+                stream.source_lineage,
+            ),
+        }
+        root_bytes = _bounded_manifest_bytes(root_manifest)
+        root_sha256 = hashlib.sha256(root_bytes).hexdigest()
+        self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
+        return _family_generation_descriptor_from_root(root_sha256, root_manifest)
+
     def inspect_root(
         self,
         manifest_sha256: str,
@@ -190,8 +325,7 @@ class MountedGenerationStore:
         root = self._read_family_generation_root(manifest_sha256)
         references = root["families"]
         assert isinstance(references, list)
-        candidate_tables: dict[str, list[dict[str, object]]] = {}
-        calendar: list[str] | None = None
+        table_references: dict[str, Mapping[str, object]] = {}
         for reference, family_spec in zip(
             references[: len(MARKET_FAMILY_SPECS)],
             MARKET_FAMILY_SPECS,
@@ -200,25 +334,17 @@ class MountedGenerationStore:
             if not isinstance(reference, Mapping):
                 raise GenerationStoreError("Dataset Family reference is incompatible")
             family_manifest = self._read_family_manifest(family_spec, reference)
-            table_references = family_manifest["tables"]
-            assert isinstance(table_references, list)
+            family_table_references = family_manifest["tables"]
+            assert isinstance(family_table_references, list)
             for table_reference, table_name in zip(
-                table_references,
+                family_table_references,
                 family_spec.table_names,
                 strict=True,
             ):
                 if not isinstance(table_reference, Mapping):
                     raise GenerationStoreError("Dataset Family table reference is incompatible")
-                spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[table_name]
-                rows = self._open_table(
-                    spec,
-                    table_reference,
-                    calendar,
-                )
-                candidate_tables[table_name] = rows
-                if table_name == "research_calendar":
-                    calendar = [str(row["session"]) for row in rows]
-        canonical = _validate_candidate_semantics(candidate_tables)
+                table_references[table_name] = table_reference
+        canonical = self._validate_market_tables_streaming(table_references)
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
         if descriptor.financial_candidate_manifest_sha256 is not None:
             from thesistrace.data.financial_candidate import (
@@ -245,6 +371,89 @@ class MountedGenerationStore:
                 raise GenerationStoreError("Financial candidate exceeds Market Coverage")
         _validate_candidate_projection(descriptor, canonical)
         return descriptor
+
+    def _validate_market_tables_streaming(
+        self,
+        table_references: Mapping[str, Mapping[str, object]],
+    ) -> dict[str, object]:
+        required = {spec.name for spec in MARKET_CANDIDATE_TABLE_SPECS}
+        if set(table_references) != required:
+            raise GenerationStoreError("Dataset Family table set is incomplete")
+        calendar_spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME["research_calendar"]
+        calendar_rows = self._open_table(
+            calendar_spec,
+            table_references["research_calendar"],
+            None,
+        )
+        calendar = [str(row["session"]) for row in calendar_rows]
+        static_tables: dict[str, list[dict[str, object]]] = {
+            "research_calendar": calendar_rows,
+        }
+        session_manifests: dict[str, dict[str, object]] = {}
+        for spec in MARKET_CANDIDATE_TABLE_SPECS:
+            if spec.name == "research_calendar":
+                continue
+            reference = table_references[spec.name]
+            if spec.session_field is None:
+                static_tables[spec.name] = self._open_table(spec, reference, calendar)
+            else:
+                session_manifests[spec.name] = self._read_table_manifest(spec, reference)
+
+        partition_count = (
+            len(calendar) + GENERATION_SESSION_PARTITION_COUNT - 1
+        ) // GENERATION_SESSION_PARTITION_COUNT
+        for manifest in session_manifests.values():
+            objects = manifest["objects"]
+            if not isinstance(objects, list) or len(objects) != partition_count:
+                raise GenerationStoreError("Generation table partitioning is invalid")
+
+        opened_row_counts = {name: 0 for name in session_manifests}
+        for ordinal in range(partition_count):
+            start = ordinal * GENERATION_SESSION_PARTITION_COUNT
+            block_calendar = calendar[start : start + GENERATION_SESSION_PARTITION_COUNT]
+            block_tables = {
+                **static_tables,
+                "research_calendar": [
+                    {"session": session} for session in block_calendar
+                ],
+            }
+            for name, manifest in session_manifests.items():
+                spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name]
+                objects = manifest["objects"]
+                assert isinstance(objects, list)
+                rows = self._open_partition(spec, objects[ordinal], ordinal)
+                opened_row_counts[name] += len(rows)
+                if rows != canonicalize_parquet_rows(rows, spec.contract):
+                    raise GenerationStoreError("Generation table ordering is invalid")
+                if any(
+                    str(row[spec.session_field]) not in block_calendar
+                    for row in rows
+                ):
+                    raise GenerationStoreError("Generation table partitioning is invalid")
+                block_tables[name] = rows
+            _validate_candidate_semantics(block_tables)
+
+        if any(
+            opened_row_counts[name] != manifest["row_count"]
+            for name, manifest in session_manifests.items()
+        ):
+            raise GenerationStoreError("Generation table row count is invalid")
+
+        instruments = static_tables["instruments"]
+        industries = static_tables["industry_membership"]
+        fields = static_tables["field_catalog"]
+        return {
+            "schema_version": "canonical-eod",
+            "research_calendar": calendar,
+            "instruments": instruments,
+            "prices": [],
+            "trading_states": [],
+            "price_limits": [],
+            "base_pool": [],
+            "liquidity_universes": {name: [] for name in _UNIVERSE_NAMES},
+            "industry_membership": industries,
+            "field_catalog": fields,
+        }
 
     def compose_financial_candidate(
         self,

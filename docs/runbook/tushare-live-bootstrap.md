@@ -43,11 +43,20 @@ Full-market daily bars, adjustment factors, suspensions, and price limits are
 collected one shared SSE/SZSE Research Session at a time with `trade_date`.
 This follows the provider's documented full-market request pattern and avoids
 asking one response to contain multiple sessions for every listed instrument.
-Each completed session emits `collection_progress` with `completed_sessions`
-and `total_sessions`; bootstrap and incremental refresh use the same path.
+Each completed session emits `collection_progress` with `completed_sessions`,
+`total_sessions`, and `source`; bootstrap and incremental refresh use the same
+collection path, while only bootstrap enables the private recovery checkpoint.
 Suspension collection requests only Tushare `suspend_type=S`; a null
 `suspend_timing` on such a row is the provider's full-session form, while
-resume rows are not suspension evidence.
+resume rows are not suspension evidence. Intraday ranges accept Tushare's
+one- or two-digit hour spelling, so both `9:31-9:41` and `09:31-09:41` map to
+an after-open suspension. For `suspend_type=S`, the provider's
+`09:30-09:30` sentinel is a full-session suspension; a same-session daily bar
+would make that evidence contradictory and fail closed. Because `suspend_d`
+reports stop/resume events rather than repeating the state every day, a
+confirmed full-session suspension carries across later sessions with no daily
+bar until a daily bar resumes. An isolated absence without that predecessor
+state still fails closed.
 
 Tushare response code `40203` is treated as rate limiting and retried with
 exponential backoff. The observed transient rejection `50101` is also retried
@@ -59,12 +68,15 @@ access tier does not use the high-frequency request profile intended for higher
 tiers.
 
 After the calendar and instrument reference have been collected, the private
-operator atomically records a token-free foundation checkpoint under the
-mounted Canonical Data root as the single unversioned current checkpoint. A
-later bootstrap for the exact same request window restores that checkpoint and
-resumes at market facts. The checkpoint is cleared only after a Dataset Head is
-successfully published; failed source collection keeps it available for
-recovery.
+operator atomically records the single current token-free checkpoint under the
+mounted Canonical Data root. Each session is added only after daily bars,
+adjustment factors, suspensions, and price limits have all succeeded; its raw
+payload is immutable SHA-256-addressed content. A later bootstrap for the exact
+same request window and source contract restores every completed session and
+queries only the unfinished dates. The checkpoint is cleared only after a
+Dataset Head is successfully published; failed source collection keeps it
+available for recovery. Invalid, corrupt, or differently scoped checkpoints
+fail closed.
 
 This credential-dependent command is deliberately outside `pnpm check`. A
 successful run proves adapter access and source coverage; it does not publish

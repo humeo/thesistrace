@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import threading
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -22,7 +23,182 @@ from thesistrace.data.generation_store import (
     MountedFamilyGenerationDescriptor,
     MountedGenerationStore,
 )
+from thesistrace.data.source import CanonicalBootstrapStream, CanonicalSessionPartition
 from thesistrace.publication.serialization import canonical_json_bytes
+
+
+def test_streaming_bootstrap_materializes_the_same_generation(tmp_path: Path) -> None:
+    canonical = _canonical()
+    prepared_at = datetime(2026, 8, 9, 0, 0, tzinfo=UTC)
+    lineage = {"snapshot": "fixed"}
+    in_memory = MountedGenerationStore(tmp_path / "in-memory").materialize(
+        canonical,
+        prepared_at=prepared_at,
+        source_name="deterministic-test",
+        source_lineage=lineage,
+    )
+    static = {
+        key: canonical[key]
+        for key in (
+            "schema_version",
+            "research_calendar",
+            "instruments",
+            "industry_membership",
+            "field_catalog",
+        )
+    }
+    calendar = [str(value) for value in canonical["research_calendar"]]
+
+    def partitions() -> Iterator[CanonicalSessionPartition]:
+        for start in range(0, len(calendar), GENERATION_SESSION_PARTITION_COUNT):
+            sessions = tuple(calendar[start : start + GENERATION_SESSION_PARTITION_COUNT])
+            selected = set(sessions)
+            rows = {
+                key: [row for row in canonical[key] if str(row["session"]) in selected]
+                for key in ("prices", "trading_states", "price_limits", "base_pool")
+            }
+            rows["liquidity_universes"] = {
+                name: [row for row in values if str(row["session"]) in selected]
+                for name, values in canonical["liquidity_universes"].items()
+            }
+            yield CanonicalSessionPartition(sessions=sessions, canonical=rows)
+
+    stream = CanonicalBootstrapStream(
+        source_name="deterministic-test",
+        source_lineage=lineage,
+        static=static,
+        covered_session_range=(
+            str(canonical["research_calendar"][0]),
+            str(canonical["research_calendar"][-1]),
+        ),
+        partitions=partitions,
+    )
+
+    streamed = MountedGenerationStore(tmp_path / "streamed").materialize_bootstrap_stream(
+        stream,
+        prepared_at=prepared_at,
+    )
+
+    assert streamed == in_memory
+
+
+def test_generation_validation_does_not_accumulate_session_tables(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    original_open_table = store._open_table
+
+    def reject_full_session_table(
+        spec: object,
+        reference: object,
+        calendar: object,
+    ) -> list[dict[str, object]]:
+        if getattr(spec, "session_field", None) is not None and getattr(
+            spec, "name", None
+        ) != "research_calendar":
+            raise AssertionError("validation accumulated a session table")
+        return original_open_table(spec, reference, calendar)
+
+    monkeypatch.setattr(store, "_open_table", reject_full_session_table)
+
+    assert store.validate_generation(generation.manifest_sha256) == generation
+
+
+def test_generation_preserves_data_unavailable_without_price_or_limit(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical()
+    missing_session = str(canonical["research_calendar"][0])
+    missing_instrument = "equity:A.SH"
+    missing_position = (missing_session, missing_instrument)
+    for row in canonical["trading_states"]:
+        if (str(row["session"]), str(row["instrument_id"])) == missing_position:
+            row["state"] = "data_unavailable"
+    for table in ("prices", "price_limits"):
+        canonical[table] = [
+            row
+            for row in canonical[table]
+            if (str(row["session"]), str(row["instrument_id"])) != missing_position
+        ]
+    for rows in canonical["liquidity_universes"].values():
+        rows[0]["instrument_ids"] = [
+            instrument_id
+            for instrument_id in rows[0]["instrument_ids"]
+            if instrument_id != missing_instrument
+        ]
+
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "data-unavailable"},
+    )
+    reopened = _open_all(store, generation.manifest_sha256)
+
+    assert missing_position in {
+        (row["session"], row["instrument_id"])
+        for row in reopened["trading_states"]
+        if row["state"] == "data_unavailable"
+    }
+    assert missing_position not in {
+        (row["session"], row["instrument_id"]) for row in reopened["prices"]
+    }
+    assert missing_position not in {
+        (row["session"], row["instrument_id"])
+        for row in reopened["price_limits"]
+    }
+    assert missing_instrument in reopened["base_pool"][0]["instrument_ids"]
+    assert all(
+        missing_instrument not in rows[0]["instrument_ids"]
+        for rows in reopened["liquidity_universes"].values()
+    )
+
+
+def test_generation_preserves_price_with_unavailable_execution_state(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical()
+    session = str(canonical["research_calendar"][0])
+    instrument_id = "equity:A.SH"
+    for row in canonical["trading_states"]:
+        if row["session"] == session and row["instrument_id"] == instrument_id:
+            row["state"] = "data_unavailable"
+    for row in canonical["prices"]:
+        if row["session"] == session and row["instrument_id"] == instrument_id:
+            row["trading_state"] = "data_unavailable"
+    canonical["price_limits"] = [
+        row
+        for row in canonical["price_limits"]
+        if row["session"] != session or row["instrument_id"] != instrument_id
+    ]
+
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "unavailable-execution-state"},
+    )
+    reopened = _open_all(store, generation.manifest_sha256)
+
+    assert any(
+        row["session"] == session
+        and row["instrument_id"] == instrument_id
+        and row["trading_state"] == "data_unavailable"
+        for row in reopened["prices"]
+    )
+    assert not any(
+        row["session"] == session and row["instrument_id"] == instrument_id
+        for row in reopened["price_limits"]
+    )
 
 
 def test_family_generation_reopens_from_descriptors_without_publishing_head(

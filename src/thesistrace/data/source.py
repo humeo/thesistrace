@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Protocol
@@ -104,6 +104,21 @@ class CanonicalSourceBatch:
 
 
 @dataclass(frozen=True)
+class CanonicalSessionPartition:
+    sessions: tuple[str, ...]
+    canonical: Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class CanonicalBootstrapStream:
+    source_name: str
+    source_lineage: Mapping[str, object]
+    static: Mapping[str, object]
+    covered_session_range: tuple[str, str]
+    partitions: Callable[[], Iterator[CanonicalSessionPartition]]
+
+
+@dataclass(frozen=True)
 class BootstrapCollectionPlan:
     as_of: datetime
     start_date: date
@@ -165,4 +180,7 @@ class DataSource(Protocol):
 
 
 class BootstrapDataSource(Protocol):
-    def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch: ...
+    def collect_bootstrap(
+        self,
+        plan: BootstrapCollectionPlan,
+    ) -> CanonicalSourceBatch | CanonicalBootstrapStream: ...

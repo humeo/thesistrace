@@ -56,5 +56,14 @@ remain independent of that coordinate.
 Under ADR-0171, references above to frozen Research Definition content mean the
 immutable ResearchRun input admitted directly from a Browser Draft. ADR-0182
 supersedes the user-Rerun clause with `Use as Draft` followed by ordinary Run.
-Dataset Head selection, Attempt-scoped Generation pins, recomputation, and
-DailyTrack progression remain accepted.
+ADR-0190 supersedes ResearchRun data selection at Attempt start: admission now
+freezes one Data Generation and every Attempt pins that same Generation.
+ADR-0195 supersedes unconditional recomputation from the beginning: an
+infrastructure retry resumes from its latest valid private ResearchRun
+checkpoint, or starts from the beginning only when no valid checkpoint exists.
+The mounted Dataset Head, temporary Generation lifecycle, execution pins,
+garbage-collection boundary, and DailyTrack progression remain accepted.
+ADR-0209 clarifies that every Tracking Advance Attempt independently resolves
+and pins the current Generation for only that Attempt, publishes nothing on
+failure, and recalculates the same frozen Tracking Advance Target from the
+unchanged Tracking Head on a later Attempt.

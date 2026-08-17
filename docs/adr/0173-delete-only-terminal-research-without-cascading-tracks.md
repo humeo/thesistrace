@@ -13,3 +13,6 @@ durable reference. It never deletes or mutates a DailyTrack seeded from that
 Research. The Track retains its copied Tracking Origin and seed `run_id` as
 provenance, continues independently, and is removed only by a separate explicit
 user DailyTrack deletion action.
+
+ADR-0198 adds non-terminal `cancelling`; a ResearchRun in that state is not
+deletable until execution has stopped and the Run reaches terminal `cancelled`.

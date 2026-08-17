@@ -1,6 +1,9 @@
 # ThesisTrace Core Architecture
 
-> Status: current module-first Core architecture.
+> Status: current module-first product boundary plus the accepted long-run
+> executor target from ADR-0194 through ADR-0211. Those executor sections are
+> not current runtime behavior until implementation and acceptance verification
+> complete.
 
 ## Product boundary
 
@@ -11,7 +14,7 @@ Data Operator prepares the current Dataset Head
     -> Data Overview exposes current coverage read-only
     -> author one browser-local Draft inside a Research Folder
     -> Run compiles and atomically admits one immutable ResearchRun
-    -> a ResearchRun Attempt pins the current Data Generation
+    -> a ResearchRun Attempt pins the Generation frozen at admission
     -> immutable Factor and Strategy Result
     -> optionally start a DailyTrack
     -> later market sessions advance that Track
@@ -28,17 +31,19 @@ not part of the active system. There is no Local/Hosted product mode.
 
 ## Runtime topology
 
-One Compose topology contains Web, API, Worker, PostgreSQL, RustFS, and a
-one-shot schema initializer. Persistent Development and disposable Test use the
-same product implementation with different Compose identities, ports, volumes,
-and data mounts.
+One Compose topology contains Web, API, fixed-role Research and Tracking Worker
+pools, PostgreSQL, RustFS, and a one-shot schema initializer. Both Worker roles
+start from the same Production Image and executable. Persistent Development and
+disposable Test use the same product implementation with different Compose
+identities, ports, volumes, and data mounts.
 
 ```mermaid
 flowchart LR
     B["Browser"] --> W["Web"]
     W --> H["HTTP adapter"]
     H --> M["Core modules"]
-    K["Worker"] --> M
+    R["Research Worker pool"] --> M
+    T["Tracking Worker pool"] --> M
     O["Private Data Operator"] --> D["Data module"]
     M --> P["PostgreSQL"]
     M --> S["RustFS via S3 client"]
@@ -161,12 +166,15 @@ POST /api/research-runs (complete Draft snapshot, Folder, request ID)
 ```
 
 The backend compiler is the single Formula authority. Run validates Formula,
-Research Period, selected Universe, Data availability, and work budget before
-any durable mutation, then freezes the submitted Formula, canonical Alpha
-Expression, field bindings, research question, and calculation contracts while
-atomically admitting a queued ResearchRun with the selected Data Generation and
-durable Generation retention. Claim replaces that retention with an Attempt pin
-before opening any physical data.
+Research Period, selected Universe, Data availability, structural limits, and
+the smallest semantics-preserving execution slice's peak footprint before any
+durable mutation. Total historical work informs progress and duration guidance
+but does not reject an otherwise safe Run. Admission then freezes the submitted
+Formula, canonical Alpha Expression, field bindings, research question,
+calculation contracts, and bounded Chunk plan while atomically admitting a
+queued ResearchRun with the selected Data Generation and durable Generation
+retention. Claim replaces that retention with an Attempt pin before opening any
+physical data.
 
 The same request ID and fingerprint returns the original outcome. Reusing the
 ID with different input is a conflict. Rejection returns source-ranged
@@ -179,14 +187,18 @@ ResearchRun creation is available only through direct Run admission.
 
 ```text
 queued -> running -> succeeded | failed
-queued | running -> cancelled
+queued -> cancelled
+running -> cancelling -> cancelled
 ```
 
 When an Attempt starts, it atomically pins the Data Generation frozen at Run
 admission. The pin remains fixed for the complete calculation even if Refresh
-moves the Dataset Head concurrently. A retry pins the same frozen Generation
-and recomputes from the beginning; partial outputs from different Generations
-are never combined.
+moves the Dataset Head concurrently. The Worker executes contiguous complete-
+Universe session Chunks sequentially, commits private integrity-checked
+Checkpoints, carries only bounded continuation state, and releases completed
+Alpha, Label, and daily Factor histories. An eligible infrastructure retry pins
+the same frozen Generation and resumes only from the latest valid Checkpoint;
+unchecked partial outputs are never combined or published.
 
 `Use as Draft` is the sole reuse action. It copies frozen authorable input into
 one selected Folder's browser-local Draft and creates no server state. A later
@@ -196,34 +208,61 @@ Folder membership stay outside immutable execution input.
 A succeeded Run exposes one immutable Result containing bounded Factor
 summaries, Strategy metrics and daily observations, benchmark results, terminal
 Strategy state, and provenance. Publication failure cannot expose a partial
-Result or mark the Run succeeded. Cancel commits durable terminal state first;
-fencing rejects late Worker publication.
+Result or mark the Run succeeded. Cancel fences publication immediately and
+enters `cancelling`; it reaches terminal `cancelled` only after execution has
+stopped and the Generation pin is released.
 
 ## DailyTracks
 
 A succeeded ResearchRun can activate at most one DailyTrack. Activation freezes
 the complete Tracking Origin and initial Strategy state. The current product
-permits at most ten active or blocked Tracks; stopped Tracks do not count.
+permits at most ten non-stopped Tracks; terminally stopped Tracks do not count.
 
 ```text
-active | blocked | stopped
+active | blocked | stopping | stopped
 ```
 
 An active Track compares its latest successful session coordinate with the
 current Dataset Head and advances later Research Sessions in order. Each
-Tracking Advance Attempt pins one current Data Generation. Only a complete
-immutable Checkpoint moves the Tracking Head. A concurrent Data Refresh is
-handled by later work rather than by mixing Generations inside one Attempt.
+Tracking Advance freezes an exact capacity-planned Target containing the oldest
+1 through 63 unpublished sessions. Every Attempt retains that Target and pins
+one current Data Generation for its complete calculation. Only a complete
+immutable Checkpoint moves the Tracking Head to the Target boundary. Longer
+catch-up and Dataset Head growth use later Advances rather than changing work
+already accepted by an existing Advance.
 
-After bounded retries are exhausted, a Track becomes blocked and retains its
-last successful Head. Retry continues from that Head. Stop is irreversible.
+A Tracking Attempt Cycle contains one initial Attempt plus at most two automatic
+Attempts for transient infrastructure failure. Retry delays of 5 then 30 seconds
+return the Advance to the fair Tracking queue; permanent data, calculation,
+domain, integrity, equivalence, or capacity failure blocks immediately. Every
+Attempt starts from the unchanged Head, resolves and pins the then-current Data
+Generation, and recalculates the complete frozen Target. Only explicit user
+Retry starts another Cycle; later data, capacity, or service lifecycle changes
+do not unblock the Track.
 
-The Working Cache is a private, bounded, disposable optimization. PostgreSQL
-state and immutable Checkpoints remain authoritative. Missing or invalid cache
-state is rebuilt from the latest 504 retained Factor sessions plus the frozen
-Effective Alpha Lookback needed to calculate their first row exactly. Each
-Advance reads that bounded dependency slice plus new targets; every Worker also
-reconciles its cache against authoritative active and blocked Track IDs.
+Tracking Progress exposes authoritative Head and lag, frozen Target, Attempt
+position within the current Cycle, retry waiting state, and transient phase and
+current session. It never reports an in-flight session as durably completed.
+
+Stop is irreversible. A Track with no active execution stops immediately. A
+running Track first becomes `stopping`; its supervisor fences and ends the child
+within the five-second total budget, then releases the Generation Pin and
+records terminal `stopped`. A no-child Stop atomically cancels its unresolved
+Advance, Cycle, retry eligibility, and pending claim. A `stopping` Track still
+counts toward the limit.
+
+The five-second Stop budget applies while the owning supervisor is alive. If
+the supervisor, container, or host is lost, durable `stopping` and fencing
+remain until lease recovery proves the old execution and Pin ownership can no
+longer be live; safety takes priority over that normal-path time bound.
+
+The Working Cache is a private, bounded, disposable optimization and never a
+recovery truth. It derives only from the authoritative Tracking Head; failed
+Attempt state is discarded. Missing or invalid cache state is rebuilt from that
+Head plus the bounded Canonical Data dependency slice needed to continue exactly.
+Every Tracking Worker also reconciles its cache against authoritative active and
+blocked Track IDs; stopping state owns no new cache writes, and terminal Stop
+deletes the disposable cache.
 
 ## Research Kernel and Publication
 
@@ -232,6 +271,12 @@ Strategy transitions, numeric semantics, and deterministic ordering. Its Run
 and Advance paths share one implementation of those rules. Operators form a
 closed append-only catalog; there is no runtime plugin or arbitrary Python/SQL
 execution.
+
+The runtime executes one current calculation kernel and Numeric Execution
+Contract. Product State records that identity, and a result-changing update
+refuses old Product State until an explicit Development Product State Reset.
+There is no Tracking Generation branch, historical contract dispatcher, or
+automatic contract migration.
 
 Publication is the shared module for immutable ResearchRun Results and
 DailyTrack Checkpoints. It hides canonical serialization, checksums,
@@ -266,12 +311,53 @@ adapter maps typed requests to module interfaces. It does not expose Data
 Operator controls, physical paths, S3 keys, manifests, SQL fields, Attempt
 administration, authentication, or deployment modes.
 
-## Worker
+## Workers
 
-Durable PostgreSQL state is work acceptance. The Worker polls module-owned work
-every five seconds. ResearchRuns and DailyTracks claim and fence their own
-Attempts; there is no Temporal, outbox relay, event bus, global job table, or
-generic dispatch interface.
+Durable PostgreSQL state is work acceptance. Each Worker process freezes one
+role at startup and has exactly one execution slot. A Research Worker claims
+only the strict-FIFO ResearchRun Queue and supervises at most one execution child
+that runs one ResearchRun's Chunks sequentially. A Tracking Worker claims only
+Tracking Advance work and supervises at most one execution child. The two pools
+scale independently; a Worker never changes roles, executes both work types, or
+selects an execution mode according to work size.
+
+The Research Worker supervisor owns the Attempt lease, fence, Data Generation
+Pin, Checkpoints, and publication. Its execution child can read only the frozen
+mounted Canonical Data Generation and return bounded Chunk data; it has no
+PostgreSQL or RustFS write authority. The supervisor validates every child result
+against current ownership before committing it.
+
+The Tracking Worker uses the same authority boundary: its supervisor owns the
+Advance, Pin, Working Cache, Tracking Checkpoint, and publication, while its
+single child has only read access to the frozen Canonical Data Generation and
+returns bounded calculation data.
+
+Eligible DailyTracks rotate fairly. A Track receives at most one Advance
+Attempt before returning behind other eligible Tracks, including after a
+successful bounded Advance that leaves more lag. Transient retries use their
+durable next-eligible time and rejoin the same rotation; multiple Tracking
+Workers may claim different Tracks but never the same Track concurrently.
+Waiting and backoff belong to the Advance and Cycle. An Attempt is created in
+`running` only when a Tracking Worker claims one eligible execution.
+
+One Attempt creates exactly one child. A Research child handles Chunks
+sequentially and waits after each result until the supervisor durably commits and
+acknowledges its checkpoint. A Tracking child calculates from the authoritative
+Tracking Head and returns one all-or-nothing Advance result without a private
+checkpoint. Attempt end or supervisor-connection loss ends the child; a child
+never crosses into another Attempt.
+
+When idle, either role may reclaim at most one pending shared Publication object
+per poll under the Publication mutation fence. Only the Tracking Worker
+reconciles Tracking Working Caches. Shared maintenance never creates another
+execution slot or a third Worker role.
+
+Development runs one 2-vCPU, 2-GiB replica in each pool. Each pool has its own
+deployment capacity declaration, and both planners reserve 25 percent of the
+container memory outside their execution budget. Production owns each pool's
+capacity and replica count. ResearchRuns and DailyTracks claim and fence their
+own Attempts; there is no Temporal, outbox relay, event bus, global job table,
+or generic dispatch interface.
 
 ## Verification
 
@@ -297,6 +383,7 @@ are not Production readiness.
 - Login, users, tenants, workspaces, quotas, collaboration, or billing.
 - Hosted deployment, Temporal, event relay, generic scheduler, or event bus.
 - SQLite Product State or a second runtime implementation.
+- Tracking Generation branches, multi-contract dispatch, or contract migration.
 - Raw artifact browsers, physical object paths, or internal lifecycle pages.
 - Server Definitions, visible Revisions, Save, authoring Refresh, or product
   Rerun endpoints and compatibility paths.

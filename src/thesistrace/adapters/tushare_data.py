@@ -9,16 +9,24 @@ from typing import Protocol
 
 from thesistrace.adapters.tushare_provider import (
     SOURCE_CONTRACT_VERSION,
+    TushareBootstrapArchive,
+    TushareSessionNormalizer,
     TushareSourceError,
+    normalize_industries,
+    normalize_instruments,
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
 from thesistrace.data.canonical_mapping import (
     SOURCE_CORRECTABLE_PRICE_FIELDS,
+    field_catalog,
     liquidity_universes,
 )
+from thesistrace.data.generation_schema import GENERATION_SESSION_PARTITION_COUNT
 from thesistrace.data.source import (
     BootstrapCollectionPlan,
+    CanonicalBootstrapStream,
+    CanonicalSessionPartition,
     CanonicalSourceBatch,
     CollectionPlan,
     DataSourceError,
@@ -31,7 +39,7 @@ class TushareProvider(Protocol):
         *,
         start_date: date,
         completed_through_date: date,
-    ) -> dict[str, list[dict[str, object]]]: ...
+    ) -> dict[str, list[dict[str, object]]] | TushareBootstrapArchive: ...
 
     def collect_incremental_snapshot(
         self,
@@ -173,12 +181,17 @@ class TushareDataSource:
             covered_session_range=(str(calendar[0]), str(calendar[-1])),
         )
 
-    def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
+    def collect_bootstrap(
+        self,
+        plan: BootstrapCollectionPlan,
+    ) -> CanonicalSourceBatch | CanonicalBootstrapStream:
         try:
             snapshot = self._provider.collect_bootstrap_snapshot(
                 start_date=plan.start_date,
                 completed_through_date=plan.completed_through_date,
             )
+            if isinstance(snapshot, TushareBootstrapArchive):
+                return _stream_bootstrap_archive(snapshot, plan)
             lineage, canonical = normalize_tushare_snapshot(snapshot)
         except TushareSourceError as error:
             raise DataSourceError(
@@ -210,6 +223,131 @@ class TushareDataSource:
             canonical=canonical,
             covered_session_range=(str(calendar[0]), str(calendar[-1])),
         )
+
+
+def _stream_bootstrap_archive(
+    archive: TushareBootstrapArchive,
+    plan: BootstrapCollectionPlan,
+) -> CanonicalBootstrapStream:
+    if (archive.request_start, archive.request_end) != (
+        plan.start_date,
+        plan.completed_through_date,
+    ):
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="BOOTSTRAP_WINDOW_VIOLATION",
+        )
+    sse_open = {
+        str(row["cal_date"])
+        for row in archive.foundation["calendar_sse"]
+        if str(row["is_open"]) == "1"
+    }
+    szse_open = {
+        str(row["cal_date"])
+        for row in archive.foundation["calendar_szse"]
+        if str(row["is_open"]) == "1"
+    }
+    sessions = tuple(sorted(sse_open & szse_open))
+    if sessions != archive.sessions or not sessions:
+        raise DataSourceError(
+            "invalid_source_data",
+            detail_code="INCOMPLETE_EXCHANGE_CALENDARS",
+        )
+    iso_sessions = [
+        f"{session[:4]}-{session[4:6]}-{session[6:]}" for session in sessions
+    ]
+    instruments = normalize_instruments(archive.foundation["stock_basic"])
+    industries = normalize_industries(
+        archive.industry_membership,
+        allowed_codes={str(row["ts_code"]) for row in instruments},
+    )
+    static = {
+        "schema_version": "canonical-eod",
+        "research_calendar": iso_sessions,
+        "instruments": instruments,
+        "industry_membership": industries,
+        "field_catalog": field_catalog(iso_sessions[-1]),
+    }
+
+    def partitions() -> Iterator[CanonicalSessionPartition]:
+        normalizer = TushareSessionNormalizer(instruments)
+        prior_sessions: list[str] = []
+        prior_prices: list[dict[str, str]] = []
+        prior_states: list[dict[str, str]] = []
+        prior_base_pool: list[dict[str, object]] = []
+        for start in range(0, len(sessions), GENERATION_SESSION_PARTITION_COUNT):
+            session_keys = sessions[start : start + GENERATION_SESSION_PARTITION_COUNT]
+            block_prices: list[dict[str, str]] = []
+            block_states: list[dict[str, str]] = []
+            block_limits: list[dict[str, str]] = []
+            block_base_pool: list[dict[str, object]] = []
+            for session_key in session_keys:
+                try:
+                    normalized = normalizer.normalize(
+                        session_key,
+                        archive.load_session(session_key),
+                    )
+                except TushareSourceError as error:
+                    raise DataSourceError(
+                        _error_category(error.reason_code),
+                        detail_code=error.reason_code,
+                    ) from error
+                except (KeyError, IndexError, TypeError, ValueError) as error:
+                    raise DataSourceError(
+                        "invalid_source_data",
+                        detail_code="MALFORMED_PROVIDER_PAYLOAD",
+                    ) from error
+                block_prices.extend(normalized["prices"])
+                block_states.extend(normalized["trading_states"])
+                block_limits.extend(normalized["price_limits"])
+                block_base_pool.extend(normalized["base_pool"])
+            block_iso_sessions = [
+                f"{session[:4]}-{session[4:6]}-{session[6:]}" for session in session_keys
+            ]
+            combined_sessions = [*prior_sessions, *block_iso_sessions]
+            combined_prices = [*prior_prices, *block_prices]
+            combined_states = [*prior_states, *block_states]
+            combined_base_pool = [*prior_base_pool, *block_base_pool]
+            combined_universes = liquidity_universes(
+                combined_sessions,
+                combined_base_pool,
+                combined_prices,
+                combined_states,
+            )
+            selected = set(block_iso_sessions)
+            block_universes = {
+                name: [row for row in rows if str(row["session"]) in selected]
+                for name, rows in combined_universes.items()
+            }
+            yield CanonicalSessionPartition(
+                sessions=tuple(block_iso_sessions),
+                canonical={
+                    "prices": block_prices,
+                    "trading_states": block_states,
+                    "price_limits": block_limits,
+                    "base_pool": block_base_pool,
+                    "liquidity_universes": block_universes,
+                },
+            )
+            retained = set(combined_sessions[-19:])
+            prior_sessions = combined_sessions[-19:]
+            prior_prices = [
+                row for row in combined_prices if str(row["session"]) in retained
+            ]
+            prior_states = [
+                row for row in combined_states if str(row["session"]) in retained
+            ]
+            prior_base_pool = [
+                row for row in combined_base_pool if str(row["session"]) in retained
+            ]
+
+    return CanonicalBootstrapStream(
+        source_name="tushare",
+        source_lineage=archive.source_lineage,
+        static=static,
+        covered_session_range=(iso_sessions[0], iso_sessions[-1]),
+        partitions=partitions,
+    )
 
 
 def _error_category(reason_code: str) -> str:
@@ -578,6 +716,8 @@ def _preserve_ordinary_overlap_absence(
             )
             suspension_positions.add(source_position)
             continue
+        if state["state"] == "data_unavailable":
+            continue
         if price is None or prior_limit is None:
             raise DataSourceError(
                 "invalid_source_data",
@@ -635,6 +775,18 @@ def _validate_new_session_evidence(
             )
     known_codes = {str(row["ts_code"]) for row in stock_basic}
     frontier = current_data_through.replace("-", "")
+    new_open_sessions = (
+        {
+            str(row["cal_date"])
+            for row in sse
+            if str(row.get("is_open")) == "1" and str(row["cal_date"]) > frontier
+        }
+        & {
+            str(row["cal_date"])
+            for row in szse
+            if str(row.get("is_open")) == "1" and str(row["cal_date"]) > frontier
+        }
+    )
     for table in ("daily", "adjustments", "suspensions", "price_limits"):
         rows = snapshot.get(table)
         if not isinstance(rows, list):
@@ -649,6 +801,19 @@ def _validate_new_session_evidence(
             raise DataSourceError(
                 "invalid_source_data",
                 detail_code="INCOMPLETE_NEW_SESSION_INSTRUMENT",
+            )
+        returned_sessions = {str(row["trade_date"]) for row in rows}
+        if table == "daily" and not new_open_sessions <= returned_sessions:
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="UNEXPLAINED_DAILY_ABSENCE",
+            )
+        if table in {"adjustments", "price_limits"} and not new_open_sessions <= (
+            returned_sessions
+        ):
+            raise DataSourceError(
+                "invalid_source_data",
+                detail_code="INCOMPLETE_REQUIRED_MARKET_FACTS",
             )
 
 

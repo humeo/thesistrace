@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 from dataclasses import replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -81,7 +82,7 @@ def _materialized_candidate(tmp_path: Path):
         payload = {
             "format": "thesistrace-raw-financial-batch",
             "version": 1,
-            "source_contract_version": "tushare-financial-ordinary-v1",
+            "source_contract_version": "tushare-financial-ordinary-v2",
             "endpoint": endpoint,
             "parameters": {"ts_code": ts_code},
             "returned_fields": list(FIELDS),
@@ -249,6 +250,50 @@ def test_materializes_sparse_versioned_financial_family_without_publishing(tmp_p
     assert not (tmp_path / "HEAD.json").exists()
 
 
+def test_materialization_does_not_retain_all_raw_batches(tmp_path: Path) -> None:
+    _store, _first, _repeated, snapshot = _materialized_candidate(tmp_path)
+
+    class TrackedBatch(dict[str, object]):
+        live = 0
+        peak = 0
+
+        def __init__(self, value: dict[str, object]) -> None:
+            super().__init__(value)
+            type(self).live += 1
+            type(self).peak = max(type(self).peak, type(self).live)
+
+        def __del__(self) -> None:
+            type(self).live -= 1
+
+    class TrackingStore(FinancialCandidateStore):
+        def _read_raw_batch(self, batch_sha256: str) -> dict[str, object]:
+            return TrackedBatch(super()._read_raw_batch(batch_sha256))
+
+    candidate = TrackingStore(tmp_path).materialize(
+        snapshot,
+        observation_through_session="2026-08-13",
+    )
+    gc.collect()
+
+    assert candidate.raw_batch_count == 6
+    assert TrackedBatch.live == 0
+    assert TrackedBatch.peak <= 2
+
+
+def test_validation_does_not_open_whole_financial_tables(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, candidate, _repeated, _snapshot = _materialized_candidate(tmp_path)
+
+    def reject_whole_table_open(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("validation must compare bounded table objects")
+
+    monkeypatch.setattr(store, "_open_table", reject_whole_table_open)
+
+    assert store.validate(candidate.manifest_sha256) == candidate
+
+
 def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -267,10 +312,9 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
         )
 
     complete = candidate_store.materialize(
-        _empty_bounded_snapshot(
+        _empty_complete_snapshot(
             tmp_path,
             market_manifest,
-            through="20260813",
             idempotency_key="complete-six-fields",
             fields=FULL_EXECUTABLE_FIELDS,
         ),
@@ -373,10 +417,9 @@ def test_financial_generation_rejects_an_incomplete_research_readiness_slice(
         _incomplete.manifest_sha256
     )
     complete = candidate_store.materialize(
-        _empty_bounded_snapshot(
+        _empty_complete_snapshot(
             tmp_path,
             market_manifest,
-            through="20260813",
             idempotency_key="readiness-six-fields",
             fields=FULL_EXECUTABLE_FIELDS,
         ),
@@ -580,7 +623,7 @@ def test_materialization_rejects_wrong_instrument_identity_and_shard_parameters(
         )
 
 
-def test_materialization_rechecks_truncation_and_bounded_shard_cutoff(
+def test_materialization_rechecks_truncation_and_rejects_bounded_shards(
     tmp_path: Path,
 ) -> None:
     store, _candidate, _repeated, snapshot = _materialized_candidate(tmp_path)
@@ -598,10 +641,13 @@ def test_materialization_rechecks_truncation_and_bounded_shard_cutoff(
             observation_through_session="2026-08-13",
         )
 
-    stale = replace(snapshot.contract, shards=_bounded_shards("20260812"))
-    with pytest.raises(FinancialCandidateError, match="FINANCIAL_SHARD_CONTRACT_INCOMPLETE"):
+    bounded = replace(
+        snapshot.contract,
+        shards=(FinancialDateShard("bounded", "19900101", "20260812"),),
+    )
+    with pytest.raises(FinancialCandidateError, match="FINANCIAL_SHARD_CONTRACT_INVALID"):
         store.materialize(
-            replace(snapshot, contract=stale),
+            replace(snapshot, contract=bounded),
             observation_through_session="2026-08-13",
         )
 
@@ -915,26 +961,24 @@ def test_refresh_rejects_contract_and_cutoff_regressions_without_head(tmp_path: 
     assert not (tmp_path / "HEAD.json").exists()
 
 
-def test_bounded_refresh_extends_cutoff_with_a_new_complete_shard_contract(
+def test_complete_history_refresh_extends_cutoff(
     tmp_path: Path,
 ) -> None:
     market_manifest = _market_generation(tmp_path)
     store = FinancialCandidateStore(tmp_path)
-    prior_snapshot = _empty_bounded_snapshot(
+    prior_snapshot = _empty_complete_snapshot(
         tmp_path,
         market_manifest,
-        through="20260427",
-        idempotency_key="bounded-prior",
+        idempotency_key="complete-prior",
     )
     prior = store.materialize(
         prior_snapshot,
         observation_through_session="2026-04-27",
     )
-    current_snapshot = _empty_bounded_snapshot(
+    current_snapshot = _empty_complete_snapshot(
         tmp_path,
         market_manifest,
-        through="20260813",
-        idempotency_key="bounded-current",
+        idempotency_key="complete-current",
     )
 
     current = store.rebuild(
@@ -944,37 +988,20 @@ def test_bounded_refresh_extends_cutoff_with_a_new_complete_shard_contract(
     )
 
     assert current.observation_through_session == "2026-08-13"
-    assert current.raw_batch_count > prior.raw_batch_count
+    assert current.raw_batch_count == prior.raw_batch_count
+    assert current.manifest_sha256 != prior.manifest_sha256
     assert store.validate(current.manifest_sha256) == current
 
 
-def _bounded_shards(through: str) -> tuple[FinancialDateShard, ...]:
-    start = date(1990, 1, 1)
-    final = datetime.strptime(through, "%Y%m%d").date()
-    shards: list[FinancialDateShard] = []
-    while start <= final:
-        end = min(start + timedelta(days=365), final)
-        shards.append(
-            FinancialDateShard(
-                f"{start:%Y%m%d}-{end:%Y%m%d}",
-                f"{start:%Y%m%d}",
-                f"{end:%Y%m%d}",
-            )
-        )
-        start = end + timedelta(days=1)
-    return tuple(shards)
-
-
-def _empty_bounded_snapshot(
+def _empty_complete_snapshot(
     root: Path,
     market_manifest: str,
     *,
-    through: str,
     idempotency_key: str,
     fields: tuple[str, ...] = FIELDS,
 ) -> CompletedFinancialCollection:
     raw = RawFinancialBatchStore(root)
-    shards = _bounded_shards(through)
+    shards = (FinancialDateShard("complete-history"),)
     checkpoints: list[FinancialShardCheckpoint] = []
     payload_sha256 = hashlib.sha256(
         canonical_json_bytes({"fields": list(fields), "items": []})
@@ -989,7 +1016,7 @@ def _empty_bounded_snapshot(
                 payload = {
                     "format": "thesistrace-raw-financial-batch",
                     "version": 1,
-                    "source_contract_version": "tushare-financial-ordinary-v1",
+                    "source_contract_version": "tushare-financial-ordinary-v2",
                     "endpoint": endpoint,
                     "parameters": {"ts_code": ts_code, **shard.parameters()},
                     "returned_fields": list(fields),

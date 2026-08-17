@@ -1,7 +1,10 @@
 """Tushare transport, collection, and canonical normalization adapter."""
 
+import hashlib
 import json
 import os
+import re
+import shutil
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -21,17 +24,20 @@ from thesistrace.data.canonical_mapping import (
     liquidity_universes,
     research_sessions_after,
 )
+from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.source import RawSourceError, RawSourceResponse
 
 SOURCE_CONTRACT_VERSION = "tushare-v2"
-_BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-foundation"
+_BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-checkpoint"
 _BOOTSTRAP_CHECKPOINT_MAX_BYTES = 128 * 1024 * 1024
+_BOOTSTRAP_MARKET_SESSION_MAX_BYTES = 32 * 1024 * 1024
 _DEFAULT_PAGE_SIZE = 5_000
 _ENDPOINT_PAGE_SIZES = {
     "daily": 6_000,
     "stk_limit": 5_800,
     "index_member_all": 2_000,
 }
+_SOURCE_TIME_PATTERN = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)")
 
 
 class TushareTransport(Protocol):
@@ -92,6 +98,148 @@ class PermissionProbe:
     api_name: str
     params: dict[str, object]
     fields: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class TushareBootstrapArchive:
+    request_start: date
+    request_end: date
+    foundation: dict[str, list[dict[str, object]]]
+    sessions: tuple[str, ...]
+    industry_classification: list[dict[str, object]]
+    industry_membership: list[dict[str, object]]
+    source_lineage: dict[str, object]
+    _load_session: Callable[[str], dict[str, list[dict[str, object]]]]
+
+    def load_session(self, session: str) -> dict[str, list[dict[str, object]]]:
+        if session not in self.sessions:
+            raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
+        return self._load_session(session)
+
+    def materialize(self) -> dict[str, list[dict[str, object]]]:
+        market_facts = {
+            "daily": [],
+            "adjustments": [],
+            "suspensions": [],
+            "price_limits": [],
+        }
+        for session in self.sessions:
+            facts = self.load_session(session)
+            for name in market_facts:
+                market_facts[name].extend(facts[name])
+        return {
+            **self.foundation,
+            **market_facts,
+            "industry_classification": self.industry_classification,
+            "industry_membership": self.industry_membership,
+        }
+
+
+class TushareSessionNormalizer:
+    def __init__(self, instruments: Sequence[Mapping[str, object]]) -> None:
+        self._instrument_by_code = {
+            str(row["ts_code"]): dict(row) for row in instruments
+        }
+        self._prior_state_by_code: dict[str, str] = {}
+
+    def normalize(
+        self,
+        session_key: str,
+        market_facts: Mapping[str, list[dict[str, object]]],
+    ) -> dict[str, object]:
+        session = iso_date(session_key)
+        daily = {
+            str(row["ts_code"]): row
+            for row in market_facts["daily"]
+            if str(row["trade_date"]) == session_key
+            and str(row["ts_code"]) in self._instrument_by_code
+        }
+        factors = {
+            str(row["ts_code"]): decimal(row["adj_factor"])
+            for row in market_facts["adjustments"]
+            if str(row["trade_date"]) == session_key
+            and str(row["ts_code"]) in self._instrument_by_code
+        }
+        suspensions: dict[str, list[dict[str, object]]] = {}
+        for row in market_facts["suspensions"]:
+            code = str(row["ts_code"])
+            if str(row["trade_date"]) == session_key and code in self._instrument_by_code:
+                suspensions.setdefault(code, []).append(row)
+        limits = {
+            str(row["ts_code"]): row
+            for row in market_facts["price_limits"]
+            if str(row["trade_date"]) == session_key
+            and str(row["ts_code"]) in self._instrument_by_code
+        }
+        active_codes = sorted(
+            code
+            for code, instrument in self._instrument_by_code.items()
+            if is_active(instrument, session_key)
+        )
+        prices: list[dict[str, str]] = []
+        states: list[dict[str, str]] = []
+        price_limits: list[dict[str, str]] = []
+        for code in active_codes:
+            instrument_id = str(self._instrument_by_code[code]["instrument_id"])
+            source_row = daily.get(code)
+            state = resolve_trading_state(
+                source_row,
+                suspensions.get(code),
+                previous_state=self._prior_state_by_code.get(code),
+            )
+            factor = factors.get(code) if source_row is not None else None
+            limit = limits.get(code) if source_row is not None else None
+            if source_row is not None and (factor is None or limit is None):
+                state = "data_unavailable"
+            self._prior_state_by_code[code] = state
+            states.append(
+                {"session": session, "instrument_id": instrument_id, "state": state}
+            )
+            if source_row is None or factor is None:
+                continue
+            if factor <= 0:
+                raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
+            bar = validate_source_bar(source_row)
+            prices.append(
+                {
+                    "session": session,
+                    "instrument_id": instrument_id,
+                    "open_raw": decimal_string(bar["open"], 4),
+                    "high_raw": decimal_string(bar["high"], 4),
+                    "low_raw": decimal_string(bar["low"], 4),
+                    "close_raw": decimal_string(bar["close"], 4),
+                    "pre_close_raw": decimal_string(bar["pre_close"], 4),
+                    "change_raw": decimal_string(bar["change"], 4),
+                    "pct_change_raw": decimal_string(bar["pct_chg"], 6),
+                    "volume_shares": decimal_string(bar["vol"] * 100, 0),
+                    "turnover_cny": decimal_string(bar["amount"] * 1000, 2),
+                    "adjustment_factor": decimal_string(factor, 6),
+                    "trading_state": state,
+                }
+            )
+            if limit is not None:
+                price_limits.append(
+                    {
+                        "session": session,
+                        "instrument_id": instrument_id,
+                        "upper": decimal_string(decimal(limit["up_limit"]), 4),
+                        "lower": decimal_string(decimal(limit["down_limit"]), 4),
+                    }
+                )
+        return {
+            "prices": causal_adjusted_prices(prices),
+            "trading_states": states,
+            "price_limits": price_limits,
+            "base_pool": [
+                {
+                    "session": session,
+                    "instrument_ids": [
+                        str(self._instrument_by_code[code]["instrument_id"])
+                        for code in active_codes
+                    ],
+                }
+            ],
+        }
 
 
 def permission_probes(reference_date: date | None = None) -> tuple[PermissionProbe, ...]:
@@ -201,6 +349,9 @@ class TushareAdapter:
             return
         try:
             self._bootstrap_checkpoint.unlink(missing_ok=True)
+            shutil.rmtree(_bootstrap_market_root(self._bootstrap_checkpoint), ignore_errors=False)
+        except FileNotFoundError:
+            pass
         except OSError as error:
             raise TushareSourceError(
                 "BOOTSTRAP_CHECKPOINT_CLEANUP_FAILED",
@@ -235,13 +386,13 @@ class TushareAdapter:
         *,
         start_date: date,
         completed_through_date: date,
-    ) -> dict[str, list[dict[str, object]]]:
-        foundation = _load_bootstrap_checkpoint(
+    ) -> TushareBootstrapArchive:
+        checkpoint = _load_bootstrap_checkpoint(
             self._bootstrap_checkpoint,
             start_date=start_date,
             completed_through_date=completed_through_date,
         )
-        if foundation is None:
+        if checkpoint is None:
             foundation = self._collect_bootstrap_foundation(
                 start_date=start_date,
                 completed_through_date=completed_through_date,
@@ -251,7 +402,9 @@ class TushareAdapter:
                 start_date=start_date,
                 completed_through_date=completed_through_date,
                 foundation=foundation,
+                market_sessions={},
             )
+            market_sessions: dict[str, dict[str, object]] = {}
             if self._bootstrap_checkpoint is not None:
                 self._progress(
                     {
@@ -263,6 +416,8 @@ class TushareAdapter:
                     }
                 )
         else:
+            foundation = checkpoint["foundation"]
+            market_sessions = checkpoint["market_sessions"]
             self._progress(
                 {
                     "event": "collection_phase",
@@ -284,16 +439,23 @@ class TushareAdapter:
             raise TushareSourceError("INSUFFICIENT_CALENDAR_COVERAGE", source_code=0)
 
         self._progress({"event": "collection_phase", "phase": "market_facts", "status": "started"})
-        market_facts = self._collect_market_facts(shared_open)
+        market_row_counts, in_memory_sessions = self._collect_market_facts(
+            shared_open,
+            checkpoint_path=self._bootstrap_checkpoint,
+            start_date=start_date,
+            completed_through_date=completed_through_date,
+            foundation=foundation,
+            market_sessions=market_sessions,
+        )
         self._progress(
             {
                 "event": "collection_phase",
                 "phase": "market_facts",
                 "status": "completed",
-                "daily_rows": len(market_facts["daily"]),
-                "adjustment_rows": len(market_facts["adjustments"]),
-                "suspension_rows": len(market_facts["suspensions"]),
-                "price_limit_rows": len(market_facts["price_limits"]),
+                "daily_rows": market_row_counts["daily"],
+                "adjustment_rows": market_row_counts["adjustments"],
+                "suspension_rows": market_row_counts["suspensions"],
+                "price_limit_rows": market_row_counts["price_limits"],
             }
         )
 
@@ -319,14 +481,58 @@ class TushareAdapter:
                 "membership_rows": len(industry_membership),
             }
         )
-        return {
+        foundation = {
             "calendar_sse": sse_calendar,
             "calendar_szse": szse_calendar,
             "stock_basic": stock_basic,
-            **market_facts,
-            "industry_classification": industry_classification,
-            "industry_membership": industry_membership,
         }
+
+        def load_session(session: str) -> dict[str, list[dict[str, object]]]:
+            if self._bootstrap_checkpoint is None:
+                try:
+                    return in_memory_sessions[session]
+                except KeyError as error:
+                    raise TushareSourceError(
+                        "INVALID_BOOTSTRAP_CHECKPOINT", source_code=0
+                    ) from error
+            facts = _load_market_session_checkpoint(
+                self._bootstrap_checkpoint,
+                session=session,
+                descriptor=market_sessions.get(session),
+                start_date=start_date,
+                completed_through_date=completed_through_date,
+            )
+            if facts is None:
+                raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
+            return facts
+
+        return TushareBootstrapArchive(
+            request_start=start_date,
+            request_end=completed_through_date,
+            foundation=foundation,
+            sessions=tuple(shared_open),
+            industry_classification=industry_classification,
+            industry_membership=industry_membership,
+            source_lineage={
+                "source": "tushare",
+                "source_contract_version": SOURCE_CONTRACT_VERSION,
+                "request_start": start_date.isoformat(),
+                "request_end": completed_through_date.isoformat(),
+                "foundation_row_counts": {
+                    name: len(rows) for name, rows in sorted(foundation.items())
+                },
+                "market_session_content": {
+                    session: dict(descriptor)
+                    for session, descriptor in sorted(market_sessions.items())
+                },
+                "market_row_counts": dict(market_row_counts),
+                "industry_row_counts": {
+                    "classification": len(industry_classification),
+                    "membership": len(industry_membership),
+                },
+            },
+            _load_session=load_session,
+        )
 
     def _collect_bootstrap_foundation(
         self,
@@ -458,7 +664,15 @@ class TushareAdapter:
             {str(row["cal_date"]) for row in calendar_sse if str(row["is_open"]) == "1"}
             & {str(row["cal_date"]) for row in calendar_szse if str(row["is_open"]) == "1"}
         )
-        market_facts = self._collect_market_facts(shared_open)
+        _row_counts, market_sessions = self._collect_market_facts(shared_open)
+        market_facts = {
+            name: [
+                row
+                for session in shared_open
+                for row in market_sessions[session][name]
+            ]
+            for name in ("daily", "adjustments", "suspensions", "price_limits")
+        }
         return {
             "calendar_sse": calendar_sse,
             "calendar_szse": calendar_szse,
@@ -475,15 +689,33 @@ class TushareAdapter:
     def _collect_market_facts(
         self,
         sessions: Sequence[str],
-    ) -> dict[str, list[dict[str, object]]]:
-        daily: list[dict[str, object]] = []
-        adjustments: list[dict[str, object]] = []
-        suspensions: list[dict[str, object]] = []
-        price_limits: list[dict[str, object]] = []
+        *,
+        checkpoint_path: Path | None = None,
+        start_date: date | None = None,
+        completed_through_date: date | None = None,
+        foundation: dict[str, list[dict[str, object]]] | None = None,
+        market_sessions: dict[str, dict[str, object]] | None = None,
+    ) -> tuple[dict[str, int], dict[str, dict[str, list[dict[str, object]]]]]:
+        row_counts = {
+            "daily": 0,
+            "adjustments": 0,
+            "suspensions": 0,
+            "price_limits": 0,
+        }
+        in_memory_sessions: dict[str, dict[str, list[dict[str, object]]]] = {}
         for completed_sessions, session in enumerate(sessions, start=1):
-            session_params = {"trade_date": session}
-            daily.extend(
-                self.query_paginated(
+            cached = _load_market_session_checkpoint(
+                checkpoint_path,
+                session=session,
+                descriptor=(market_sessions or {}).get(session),
+                start_date=start_date,
+                completed_through_date=completed_through_date,
+            )
+            source = "checkpoint" if cached is not None else "upstream"
+            if cached is None:
+                session_params = {"trade_date": session}
+                cached = {
+                    "daily": self.query_paginated(
                     "daily",
                     params=session_params,
                     fields=(
@@ -500,32 +732,51 @@ class TushareAdapter:
                         "amount",
                     ),
                     primary_key=("trade_date", "ts_code"),
-                )
-            )
-            adjustments.extend(
-                self.query_paginated(
+                    ),
+                    "adjustments": self.query_paginated(
                     "adj_factor",
                     params=session_params,
                     fields=("ts_code", "trade_date", "adj_factor"),
                     primary_key=("trade_date", "ts_code"),
-                )
-            )
-            suspensions.extend(
-                self.query_paginated(
+                    ),
+                    "suspensions": self.query_paginated(
                     "suspend_d",
                     params={**session_params, "suspend_type": "S"},
                     fields=("ts_code", "trade_date", "suspend_timing", "suspend_type"),
                     primary_key=("trade_date", "ts_code", "suspend_type"),
-                )
-            )
-            price_limits.extend(
-                self.query_paginated(
+                    ),
+                    "price_limits": self.query_paginated(
                     "stk_limit",
                     params=session_params,
                     fields=("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
                     primary_key=("trade_date", "ts_code"),
-                )
-            )
+                    ),
+                }
+                if (
+                    checkpoint_path is not None
+                    and start_date is not None
+                    and completed_through_date is not None
+                    and foundation is not None
+                    and market_sessions is not None
+                ):
+                    market_sessions[session] = _save_market_session_checkpoint(
+                        checkpoint_path,
+                        session=session,
+                        start_date=start_date,
+                        completed_through_date=completed_through_date,
+                        market_facts=cached,
+                    )
+                    _save_bootstrap_checkpoint(
+                        checkpoint_path,
+                        start_date=start_date,
+                        completed_through_date=completed_through_date,
+                        foundation=foundation,
+                        market_sessions=market_sessions,
+                    )
+            for name in row_counts:
+                row_counts[name] += len(cached[name])
+            if checkpoint_path is None:
+                in_memory_sessions[session] = cached
             self._progress(
                 {
                     "event": "collection_progress",
@@ -533,14 +784,10 @@ class TushareAdapter:
                     "session": session,
                     "completed_sessions": completed_sessions,
                     "total_sessions": len(sessions),
+                    "source": source,
                 }
             )
-        return {
-            "daily": daily,
-            "adjustments": adjustments,
-            "suspensions": suspensions,
-            "price_limits": price_limits,
-        }
+        return row_counts, in_memory_sessions
 
     def query(
         self,
@@ -700,7 +947,7 @@ def _load_bootstrap_checkpoint(
     *,
     start_date: date,
     completed_through_date: date,
-) -> dict[str, list[dict[str, object]]] | None:
+) -> dict[str, object] | None:
     if path is None or not path.exists():
         return None
     try:
@@ -713,13 +960,23 @@ def _load_bootstrap_checkpoint(
     if not isinstance(payload, dict):
         raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
     if (
-        set(payload) != {"format", "request_start", "request_end", "foundation"}
+        set(payload)
+        != {
+            "format",
+            "source_contract_version",
+            "request_start",
+            "request_end",
+            "foundation",
+            "market_sessions",
+        }
         or payload.get("format") != _BOOTSTRAP_CHECKPOINT_FORMAT
+        or payload.get("source_contract_version") != SOURCE_CONTRACT_VERSION
         or payload.get("request_start") != start_date.isoformat()
         or payload.get("request_end") != completed_through_date.isoformat()
     ):
-        return None
+        raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
     foundation = payload.get("foundation")
+    market_sessions = payload.get("market_sessions")
     expected_tables = {
         "calendar_sse",
         "calendar_szse",
@@ -730,9 +987,12 @@ def _load_bootstrap_checkpoint(
         or set(foundation) != expected_tables
         or any(not isinstance(foundation[name], list) for name in expected_tables)
         or any(not isinstance(row, dict) for name in expected_tables for row in foundation[name])
+        or not isinstance(market_sessions, dict)
+        or any(not isinstance(session, str) for session in market_sessions)
+        or any(not _valid_market_session_descriptor(value) for value in market_sessions.values())
     ):
         raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
-    return foundation
+    return {"foundation": foundation, "market_sessions": market_sessions}
 
 
 def _save_bootstrap_checkpoint(
@@ -741,14 +1001,17 @@ def _save_bootstrap_checkpoint(
     start_date: date,
     completed_through_date: date,
     foundation: dict[str, list[dict[str, object]]],
+    market_sessions: Mapping[str, Mapping[str, object]],
 ) -> None:
     if path is None:
         return
     payload = {
         "format": _BOOTSTRAP_CHECKPOINT_FORMAT,
+        "source_contract_version": SOURCE_CONTRACT_VERSION,
         "request_start": start_date.isoformat(),
         "request_end": completed_through_date.isoformat(),
         "foundation": foundation,
+        "market_sessions": market_sessions,
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     if len(serialized.encode()) > _BOOTSTRAP_CHECKPOINT_MAX_BYTES:
@@ -762,6 +1025,123 @@ def _save_bootstrap_checkpoint(
         raise TushareSourceError("BOOTSTRAP_CHECKPOINT_WRITE_FAILED", source_code=0) from error
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def _bootstrap_market_root(path: Path) -> Path:
+    return path.with_name(f"{path.name}.market")
+
+
+def _market_session_blob_path(path: Path, sha256: str) -> Path:
+    root = _bootstrap_market_root(path)
+    return root / "sha256" / sha256[:2] / f"{sha256}.json"
+
+
+def _valid_market_session_descriptor(value: object) -> bool:
+    if not isinstance(value, dict) or set(value) != {"sha256", "byte_count"}:
+        return False
+    sha256 = value.get("sha256")
+    byte_count = value.get("byte_count")
+    return (
+        isinstance(sha256, str)
+        and len(sha256) == 64
+        and all(character in "0123456789abcdef" for character in sha256)
+        and isinstance(byte_count, int)
+        and 0 < byte_count <= _BOOTSTRAP_MARKET_SESSION_MAX_BYTES
+    )
+
+
+def _load_market_session_checkpoint(
+    path: Path | None,
+    *,
+    session: str,
+    descriptor: object,
+    start_date: date | None,
+    completed_through_date: date | None,
+) -> dict[str, list[dict[str, object]]] | None:
+    if path is None or descriptor is None:
+        return None
+    if start_date is None or completed_through_date is None or not _valid_market_session_descriptor(
+        descriptor
+    ):
+        raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
+    assert isinstance(descriptor, dict)
+    sha256 = descriptor["sha256"]
+    byte_count = descriptor["byte_count"]
+    assert isinstance(sha256, str)
+    assert isinstance(byte_count, int)
+    try:
+        content = AddressedFileStore(_bootstrap_market_root(path)).read(
+            _market_session_blob_path(path, sha256),
+            sha256,
+            expected_byte_count=byte_count,
+            max_byte_count=_BOOTSTRAP_MARKET_SESSION_MAX_BYTES,
+        )
+        payload = json.loads(content)
+    except (AddressedFileError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0) from error
+    if (
+        not isinstance(payload, dict)
+        or set(payload)
+        != {
+            "format",
+            "source_contract_version",
+            "request_start",
+            "request_end",
+            "session",
+            "market_facts",
+        }
+        or payload.get("format") != _BOOTSTRAP_CHECKPOINT_FORMAT
+        or payload.get("source_contract_version") != SOURCE_CONTRACT_VERSION
+        or payload.get("request_start") != start_date.isoformat()
+        or payload.get("request_end") != completed_through_date.isoformat()
+        or payload.get("session") != session
+        or not _valid_market_facts(payload.get("market_facts"))
+    ):
+        raise TushareSourceError("INVALID_BOOTSTRAP_CHECKPOINT", source_code=0)
+    market_facts = payload["market_facts"]
+    assert isinstance(market_facts, dict)
+    return market_facts
+
+
+def _save_market_session_checkpoint(
+    path: Path,
+    *,
+    session: str,
+    start_date: date,
+    completed_through_date: date,
+    market_facts: dict[str, list[dict[str, object]]],
+) -> dict[str, object]:
+    payload = {
+        "format": _BOOTSTRAP_CHECKPOINT_FORMAT,
+        "source_contract_version": SOURCE_CONTRACT_VERSION,
+        "request_start": start_date.isoformat(),
+        "request_end": completed_through_date.isoformat(),
+        "session": session,
+        "market_facts": market_facts,
+    }
+    content = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    if len(content) > _BOOTSTRAP_MARKET_SESSION_MAX_BYTES:
+        raise TushareSourceError("BOOTSTRAP_CHECKPOINT_TOO_LARGE", source_code=0)
+    sha256 = hashlib.sha256(content).hexdigest()
+    try:
+        AddressedFileStore(_bootstrap_market_root(path)).store(
+            _market_session_blob_path(path, sha256),
+            sha256,
+            content,
+        )
+    except AddressedFileError as error:
+        raise TushareSourceError("BOOTSTRAP_CHECKPOINT_WRITE_FAILED", source_code=0) from error
+    return {"sha256": sha256, "byte_count": len(content)}
+
+
+def _valid_market_facts(value: object) -> bool:
+    expected_tables = {"daily", "adjustments", "suspensions", "price_limits"}
+    return (
+        isinstance(value, dict)
+        and set(value) == expected_tables
+        and all(isinstance(value[name], list) for name in expected_tables)
+        and all(isinstance(row, dict) for name in expected_tables for row in value[name])
+    )
 
 
 def causal_adjusted_prices(
@@ -826,6 +1206,7 @@ def normalize_tushare_snapshot(
     trading_states: list[dict[str, str]] = []
     price_limits: list[dict[str, str]] = []
     base_pool: list[dict[str, object]] = []
+    prior_state_by_code: dict[str, str] = {}
     for session_key, session in zip(session_keys, sessions, strict=True):
         active_codes = [
             code
@@ -844,16 +1225,29 @@ def normalize_tushare_snapshot(
             instrument_id = str(instrument_by_code[code]["instrument_id"])
             source_row = daily_by_position.get((session_key, code))
             suspension = suspensions.get((session_key, code))
-            state = resolve_trading_state(source_row, suspension)
+            state = resolve_trading_state(
+                source_row,
+                suspension,
+                previous_state=prior_state_by_code.get(code),
+            )
+            factor = (
+                factor_by_position.get((session_key, code))
+                if source_row is not None
+                else None
+            )
+            limit = (
+                limit_by_position.get((session_key, code))
+                if source_row is not None
+                else None
+            )
+            if source_row is not None and (factor is None or limit is None):
+                state = "data_unavailable"
+            prior_state_by_code[code] = state
             trading_states.append(
                 {"session": session, "instrument_id": instrument_id, "state": state}
             )
-            if source_row is None:
+            if source_row is None or factor is None:
                 continue
-            factor = factor_by_position.get((session_key, code))
-            limit = limit_by_position.get((session_key, code))
-            if factor is None or limit is None:
-                raise TushareSourceError("INCOMPLETE_REQUIRED_MARKET_FACTS", source_code=0)
             if factor <= 0:
                 raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
             bar = validate_source_bar(source_row)
@@ -880,14 +1274,15 @@ def normalize_tushare_snapshot(
                     "trading_state": state,
                 }
             )
-            price_limits.append(
-                {
-                    "session": session,
-                    "instrument_id": instrument_id,
-                    "upper": decimal_string(decimal(limit["up_limit"]), 4),
-                    "lower": decimal_string(decimal(limit["down_limit"]), 4),
-                }
-            )
+            if limit is not None:
+                price_limits.append(
+                    {
+                        "session": session,
+                        "instrument_id": instrument_id,
+                        "upper": decimal_string(decimal(limit["up_limit"]), 4),
+                        "lower": decimal_string(decimal(limit["down_limit"]), 4),
+                    }
+                )
 
     canonical_prices = causal_adjusted_prices(canonical_prices)
     industries = normalize_industries(
@@ -990,6 +1385,16 @@ def normalize_tushare_increment(
     trading_states: list[dict[str, str]] = []
     price_limits: list[dict[str, str]] = []
     base_pool: list[dict[str, object]] = []
+    code_by_instrument_id = {
+        str(row["instrument_id"]): str(row["ts_code"])
+        for row in prior_instruments
+        if isinstance(row, dict)
+    }
+    prior_state_by_code = {
+        code_by_instrument_id[str(row["instrument_id"])]: str(row["state"])
+        for row in prior_states
+        if isinstance(row, dict) and str(row.get("instrument_id")) in code_by_instrument_id
+    }
     for session_key, session in zip(session_keys, sessions, strict=True):
         active_codes = sorted(
             code
@@ -1008,16 +1413,29 @@ def normalize_tushare_increment(
             instrument_id = str(instrument_by_code[code]["instrument_id"])
             source_row = daily_by_position.get((session_key, code))
             suspension = suspensions.get((session_key, code))
-            state = resolve_trading_state(source_row, suspension)
+            state = resolve_trading_state(
+                source_row,
+                suspension,
+                previous_state=prior_state_by_code.get(code),
+            )
+            factor = (
+                factor_by_position.get((session_key, code))
+                if source_row is not None
+                else None
+            )
+            limit = (
+                limit_by_position.get((session_key, code))
+                if source_row is not None
+                else None
+            )
+            if source_row is not None and (factor is None or limit is None):
+                state = "data_unavailable"
+            prior_state_by_code[code] = state
             trading_states.append(
                 {"session": session, "instrument_id": instrument_id, "state": state}
             )
-            if source_row is None:
+            if source_row is None or factor is None:
                 continue
-            factor = factor_by_position.get((session_key, code))
-            limit = limit_by_position.get((session_key, code))
-            if factor is None or limit is None:
-                raise TushareSourceError("INCOMPLETE_REQUIRED_MARKET_FACTS", source_code=0)
             if factor <= 0:
                 raise TushareSourceError("INVALID_ADJUSTMENT_FACTOR", source_code=0)
             bar = validate_source_bar(source_row)
@@ -1044,14 +1462,15 @@ def normalize_tushare_increment(
                     "trading_state": state,
                 }
             )
-            price_limits.append(
-                {
-                    "session": session,
-                    "instrument_id": instrument_id,
-                    "upper": decimal_string(decimal(limit["up_limit"]), 4),
-                    "lower": decimal_string(decimal(limit["down_limit"]), 4),
-                }
-            )
+            if limit is not None:
+                price_limits.append(
+                    {
+                        "session": session,
+                        "instrument_id": instrument_id,
+                        "upper": decimal_string(decimal(limit["up_limit"]), 4),
+                        "lower": decimal_string(decimal(limit["down_limit"]), 4),
+                    }
+                )
 
     all_sessions = [*prior_calendar, *sessions]
     all_prices = causal_adjusted_prices([*prior_prices, *canonical_prices])
@@ -1101,10 +1520,14 @@ def normalize_tushare_increment(
 def resolve_trading_state(
     daily_row: Mapping[str, object] | None,
     suspensions: Sequence[Mapping[str, object]] | None,
+    *,
+    previous_state: str | None = None,
 ) -> str:
     if not suspensions:
         if daily_row is None:
-            raise TushareSourceError("UNEXPLAINED_DAILY_ABSENCE", source_code=0)
+            if previous_state == "full_session_suspension":
+                return "full_session_suspension"
+            return "data_unavailable"
         return "normal"
     resolved: set[str] = set()
     for suspension in suspensions:
@@ -1112,7 +1535,8 @@ def resolve_trading_state(
         timing = "" if timing_value is None else str(timing_value).strip()
         suspension_type = str(suspension.get("suspend_type", "")).strip().upper()
         full_session = timing in {"全天", "全日", "全天停牌", "全日停牌"} or (
-            suspension_type == "S" and not timing
+            suspension_type == "S"
+            and (not timing or _is_market_open_sentinel(timing))
         )
         if daily_row is None:
             if not full_session:
@@ -1122,25 +1546,62 @@ def resolve_trading_state(
                 )
             resolved.add("full_session_suspension")
             continue
+        if suspension_type == "S" and not timing:
+            resolved.add("data_unavailable")
+            continue
         if full_session:
             raise TushareSourceError(
                 "CONTRADICTORY_SUSPENSION_EVIDENCE",
                 source_code=0,
             )
-        if any(marker in timing for marker in ("开盘", "盘前", "09:30", "9:30")):
+        if any(marker in timing for marker in ("开盘", "盘前")):
             resolved.add("partial_opening_suspension")
         elif any(marker in timing for marker in ("盘中", "午间", "尾盘")):
             resolved.add("after_open_suspension")
-        elif timing[:2].isdigit() and ":" in timing:
-            resolved.add("after_open_suspension")
         else:
-            raise TushareSourceError(
-                "AMBIGUOUS_SUSPENSION_EVIDENCE",
-                source_code=0,
-            )
+            timed_state = _timed_suspension_state(timing)
+            if timed_state is None:
+                raise TushareSourceError(
+                    "AMBIGUOUS_SUSPENSION_EVIDENCE",
+                    source_code=0,
+                )
+            resolved.add(timed_state)
     if len(resolved) != 1:
         raise TushareSourceError("AMBIGUOUS_SUSPENSION_EVIDENCE", source_code=0)
     return resolved.pop()
+
+
+def _is_market_open_sentinel(timing: str) -> bool:
+    points = [
+        (int(hour_text), int(minute_text))
+        for hour_text, minute_text in _SOURCE_TIME_PATTERN.findall(timing)
+    ]
+    return points == [(9, 30), (9, 30)]
+
+
+def _timed_suspension_state(timing: str) -> str | None:
+    points: list[tuple[int, int]] = []
+    for hour_text, minute_text in _SOURCE_TIME_PATTERN.findall(timing):
+        hour = int(hour_text)
+        minute = int(minute_text)
+        if hour > 23 or minute > 59:
+            return None
+        points.append((hour, minute))
+    if not points:
+        return None
+    market_open = (9, 30)
+    if market_open in points:
+        return "partial_opening_suspension"
+    ranges = tuple(zip(points[::2], points[1::2], strict=False))
+    if any(
+        start <= market_open <= end
+        or (end < start and (market_open >= start or market_open <= end))
+        for start, end in ranges
+    ):
+        return "partial_opening_suspension"
+    if any(point > market_open for point in points):
+        return "after_open_suspension"
+    return None
 
 
 def merge_incremental_industries(

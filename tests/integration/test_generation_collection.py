@@ -671,7 +671,7 @@ def _financial_generation(root: Path, market: str, *, value: str, ordinal: int) 
         payload = {
             "format": "thesistrace-raw-financial-batch",
             "version": 1,
-            "source_contract_version": "tushare-financial-ordinary-v1",
+            "source_contract_version": "tushare-financial-ordinary-v2",
             "endpoint": endpoint,
             "parameters": {"ts_code": "000001.SZ"},
             "returned_fields": list(fields[endpoint]),

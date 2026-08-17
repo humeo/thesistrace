@@ -356,6 +356,44 @@ def test_suspended_new_target_creates_one_logical_rejection_without_children() -
     assert all(child["order_id"] != rejection["order_id"] for child in result["child_orders"])
 
 
+def test_data_unavailable_new_target_is_rejected_without_execution() -> None:
+    _, canonical = build_fixture()
+    matrix = evaluate_alpha_matrix(
+        aligned_market_data(canonical),
+        compiled_alpha=validate_alpha(CLOSE_ADJUSTED, field_bindings=FIELD_BINDINGS),
+        neutralization="none",
+    )
+    execution_session = canonical["research_calendar"][1]
+    target = matrix["sessions"][0]["values"][-1]["instrument_id"]
+    for table in ("prices", "price_limits"):
+        canonical[table] = [
+            row
+            for row in canonical[table]
+            if not (
+                row["session"] == execution_session
+                and row["instrument_id"] == target
+            )
+        ]
+    for row in canonical["trading_states"]:
+        if row["session"] == execution_session and row["instrument_id"] == target:
+            row["state"] = "data_unavailable"
+
+    result = run_strategy(
+        aligned_market_data(canonical),
+        matrix,
+        strategy_definition(rebalance_interval=20),
+        origin_session=str(canonical["research_calendar"][0]),
+    )
+
+    rejection = next(
+        item
+        for item in result["rejections"]
+        if item["session"] == execution_session and item["instrument_id"] == target
+    )
+    assert rejection["reason"] == "data_unavailable"
+    assert all(child["order_id"] != rejection["order_id"] for child in result["child_orders"])
+
+
 def test_terminal_delisting_writes_off_without_an_order_or_cost() -> None:
     _, canonical = build_fixture()
     matrix = evaluate_alpha_matrix(

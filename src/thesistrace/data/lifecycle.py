@@ -139,6 +139,20 @@ class DatasetLifecycle:
             self.release_candidate(operation_id=operation_id)
             raise
 
+    def protect_prevalidated_candidate(
+        self,
+        *,
+        operation_id: str,
+        generation_manifest_sha256: str,
+        lease_seconds: float,
+    ) -> None:
+        """Protect an immutable generation already validated by its producer."""
+        self._register_candidate(
+            operation_id=operation_id,
+            generation_manifest_sha256=generation_manifest_sha256,
+            lease_seconds=lease_seconds,
+        )
+
     def _register_candidate(
         self,
         *,

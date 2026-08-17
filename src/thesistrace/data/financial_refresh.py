@@ -24,7 +24,11 @@ from thesistrace.data.financial_collection import (
 )
 from thesistrace.data.generation_store import GenerationStoreError, MountedGenerationStore
 from thesistrace.data.head_store import DatasetHeadConflict
-from thesistrace.data.lifecycle import DatasetLifecycle, mounted_data_mutation_lock
+from thesistrace.data.lifecycle import (
+    DataLifecycleError,
+    DatasetLifecycle,
+    mounted_data_mutation_lock,
+)
 from thesistrace.publication.serialization import canonical_json_bytes
 
 
@@ -128,23 +132,20 @@ class FinancialRefreshService:
                 prepared_at = self._validated_clock()
                 operation_id = _publication_operation_id(idempotency_key, attempt)
                 with mounted_data_mutation_lock(self._database):
-                    financial = self._candidates.validate_against_market_generation(
-                        outcome.candidate.manifest_sha256,
-                        current.generation_manifest_sha256,
-                    )
                     composed = self._generations.compose_financial_candidate(
                         current.generation_manifest_sha256,
-                        financial.manifest_sha256,
+                        outcome.candidate.manifest_sha256,
                         prepared_at=prepared_at,
                         publication_coordinate=fingerprint,
                     )
+                    financial = self._candidates.reopen(outcome.candidate.manifest_sha256)
                     self._record_publication_candidate(
                         idempotency_key,
                         financial.manifest_sha256,
                         composed.manifest_sha256,
                         prepared_at,
                     )
-                    self._lifecycle.protect_candidate(
+                    self._lifecycle.protect_prevalidated_candidate(
                         operation_id=operation_id,
                         generation_manifest_sha256=composed.manifest_sha256,
                         lease_seconds=900,
@@ -200,7 +201,8 @@ class FinancialRefreshService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT fingerprint, publication_candidate_manifest_sha256,
+                SELECT fingerprint, generation_manifest_sha256,
+                       publication_candidate_manifest_sha256,
                        composed_generation_manifest_sha256,
                        publication_prepared_at, publication_head_moved_at
                 FROM data.financial_refresh_operations
@@ -223,16 +225,51 @@ class FinancialRefreshService:
                 composed,
                 publication_coordinate=str(row["fingerprint"]),
             ):
-                return None
-            for attempt in range(4):
-                self._lifecycle.release_candidate(
-                    operation_id=_publication_operation_id(idempotency_key, attempt)
+                current = self._lifecycle.current_pointer()
+                if (
+                    current is None
+                    or current.generation_manifest_sha256
+                    != str(row["generation_manifest_sha256"])
+                ):
+                    return None
+                recovered = False
+                for attempt in range(4):
+                    operation_id = _publication_operation_id(idempotency_key, attempt)
+                    try:
+                        self._lifecycle.protect_prevalidated_candidate(
+                            operation_id=operation_id,
+                            generation_manifest_sha256=composed,
+                            lease_seconds=900,
+                        )
+                    except DataLifecycleError:
+                        continue
+                    try:
+                        self._lifecycle.compare_and_swap_head(
+                            expected_generation_manifest_sha256=(
+                                current.generation_manifest_sha256
+                            ),
+                            candidate_generation_manifest_sha256=composed,
+                            operation_id=operation_id,
+                            prepared_at=row["publication_prepared_at"],
+                            financial_publication_key=idempotency_key,
+                        )
+                    except DatasetHeadConflict:
+                        self._lifecycle.release_candidate(operation_id=operation_id)
+                        return None
+                    recovered = True
+                    break
+                if not recovered:
+                    raise FinancialRefreshError("FINANCIAL_PUBLICATION_RECOVERY_CONFLICT")
+            else:
+                for attempt in range(4):
+                    self._lifecycle.release_candidate(
+                        operation_id=_publication_operation_id(idempotency_key, attempt)
+                    )
+                self._record_publication_head_moved(
+                    idempotency_key,
+                    generation_manifest_sha256=composed,
+                    moved_at=row["publication_prepared_at"],
                 )
-            self._record_publication_head_moved(
-                idempotency_key,
-                generation_manifest_sha256=composed,
-                moved_at=row["publication_prepared_at"],
-            )
         self._complete_publication(
             idempotency_key,
             generation_manifest_sha256=composed,
@@ -527,7 +564,7 @@ class FinancialRefreshService:
             raise FinancialRefreshError(str(row["failure_code"]))
         if row["status"] == "running":
             return None
-        candidate = self._candidates.validate(str(row["candidate_manifest_sha256"]))
+        candidate = self._candidates.reopen(str(row["candidate_manifest_sha256"]))
         return FinancialRefreshOutcome(
             idempotency_key=idempotency_key,
             candidate=candidate,

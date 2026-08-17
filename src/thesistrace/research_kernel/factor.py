@@ -173,6 +173,8 @@ def unavailable_reason(
         return "terminal_delisting" if valid_entry else "confirmed_market_open_unavailable"
     if trading_state == "full_session_suspension":
         return "confirmed_market_open_unavailable"
+    if trading_state == "data_unavailable":
+        return "data_unavailable"
     return "unexplained_missing_or_invalid_data"
 
 

@@ -12,3 +12,9 @@ data affects only calculations first performed from the later Data Generation;
 it does not rewrite published Track history. A result-changing calculation
 kernel or numeric-contract change requires a new Tracking Generation and full
 execution because it changes research semantics.
+
+## Superseded clause
+
+ADR-0211 replaces the final Tracking Generation requirement with a single-
+contract Product State hard cut. Contract identity remains frozen and recorded,
+but the active runtime never dispatches or branches across contract versions.

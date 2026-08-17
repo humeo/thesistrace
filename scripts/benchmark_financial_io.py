@@ -411,7 +411,7 @@ def _financial_candidate(
             payload = {
                 "format": "thesistrace-raw-financial-batch",
                 "version": 1,
-                "source_contract_version": "tushare-financial-ordinary-v1",
+                "source_contract_version": "tushare-financial-ordinary-v2",
                 "endpoint": endpoint,
                 "parameters": {"ts_code": ts_code},
                 "returned_fields": list(fields[endpoint]),

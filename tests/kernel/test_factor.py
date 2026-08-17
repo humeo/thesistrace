@@ -131,6 +131,41 @@ def test_labels_distinguish_terminal_delisting_from_suspended_exit() -> None:
     assert first["unavailable"] == {"confirmed_market_open_unavailable": 1}
 
 
+def test_labels_report_data_unavailable_without_failing_the_run() -> None:
+    sessions = ["2026-07-01", "2026-07-02", "2026-07-03"]
+    instrument_id = "equity:X.SH"
+    matrix = {
+        "checksum": "alpha",
+        "sessions": [
+            {
+                "session": session,
+                "values": (
+                    [{"instrument_id": instrument_id, "value": 1.0}]
+                    if session == sessions[0]
+                    else []
+                ),
+            }
+            for session in sessions
+        ],
+    }
+    research_data = AlignedResearchData(
+        sessions=tuple(sessions),
+        instruments={instrument_id: InstrumentProfile(board="main", listed_to="")},
+        fields={},
+        universe_members={session: (instrument_id,) for session in sessions},
+        industries={},
+        execution_prices={},
+        trading_states={(sessions[1], instrument_id): "data_unavailable"},
+        price_limits={},
+    )
+
+    labels = build_forward_labels(research_data, matrix, signal_sessions=sessions)
+    first = labels["horizons"]["1"]["sessions"][0]
+
+    assert first["samples"] == []
+    assert first["unavailable"] == {"data_unavailable": 1}
+
+
 def test_unexplained_label_open_is_a_hard_data_failure() -> None:
     canonical = {
         "research_calendar": ["2026-07-01", "2026-07-02", "2026-07-03"],

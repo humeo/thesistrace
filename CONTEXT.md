@@ -70,14 +70,18 @@ _Avoid_: Multi-factor configuration object, automatic weighting, model training
 
 **Alpha Execution Plan**:
 The transient deterministic post-order plan derived from a frozen Alpha
-Expression for one execution slice. Each node computes its complete Numeric
-Series once, rolling Builtins use one-pass series algorithms, Cross-Sectional
-Rank evaluates one selected-universe cross-section per Research Session, and
-downstream nodes consume those results instead of recursively reevaluating
-scalar cells. ResearchRun and DailyTrack use the same planner and evaluators;
-DailyTrack limits its slice to the Effective Alpha Lookback plus new Research
-Sessions.
+Expression. It evaluates each node once per ResearchRun Execution Chunk,
+preserves complete per-session cross-sections, and has the same meaning for
+ResearchRun and DailyTrack.
 _Avoid_: Persisted execution truth, recursive per-cell evaluator, bytecode VM
+
+**ResearchRun Execution Chunk**:
+One deterministic contiguous segment of sessions processed inside one
+ResearchRun Attempt. Each included session contains its complete eligible
+Universe, and the whole Chunk is one private ResearchRun Execution Checkpoint
+boundary.
+_Avoid_: Instrument shard, partial cross-section, mutable retry batch size,
+Result partition
 
 **Alpha Value Model**:
 The small static type system used to compile an Alpha Formula: a Canonical
@@ -162,11 +166,12 @@ _Avoid_: Decimal Alpha arithmetic, sample rolling standard deviation,
 implementation-default rounding
 
 **Numeric Execution Contract**:
-The versioned V1 numeric contract frozen by a ResearchRun and by a DailyTrack.
-It fixes integer, 34-digit half-even Decimal, binary64, residual, and
-canonical-checksum semantics independently of UI formatting or the selected
-Data Generation.
-_Avoid_: Runtime default precision, report formatting, tolerance-based equality
+The single current numeric contract frozen by a ResearchRun and by a DailyTrack.
+It fixes integer, 34-digit half-even Decimal, binary64, residual, and canonical-
+checksum semantics independently of UI formatting or the selected Data
+Generation; result-changing updates require a Product State hard cut.
+_Avoid_: Runtime default precision, report formatting, tolerance-based equality,
+multi-contract dispatcher
 
 **Effective Alpha Lookback**:
 The farthest market-session distance required by an Alpha Expression after
@@ -178,12 +183,26 @@ automatic data-range expansion
 **Alpha Admission Budget**:
 The deterministic Run-admission limits applied before any ResearchRun is
 created: Formula length, expression node count, nesting depth, Effective Alpha
-Lookback, and estimated execution work derived from Builtin costs and the
-selected research dimensions. An over-budget Browser Draft remains local with
-diagnostics, while Run rejects it without creating a ResearchRun or consuming
-Worker capacity. Numeric thresholds are fixed from representative Benchmarks
-and protected by tests.
+Lookback, and Estimated Peak Execution Footprint for the smallest semantically
+valid execution slice. Estimated Total Research Work can inform scheduling and
+duration expectations, but cannot reject a Run or change queue priority merely
+because its Research Period is long. An over-budget Browser Draft remains local
+with diagnostics, while Run rejects it without creating a ResearchRun.
 _Avoid_: Worker timeout policy, arbitrary UI limit, best-effort execution
+
+**Estimated Total Research Work**:
+A deterministic relative-cost estimate for completing the selected Alpha
+Formula, Research Period, and Universe. It informs progress and duration
+guidance, but is neither an exact runtime prediction, a queue priority, nor a
+Run-admission limit.
+_Avoid_: Peak memory limit, maximum Research Period, guaranteed completion time
+
+**Estimated Peak Execution Footprint**:
+A deterministic upper bound on live data and execution state for the smallest
+semantics-preserving bounded slice; cross-sectional operations require that
+slice to contain the complete eligible Universe for one Research Session. It is
+the dynamic compute-safety limit used at Run admission.
+_Avoid_: Total historical work, instrument-sharded cross-section, Worker OOM
 
 **Alpha Diagnostic**:
 A structured compiler finding with a stable reason code, human-readable
@@ -222,16 +241,18 @@ _Avoid_: Alpha, factor definition, trading signal
 
 **Alpha Matrix**:
 The logical collection of Final Alpha Cross-Sections evaluated during one
-execution. It is transient, shared by Factor Evaluation and Strategy Backtest,
-and never published in a Result Bundle or Tracking Checkpoint.
+ResearchRun Execution Chunk. It is transient, shared by Factor Evaluation and
+Strategy Backtest, folded into bounded continuation and aggregate state, and
+released before the next Chunk; it is never published in a Result Bundle or
+Tracking Checkpoint.
 _Avoid_: Durable result object, raw expression output, Strategy signal table,
 vendor factor table
 
 ### Daily Tracking
 
 **Active DailyTrack Limit**:
-The hard maximum of ten active or blocked DailyTracks in the current product.
-A stopped Track does not count toward it.
+The hard maximum of ten non-stopped DailyTracks in the current product. A
+terminally stopped Track does not count toward it.
 _Avoid_: Quota Profile, total DailyTrack history, Compute concurrency
 
 **Daily Tracking**:
@@ -247,7 +268,8 @@ The stable identity of one continuous, fixed-inception Daily Tracking stream
 explicitly started from a successful seed ResearchRun. It freezes the complete
 ResearchRun input snapshot, carries cash, holdings, NAV, and Strategy phase,
 catches up to the Dataset Head, and then continues forward. It is blocked when its
-current target cannot complete and terminally stopped only by an explicit Stop;
+current target cannot complete, reactivated only by explicit Retry, and
+terminally stopped only by an explicit Stop;
 editing, reusing as a Draft, moving, renaming, or deleting the seed Research never
 mutates or deletes it. Only an explicit user DailyTrack deletion removes the
 Track and its owned state.
@@ -255,16 +277,22 @@ _Avoid_: ResearchRun, rolling backtest, mutable Browser Draft
 
 **DailyTrack Deletion**:
 The explicit permanent removal of one `stopped` DailyTrack. An `active` or
-`blocked` Track must complete the separate Stop action before it can be deleted;
-Delete never stops ongoing work implicitly. Deletion removes Track-owned
+`blocked` Track must complete the separate Stop action, and a `stopping` Track
+must reach `stopped`, before it can be deleted. Delete never stops ongoing work
+implicitly. Deletion removes Track-owned
 progressions, checkpoints, caches, receipts, and unreferenced physical objects.
 _Avoid_: Stop, Research Deletion, automatic cascade
 
+**DailyTrack Stop**:
+The irreversible action that fences further Tracking publication and moves a
+Track to `stopped` only after any active execution has ended and released its
+ownership. A Track with no active execution stops immediately.
+_Avoid_: Pause, Retry, optimistic cancellation, Delete
+
 **Working Cache**:
-The latest-only, non-authoritative Pending Alpha and rolling Factor aggregate
-state used to advance one active DailyTrack incrementally. It is bounded,
-fenced, rebuildable from the latest successful Tracking Checkpoint plus
-currently available Canonical Market Data, and deleted when the Track stops.
+The bounded, non-authoritative performance projection of one DailyTrack's
+Tracking Head. It is disposable and rebuildable from that authoritative Head
+plus the Canonical Data needed to continue, and terminal Stop deletes it.
 _Avoid_: Tracking Checkpoint, Result Bundle, Factor curve, permanent Alpha store
 
 **Tracking Origin**:
@@ -282,17 +310,51 @@ _Avoid_: New all-cash baseline, copied Result Bundle, pending Label store,
 historical fake Update
 
 **Tracking Advance**:
-One idempotent execution that extends a `(DailyTrack, Tracking Generation)`
-through one or more later Research Sessions. Its Attempt pins the current Data
-Generation, processes sessions in order, survives failure, and publishes one
-Tracking Checkpoint only on complete success.
+One idempotent execution that extends a DailyTrack through one frozen Tracking
+Advance Target. Its identity may survive a failed Attempt, but no unpublished
+calculation state does; one Tracking Checkpoint is published only on complete
+Attempt success.
 _Avoid_: New ResearchRun, Data Refresh, partial result
+
+**Tracking Advance Target**:
+The exact contiguous list of the oldest 1 through 63 unpublished Research
+Sessions selected once for a Tracking Advance. Later Attempts and a growing
+Dataset Head never change it.
+_Avoid_: Current backlog, mutable target, ResearchRun Execution Chunk
 
 **Tracking Advance Attempt**:
 One execution attempt under a persistent Tracking Advance, with
-`queued -> running -> succeeded | failed | cancelled`. A failed or cancelled
-Attempt may be followed by another Attempt under the same Advance identity.
+`running -> succeeded | failed` or
+`running -> stopping -> cancelled`, and the lifecycle boundary of exactly one
+supervised execution. It pins one current Data Generation, starts from the
+authoritative Tracking Head, and retains no unpublished continuation state
+after it ends.
 _Avoid_: New Tracking Advance, ResearchRun Attempt, partial Checkpoint
+
+**Tracking Advance Failure Policy**:
+The closed distinction between retryable Worker loss or transient PostgreSQL,
+RustFS, network, timeout, or Publication unavailability and permanent data,
+calculation, domain, integrity, equivalence, or capacity failure. Permanent
+failure immediately blocks; explicit Retry starts another bounded Cycle only
+when the frozen Target is executable, and User Stop never retries.
+_Avoid_: Catch-all retry, OOM retry, infinite retry, private recovery checkpoint
+
+**Tracking Attempt Cycle**:
+One initial Attempt plus at most two automatic Attempts for the same Tracking
+Advance Target. First execution eligibility after Advance creation or explicit
+Retry starts a Cycle; Retry that still fails capacity validation leaves the
+Track blocked without creating a Cycle or Attempt.
+_Avoid_: Attempt lifetime limit, infinite retry loop, new Tracking Advance
+
+**Tracking Worker**:
+The exclusive execution owner of at most one Tracking Advance Attempt. It never
+claims or executes a ResearchRun.
+_Avoid_: Research Worker, mixed-role Worker, concurrent Tracking Advances
+
+**Tracking Worker Pool**:
+The independently scaled set of Tracking Workers that claims only Tracking
+Advance work.
+_Avoid_: ResearchRun Queue, dynamic role switching, in-process multi-slot pool
 
 **Tracking Checkpoint**:
 The immutable authoritative manifest and state published by a successful
@@ -307,12 +369,11 @@ Generation for one DailyTrack. Moving the pointer atomically changes the
 current view but never edits any Checkpoint or observation.
 _Avoid_: Result truth, mutable Checkpoint, Dataset latest
 
-**Tracking Generation**:
-One immutable DailyTrack result branch whose Advances share one calculation
-kernel and Numeric Execution Contract. Data changes never rewrite it, while a
-result-changing kernel correction creates a new fully executed Generation
-without mutating the prior branch.
-_Avoid_: Data Generation, partial patch, Dataset Head
+**Tracking Progress**:
+The user-visible combination of authoritative Tracking Head and lag with
+non-authoritative current-Advance liveness. An in-flight session is never
+reported as durably completed before the Head moves.
+_Avoid_: Private checkpoint, elapsed-time completion, provisional Head
 
 **Batch-Incremental Equivalence**:
 The core V1 correctness invariant that a reference execution and
@@ -589,6 +650,21 @@ Attempt produces Factor Evaluation and Strategy Backtest conclusions and may
 seed a DailyTrack only after publishing a complete Result Bundle.
 _Avoid_: Research Folder, Browser Draft, factor evaluation, backtest
 
+**ResearchRun State**:
+The durable user-visible lifecycle `queued -> running -> succeeded | failed` or
+`queued -> cancelled` or `running -> cancelling -> cancelled`. `cancelling` is
+non-terminal: execution is fenced immediately, but the Run becomes `cancelled`
+only after its execution has stopped and ownership is released.
+_Avoid_: Attempt heartbeat, optimistic Cancel acknowledgement, UI-only status
+
+**ResearchRun Progress**:
+The monotonic durable measurement derived only from complete committed
+ResearchRun Execution Chunks. Calculation Warm-up has separate phase progress
+and never counts as completed Research Period work; in-flight work never counts
+as completed, and any duration estimate remains non-authoritative.
+_Avoid_: Partial Result, uncommitted-session completion, guaranteed finish time,
+progress reset on retry
+
 **Research Name**:
 The mutable display name of one ResearchRun. The user may submit it in a Browser
 Draft or rename the Research later; an omitted or blank name receives a
@@ -602,10 +678,10 @@ _Avoid_: Alpha name, immutable input field, ResearchRun identity, filename key
 **Research Deletion**:
 The explicit permanent removal of one terminal ResearchRun. Only `succeeded`,
 `failed`, or `cancelled` Research may be deleted; `queued` or `running` Research
-must first reach a terminal state. Deletion removes the Research resource and
-its unreferenced owned state but never deletes a DailyTrack seeded from it;
-Track-owned or shared physical objects remain until no durable reference needs
-them.
+must first reach a terminal state, and `cancelling` Research must finish
+cancellation. Deletion removes the Research resource and its unreferenced owned
+state but never deletes a DailyTrack seeded from it; Track-owned or shared
+physical objects remain until no durable reference needs them.
 _Avoid_: Cancel, Folder removal, cascading DailyTrack deletion
 
 **Use as Draft**:
@@ -618,11 +694,47 @@ _Avoid_: Rerun, retry, automatic latest-Run restore
 
 **ResearchRun Attempt**:
 One infrastructure execution attempt belonging to an existing ResearchRun,
-which pins the Data Generation frozen at Run admission and recomputes the whole
-Run from the beginning. A retry creates another Attempt, retains and pins the
-same Generation, and never mixes partial artifacts. Reusing research input requires
-Use as Draft followed by an ordinary Run Action.
+and the lifecycle boundary of exactly one supervised execution. A retry retains
+the Run's frozen Data Generation and resumes from the latest valid ResearchRun
+Execution Checkpoint; it cannot publish or combine unchecked partial artifacts.
 _Avoid_: ResearchRun, Use as Draft, modified run input
+
+**ResearchRun Failure Policy**:
+The closed distinction between retryable transient infrastructure failure and
+terminal execution failure. A retry never changes the frozen research question
+or discards a valid completed execution boundary.
+_Avoid_: Catch-all retry, OOM retry, restart from zero, mutable error category
+
+**Research Worker**:
+The exclusive execution owner of at most one active ResearchRun Attempt. It
+executes that Run's Chunks sequentially and never claims Tracking work or a
+second concurrent Run.
+_Avoid_: Multi-Run process, distributed Chunk executor, thread pool slot,
+in-process scheduler, mixed-role Worker
+
+**Research Worker Pool**:
+The independently scaled set of Research Workers that claims only the
+ResearchRun Queue.
+_Avoid_: Tracking queue, dynamic role switching, in-process multi-slot pool
+
+**ResearchRun Queue**:
+The strict FIFO of claimable ResearchRuns ordered by original admission time and
+stable Run identity. A retry retains its Run's original order.
+_Avoid_: Shortest-job-first, long/short queues, mutable priority, retry tail
+
+**ResearchRun Execution Checkpoint**:
+A private immutable completed-Chunk boundary owned by one non-terminal
+ResearchRun. A later infrastructure Attempt may resume from it only after its
+frozen inputs and continuation data are proven intact.
+_Avoid_: Result Bundle, partial public result, user rerun cache, best-effort
+resume
+
+**ResearchRun Continuation State**:
+The bounded state required to continue the next ResearchRun Execution Chunk with
+exactly the same result. It excludes completed Alpha, matured stock-level Label,
+and daily Factor history.
+_Avoid_: Full historical matrix, approximate chunk summary, Result Bundle,
+Tracking state
 
 **Result Bundle**:
 The immutable, minimal authoritative result of one successful ResearchRun. It
@@ -897,8 +1009,8 @@ _Avoid_: Runtime cache, Result Bundle store, startup download
 
 **Dataset Head**:
 The atomic pointer to the one current validated Data Generation. It is the data
-source selected when a ResearchRun Attempt or Tracking Advance Attempt starts,
-not an immutable user-visible version history.
+source selected when a ResearchRun is admitted or a Tracking Advance Attempt
+starts, not an immutable user-visible version history.
 _Avoid_: Dataset Release chain, ResearchRun result, permanent snapshot catalog
 
 **Data Generation**:
