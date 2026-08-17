@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
 from collections.abc import Callable, Iterator, Mapping
@@ -29,6 +30,8 @@ from thesistrace.data import (
     MountedGenerationStore,
 )
 from thesistrace.publication import (
+    JsonPayload,
+    ParquetRowsPayload,
     PreparedPublication,
     Publication,
     PublicationNotFoundError,
@@ -36,13 +39,11 @@ from thesistrace.publication import (
     PublicationUnavailableError,
     PublicationVerificationError,
     PublishedRef,
+    StagedPayload,
     lock_publication_mutation,
 )
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_kernel.alpha_expression import (
-    MAX_ALPHA_RUN_ESTIMATED_WORK,
-    estimate_alpha_run_work,
-)
+from thesistrace.research_kernel.alpha_expression import estimate_alpha_run_work
 from thesistrace.research_kernel.numeric import (
     NUMERIC_CONTRACT_ID,
     NumericContractError,
@@ -68,15 +69,22 @@ from thesistrace.research_run.models import (
     ResearchRunCancelCommand,
     ResearchRunDetail,
     ResearchRunList,
+    ResearchRunProgress,
     ResearchRunResult,
     ResearchRunSummary,
     StartTrackingCommand,
 )
+from thesistrace.research_run.planning import (
+    DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
+    ResearchChunkCapacityError,
+    plan_research_chunks,
+)
 from thesistrace.research_run.result import (
+    STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
     ResearchResultError,
     enforce_result_bundle_budget,
     read_result_bundle,
-    result_publication_payloads,
+    result_publication_payloads_from_staged,
 )
 
 logger = logging.getLogger(__name__)
@@ -213,6 +221,7 @@ class ResearchRunService:
         current_dataset: CurrentDataset | None = None,
         track_references_result: TrackReferencesResult | None = None,
         execution: SupervisedResearchExecutor | None = None,
+        execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -228,6 +237,11 @@ class ResearchRunService:
         self._current_dataset = current_dataset
         self._track_references_result = track_references_result
         self._execution = execution
+        self._execution_memory_bytes = execution_memory_bytes
+
+    @property
+    def execution_memory_bytes(self) -> int:
+        return self._execution_memory_bytes
 
     def admit(
         self,
@@ -264,7 +278,12 @@ class ResearchRunService:
                 ]
             ) from error
         snapshot = self._current_dataset()
-        immutable_input = _admitted_input(command, compiled, snapshot)
+        immutable_input = _admitted_input(
+            command,
+            compiled,
+            snapshot,
+            execution_memory_bytes=self._execution_memory_bytes,
+        )
         run_id = f"run_{uuid4().hex[:20]}"
         submitted_name = (command.name or "").strip()
         name = submitted_name or f"Research {run_id[-8:].upper()}"
@@ -320,6 +339,21 @@ class ResearchRunService:
                 """,
                 (command.request_id, fingerprint, run_id),
             )
+            transaction.execute(
+                """
+                INSERT INTO research_runs.progress (
+                    run_id, phase,
+                    completed_warmup_sessions, total_warmup_sessions,
+                    completed_research_sessions, total_research_sessions,
+                    committed_chunk_count
+                ) VALUES (%s, 'queued', 0, %s, 0, %s, 0)
+                """,
+                (
+                    run_id,
+                    immutable_input.execution_plan.research_session_offset,
+                    immutable_input.execution_plan.research_session_count,
+                ),
+            )
             if self._dataset_lifecycle is not None:
                 self._dataset_lifecycle.retain_generation_in_transaction(
                     transaction,
@@ -356,14 +390,26 @@ class ResearchRunService:
                     claim,
                     emit=on_execution_event or (lambda _event: None),
                 )
-                prepared, provenance = self._prepare_execution_result(claim, execution)
-                self._progress("prepared", claim.run_id)
-                self._validate_current_execution(claim)
-                execution.acknowledge(
-                    cancel_requested=lambda: self._cancellation_is_pending(claim)
-                )
-                self._publish_success(claim, prepared, provenance)
-                self._progress("succeeded", claim.run_id)
+                while True:
+                    chunk = execution.chunk
+                    self._commit_execution_chunk(claim, chunk)
+                    self._progress("checkpoint", claim.run_id)
+                    if chunk["final"] is True:
+                        prepared, provenance = self._prepare_execution_result(
+                            claim,
+                            chunk,
+                        )
+                        self._progress("prepared", claim.run_id)
+                        self._validate_current_execution(claim)
+                        execution.acknowledge(
+                            cancel_requested=lambda: self._cancellation_is_pending(claim)
+                        )
+                        self._publish_success(claim, prepared, provenance)
+                        self._progress("succeeded", claim.run_id)
+                        break
+                    execution.advance(
+                        cancel_requested=lambda: self._cancellation_is_pending(claim)
+                    )
             except ResearchExecutionCancelled:
                 cancellation_pending = True
             except ResearchRunFenced:
@@ -533,6 +579,10 @@ class ResearchRunService:
             )
             transaction.execute(
                 "DELETE FROM research_runs.admission_requests WHERE run_id = %s",
+                (run_id,),
+            )
+            transaction.execute(
+                "DELETE FROM research_runs.execution_checkpoints WHERE run_id = %s",
                 (run_id,),
             )
             transaction.execute(
@@ -732,6 +782,7 @@ class ResearchRunService:
                 """,
                 (claim.run_id,),
             )
+            self._release_execution_checkpoints(transaction, claim.run_id)
             self._dataset_lifecycle.release_pin_in_transaction(
                 transaction,
                 claim.generation_pin_id,
@@ -774,6 +825,7 @@ class ResearchRunService:
                 """,
                 (row["run_id"],),
             )
+            self._release_execution_checkpoints(transaction, str(row["run_id"]))
             self._dataset_lifecycle.release_pin_in_transaction(
                 transaction,
                 str(row["generation_pin_id"]),
@@ -881,11 +933,23 @@ class ResearchRunService:
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
-                SELECT id, name, folder_id, status, requested_start_date,
-                       requested_end_date, created_at, immutable_input,
-                       result_manifest_sha256, result_provenance, failure_reason
-                FROM research_runs.runs
-                WHERE id = %s
+                SELECT run.id, run.name, run.folder_id, run.status,
+                       run.requested_start_date, run.requested_end_date,
+                       run.created_at, run.immutable_input,
+                       run.result_manifest_sha256, run.result_provenance,
+                       run.failure_reason,
+                       progress.phase AS progress_phase,
+                       progress.completed_warmup_sessions,
+                       progress.total_warmup_sessions,
+                       progress.completed_research_sessions,
+                       progress.total_research_sessions,
+                       progress.committed_chunk_count,
+                       progress.last_completed_warmup_session,
+                       progress.last_completed_research_session,
+                       progress.remaining_duration_estimate_seconds
+                FROM research_runs.runs AS run
+                JOIN research_runs.progress AS progress ON progress.run_id = run.id
+                WHERE run.id = %s
                 """,
                 (run_id,),
             ).fetchone()
@@ -897,6 +961,7 @@ class ResearchRunService:
             return ResearchRunDetail(
                 **summary.model_dump(),
                 input=authorable_input,
+                progress=_research_progress(row),
             )
         manifest_sha256 = row.get("result_manifest_sha256")
         provenance = row.get("result_provenance")
@@ -925,6 +990,7 @@ class ResearchRunService:
         return ResearchRunDetail(
             **summary.model_dump(),
             input=authorable_input,
+            progress=_research_progress(row),
             result=result,
         )
 
@@ -1100,6 +1166,22 @@ class ResearchRunService:
                         ),
                     )
                     return None
+            if row["latest_attempt_id"] is not None:
+                self._release_execution_checkpoints(transaction, run_id)
+                transaction.execute(
+                    """
+                    UPDATE research_runs.progress
+                    SET phase = 'queued', completed_warmup_sessions = 0,
+                        completed_research_sessions = 0,
+                        committed_chunk_count = 0,
+                        last_completed_warmup_session = NULL,
+                        last_completed_research_session = NULL,
+                        remaining_duration_estimate_seconds = NULL,
+                        updated_at = now()
+                    WHERE run_id = %s
+                    """,
+                    (run_id,),
+                )
             fence = int(row["execution_fence"]) + 1
             ordinal_row = transaction.execute(
                 """
@@ -1275,22 +1357,232 @@ class ResearchRunService:
     def _prepare_execution_result(
         self,
         claim: _ExecutionClaim,
-        execution: SupervisedResearchExecution,
+        chunk: Mapping[str, object],
     ) -> tuple[PreparedPublication, dict[str, object]]:
         assert self._publication is not None
-        result = execution.result
+        final_values = chunk.get("final_values")
+        if not isinstance(final_values, Mapping):
+            raise ResearchResultError("Final Research Chunk has no Result values")
         provenance = _result_provenance(claim)
-        observations = result["strategy_daily_observations"]
-        if not isinstance(observations, list):
-            raise ResearchResultError("Result Strategy Daily Observations are invalid")
+        with self._database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT observation_payload, observation_row_count,
+                       observation_first_session, observation_last_session
+                FROM research_runs.execution_checkpoints
+                WHERE run_id = %s AND observation_row_count > 0
+                ORDER BY ordinal
+                """,
+                (claim.run_id,),
+            ).fetchall()
+            progress = transaction.execute(
+                """
+                SELECT completed_research_sessions
+                FROM research_runs.progress
+                WHERE run_id = %s
+                """,
+                (claim.run_id,),
+            ).fetchone()
+        partitions = [
+            (
+                _staged_payload(row["observation_payload"]),
+                int(row["observation_row_count"]),
+                row["observation_first_session"].isoformat(),
+                row["observation_last_session"].isoformat(),
+            )
+            for row in rows
+        ]
         prepared = self._publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads(result),
+            payloads=result_publication_payloads_from_staged(
+                final_values,
+                partitions,
+            ),
             provenance=provenance,
             staging_authority=lambda: self._authorize_result_staging(claim),
         )
-        enforce_result_bundle_budget(prepared.exact_bytes, len(observations))
+        if progress is None:
+            raise ResearchResultError("Research Progress is missing")
+        enforce_result_bundle_budget(
+            prepared.exact_bytes,
+            int(progress["completed_research_sessions"]),
+        )
         return prepared, provenance
+
+    def _commit_execution_chunk(
+        self,
+        claim: _ExecutionClaim,
+        chunk: Mapping[str, object],
+    ) -> None:
+        assert self._publication is not None
+        ordinal = int(chunk["ordinal"])
+        boundary_session = str(chunk["boundary_session"])
+        phase = str(chunk["phase"])
+        completed_warmup = int(chunk["completed_warmup_sessions"])
+        completed_research = int(chunk["completed_research_sessions"])
+        continuation = chunk.get("continuation")
+        observations = chunk.get("strategy_daily_observations")
+        if (
+            phase not in {"warmup", "research"}
+            or not isinstance(continuation, Mapping)
+            or not isinstance(observations, list)
+            or any(not isinstance(value, Mapping) for value in observations)
+        ):
+            raise ResearchResultError("Research Chunk boundary is invalid")
+        continuation_payload = self._publication.stage(
+            JsonPayload(dict(continuation)),
+            staging_authority=lambda: self._authorize_result_staging(claim),
+        )
+        observation_payload = (
+            self._publication.stage(
+                ParquetRowsPayload(
+                    rows=tuple(dict(value) for value in observations),
+                    contract=STRATEGY_DAILY_OBSERVATIONS_CONTRACT,
+                ),
+                staging_authority=lambda: self._authorize_result_staging(claim),
+            )
+            if observations
+            else None
+        )
+        checkpoint_prepared = self._publication.prepare(
+            kind="research.execution-checkpoint",
+            payloads={
+                "continuation": continuation_payload,
+                **(
+                    {"strategy_daily_observations": observation_payload}
+                    if observation_payload is not None
+                    else {}
+                ),
+            },
+            provenance={
+                "run_id": claim.run_id,
+                "attempt_id": claim.attempt_id,
+                "ordinal": ordinal,
+                "data_generation_id": claim.data_generation_id,
+            },
+            staging_authority=lambda: self._authorize_result_staging(claim),
+        )
+        with self._database.transaction() as transaction:
+            self._validate_current_execution_in_transaction(transaction, claim)
+            prior = transaction.execute(
+                """
+                SELECT ordinal, chain_sha256
+                FROM research_runs.execution_checkpoints
+                WHERE run_id = %s
+                ORDER BY ordinal DESC
+                LIMIT 1
+                FOR UPDATE
+                """,
+                (claim.run_id,),
+            ).fetchone()
+            if ordinal != (1 if prior is None else int(prior["ordinal"]) + 1):
+                raise ResearchRunFenced
+            continuation_value = _staged_payload_value(continuation_payload)
+            observation_value = (
+                _staged_payload_value(observation_payload)
+                if observation_payload is not None
+                else None
+            )
+            checkpoint_identity = {
+                "run_id": claim.run_id,
+                "attempt_id": claim.attempt_id,
+                "ordinal": ordinal,
+                "boundary_session": boundary_session,
+                "phase": phase,
+                "completed_warmup_sessions": completed_warmup,
+                "completed_research_sessions": completed_research,
+                "continuation_payload": continuation_value,
+                "observation_payload": observation_value,
+                "prior_chain_sha256": None if prior is None else prior["chain_sha256"],
+            }
+            chain_sha256 = hashlib.sha256(
+                canonical_json_bytes(checkpoint_identity)
+            ).hexdigest()
+            checkpoint_publication = self._publication.record(
+                transaction,
+                checkpoint_prepared,
+            )
+            transaction.execute(
+                """
+                INSERT INTO research_runs.execution_checkpoints (
+                    id, run_id, attempt_id, ordinal, boundary_session, phase,
+                    completed_warmup_sessions, completed_research_sessions,
+                    continuation_payload, observation_payload,
+                    observation_row_count, observation_first_session,
+                    observation_last_session, checkpoint_manifest_sha256,
+                    chain_sha256
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    f"checkpoint_{uuid4().hex[:20]}",
+                    claim.run_id,
+                    claim.attempt_id,
+                    ordinal,
+                    boundary_session,
+                    phase,
+                    completed_warmup,
+                    completed_research,
+                    Jsonb(continuation_value),
+                    Jsonb(observation_value) if observation_value is not None else None,
+                    len(observations),
+                    observations[0]["session"] if observations else None,
+                    observations[-1]["session"] if observations else None,
+                    checkpoint_publication.manifest_sha256,
+                    chain_sha256,
+                ),
+            )
+            remaining_estimate: int | None = None
+            if ordinal >= 2:
+                timing = transaction.execute(
+                    """
+                    SELECT extract(epoch FROM (now() - min(created_at))) AS elapsed_seconds
+                    FROM research_runs.execution_checkpoints
+                    WHERE run_id = %s
+                    """,
+                    (claim.run_id,),
+                ).fetchone()
+                remaining_chunks = len(claim.immutable_input.execution_plan.chunks) - ordinal
+                if timing is not None and remaining_chunks > 0:
+                    elapsed_seconds = float(timing["elapsed_seconds"] or 0)
+                    remaining_estimate = max(
+                        1,
+                        math.ceil(elapsed_seconds / (ordinal - 1) * remaining_chunks),
+                    )
+            last_warmup_session = (
+                claim.immutable_input.execution_plan.calculation_sessions[
+                    completed_warmup - 1
+                ]
+                if completed_warmup > 0
+                else None
+            )
+            transaction.execute(
+                """
+                UPDATE research_runs.progress
+                SET phase = %s,
+                    completed_warmup_sessions = %s,
+                    completed_research_sessions = %s,
+                    committed_chunk_count = %s,
+                    last_completed_warmup_session = CASE
+                        WHEN %s > 0 THEN %s ELSE last_completed_warmup_session END,
+                    last_completed_research_session = CASE
+                        WHEN %s > 0 THEN %s ELSE last_completed_research_session END,
+                    remaining_duration_estimate_seconds = %s,
+                    updated_at = now()
+                WHERE run_id = %s
+                """,
+                (
+                    "finalizing" if chunk["final"] is True else phase,
+                    completed_warmup,
+                    completed_research,
+                    ordinal,
+                    completed_warmup,
+                    last_warmup_session,
+                    completed_research,
+                    observations[-1]["session"] if observations else None,
+                    remaining_estimate,
+                    claim.run_id,
+                ),
+            )
 
     def _validate_current_execution(self, claim: _ExecutionClaim) -> None:
         with self._database.transaction() as transaction:
@@ -1365,6 +1657,7 @@ class ResearchRunService:
             if current != {"status": "running", "execution_fence": claim.fence}:
                 raise ResearchRunFenced
             published = self._publication.record(transaction, prepared)
+            self._release_execution_checkpoints(transaction, claim.run_id)
             attempt = transaction.execute(
                 """
                 UPDATE research_runs.attempts
@@ -1393,6 +1686,14 @@ class ResearchRunService:
             )
             if updated.rowcount != 1:
                 raise ResearchRunFenced
+            transaction.execute(
+                """
+                UPDATE research_runs.progress
+                SET phase = 'succeeded', updated_at = now()
+                WHERE run_id = %s
+                """,
+                (claim.run_id,),
+            )
             self._dataset_lifecycle.release_pin_in_transaction(
                 transaction,
                 claim.generation_pin_id,
@@ -1485,6 +1786,8 @@ class ResearchRunService:
                     claim.fence,
                 ),
             )
+            if not retry:
+                self._release_execution_checkpoints(transaction, claim.run_id)
             if retry:
                 self._dataset_lifecycle.retain_generation_in_transaction(
                     transaction,
@@ -1498,6 +1801,33 @@ class ResearchRunService:
                 transaction,
                 claim.generation_pin_id,
                 owner_id=claim.attempt_id,
+            )
+
+    def _release_execution_checkpoints(
+        self,
+        transaction: PostgresTransaction,
+        run_id: str,
+    ) -> None:
+        assert self._publication is not None
+        rows = transaction.execute(
+            """
+            SELECT checkpoint_manifest_sha256
+            FROM research_runs.execution_checkpoints
+            WHERE run_id = %s
+            ORDER BY ordinal
+            FOR UPDATE
+            """,
+            (run_id,),
+        ).fetchall()
+        transaction.execute(
+            "DELETE FROM research_runs.execution_checkpoints WHERE run_id = %s",
+            (run_id,),
+        )
+        for row in rows:
+            self._publication.release_manifest_in_transaction(
+                transaction,
+                str(row["checkpoint_manifest_sha256"]),
+                still_referenced=False,
             )
 
 
@@ -1552,6 +1882,8 @@ def _admitted_input(
     command: ResearchRunAdmissionCommand,
     compiled: CompiledAlpha,
     snapshot: DatasetAdmissionSnapshot | None,
+    *,
+    execution_memory_bytes: int,
 ) -> ImmutableRunInput:
     if snapshot is None:
         raise ResearchRunAdmissionRejected(
@@ -1647,18 +1979,32 @@ def _admitted_input(
         research_session_count=calculation_session_count,
         universe_instrument_count=universe_instrument_count,
     )
-    if estimated_run_work > MAX_ALPHA_RUN_ESTIMATED_WORK:
+    first_research_index = snapshot.research_sessions.index(sessions[0])
+    calculation_start_index = first_research_index - compiled.effective_lookback
+    calculation_sessions = snapshot.research_sessions[
+        calculation_start_index : snapshot.research_sessions.index(sessions[-1]) + 1
+    ]
+    try:
+        execution_plan = plan_research_chunks(
+            calculation_sessions=calculation_sessions,
+            research_session_offset=compiled.effective_lookback,
+            formula_work=compiled.estimated_work,
+            node_count=compiled.node_count,
+            field_count=len(compiled.field_ids_by_identifier),
+            maximum_universe_cardinality=universe_instrument_count,
+            effective_lookback=compiled.effective_lookback,
+            execution_memory_bytes=execution_memory_bytes,
+        )
+    except ResearchChunkCapacityError as error:
         raise ResearchRunAdmissionRejected(
             [
                 ResearchRunAdmissionIssue(
-                    code="ALPHA_RUN_WORK_EXCEEDS_LIMIT",
-                    field="formula",
-                    message=(
-                        "Alpha Formula, Research Dates, and Universe exceed the Run work budget"
-                    ),
+                    code="RESEARCH_SESSION_EXCEEDS_WORKER_CAPACITY",
+                    field="universe",
+                    message=str(error),
                 )
             ]
-        )
+        ) from error
     return ImmutableRunInput(
         formula_source=command.formula,
         alpha_expression=compiled.expression,
@@ -1699,6 +2045,7 @@ def _admitted_input(
             calculation_session_count=calculation_session_count,
             universe_instrument_count=universe_instrument_count,
         ),
+        execution_plan=execution_plan,
     )
 
 
@@ -1845,6 +2192,45 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
         rebalance_every_sessions=int(
             immutable_input.strategy["rebalance_every_sessions"]
         ),
+    )
+
+
+def _research_progress(row: Mapping[str, object]) -> ResearchRunProgress:
+    return ResearchRunProgress(
+        phase=str(row["progress_phase"]),
+        completed_warmup_sessions=int(row["completed_warmup_sessions"]),
+        total_warmup_sessions=int(row["total_warmup_sessions"]),
+        completed_research_sessions=int(row["completed_research_sessions"]),
+        total_research_sessions=int(row["total_research_sessions"]),
+        committed_chunk_count=int(row["committed_chunk_count"]),
+        last_completed_warmup_session=row.get("last_completed_warmup_session"),
+        last_completed_research_session=row.get("last_completed_research_session"),
+        remaining_duration_estimate_seconds=row.get(
+            "remaining_duration_estimate_seconds"
+        ),
+    )
+
+
+def _staged_payload_value(payload: StagedPayload) -> dict[str, object]:
+    return {
+        "sha256": payload.sha256,
+        "byte_size": payload.byte_size,
+        "media_type": payload.media_type,
+        "serialization": dict(payload.serialization),
+    }
+
+
+def _staged_payload(value: object) -> StagedPayload:
+    if not isinstance(value, Mapping):
+        raise ResearchResultError("Staged Result payload reference is invalid")
+    serialization = value.get("serialization")
+    if not isinstance(serialization, Mapping):
+        raise ResearchResultError("Staged Result payload serialization is invalid")
+    return StagedPayload(
+        sha256=str(value["sha256"]),
+        byte_size=int(value["byte_size"]),
+        media_type=str(value["media_type"]),
+        serialization=dict(serialization),
     )
 
 

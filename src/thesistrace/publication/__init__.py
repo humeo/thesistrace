@@ -11,6 +11,7 @@ if TYPE_CHECKING:
         PublicationUnavailableError,
         PublicationVerificationError,
         PublishedRef,
+        StagedPayload,
         VerifiedBundle,
         VerifiedPayload,
         lock_publication_mutation,
@@ -27,6 +28,7 @@ __all__ = [
     "PublicationUnavailableError",
     "PublicationVerificationError",
     "PublishedRef",
+    "StagedPayload",
     "VerifiedBundle",
     "VerifiedPayload",
 ]

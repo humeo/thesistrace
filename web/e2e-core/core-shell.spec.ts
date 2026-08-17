@@ -191,6 +191,8 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     controlledWorker = barrier.process;
     await barrier.claimed;
     await expect(page.locator(".research-run-facts").getByText(/Status\s+running/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Committed progress" })).toBeVisible();
+    await expect(page.getByText("Current work is in flight and not yet committed.")).toBeVisible();
     controlledWorker.stdin?.end("1");
     await controlledWorkerExit(controlledWorker);
     controlledWorker = undefined;
@@ -393,6 +395,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const defaultRunId = page.url().split("/").at(-1);
     expect(defaultRunId).toMatch(/^run_[a-f0-9]+$/);
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByRole("heading", { name: "Committed progress" })).toBeVisible();
+    await expect(page.getByText(/Research\s+2 \/ 2/)).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(/checkpoint|staged payload/i);
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
 

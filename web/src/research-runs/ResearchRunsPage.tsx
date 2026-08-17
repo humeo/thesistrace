@@ -103,6 +103,19 @@ type ResearchResult = {
   };
 };
 
+export type ResearchRunProgress = {
+  phase: "queued" | "warmup" | "research" | "finalizing" | "succeeded";
+  completed_warmup_sessions: number;
+  total_warmup_sessions: number;
+  completed_research_sessions: number;
+  total_research_sessions: number;
+  committed_chunk_count: number;
+  last_completed_warmup_session: string | null;
+  last_completed_research_session: string | null;
+  remaining_duration_estimate_seconds: number | null;
+  duration_is_estimate: boolean;
+};
+
 export type ResearchRun = {
   id: string;
   status: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
@@ -115,6 +128,7 @@ export type ResearchRun = {
   input?: FrozenResearchAuthorableInput;
   failure_reason?: string;
   result?: ResearchResult;
+  progress?: ResearchRunProgress;
 };
 
 type ResearchRunList = { items: ResearchRun[]; next_cursor: string | null };
@@ -437,6 +451,12 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
           <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
         </div>
+        {run.progress ? (
+          <ResearchRunProgressView
+            active={run.status === "running" || run.status === "cancelling"}
+            progress={run.progress}
+          />
+        ) : null}
         {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
         {deleting ? null : folderError !== null ? (
           <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
@@ -487,6 +507,31 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       )}
       {items?.length === 0 ? <p>No Research Runs yet.</p> : null}
       <ResearchRunHistory items={items ?? []} />
+    </section>
+  );
+}
+
+export function ResearchRunProgressView({
+  active,
+  progress,
+}: {
+  active: boolean;
+  progress: ResearchRunProgress;
+}) {
+  const estimate = progress.remaining_duration_estimate_seconds;
+  return (
+    <section aria-label="ResearchRun progress">
+      <h2>Committed progress</h2>
+      <p>Warm-up {progress.completed_warmup_sessions} / {progress.total_warmup_sessions}</p>
+      <p>Research {progress.completed_research_sessions} / {progress.total_research_sessions}</p>
+      <p>Committed Chunks {progress.committed_chunk_count}</p>
+      {active ? <p>Current work is in flight and not yet committed.</p> : null}
+      {estimate !== null ? (
+        <p>
+          About {Math.max(1, Math.ceil(estimate / 60))} minutes remaining
+          {progress.duration_is_estimate ? " (revisable estimate, not an SLA)" : ""}.
+        </p>
+      ) : null}
     </section>
   );
 }

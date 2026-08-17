@@ -124,6 +124,33 @@ class DataAdmissionFacts(BaseModel):
     universe_instrument_count: int
 
 
+class ResearchExecutionChunk(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    ordinal: int
+    first_session: NaturalDate
+    last_session: NaturalDate
+    session_count: int
+    warmup_session_count: int
+    research_session_count: int
+
+
+class ResearchExecutionPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    execution_memory_bytes: int
+    chunk_time_target_seconds: int
+    chunk_session_count: int
+    time_target_exceeded: bool
+    estimated_peak_bytes: int
+    estimated_chunk_work: int
+    maximum_universe_cardinality: int
+    calculation_sessions: tuple[NaturalDate, ...]
+    research_session_offset: int
+    research_session_count: int
+    chunks: tuple[ResearchExecutionChunk, ...]
+
+
 class ImmutableRunInput(BaseModel):
     """Private, complete value input owned by one ResearchRun."""
 
@@ -144,6 +171,7 @@ class ImmutableRunInput(BaseModel):
     semantic_versions: dict[str, str]
     alpha_admission: AlphaAdmissionFacts
     data_admission: DataAdmissionFacts
+    execution_plan: ResearchExecutionPlan
 
 
 class ResearchRunSummary(BaseModel):
@@ -341,8 +369,24 @@ class ResearchRunResult(BaseModel):
     provenance: ResultProvenance
 
 
+class ResearchRunProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    phase: Literal["queued", "warmup", "research", "finalizing", "succeeded"]
+    completed_warmup_sessions: int
+    total_warmup_sessions: int
+    completed_research_sessions: int
+    total_research_sessions: int
+    committed_chunk_count: int
+    last_completed_warmup_session: date | None = None
+    last_completed_research_session: date | None = None
+    remaining_duration_estimate_seconds: int | None = None
+    duration_is_estimate: bool = True
+
+
 class ResearchRunDetail(ResearchRunSummary):
     input: ResearchRunAuthorableInput
+    progress: ResearchRunProgress
     result: ResearchRunResult | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

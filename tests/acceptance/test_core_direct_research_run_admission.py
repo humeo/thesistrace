@@ -22,10 +22,7 @@ from thesistrace.entrypoints.runtime import (
     open_core_runtime,
 )
 from thesistrace.fixture import build_minimal_canonical_fixture
-from thesistrace.research_run import (
-    ResearchRunAdmissionRejected,
-    ResearchRunService,
-)
+from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.models import ResearchRunAdmissionCommand
 
 SESSIONS = (
@@ -128,7 +125,7 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL runtime is not configured",
 )
-def test_formula_dates_and_universe_over_budget_leave_no_admission_rows() -> None:
+def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan() -> None:
     settings = CoreSettings.from_environment()
     drop_product_schemas(settings)
     sessions = tuple(date(2024, 1, 1) + timedelta(days=index) for index in range(505))
@@ -139,7 +136,7 @@ def test_formula_dates_and_universe_over_budget_leave_no_admission_rows() -> Non
         coverage_end=sessions[-1],
         research_sessions=sessions,
         available_field_ids=frozenset({"price.close.adjusted"}),
-        count_universe_instruments=lambda _universe, _start, _end: 3000,
+        maximum_universe_cardinality=lambda _universe, _start, _end: 3000,
     )
     command = ResearchRunAdmissionCommand.model_validate(
         {
@@ -157,13 +154,24 @@ def test_formula_dates_and_universe_over_budget_leave_no_admission_rows() -> Non
             compile_formula=alpha_language.compile,
             current_dataset=lambda: snapshot,
         )
-        with pytest.raises(ResearchRunAdmissionRejected) as rejected:
-            service.admit(command)
+        admitted = service.admit(command)
 
-    assert [issue.code for issue in rejected.value.issues] == [
-        "ALPHA_RUN_WORK_EXCEEDS_LIMIT"
-    ]
-    assert _admission_counts(settings) == {"requests": 0, "runs": 0}
+    assert admitted.status == "queued"
+    frozen = _stored_run(settings, admitted.id)["immutable_input"]
+    assert frozen["alpha_admission"]["estimated_run_work"] > 15_000_000
+    plan = frozen["execution_plan"]
+    assert plan["execution_memory_bytes"] == 1536 * 1024**2
+    assert 1 <= plan["chunk_session_count"] <= 63
+    assert plan["calculation_sessions"] == [session.isoformat() for session in sessions[1:]]
+    assert plan["research_session_offset"] == 251
+    assert plan["research_session_count"] == 253
+    assert plan["chunks"][0]["first_session"] == sessions[1].isoformat()
+    assert plan["chunks"][-1]["last_session"] == sessions[-1].isoformat()
+    assert all(
+        chunk["session_count"] == plan["chunk_session_count"]
+        for chunk in plan["chunks"][:-1]
+    )
+    assert _admission_counts(settings) == {"requests": 1, "runs": 1}
 
 
 @pytest.mark.skipif(
@@ -267,6 +275,28 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
                 "last_research_session": "2026-08-04",
                 "calculation_session_count": 2,
                 "universe_instrument_count": 1,
+            },
+            "execution_plan": {
+                "execution_memory_bytes": 1536 * 1024**2,
+                "chunk_time_target_seconds": 30,
+                "chunk_session_count": 63,
+                "time_target_exceeded": False,
+                "estimated_peak_bytes": 67_163_152,
+                "estimated_chunk_work": 2_079,
+                "maximum_universe_cardinality": 1,
+                "calculation_sessions": ["2026-08-03", "2026-08-04"],
+                "research_session_offset": 0,
+                "research_session_count": 2,
+                "chunks": [
+                    {
+                        "ordinal": 1,
+                        "first_session": "2026-08-03",
+                        "last_session": "2026-08-04",
+                        "session_count": 2,
+                        "warmup_session_count": 0,
+                        "research_session_count": 2,
+                    }
+                ],
             },
         }
         _assert_obsolete_schema_is_absent(settings)

@@ -988,17 +988,14 @@ def test_admission_projection_opens_only_research_calendar(
         "price.close.adjusted",
     )
     assert admission.research_calendar == tuple(canonical["research_calendar"])
-    assert store.count_universe_instruments(
+    assert store.maximum_universe_cardinality(
         generation.manifest_sha256,
         universe="top3000",
         start_session=str(canonical["research_calendar"][0]),
         end_session=str(canonical["research_calendar"][-1]),
-    ) == len(
-        {
-            str(instrument_id)
-            for row in canonical["liquidity_universes"]["top3000"]
-            for instrument_id in row["instrument_ids"]
-        }
+    ) == max(
+        len({str(instrument_id) for instrument_id in row["instrument_ids"]})
+        for row in canonical["liquidity_universes"]["top3000"]
     )
     with pytest.raises(GenerationStoreError, match="missing"):
         MountedGenerationStore(tmp_path).validate_generation(generation.manifest_sha256)
@@ -1034,7 +1031,7 @@ def test_universe_count_opens_only_overlapping_session_partitions(
     final_session = str(canonical["research_calendar"][-1])
 
     assert (
-        store.count_universe_instruments(
+        store.maximum_universe_cardinality(
             generation.manifest_sha256,
             universe="top3000",
             start_session=final_session,
@@ -1043,6 +1040,31 @@ def test_universe_count_opens_only_overlapping_session_partitions(
         == 2
     )
     assert opened == [2]
+
+
+def test_maximum_universe_cardinality_does_not_count_membership_churn(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical(session_count=4)
+    for rows in canonical["liquidity_universes"].values():
+        for ordinal, row in enumerate(rows):
+            row["instrument_ids"] = [
+                "equity:A.SH" if ordinal % 2 == 0 else "equity:B.SZ"
+            ]
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "membership-churn"},
+    )
+
+    assert store.maximum_universe_cardinality(
+        generation.manifest_sha256,
+        universe="top3000",
+        start_session=str(canonical["research_calendar"][0]),
+        end_session=str(canonical["research_calendar"][-1]),
+    ) == 1
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])

@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from collections import Counter, defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
 import pyarrow as pa
@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from thesistrace.publication import (
     JsonPayload,
     ParquetRowsPayload,
+    StagedPayload,
     VerifiedBundle,
 )
 from thesistrace.publication.serialization import (
@@ -23,6 +24,7 @@ from thesistrace.publication.serialization import (
 )
 from thesistrace.research_kernel.kernel_run import RunOutput
 from thesistrace.research_kernel.numeric import canonical_decimal
+from thesistrace.research_kernel.serialization import canonical_checksum_chain
 from thesistrace.research_kernel.strategy import advance_strategy_metric_state
 from thesistrace.research_kernel.terminal_state_schema import (
     LAST_DAILY_OBSERVATION_KEYS,
@@ -155,6 +157,70 @@ def result_publication_payloads(
     return payloads
 
 
+def result_publication_payloads_from_staged(
+    final_values: Mapping[str, object],
+    partitions: Sequence[tuple[StagedPayload, int, str, str]],
+) -> dict[str, JsonPayload | StagedPayload]:
+    if set(final_values) != {
+        "factor_summary",
+        "strategy_summary",
+        "terminal_strategy_state",
+    }:
+        raise ResearchResultError("Final Research values are incomplete")
+    try:
+        FactorSummaryValue.model_validate(final_values["factor_summary"])
+        StrategySummaryValue.model_validate(final_values["strategy_summary"])
+        TerminalStrategyStateValue.model_validate(final_values["terminal_strategy_state"])
+    except ValidationError as error:
+        raise ResearchResultError("Final Research values are invalid") from error
+    if not partitions:
+        raise ResearchResultError("Result requires staged Strategy observations")
+    payloads: dict[str, JsonPayload | StagedPayload] = {
+        "factor_summary": JsonPayload(copy.deepcopy(final_values["factor_summary"])),
+        "strategy_summary": JsonPayload(copy.deepcopy(final_values["strategy_summary"])),
+        "terminal_strategy_state": JsonPayload(
+            copy.deepcopy(final_values["terminal_strategy_state"])
+        ),
+    }
+    descriptors: list[dict[str, object]] = []
+    prior_session: str | None = None
+    for index, (payload, row_count, first_session, last_session) in enumerate(partitions):
+        if (
+            row_count < 1
+            or row_count > RESULT_DAILY_PARTITION_SESSION_COUNT
+            or first_session > last_session
+            or (prior_session is not None and first_session <= prior_session)
+            or payload.media_type != "application/vnd.apache.parquet"
+            or payload.serialization
+            != {
+                "format": "canonical-parquet",
+                "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
+            }
+        ):
+            raise ResearchResultError("Staged Strategy observation partition is invalid")
+        name = f"{RESULT_DAILY_PARTITION_PREFIX}{index:06d}"
+        payloads[name] = payload
+        descriptors.append(
+            {
+                "name": name,
+                "row_count": row_count,
+                "first_session": first_session,
+                "last_session": last_session,
+            }
+        )
+        prior_session = last_session
+    payloads["strategy_daily_observations"] = JsonPayload(
+        {
+            "format": "partitioned-parquet",
+            "version": 1,
+            "partition_session_count": RESULT_DAILY_PARTITION_SESSION_COUNT,
+            "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
+            "partitions": descriptors,
+        }
+    )
+    return payloads
+
+
 def read_result_bundle(bundle: VerifiedBundle) -> dict[str, object]:
     if bundle.kind != "research.result" or not RESULT_VALUE_NAMES <= set(bundle.payloads):
         raise ResearchResultError("Result Bundle must contain exactly four durable values")
@@ -212,8 +278,15 @@ def _factor_summary(factor: Mapping[str, object]) -> dict[str, object]:
         projected[horizon] = {
             "horizon": int(value["horizon"]),
             "alpha_checksum": str(value["alpha_checksum"]),
-            "label_checksum": str(value["label_checksum"]),
-            "source_checksum": str(value["checksum"]),
+            "label_checksum": canonical_checksum_chain(
+                {
+                    "session": str(observation["session"]),
+                    "sample_count": int(observation["sample_count"]),
+                }
+                for observation in daily
+                if isinstance(observation, Mapping)
+            ),
+            "source_checksum": canonical_checksum_chain(daily),
             "summary": summary,
             "coverage": {
                 "signal_session_count": len(daily),
@@ -245,7 +318,9 @@ def _strategy_summary(
     return {
         "alpha_checksum": str(strategy["alpha_checksum"]),
         "initial_cash_cny": str(strategy["initial_cash_cny"]),
-        "source_checksum": str(strategy["checksum"]),
+        "source_checksum": canonical_checksum_chain(
+            _strategy_daily_observations(strategy)
+        ),
         "benchmark": {
             "universe": universe,
             "methodology": "selected_universe_equal_weight",
@@ -435,8 +510,7 @@ def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
             or value.get("row_count") != len(partition_rows)
             or value.get("first_session") != partition_rows[0]["session"]
             or value.get("last_session") != partition_rows[-1]["session"]
-            or (index + 1 < len(partitions) and len(partition_rows) != 504)
-            or len(partition_rows) > 504
+            or len(partition_rows) > RESULT_DAILY_PARTITION_SESSION_COUNT
             or (prior_session is not None and str(partition_rows[0]["session"]) <= prior_session)
         ):
             raise ResearchResultError("Strategy Daily Observations partition is invalid")

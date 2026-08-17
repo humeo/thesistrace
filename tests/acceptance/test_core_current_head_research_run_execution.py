@@ -118,6 +118,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         )
         assert [event["event"] for event in execution_events] == [
             "research_execution_child_started",
+            "research_execution_chunk_received",
             "research_execution_child_acknowledged",
             "research_execution_child_exited",
         ]
@@ -171,6 +172,136 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         )
         assert started.status_code == 201
         assert started.json()["status"] == "active"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chunks(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = _weekday_sessions_between(date(2010, 1, 4), date(2026, 8, 13))
+    assert len(sessions) > 4_000
+    _publish_composite_head(
+        settings,
+        sessions=sessions,
+        operation_id="long-research-multi-formula",
+    )
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        for index, formula in enumerate(
+            (
+                "close_adj",
+                "total_revenue_latest_fy",
+                "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
+            )
+        ):
+            execution_events: list[dict[str, object]] = []
+            accepted = client.post(
+                "/api/research-runs",
+                json=_run_command(
+                    f"long-research-{index}",
+                    formula=formula,
+                    start_date=sessions[0],
+                    end_date=sessions[-1],
+                ),
+            )
+            assert accepted.status_code == 202, accepted.text
+            run_id = str(accepted.json()["id"])
+            if index == 0:
+                second_checkpoint = Event()
+                release_execution = Event()
+                committed_boundaries = [0]
+
+                def pause_after_second_checkpoint(
+                    stage: str,
+                    target_run_id: str,
+                    expected_run_id: str = run_id,
+                    checkpoint_event: Event = second_checkpoint,
+                    release_event: Event = release_execution,
+                    boundary_count: list[int] = committed_boundaries,
+                ) -> None:
+                    if stage == "checkpoint" and target_run_id == expected_run_id:
+                        boundary_count[0] += 1
+                    if boundary_count[0] == 2 and not checkpoint_event.is_set():
+                        checkpoint_event.set()
+                        assert release_event.wait(timeout=20)
+
+                processor = ResearchRunService(
+                    runtime.database,
+                    dataset_lifecycle=DatasetLifecycle(
+                        runtime.database,
+                        settings.data_mount,
+                    ),
+                    generation_store=MountedGenerationStore(settings.data_mount),
+                    publication=runtime.publication,
+                    execution=SupervisedResearchExecutor(settings.data_mount),
+                    progress=pause_after_second_checkpoint,
+                )
+                worker = Thread(
+                    target=processor.process_next,
+                    kwargs={"on_execution_event": execution_events.append},
+                )
+                worker.start()
+                assert second_checkpoint.wait(timeout=20)
+                committed = client.get(f"/api/research-runs/{run_id}").json()
+                assert committed["status"] == "running"
+                assert committed["progress"]["committed_chunk_count"] == 2
+                assert committed["progress"]["completed_research_sessions"] > 0
+                assert committed["progress"]["completed_research_sessions"] < len(sessions)
+                assert committed["progress"]["remaining_duration_estimate_seconds"] >= 1
+                release_execution.set()
+                worker.join(timeout=120)
+                assert not worker.is_alive()
+            else:
+                processor = ResearchRunService(
+                    runtime.database,
+                    dataset_lifecycle=DatasetLifecycle(
+                        runtime.database,
+                        settings.data_mount,
+                    ),
+                    generation_store=MountedGenerationStore(settings.data_mount),
+                    publication=runtime.publication,
+                    execution=SupervisedResearchExecutor(settings.data_mount),
+                )
+                assert processor.process_next(
+                    on_execution_event=execution_events.append
+                ) is True
+            peak_rss_values = [
+                int(event["child_peak_rss_bytes"])
+                for event in execution_events
+                if event["event"] == "research_execution_chunk_received"
+            ]
+            assert len(peak_rss_values) >= 3
+            assert max(peak_rss_values) <= 1536 * 1024**2
+            detail = client.get(f"/api/research-runs/{run_id}").json()
+            assert detail["status"] == "succeeded"
+            assert detail["progress"]["phase"] == "succeeded"
+            assert detail["progress"]["completed_research_sessions"] == len(sessions)
+            assert detail["progress"]["total_research_sessions"] == len(sessions)
+            assert detail["progress"]["committed_chunk_count"] >= 3
+            assert "checkpoint" not in str(detail).lower()
+            assert "staged" not in str(detail).lower()
+        with runtime.database.transaction() as transaction:
+            private_state = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM research_runs.execution_checkpoints)
+                        AS checkpoint_count,
+                    (SELECT count(*) FROM publication.manifests
+                     WHERE kind = 'research.execution-checkpoint')
+                        AS checkpoint_manifest_count
+                """
+            ).fetchone()
+        assert private_state == {
+            "checkpoint_count": 0,
+            "checkpoint_manifest_count": 0,
+        }
 
 
 @pytest.mark.skipif(
@@ -572,8 +703,9 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "start_date",
             "end_date",
             "formula_summary",
-            "input",
-            "result",
+                "input",
+                "progress",
+                "result",
         }
         assert set(public_run["result"]) == {
             "factor",
@@ -2312,6 +2444,7 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
         assert _publication_manifest_count(settings) == manifest_count
         assert [event["event"] for event in execution_events] == [
             "research_execution_child_started",
+            "research_execution_chunk_received",
             "research_execution_child_exited",
         ]
         assert execution_events[-1]["acknowledged"] is False
@@ -2542,6 +2675,16 @@ def _weekday_sessions_after(start: date, *, count: int) -> tuple[str, ...]:
         cursor += timedelta(days=1)
         if cursor.weekday() < 5:
             sessions.append(cursor.isoformat())
+    return tuple(sessions)
+
+
+def _weekday_sessions_between(start: date, end: date) -> tuple[str, ...]:
+    sessions: list[str] = []
+    cursor = start
+    while cursor <= end:
+        if cursor.weekday() < 5:
+            sessions.append(cursor.isoformat())
+        cursor += timedelta(days=1)
     return tuple(sessions)
 
 

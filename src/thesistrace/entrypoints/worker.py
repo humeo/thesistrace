@@ -138,6 +138,13 @@ def process_one_poll(
 ) -> None:
     claim = _claim_event(configuration, emit)
     if configuration.role is WorkerRole.RESEARCH:
+        if (
+            runtime.research_runs.execution_memory_bytes
+            > configuration.capacity.execution_memory_bytes
+        ):
+            raise WorkerCapacityError(
+                "Research Worker execution memory cannot fit frozen planning capacity"
+            )
         product_worked = runtime.research_runs.process_next(
             on_claim=claim,
             on_execution_event=emit,

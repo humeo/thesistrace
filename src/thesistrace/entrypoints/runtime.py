@@ -28,6 +28,7 @@ from thesistrace.research_run import (
     research_run_exists,
 )
 from thesistrace.research_run.execution import SupervisedResearchExecutor
+from thesistrace.research_run.planning import DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
 from thesistrace.research_run.result import read_result_bundle
 
 CORE_ENVIRONMENT_NAMES = (
@@ -50,6 +51,7 @@ class CoreSettings:
     s3_bucket: str
     data_mount: Path
     s3_region: str = "us-east-1"
+    research_execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
 
     @classmethod
     def from_environment(cls) -> CoreSettings:
@@ -77,6 +79,14 @@ class CoreSettings:
                 missing.append(name)
         if missing:
             raise RuntimeError(f"missing Core configuration: {', '.join(missing)}")
+        research_execution_memory_bytes = int(
+            os.environ.get(
+                "THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES",
+                str(DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES),
+            )
+        )
+        if research_execution_memory_bytes <= 0:
+            raise RuntimeError("Research execution memory must be positive")
         return cls(
             database_url=values["database_url"],
             s3_endpoint_url=values["s3_endpoint_url"],
@@ -85,6 +95,7 @@ class CoreSettings:
             s3_bucket=values["s3_bucket"],
             data_mount=Path(values["data_mount"]),
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
+            research_execution_memory_bytes=research_execution_memory_bytes,
         )
 
 
@@ -152,6 +163,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             current_dataset=dataset_admission.current,
             track_references_result=daily_tracks.references_result_manifest,
             execution=SupervisedResearchExecutor(settings.data_mount),
+            execution_memory_bytes=settings.research_execution_memory_bytes,
         )
         yield CoreRuntime(
             database=database,

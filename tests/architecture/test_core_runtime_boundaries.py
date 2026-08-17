@@ -654,7 +654,6 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
     ).read_text()
 
     assert "read_columnar_slice(" in execution_source
-    assert "run_columnar_chunk(" in execution_source
     assert "read_composite_slice(" not in execution_source
     assert "run_kernel(" not in execution_source
     assert "to_pylist(" not in execution_source

@@ -8,7 +8,7 @@ Result.
 
 **Blocked by:** 04 — Confirm Research cancellation after child exit
 
-**Status:** ready-for-agent
+**Status:** completed
 
 - [ ] Estimated Total Research Work is retained for progress, duration guidance, warnings, and telemetry but no longer rejects a Run or changes queue priority.
 - [ ] Admission rejects only structural, lookback, coverage, or minimum legal peak-footprint failures relevant to this execution change.

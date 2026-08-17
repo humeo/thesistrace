@@ -71,7 +71,15 @@ class ParquetRowsPayload:
     contract: ParquetWriterContract
 
 
-type PublicationPayload = JsonPayload | ParquetRowsPayload
+@dataclass(frozen=True)
+class StagedPayload:
+    sha256: str
+    byte_size: int
+    media_type: str
+    serialization: Mapping[str, object]
+
+
+type PublicationPayload = JsonPayload | ParquetRowsPayload | StagedPayload
 type StagingAuthority = Callable[[], AbstractContextManager[None]]
 
 
@@ -174,12 +182,22 @@ class Publication:
             raise PublicationPreparationError("a publication requires at least one payload")
         canonical_provenance = _canonical_json_value(provenance, subject="provenance")
         serialized: list[tuple[str, bytes, str, dict[str, object]]] = []
+        staged: list[tuple[str, StagedPayload]] = []
         for name in sorted(payloads):
             with _staging_authority(staging_authority):
                 pass
             _require_identifier(name, subject="payload name")
-            content, media_type, serialization = _serialize_payload(payloads[name])
-            serialized.append((name, content, media_type, serialization))
+            payload = payloads[name]
+            if isinstance(payload, StagedPayload):
+                self._read_verified(
+                    payload.sha256,
+                    payload.byte_size,
+                    staging_authority=staging_authority,
+                )
+                staged.append((name, payload))
+            else:
+                content, media_type, serialization = _serialize_payload(payload)
+                serialized.append((name, content, media_type, serialization))
 
         self._ensure_bucket(staging_authority=staging_authority)
         manifest_objects: list[dict[str, object]] = []
@@ -200,6 +218,17 @@ class Publication:
                     "sha256": digest,
                 }
             )
+        manifest_objects.extend(
+            {
+                "bytes": payload.byte_size,
+                "media_type": payload.media_type,
+                "name": name,
+                "serialization": dict(payload.serialization),
+                "sha256": payload.sha256,
+            }
+            for name, payload in staged
+        )
+        manifest_objects.sort(key=lambda item: str(item["name"]))
 
         manifest = {
             "kind": kind,
@@ -211,6 +240,28 @@ class Publication:
         return PreparedPublication(
             manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
             _manifest_bytes=manifest_bytes,
+        )
+
+    def stage(
+        self,
+        payload: JsonPayload | ParquetRowsPayload,
+        *,
+        staging_authority: StagingAuthority | None = None,
+    ) -> StagedPayload:
+        content, media_type, serialization = _serialize_payload(payload)
+        self._ensure_bucket(staging_authority=staging_authority)
+        digest = hashlib.sha256(content).hexdigest()
+        self._put_immutable(
+            digest,
+            content,
+            media_type=media_type,
+            staging_authority=staging_authority,
+        )
+        return StagedPayload(
+            sha256=digest,
+            byte_size=len(content),
+            media_type=media_type,
+            serialization=serialization,
         )
 
     def verify_prepared(self, prepared: PreparedPublication) -> VerifiedBundle:
@@ -641,11 +692,18 @@ class Publication:
                 "Publication content address contains different bytes"
             )
 
-    def _read_verified(self, digest: str, expected_bytes: int) -> bytes:
+    def _read_verified(
+        self,
+        digest: str,
+        expected_bytes: int,
+        *,
+        staging_authority: StagingAuthority | None = None,
+    ) -> bytes:
         content = self._read_object_bytes(
             digest,
             unavailable_message="Publication object read is temporarily unavailable",
             missing_message="Publication object is missing",
+            staging_authority=staging_authority,
         )
         if len(content) != expected_bytes:
             raise PublicationVerificationError("Publication object length is invalid")

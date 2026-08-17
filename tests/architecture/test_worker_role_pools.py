@@ -22,6 +22,7 @@ class _ProductQueue:
     resource_id: str
     has_work: bool
     calls: int = 0
+    execution_memory_bytes: int = 1536 * 1024**2
 
     def process_next(self, *, on_claim=None, on_execution_event=None) -> bool:
         del on_execution_event
@@ -99,6 +100,24 @@ def test_research_worker_claims_only_one_research_run_and_skips_maintenance() ->
             "attempt_id": "attempt-run-1",
         }
     ]
+
+
+def test_research_worker_refuses_a_plan_from_another_memory_envelope() -> None:
+    research = _ProductQueue("run-1", True, execution_memory_bytes=2 * 1024**3)
+    runtime = SimpleNamespace(
+        research_runs=research,
+        daily_tracks=_TrackingQueue("track-1", False),
+        publication=_PublicationMaintenance(),
+    )
+
+    with pytest.raises(WorkerCapacityError, match="cannot fit frozen planning capacity"):
+        process_one_poll(
+            runtime,
+            _configuration(WorkerRole.RESEARCH),
+            emit=lambda _event: None,
+        )
+
+    assert research.calls == 0
 
 
 def test_tracking_worker_claims_only_one_advance_and_skips_maintenance() -> None:

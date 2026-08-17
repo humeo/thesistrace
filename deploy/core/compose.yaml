@@ -6,6 +6,7 @@ x-core-environment: &core-environment
   THESISTRACE_S3_BUCKET: thesistrace-local
   THESISTRACE_S3_REGION: us-east-1
   THESISTRACE_DATA_MOUNT: /var/lib/thesistrace/canonical-data
+  THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES: ${THESISTRACE_RESEARCH_WORKER_EXECUTION_MEMORY_BYTES:-1610612736}
 
 x-backend: &backend
   build:

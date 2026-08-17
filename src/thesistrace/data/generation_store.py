@@ -918,7 +918,7 @@ class MountedGenerationStore:
             financial_observation_through_session=financial_through,
         )
 
-    def count_universe_instruments(
+    def maximum_universe_cardinality(
         self,
         manifest_sha256: str,
         *,
@@ -944,14 +944,12 @@ class MountedGenerationStore:
             },
             columns={"session", "universe", "instrument_ids"},
         )
-        return len(
-            {
-                str(instrument_id)
-                for row in rows
-                if row["universe"] == universe
-                for instrument_id in row["instrument_ids"]
-            }
-        )
+        cardinalities = [
+            len({str(instrument_id) for instrument_id in row["instrument_ids"]})
+            for row in rows
+            if row["universe"] == universe
+        ]
+        return max(cardinalities, default=0)
 
     def open_refresh_base(
         self,

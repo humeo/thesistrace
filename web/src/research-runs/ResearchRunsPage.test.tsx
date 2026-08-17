@@ -4,12 +4,41 @@ import { describe, expect, it } from "vitest";
 import {
   ResearchFolderLoadFailure,
   ResearchOrganizationPanel,
+  ResearchRunProgressView,
   ResearchRunHistory,
   TerminalStrategyStateView,
   UseAsDraftPanel,
   isTerminalResearch,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
+
+describe("ResearchRunProgressView", () => {
+  it("separates committed warm-up and Research progress from in-flight work", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchRunProgressView
+        active
+        progress={{
+          phase: "research",
+          completed_warmup_sessions: 252,
+          total_warmup_sessions: 252,
+          completed_research_sessions: 126,
+          total_research_sessions: 4034,
+          committed_chunk_count: 6,
+          last_completed_warmup_session: "2010-12-31",
+          last_completed_research_session: "2011-06-30",
+          remaining_duration_estimate_seconds: 840,
+          duration_is_estimate: true,
+        }}
+      />,
+    );
+    expect(markup).toContain("Committed progress");
+    expect(markup).toContain("Warm-up 252 / 252");
+    expect(markup).toContain("Research 126 / 4034");
+    expect(markup).toContain("in flight and not yet committed");
+    expect(markup).toContain("revisable estimate, not an SLA");
+    expect(markup).not.toMatch(/checkpoint|staged|payload|alpha value/i);
+  });
+});
 
 describe("ResearchFolderLoadFailure", () => {
   it("keeps Folder recovery separate from ResearchRun loading", () => {

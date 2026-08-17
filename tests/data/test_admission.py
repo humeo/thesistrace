@@ -14,7 +14,7 @@ def test_calculation_shape_rejects_a_truncated_warmup_window() -> None:
         coverage_end=sessions[-1],
         research_sessions=sessions,
         available_field_ids=frozenset({"price.close.adjusted"}),
-        count_universe_instruments=lambda _universe, _start, _end: 300,
+        maximum_universe_cardinality=lambda _universe, _start, _end: 300,
     )
 
     with pytest.raises(DatasetWarmupUnavailable):

@@ -74,6 +74,59 @@ CREATE TABLE research_runs.runs (
 );
 
 
+CREATE TABLE research_runs.progress (
+    run_id text NOT NULL,
+    phase text NOT NULL,
+    completed_warmup_sessions integer NOT NULL,
+    total_warmup_sessions integer NOT NULL,
+    completed_research_sessions integer NOT NULL,
+    total_research_sessions integer NOT NULL,
+    committed_chunk_count integer NOT NULL,
+    last_completed_warmup_session date,
+    last_completed_research_session date,
+    remaining_duration_estimate_seconds integer,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT progress_phase_check CHECK ((phase = ANY (ARRAY['queued'::text, 'warmup'::text, 'research'::text, 'finalizing'::text, 'succeeded'::text]))),
+    CONSTRAINT progress_counts_check CHECK (
+        completed_warmup_sessions >= 0
+        AND completed_warmup_sessions <= total_warmup_sessions
+        AND completed_research_sessions >= 0
+        AND completed_research_sessions <= total_research_sessions
+        AND committed_chunk_count >= 0
+    )
+);
+
+
+CREATE TABLE research_runs.execution_checkpoints (
+    id text NOT NULL,
+    run_id text NOT NULL,
+    attempt_id text NOT NULL,
+    ordinal integer NOT NULL,
+    boundary_session date NOT NULL,
+    phase text NOT NULL,
+    completed_warmup_sessions integer NOT NULL,
+    completed_research_sessions integer NOT NULL,
+    continuation_payload jsonb NOT NULL,
+    observation_payload jsonb,
+    observation_row_count integer NOT NULL,
+    observation_first_session date,
+    observation_last_session date,
+    checkpoint_manifest_sha256 text NOT NULL,
+    chain_sha256 text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT execution_checkpoints_ordinal_check CHECK (ordinal > 0),
+    CONSTRAINT execution_checkpoints_phase_check CHECK ((phase = ANY (ARRAY['warmup'::text, 'research'::text]))),
+    CONSTRAINT execution_checkpoints_counts_check CHECK (
+        completed_warmup_sessions >= 0
+        AND completed_research_sessions >= 0
+        AND observation_row_count >= 0
+    ),
+    CONSTRAINT execution_checkpoints_continuation_check CHECK (jsonb_typeof(continuation_payload) = 'object'),
+    CONSTRAINT execution_checkpoints_observation_check CHECK (observation_payload IS NULL OR jsonb_typeof(observation_payload) = 'object'),
+    CONSTRAINT execution_checkpoints_manifest_check CHECK (checkpoint_manifest_sha256 ~ '^[0-9a-f]{64}$')
+);
+
+
 CREATE TABLE research_runs.admission_requests (
     request_id text NOT NULL,
     request_fingerprint text NOT NULL,
@@ -143,6 +196,15 @@ ALTER TABLE ONLY research_runs.admission_requests
 ALTER TABLE ONLY research_runs.runs
     ADD CONSTRAINT runs_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY research_runs.progress
+    ADD CONSTRAINT progress_pkey PRIMARY KEY (run_id);
+
+ALTER TABLE ONLY research_runs.execution_checkpoints
+    ADD CONSTRAINT execution_checkpoints_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY research_runs.execution_checkpoints
+    ADD CONSTRAINT execution_checkpoints_run_id_ordinal_key UNIQUE (run_id, ordinal);
+
 
 ALTER TABLE ONLY research_runs.runs
     ADD CONSTRAINT runs_folder_id_fkey FOREIGN KEY (folder_id) REFERENCES research_folders.folders(id);
@@ -182,3 +244,12 @@ ALTER TABLE ONLY research_runs.attempts
 
 ALTER TABLE ONLY research_runs.admission_requests
     ADD CONSTRAINT admission_requests_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id);
+
+ALTER TABLE ONLY research_runs.progress
+    ADD CONSTRAINT progress_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY research_runs.execution_checkpoints
+    ADD CONSTRAINT execution_checkpoints_run_id_fkey FOREIGN KEY (run_id) REFERENCES research_runs.runs(id) ON DELETE CASCADE;
+
+ALTER TABLE ONLY research_runs.execution_checkpoints
+    ADD CONSTRAINT execution_checkpoints_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES research_runs.attempts(id);

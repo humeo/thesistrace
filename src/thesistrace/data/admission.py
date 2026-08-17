@@ -9,7 +9,7 @@ from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.generation_store import MountedGenerationStore
 from thesistrace.data.lifecycle import DatasetLifecycle
 
-type UniverseInstrumentCounter = Callable[[str, date, date], int]
+type MaximumUniverseCardinality = Callable[[str, date, date], int]
 
 
 class DatasetWarmupUnavailable(ValueError):
@@ -24,7 +24,7 @@ class DatasetAdmissionSnapshot:
     coverage_end: date
     research_sessions: tuple[date, ...]
     available_field_ids: frozenset[str]
-    count_universe_instruments: UniverseInstrumentCounter
+    maximum_universe_cardinality: MaximumUniverseCardinality
     financial_coverage_start: date | None = None
     financial_coverage_end: date | None = None
 
@@ -50,7 +50,7 @@ class DatasetAdmissionSnapshot:
         calculation_sessions = self.research_sessions[
             start_index - lookback : end_index + 1
         ]
-        instrument_count = self.count_universe_instruments(
+        instrument_count = self.maximum_universe_cardinality(
             universe,
             calculation_sessions[0],
             calculation_sessions[-1],
@@ -87,8 +87,8 @@ class DatasetAdmissionService:
             coverage_end=sessions[-1],
             research_sessions=sessions,
             available_field_ids=frozenset(admission.generation.field_availability),
-            count_universe_instruments=lambda universe, start, end: (
-                self._generations.count_universe_instruments(
+            maximum_universe_cardinality=lambda universe, start, end: (
+                self._generations.maximum_universe_cardinality(
                     admission.generation.manifest_sha256,
                     universe=universe,
                     start_session=start.isoformat(),

@@ -2,23 +2,22 @@ from __future__ import annotations
 
 import json
 import os
+import resource
 import selectors
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from time import monotonic
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
-from thesistrace.research_kernel.kernel_run import (
-    InsufficientCalculationWarmupError,
-    KernelRunError,
-    RunInput,
-    run_columnar_chunk,
+from thesistrace.research_kernel.kernel_run import KernelRunError, RunInput
+from thesistrace.research_kernel.research_chunks import (
+    empty_research_continuation,
+    execute_research_chunk,
 )
 from thesistrace.research_run.models import ImmutableRunInput
-from thesistrace.research_run.result import build_result_payload
 
 _MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024
 _CANCEL_COOPERATIVE_GRACE_SECONDS = 1.0
@@ -61,19 +60,46 @@ class SupervisedResearchExecution:
         self,
         process: subprocess.Popen[str],
         request: ResearchExecutionRequest,
-        result: dict[str, object],
+        chunk: dict[str, object],
         emit: ExecutionEvent,
     ) -> None:
         self._process = process
         self._request = request
-        self.result = result
+        self.chunk = chunk
         self._emit = emit
         self._acknowledged = False
         self._exit_emitted = False
 
+    def advance(self, *, cancel_requested: Callable[[], bool]) -> None:
+        if self.chunk.get("final") is True:
+            raise ResearchExecutionError("Final Research Chunk cannot advance")
+        if cancel_requested():
+            self.cancel()
+            raise ResearchExecutionCancelled("Research execution was cancelled")
+        assert self._process.stdin is not None
+        self._process.stdin.write('{"command":"acknowledge_chunk"}\n')
+        self._process.stdin.flush()
+        response = _read_message(
+            self._process,
+            self._request,
+            emit=self._emit,
+            cancel_requested=cancel_requested,
+        )
+        self.chunk = _chunk_from_response(response)
+        self._emit(
+            {
+                **self._event("research_execution_chunk_received"),
+                "chunk_ordinal": self.chunk["ordinal"],
+                "boundary_session": self.chunk["boundary_session"],
+                "child_peak_rss_bytes": _peak_rss_bytes(response),
+            }
+        )
+
     def acknowledge(self, *, cancel_requested: Callable[[], bool]) -> None:
         if self._acknowledged:
             raise ResearchExecutionError("Research execution child was already acknowledged")
+        if self.chunk.get("final") is not True:
+            raise ResearchExecutionError("Research execution has uncommitted Chunks")
         if cancel_requested():
             self.cancel()
             raise ResearchExecutionCancelled("Research execution was cancelled")
@@ -239,20 +265,20 @@ class SupervisedResearchExecutor:
                 raise ResearchExecutionError(
                     f"{error}{_child_stderr_detail(process)}"
                 ) from error
-            if response.get("status") != "succeeded":
-                category = response.get("category")
-                message = str(response.get("message", "Research execution child failed"))
-                if category == "cancelled":
-                    raise ResearchExecutionCancelled(message)
-                if category == "insufficient_warmup":
-                    raise ResearchExecutionInsufficientWarmup(message)
-                if category == "invalid_input":
-                    raise ResearchExecutionInputInvalid(message)
-                raise ResearchExecutionError(message)
-            result = response.get("result")
-            if not isinstance(result, dict):
-                raise ResearchExecutionError("Research execution child returned no Result")
-            return SupervisedResearchExecution(process, request, result, emit)
+            chunk = _chunk_from_response(response)
+            emit(
+                {
+                    "event": "research_execution_chunk_received",
+                    "resource_type": "ResearchRun",
+                    "resource_id": request.run_id,
+                    "attempt_id": request.attempt_id,
+                    "child_pid": process.pid,
+                    "chunk_ordinal": chunk["ordinal"],
+                    "boundary_session": chunk["boundary_session"],
+                    "child_peak_rss_bytes": _peak_rss_bytes(response),
+                }
+            )
+            return SupervisedResearchExecution(process, request, chunk, emit)
         except Exception:
             if process.stdin is not None and not process.stdin.closed:
                 process.stdin.close()
@@ -277,11 +303,11 @@ class SupervisedResearchExecutor:
             raise
 
 
-def execute_request(
+def execute_request_chunks(
     value: Mapping[str, object],
     *,
     cancel_requested: Callable[[], bool],
-) -> dict[str, object]:
+) -> Iterator[dict[str, object]]:
     try:
         if value.get("schema_version") != "research-child-request-v1":
             raise ResearchExecutionInputInvalid("Research child request is incompatible")
@@ -289,36 +315,35 @@ def execute_request(
         generation_id = str(value["data_generation_id"])
         immutable_input = ImmutableRunInput.model_validate(value["immutable_input"])
         _require_not_cancelled(cancel_requested)
-        result = _calculate_result(
+        yield from _calculate_chunks(
             data_mount,
             generation_id,
             immutable_input,
             cancel_requested=cancel_requested,
         )
-        return {"status": "succeeded", "result": result}
     except ResearchExecutionCancelled as error:
-        return {"status": "cancelled", "category": "cancelled", "message": str(error)}
+        yield {"status": "cancelled", "category": "cancelled", "message": str(error)}
     except ResearchExecutionInsufficientWarmup as error:
-        return {
+        yield {
             "status": "failed",
             "category": "insufficient_warmup",
             "message": str(error),
         }
     except (ResearchExecutionInputInvalid, GenerationStoreError, KernelRunError) as error:
-        return {
+        yield {
             "status": "failed",
             "category": "invalid_input",
             "message": str(error),
         }
 
 
-def _calculate_result(
+def _calculate_chunks(
     data_mount: Path,
     generation_id: str,
     immutable_input: ImmutableRunInput,
     *,
     cancel_requested: Callable[[], bool],
-) -> dict[str, object]:
+) -> Iterator[dict[str, object]]:
     _require_not_cancelled(cancel_requested)
     store = MountedGenerationStore(data_mount)
     admission = store.open_admission(generation_id)
@@ -329,38 +354,88 @@ def _calculate_result(
         available_field_ids=frozenset(admission.generation.field_availability),
     )
     calendar = list(admission.research_calendar)
+    plan = immutable_input.execution_plan
+    planned_sessions = tuple(session.isoformat() for session in plan.calculation_sessions)
     start_index = calendar.index(start_session)
-    warmup_start = start_index - immutable_input.alpha_admission.effective_lookback
-    if warmup_start < 0:
+    warmup_start = start_index - plan.research_session_offset
+    if warmup_start < 0 or tuple(
+        calendar[warmup_start : calendar.index(end_session) + 1]
+    ) != planned_sessions:
         raise ResearchExecutionInsufficientWarmup(
-            "insufficient Calculation Warm-up for selected Research Period"
+            "frozen Research Chunk plan does not match selected Data Generation"
         )
-    calculation_sessions = calendar[warmup_start : calendar.index(end_session) + 1]
-    research_data = store.read_columnar_slice(
-        generation_id,
-        sessions=calculation_sessions,
-        universe_name=immutable_input.universe,
-        neutralization=immutable_input.neutralization,
-        field_bindings=immutable_input.field_bindings,
-    )
-    _require_not_cancelled(cancel_requested)
-    try:
-        output = run_columnar_chunk(
-            _kernel_input(
-                immutable_input,
-                research_data,
-                research_start_session=start_session,
-                research_end_session=end_session,
-            ),
-            cancellation_check=lambda: _require_not_cancelled(cancel_requested),
+    continuation = empty_research_continuation()
+    for chunk in plan.chunks:
+        _require_not_cancelled(cancel_requested)
+        chunk_sessions = tuple(
+            session
+            for session in planned_sessions
+            if chunk.first_session.isoformat() <= session <= chunk.last_session.isoformat()
         )
-    except InsufficientCalculationWarmupError as error:
-        raise ResearchExecutionInsufficientWarmup(str(error)) from error
-    return build_result_payload(
-        output,
-        rebalance_interval=int(immutable_input.strategy["rebalance_every_sessions"]),
-        universe=immutable_input.universe,
-    )
+        research_sessions = tuple(
+            session for session in chunk_sessions if start_session <= session <= end_session
+        )
+        final_chunk = chunk.ordinal == len(plan.chunks)
+        observations: tuple[dict[str, object], ...] = ()
+        final_values: dict[str, object] | None = None
+        if research_sessions:
+            first_research_index = calendar.index(research_sessions[0])
+            context_start = max(
+                0,
+                first_research_index
+                - max(immutable_input.alpha_admission.effective_lookback, 21, 2),
+            )
+            context_sessions = calendar[
+                context_start : calendar.index(research_sessions[-1]) + 1
+            ]
+            research_data = store.read_columnar_slice(
+                generation_id,
+                sessions=context_sessions,
+                universe_name=immutable_input.universe,
+                neutralization=immutable_input.neutralization,
+                field_bindings=immutable_input.field_bindings,
+            )
+            calculation = execute_research_chunk(
+                run_input=_kernel_input(
+                    immutable_input,
+                    research_data,
+                    research_start_session=start_session,
+                    research_end_session=end_session,
+                ),
+                research_data=research_data,
+                research_sessions=research_sessions,
+                final_chunk=final_chunk,
+                continuation=continuation,
+                cancellation_check=lambda: _require_not_cancelled(cancel_requested),
+            )
+            continuation = calculation.continuation
+            observations = calculation.strategy_daily_observations
+            final_values = calculation.final_values
+        else:
+            lookback = immutable_input.alpha_admission.effective_lookback
+            continuation["rolling_tail_sessions"] = (
+                list(chunk_sessions[-lookback:]) if lookback else []
+            )
+        yield {
+            "status": "chunk_succeeded",
+            "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+            "chunk": {
+                "ordinal": chunk.ordinal,
+                "boundary_session": chunk.last_session.isoformat(),
+                "phase": "research" if research_sessions else "warmup",
+                "completed_warmup_sessions": min(
+                    plan.research_session_offset,
+                    chunk.ordinal * plan.chunk_session_count,
+                ),
+                "completed_research_sessions": int(
+                    continuation["completed_research_session_count"]
+                ),
+                "continuation": continuation,
+                "strategy_daily_observations": list(observations),
+                "final_values": final_values,
+                "final": final_chunk,
+            },
+        }
 
 
 def _selected_research_period(
@@ -496,6 +571,48 @@ def _read_message(
     if not isinstance(value, dict):
         raise ResearchExecutionError("Research execution child response is invalid")
     return value
+
+
+def _chunk_from_response(response: Mapping[str, object]) -> dict[str, object]:
+    if response.get("status") != "chunk_succeeded":
+        category = response.get("category")
+        message = str(response.get("message", "Research execution child failed"))
+        if category == "cancelled":
+            raise ResearchExecutionCancelled(message)
+        if category == "insufficient_warmup":
+            raise ResearchExecutionInsufficientWarmup(message)
+        if category == "invalid_input":
+            raise ResearchExecutionInputInvalid(message)
+        raise ResearchExecutionError(message)
+    chunk = response.get("chunk")
+    if not isinstance(chunk, dict):
+        raise ResearchExecutionError("Research execution child returned no Chunk")
+    required = {
+        "ordinal",
+        "boundary_session",
+        "phase",
+        "completed_warmup_sessions",
+        "completed_research_sessions",
+        "continuation",
+        "strategy_daily_observations",
+        "final_values",
+        "final",
+    }
+    if set(chunk) != required:
+        raise ResearchExecutionError("Research execution child returned an invalid Chunk")
+    return chunk
+
+
+def _peak_rss_bytes(response: Mapping[str, object]) -> int:
+    value = response.get("child_peak_rss_bytes")
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ResearchExecutionError("Research execution child memory evidence is invalid")
+    return value
+
+
+def _current_process_peak_rss_bytes() -> int:
+    peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+    return peak if sys.platform == "darwin" else peak * 1024
 
 
 def _require_not_cancelled(cancel_requested: Callable[[], bool]) -> None:

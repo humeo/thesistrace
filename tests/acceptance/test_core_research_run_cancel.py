@@ -418,7 +418,11 @@ def test_cancel_racing_with_terminal_handshake_failure_is_confirmed_locally(
     class FailingAcknowledgement:
         def __init__(self, execution) -> None:
             self._execution = execution
-            self.result = execution.result
+            self.chunk = execution.chunk
+
+        def advance(self, *, cancel_requested) -> None:
+            self._execution.advance(cancel_requested=cancel_requested)
+            self.chunk = self._execution.chunk
 
         def acknowledge(self, *, cancel_requested) -> None:
             acknowledgement_started.set()
@@ -488,7 +492,11 @@ def test_handshake_failure_keeps_attempt_live_until_child_close_and_cancel(
     class FailingBeforeSlowClose:
         def __init__(self, execution) -> None:
             self._execution = execution
-            self.result = execution.result
+            self.chunk = execution.chunk
+
+        def advance(self, *, cancel_requested) -> None:
+            self._execution.advance(cancel_requested=cancel_requested)
+            self.chunk = self._execution.chunk
 
         def acknowledge(self, *, cancel_requested) -> None:
             raise RuntimeError("terminal acknowledgement fault before close")
