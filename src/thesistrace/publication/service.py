@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -71,6 +72,13 @@ class ParquetRowsPayload:
 
 
 type PublicationPayload = JsonPayload | ParquetRowsPayload
+type StagingAuthority = Callable[[], AbstractContextManager[None]]
+
+
+def _staging_authority(
+    authority: StagingAuthority | None,
+) -> AbstractContextManager[None]:
+    return nullcontext() if authority is None else authority()
 
 
 @dataclass(frozen=True)
@@ -159,6 +167,7 @@ class Publication:
         kind: str,
         payloads: Mapping[str, PublicationPayload],
         provenance: object,
+        staging_authority: StagingAuthority | None = None,
     ) -> PreparedPublication:
         _require_identifier(kind, subject="publication kind")
         if not payloads:
@@ -166,15 +175,22 @@ class Publication:
         canonical_provenance = _canonical_json_value(provenance, subject="provenance")
         serialized: list[tuple[str, bytes, str, dict[str, object]]] = []
         for name in sorted(payloads):
+            with _staging_authority(staging_authority):
+                pass
             _require_identifier(name, subject="payload name")
             content, media_type, serialization = _serialize_payload(payloads[name])
             serialized.append((name, content, media_type, serialization))
 
-        self._ensure_bucket()
+        self._ensure_bucket(staging_authority=staging_authority)
         manifest_objects: list[dict[str, object]] = []
         for name, content, media_type, serialization in serialized:
             digest = hashlib.sha256(content).hexdigest()
-            self._put_immutable(digest, content, media_type=media_type)
+            self._put_immutable(
+                digest,
+                content,
+                media_type=media_type,
+                staging_authority=staging_authority,
+            )
             manifest_objects.append(
                 {
                     "bytes": len(content),
@@ -491,9 +507,10 @@ class Publication:
         if rows != expected:
             raise PublicationVerificationError("Publication manifest-object records conflict")
 
-    def _ensure_bucket(self) -> None:
+    def _ensure_bucket(self, *, staging_authority: StagingAuthority | None) -> None:
         try:
-            self._s3.head_bucket(Bucket=self._bucket)
+            with _staging_authority(staging_authority):
+                self._s3.head_bucket(Bucket=self._bucket)
             return
         except ClientError as error:
             if _error_code(error) not in {"404", "NoSuchBucket", "NotFound"}:
@@ -507,7 +524,8 @@ class Publication:
                 "Publication bucket is temporarily unavailable"
             ) from error
         try:
-            self._s3.create_bucket(Bucket=self._bucket)
+            with _staging_authority(staging_authority):
+                self._s3.create_bucket(Bucket=self._bucket)
         except ClientError as error:
             if _error_code(error) not in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}:
                 if _client_error_is_transient(error):
@@ -534,20 +552,32 @@ class Publication:
                 "Publication object deletion is temporarily unavailable"
             ) from error
 
-    def _put_immutable(self, digest: str, content: bytes, *, media_type: str) -> None:
-        if self._object_exists(digest):
-            self._verify_existing(digest, content)
+    def _put_immutable(
+        self,
+        digest: str,
+        content: bytes,
+        *,
+        media_type: str,
+        staging_authority: StagingAuthority | None,
+    ) -> None:
+        if self._object_exists(digest, staging_authority=staging_authority):
+            self._verify_existing(
+                digest,
+                content,
+                staging_authority=staging_authority,
+            )
             return
         try:
-            self._s3.put_object(
-                Bucket=self._bucket,
-                Key=_object_key(digest),
-                Body=content,
-                ContentLength=len(content),
-                ContentType=media_type,
-                IfNoneMatch="*",
-                Metadata={"sha256": digest},
-            )
+            with _staging_authority(staging_authority):
+                self._s3.put_object(
+                    Bucket=self._bucket,
+                    Key=_object_key(digest),
+                    Body=content,
+                    ContentLength=len(content),
+                    ContentType=media_type,
+                    IfNoneMatch="*",
+                    Metadata={"sha256": digest},
+                )
         except ClientError as error:
             if _error_code(error) not in {
                 "409",
@@ -564,11 +594,21 @@ class Publication:
             raise PublicationUnavailableError(
                 "Publication object upload is temporarily unavailable"
             ) from error
-        self._verify_existing(digest, content)
+        self._verify_existing(
+            digest,
+            content,
+            staging_authority=staging_authority,
+        )
 
-    def _object_exists(self, digest: str) -> bool:
+    def _object_exists(
+        self,
+        digest: str,
+        *,
+        staging_authority: StagingAuthority | None,
+    ) -> bool:
         try:
-            self._s3.head_object(Bucket=self._bucket, Key=_object_key(digest))
+            with _staging_authority(staging_authority):
+                self._s3.head_object(Bucket=self._bucket, Key=_object_key(digest))
             return True
         except ClientError as error:
             if _error_code(error) in {"404", "NoSuchKey", "NotFound"}:
@@ -583,11 +623,18 @@ class Publication:
                 "Publication object lookup is temporarily unavailable"
             ) from error
 
-    def _verify_existing(self, digest: str, expected: bytes) -> None:
+    def _verify_existing(
+        self,
+        digest: str,
+        expected: bytes,
+        *,
+        staging_authority: StagingAuthority | None,
+    ) -> None:
         actual = self._read_object_bytes(
             digest,
             unavailable_message="Publication object verification is temporarily unavailable",
             missing_message="Publication object is missing",
+            staging_authority=staging_authority,
         )
         if actual != expected or hashlib.sha256(actual).hexdigest() != digest:
             raise PublicationVerificationError(
@@ -612,18 +659,20 @@ class Publication:
         *,
         unavailable_message: str,
         missing_message: str,
+        staging_authority: StagingAuthority | None = None,
     ) -> bytes:
         last_transient_error: Exception | None = None
         for _attempt in range(OBJECT_READ_ATTEMPTS):
             try:
-                body = self._s3.get_object(
-                    Bucket=self._bucket,
-                    Key=_object_key(digest),
-                )["Body"]
-                try:
-                    return bytes(body.read())
-                finally:
-                    body.close()
+                with _staging_authority(staging_authority):
+                    body = self._s3.get_object(
+                        Bucket=self._bucket,
+                        Key=_object_key(digest),
+                    )["Body"]
+                    try:
+                        return bytes(body.read())
+                    finally:
+                        body.close()
             except ClientError as error:
                 if not _client_error_is_transient(error):
                     raise PublicationVerificationError(missing_message) from error

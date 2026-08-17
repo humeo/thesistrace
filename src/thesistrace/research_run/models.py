@@ -150,7 +150,9 @@ class ResearchRunSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal["queued", "running", "succeeded", "failed", "cancelled"]
+    status: Literal[
+        "queued", "running", "cancelling", "succeeded", "failed", "cancelled"
+    ]
     name: str
     folder_id: str
     created_at: datetime

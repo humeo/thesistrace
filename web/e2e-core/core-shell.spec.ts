@@ -295,6 +295,52 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
   }
 });
 
+test("running Research cancellation stays visible until the child exits", async ({ page }) => {
+  test.setTimeout(90_000);
+  let workerPaused = false;
+  let controlledWorker: ChildProcess | undefined;
+  try {
+    controlWorker("pause");
+    workerPaused = true;
+    await page.goto("/research?new");
+    await fillCompleteDraft(page, {
+      name: "Confirmed browser cancellation",
+      formula: "ts_mean(close_adj, 2)",
+    });
+    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    const runId = page.url().split("/").at(-1);
+    if (runId === undefined) throw new Error("ResearchRun route has no identity");
+
+    const barrier = startControlledResearchRun(runId);
+    controlledWorker = barrier.process;
+    await barrier.claimed;
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+running/)).toBeVisible();
+
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+cancelling/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Use as Draft" })).toHaveCount(0);
+
+    controlledWorker.stdin?.end("1");
+    await controlledWorkerExit(controlledWorker);
+    controlledWorker = undefined;
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+cancelled/)).toBeVisible({
+      timeout: 20_000,
+    });
+    await expect(page.getByRole("button", { name: "Use as Draft" })).toBeVisible();
+    page.once("dialog", async (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Delete Research" }).click();
+    await expect(page).toHaveURL(/\/research-runs$/);
+  } finally {
+    if (controlledWorker !== undefined) {
+      controlledWorker.kill("SIGTERM");
+      await controlledWorkerExit(controlledWorker, true);
+    }
+    if (workerPaused) controlWorker("unpause");
+  }
+});
+
 test("Default and custom Folder Drafts run once, retain edits, reject safely, and publish results", async ({ page }, testInfo) => {
   test.setTimeout(120_000);
   const responses: string[] = [];

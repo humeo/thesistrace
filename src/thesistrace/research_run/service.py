@@ -50,6 +50,7 @@ from thesistrace.research_kernel.numeric import (
 )
 from thesistrace.research_run.execution import (
     ExecutionEvent,
+    ResearchExecutionCancelled,
     ResearchExecutionInputInvalid,
     ResearchExecutionInsufficientWarmup,
     ResearchExecutionRequest,
@@ -338,6 +339,8 @@ class ResearchRunService:
         on_execution_event: ExecutionEvent | None = None,
     ) -> bool:
         self._require_execution_dependencies()
+        if self._recover_cancelled_attempt():
+            return True
         claim = self._claim_next()
         if claim is None:
             return False
@@ -346,33 +349,60 @@ class ResearchRunService:
         with self._maintain_claim(claim):
             self._progress("claimed", claim.run_id)
             execution: SupervisedResearchExecution | None = None
+            cancellation_pending = False
+            execution_failure: Exception | None = None
             try:
                 execution = self._execute(
                     claim,
                     emit=on_execution_event or (lambda _event: None),
                 )
-                self._validate_current_execution(claim)
                 prepared, provenance = self._prepare_execution_result(claim, execution)
                 self._progress("prepared", claim.run_id)
                 self._validate_current_execution(claim)
-                execution.acknowledge()
+                execution.acknowledge(
+                    cancel_requested=lambda: self._cancellation_is_pending(claim)
+                )
                 self._publish_success(claim, prepared, provenance)
                 self._progress("succeeded", claim.run_id)
+            except ResearchExecutionCancelled:
+                cancellation_pending = True
             except ResearchRunFenced:
+                cancellation_pending = self._cancellation_is_pending(claim)
                 logger.info(
                     "ResearchRun result rejected by execution fence",
-                    extra={"run_id": claim.run_id},
+                    extra={
+                        "run_id": claim.run_id,
+                        "cancellation_pending": cancellation_pending,
+                    },
                 )
             except Exception as error:
-                self._record_failure(claim, error)
-                logger.error(
-                    "ResearchRun execution failed",
-                    extra={"run_id": claim.run_id, "error_type": type(error).__name__},
-                    exc_info=True,
-                )
+                execution_failure = error
+                cancellation_pending = self._cancellation_is_pending(claim)
             finally:
                 if execution is not None:
-                    execution.close()
+                    if cancellation_pending:
+                        execution.cancel()
+                    else:
+                        execution.close()
+            if execution_failure is not None:
+                self._record_failure(claim, execution_failure)
+                cancellation_pending = (
+                    cancellation_pending or self._cancellation_is_pending(claim)
+                )
+                logger.error(
+                    "ResearchRun execution failed",
+                    extra={
+                        "run_id": claim.run_id,
+                        "error_type": type(execution_failure).__name__,
+                    },
+                    exc_info=(
+                        type(execution_failure),
+                        execution_failure,
+                        execution_failure.__traceback__,
+                    ),
+                )
+            if cancellation_pending:
+                self._confirm_cancelled(claim)
         return True
 
     def list(
@@ -556,6 +586,7 @@ class ResearchRunService:
                     raise ResearchRunCancelConflict("ResearchRun Cancel request_id conflicts")
                 return ResearchRunSummary.model_validate(receipt["outcome"])
 
+            self._lock_result_staging(transaction, run_id)
             row = transaction.execute(
                 """
                 SELECT id, name, folder_id, status, requested_start_date,
@@ -569,32 +600,61 @@ class ResearchRunService:
             ).fetchone()
             if row is None:
                 return None
-            if row["status"] in {"queued", "running"}:
-                cancelled_attempt = transaction.execute(
+            if row["status"] == "running":
+                cancelling_attempt = transaction.execute(
                     """
                     UPDATE research_runs.attempts
-                    SET status = 'cancelled', heartbeat_at = now(),
-                        lease_expires_at = now(), finished_at = now(),
+                    SET status = 'cancelling', heartbeat_at = now(),
                         failure_reason = 'UserCancelled'
                     WHERE run_id = %s AND status = 'running'
-                    RETURNING id, generation_pin_id
+                    RETURNING id
                     """,
                     (run_id,),
                 ).fetchone()
-                if cancelled_attempt is not None:
-                    assert self._dataset_lifecycle is not None
-                    self._dataset_lifecycle.release_pin_in_transaction(
-                        transaction,
-                        str(cancelled_attempt["generation_pin_id"]),
-                        owner_id=str(cancelled_attempt["id"]),
-                    )
+                if cancelling_attempt is None:
+                    updated = transaction.execute(
+                        """
+                        UPDATE research_runs.runs
+                        SET status = 'cancelled',
+                            execution_fence = execution_fence + 1,
+                            failure_reason = NULL, updated_at = now()
+                        WHERE id = %s AND status = 'running'
+                        RETURNING id, name, folder_id, status,
+                                  requested_start_date, requested_end_date,
+                                  created_at, immutable_input, failure_reason
+                        """,
+                        (run_id,),
+                    ).fetchone()
+                    if updated is not None and self._dataset_lifecycle is not None:
+                        self._dataset_lifecycle.release_retention_in_transaction(
+                            transaction,
+                            retention_id=f"queued-research-run:{run_id}",
+                        )
+                else:
+                    updated = transaction.execute(
+                        """
+                        UPDATE research_runs.runs
+                        SET status = 'cancelling',
+                            execution_fence = execution_fence + 1,
+                            failure_reason = NULL, updated_at = now()
+                        WHERE id = %s AND status = 'running'
+                        RETURNING id, name, folder_id, status,
+                                  requested_start_date, requested_end_date,
+                                  created_at, immutable_input, failure_reason
+                        """,
+                        (run_id,),
+                    ).fetchone()
+                if updated is None:
+                    raise ResearchRunFenced
+                row = updated
+            elif row["status"] == "queued":
                 updated = transaction.execute(
                     """
                     UPDATE research_runs.runs
                     SET status = 'cancelled',
                         execution_fence = execution_fence + 1,
                         failure_reason = NULL, updated_at = now()
-                    WHERE id = %s AND status IN ('queued', 'running')
+                    WHERE id = %s AND status = 'queued'
                     RETURNING id, name, folder_id, status,
                               requested_start_date, requested_end_date,
                               created_at, immutable_input, failure_reason
@@ -624,6 +684,102 @@ class ResearchRunService:
                 ),
             )
         return outcome
+
+    def _cancellation_is_pending(self, claim: _ExecutionClaim) -> bool:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.status AS run_status, attempt.status AS attempt_status
+                FROM research_runs.runs AS run
+                JOIN research_runs.attempts AS attempt ON attempt.run_id = run.id
+                WHERE run.id = %s AND attempt.id = %s AND attempt.fence = %s
+                """,
+                (claim.run_id, claim.attempt_id, claim.fence),
+            ).fetchone()
+        return row == {"run_status": "cancelling", "attempt_status": "cancelling"}
+
+    def _confirm_cancelled(self, claim: _ExecutionClaim) -> None:
+        assert self._dataset_lifecycle is not None
+        with self._database.transaction() as transaction:
+            run = transaction.execute(
+                """
+                SELECT status
+                FROM research_runs.runs
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (claim.run_id,),
+            ).fetchone()
+            if run != {"status": "cancelling"}:
+                return
+            attempt = transaction.execute(
+                """
+                UPDATE research_runs.attempts
+                SET status = 'cancelled', heartbeat_at = now(),
+                    lease_expires_at = now(), finished_at = now()
+                WHERE id = %s AND run_id = %s AND fence = %s
+                  AND status = 'cancelling'
+                """,
+                (claim.attempt_id, claim.run_id, claim.fence),
+            )
+            if attempt.rowcount != 1:
+                return
+            transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET status = 'cancelled', updated_at = now()
+                WHERE id = %s AND status = 'cancelling'
+                """,
+                (claim.run_id,),
+            )
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                claim.generation_pin_id,
+                owner_id=claim.attempt_id,
+            )
+
+    def _recover_cancelled_attempt(self) -> bool:
+        assert self._dataset_lifecycle is not None
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.id AS run_id, attempt.id AS attempt_id,
+                       attempt.generation_pin_id
+                FROM research_runs.runs AS run
+                JOIN research_runs.attempts AS attempt ON attempt.run_id = run.id
+                WHERE run.status = 'cancelling'
+                  AND attempt.status = 'cancelling'
+                  AND attempt.lease_expires_at <= now()
+                ORDER BY run.created_at, run.id
+                FOR UPDATE OF run, attempt SKIP LOCKED
+                LIMIT 1
+                """
+            ).fetchone()
+            if row is None:
+                return False
+            transaction.execute(
+                """
+                UPDATE research_runs.attempts
+                SET status = 'cancelled', heartbeat_at = now(),
+                    lease_expires_at = now(), finished_at = now()
+                WHERE id = %s AND status = 'cancelling'
+                """,
+                (row["attempt_id"],),
+            )
+            transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET status = 'cancelled', updated_at = now()
+                WHERE id = %s AND status = 'cancelling'
+                """,
+                (row["run_id"],),
+            )
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                str(row["generation_pin_id"]),
+                owner_id=str(row["attempt_id"]),
+            )
+        return True
 
     def start_tracking(
         self,
@@ -1105,7 +1261,10 @@ class ResearchRunService:
                     immutable_input=immutable_input,
                 ),
                 emit=emit,
+                cancel_requested=lambda: self._cancellation_is_pending(claim),
             )
+        except ResearchExecutionCancelled:
+            raise
         except ResearchExecutionInsufficientWarmup as error:
             raise ResearchRunInsufficientWarmup(str(error)) from error
         except ResearchExecutionInputInvalid as error:
@@ -1121,40 +1280,68 @@ class ResearchRunService:
         assert self._publication is not None
         result = execution.result
         provenance = _result_provenance(claim)
+        observations = result["strategy_daily_observations"]
+        if not isinstance(observations, list):
+            raise ResearchResultError("Result Strategy Daily Observations are invalid")
         prepared = self._publication.prepare(
             kind="research.result",
             payloads=result_publication_payloads(result),
             provenance=provenance,
+            staging_authority=lambda: self._authorize_result_staging(claim),
         )
-        observations = result["strategy_daily_observations"]
-        if not isinstance(observations, list):
-            raise ResearchResultError("Result Strategy Daily Observations are invalid")
         enforce_result_bundle_budget(prepared.exact_bytes, len(observations))
         return prepared, provenance
 
     def _validate_current_execution(self, claim: _ExecutionClaim) -> None:
         with self._database.transaction() as transaction:
-            current = transaction.execute(
-                """
-                SELECT status, execution_fence
-                FROM research_runs.runs
-                WHERE id = %s
-                FOR UPDATE
-                """,
-                (claim.run_id,),
-            ).fetchone()
-            if current != {"status": "running", "execution_fence": claim.fence}:
-                raise ResearchRunFenced
-            attempt = transaction.execute(
-                """
-                SELECT 1
-                FROM research_runs.attempts
-                WHERE id = %s AND run_id = %s AND fence = %s AND status = 'running'
-                """,
-                (claim.attempt_id, claim.run_id, claim.fence),
-            ).fetchone()
-            if attempt is None:
-                raise ResearchRunFenced
+            self._validate_current_execution_in_transaction(transaction, claim)
+
+    def _validate_current_execution_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        claim: _ExecutionClaim,
+    ) -> None:
+        current = transaction.execute(
+            """
+            SELECT status, execution_fence
+            FROM research_runs.runs
+            WHERE id = %s
+            FOR UPDATE
+            """,
+            (claim.run_id,),
+        ).fetchone()
+        if current != {"status": "running", "execution_fence": claim.fence}:
+            raise ResearchRunFenced
+        attempt = transaction.execute(
+            """
+            SELECT 1
+            FROM research_runs.attempts
+            WHERE id = %s AND run_id = %s AND fence = %s AND status = 'running'
+            """,
+            (claim.attempt_id, claim.run_id, claim.fence),
+        ).fetchone()
+        if attempt is None:
+            raise ResearchRunFenced
+
+    @contextmanager
+    def _authorize_result_staging(
+        self,
+        claim: _ExecutionClaim,
+    ) -> Iterator[None]:
+        with self._database.transaction() as transaction:
+            self._lock_result_staging(transaction, claim.run_id)
+            self._validate_current_execution_in_transaction(transaction, claim)
+            yield
+
+    def _lock_result_staging(
+        self,
+        transaction: PostgresTransaction,
+        run_id: str,
+    ) -> None:
+        transaction.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"research_runs.result_staging:{run_id}",),
+        ).fetchone()
 
     def _publish_success(
         self,

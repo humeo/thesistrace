@@ -29,7 +29,7 @@ CREATE TABLE research_runs.attempts (
     failure_reason text,
     CONSTRAINT attempts_fence_check CHECK ((fence > 0)),
     CONSTRAINT attempts_ordinal_check CHECK ((ordinal > 0)),
-    CONSTRAINT attempts_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
+    CONSTRAINT attempts_status_check CHECK ((status = ANY (ARRAY['running'::text, 'cancelling'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
 
@@ -70,7 +70,7 @@ CREATE TABLE research_runs.runs (
     CONSTRAINT runs_execution_fence_check CHECK ((execution_fence >= 0)),
     CONSTRAINT runs_immutable_input_check CHECK ((jsonb_typeof(immutable_input) = 'object'::text)),
     CONSTRAINT runs_result_provenance_check CHECK (((result_provenance IS NULL) OR (jsonb_typeof(result_provenance) = 'object'::text))),
-    CONSTRAINT runs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
+    CONSTRAINT runs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'cancelling'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
 

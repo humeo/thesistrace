@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 
 from thesistrace.research_kernel.alpha import (
@@ -262,7 +262,12 @@ def run(run_input: RunInput) -> RunOutput:
     return _run_explicit_period(run_input, research_data, calendar)
 
 
-def run_columnar_chunk(run_input: RunInput) -> RunOutput:
+def run_columnar_chunk(
+    run_input: RunInput,
+    *,
+    cancellation_check: Callable[[], None],
+) -> RunOutput:
+    cancellation_check()
     research_data = run_input.research_data_snapshot()
     if not isinstance(research_data, ColumnarResearchSeries):
         raise KernelRunError("Research Chunk requires columnar input")
@@ -282,6 +287,7 @@ def run_columnar_chunk(run_input: RunInput) -> RunOutput:
         calculation_data,
         origin_session=start_session,
         period_sessions=period_sessions,
+        cancellation_check=cancellation_check,
     )
 
 
@@ -363,6 +369,7 @@ def _calculate_columnar(
     *,
     origin_session: str,
     period_sessions: list[str],
+    cancellation_check: Callable[[], None],
 ) -> RunOutput:
     alpha_expression = run_input.alpha_expression_snapshot()
     definition = calculation_definition(run_input, alpha_expression)
@@ -370,6 +377,7 @@ def _calculate_columnar(
         research_data,
         compiled_alpha=run_input.compiled_alpha_snapshot(),
         neutralization=run_input.neutralization,
+        cancellation_check=cancellation_check,
     )
     return _calculate_from_matrix(
         run_input,
@@ -378,6 +386,7 @@ def _calculate_columnar(
         definition,
         origin_session=origin_session,
         period_sessions=period_sessions,
+        cancellation_check=cancellation_check,
     )
 
 
@@ -389,14 +398,26 @@ def _calculate_from_matrix(
     *,
     origin_session: str,
     period_sessions: list[str],
+    cancellation_check: Callable[[], None] | None = None,
 ) -> RunOutput:
+    if cancellation_check is not None:
+        cancellation_check()
     selected = set(period_sessions)
     matrix["sessions"] = [
         session for session in matrix["sessions"] if str(session["session"]) in selected
     ]
     matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
-    labels = build_forward_labels(research_data, matrix, signal_sessions=period_sessions)
+    labels = build_forward_labels(
+        research_data,
+        matrix,
+        signal_sessions=period_sessions,
+        cancellation_check=cancellation_check,
+    )
+    if cancellation_check is not None:
+        cancellation_check()
     factor = evaluate_factor(labels)
+    if cancellation_check is not None:
+        cancellation_check()
     strategy = (
         transition_strategy(
             research_data,
@@ -410,8 +431,11 @@ def _calculate_from_matrix(
             matrix,
             definition,
             origin_session=origin_session,
+            cancellation_check=cancellation_check,
         )
     )
+    if cancellation_check is not None:
+        cancellation_check()
     artifacts = compose_output(matrix, labels, factor, strategy.finalized)
     track_state = KernelState(
         run_input=run_input,

@@ -147,6 +147,7 @@ def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section()
             "market.volume.shares": volume,
         },
         universes,
+        cancellation_check=lambda: None,
     )
     legacy = evaluate_series_execution_matrix(
         plan,
@@ -167,3 +168,31 @@ def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section()
     )
 
     np.testing.assert_array_equal(columnar, expected)
+
+
+def test_columnar_plan_checks_cancellation_between_bounded_operator_stages() -> None:
+    plan = build_series_execution_plan(
+        alpha_language.compile("cs_rank(pct_change(close_adj, 1))")
+    )
+    sessions = tuple(f"2026-08-{day:02d}" for day in range(1, 11))
+    calls = 0
+
+    def cancel_during_execution() -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise RuntimeError("cancelled at bounded stage")
+
+    with pytest.raises(RuntimeError, match="cancelled at bounded stage"):
+        evaluate_columnar_execution_matrix(
+            plan,
+            ("instrument_a", "instrument_b"),
+            sessions,
+            {
+                "price.close.adjusted": np.ones((2, len(sessions))),
+            },
+            {session: ("instrument_a", "instrument_b") for session in sessions},
+            cancellation_check=cancel_during_execution,
+        )
+
+    assert calls == 4

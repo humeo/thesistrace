@@ -95,6 +95,7 @@ def evaluate_alpha_matrix(
         compiled_alpha=compiled_alpha,
         neutralization=neutralization,
         value_at=lambda instrument_id, session_index: evaluated[instrument_id][session_index],
+        cancellation_check=None,
     )
 
 
@@ -103,6 +104,7 @@ def evaluate_columnar_alpha_matrix(
     *,
     compiled_alpha: CompiledAlphaLike,
     neutralization: str,
+    cancellation_check: Callable[[], None],
 ) -> dict[str, object]:
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization must be none or industry")
@@ -115,6 +117,7 @@ def evaluate_columnar_alpha_matrix(
         calendar,
         research_data.numeric_field_matrices(plan.field_names, instruments),
         research_data.universe_members,
+        cancellation_check=cancellation_check,
     )
     positions = {instrument_id: index for index, instrument_id in enumerate(instruments)}
     return _compose_alpha_matrix(
@@ -124,6 +127,7 @@ def evaluate_columnar_alpha_matrix(
         value_at=lambda instrument_id, session_index: evaluated[
             positions[instrument_id], session_index
         ],
+        cancellation_check=cancellation_check,
     )
 
 
@@ -133,10 +137,13 @@ def _compose_alpha_matrix(
     compiled_alpha: CompiledAlphaLike,
     neutralization: str,
     value_at: Callable[[str, int], float | None],
+    cancellation_check: Callable[[], None] | None,
 ) -> dict[str, object]:
     calendar = list(research_data.sessions)
     session_results: list[dict[str, object]] = []
     for session_index, session in enumerate(calendar):
+        if cancellation_check is not None:
+            cancellation_check()
         coverage = Counter()
         raw_values: dict[str, float] = {}
         for instrument_id in research_data.universe_members.get(session, ()):
@@ -169,6 +176,8 @@ def _compose_alpha_matrix(
         session_results.append(
             {"session": session, "values": rows, "coverage_loss": dict(sorted(coverage.items()))}
         )
+        if cancellation_check is not None:
+            cancellation_check()
     return {
         "expression": dict(compiled_alpha.expression),
         "effective_lookback": compiled_alpha.effective_lookback,

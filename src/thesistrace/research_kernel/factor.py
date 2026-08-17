@@ -1,7 +1,7 @@
 import hashlib
 import math
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from statistics import stdev
 
 from thesistrace.research_kernel.serialization import canonical_json_bytes
@@ -34,6 +34,7 @@ def build_forward_labels(
     *,
     signal_sessions: Sequence[str],
     horizons: Sequence[int] = HORIZONS,
+    cancellation_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     calendar = list(research_data.sessions)
     prices = research_data.execution_prices
@@ -45,6 +46,8 @@ def build_forward_labels(
     for horizon in horizons:
         sessions: list[dict[str, object]] = []
         for signal_session in selected_sessions:
+            if cancellation_check is not None:
+                cancellation_check()
             signal_index = calendar.index(signal_session)
             alpha_values = list(alpha_by_session[signal_session]["values"])
             samples: list[dict[str, object]] = []
@@ -149,6 +152,8 @@ def build_forward_labels(
                     "unavailable": dict(sorted(unavailable.items())),
                 }
             )
+            if cancellation_check is not None:
+                cancellation_check()
         horizon_payload = {"horizon": horizon, "sessions": sessions}
         horizon_results[str(horizon)] = {
             **horizon_payload,

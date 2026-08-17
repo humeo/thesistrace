@@ -105,7 +105,7 @@ type ResearchResult = {
 
 export type ResearchRun = {
   id: string;
-  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  status: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
   name: string;
   folder_id: string;
   created_at: string;
@@ -191,14 +191,25 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
           const nextRun = (await response.json()) as ResearchRun;
           if (generation !== loadGeneration.current) return;
           setRun(nextRun);
-          if (nextRun.status === "queued" || nextRun.status === "running") {
+          if (
+            nextRun.status === "queued" ||
+            nextRun.status === "running" ||
+            nextRun.status === "cancelling"
+          ) {
             timeout = window.setTimeout(() => void load(true), 500);
           }
         } else {
           const nextItems = ((await response.json()) as ResearchRunList).items;
           if (generation !== loadGeneration.current) return;
           setItems(nextItems);
-          if (nextItems.some((item) => item.status === "queued" || item.status === "running")) {
+          if (
+            nextItems.some(
+              (item) =>
+                item.status === "queued" ||
+                item.status === "running" ||
+                item.status === "cancelling",
+            )
+          ) {
             timeout = window.setTimeout(() => void load(true), 500);
           }
         }
@@ -266,7 +277,11 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
       });
       if (!response.ok) throw new Error("ResearchRun cancellation failed");
       if (generation !== cancelGeneration.current) return;
-      setRun((await response.json()) as ResearchRun);
+      const nextRun = (await response.json()) as ResearchRun;
+      setRun(nextRun);
+      if (nextRun.status === "cancelling") {
+        setRefreshGeneration((current) => current + 1);
+      }
       cancelRequest.current = null;
     } catch (reason: unknown) {
       if (reason instanceof DOMException && reason.name === "AbortError") return;

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import selectors
 import subprocess
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import IO
+from time import monotonic
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
 from thesistrace.research_kernel.kernel_run import (
@@ -20,6 +21,8 @@ from thesistrace.research_run.models import ImmutableRunInput
 from thesistrace.research_run.result import build_result_payload
 
 _MAX_PROTOCOL_LINE_BYTES = 16 * 1024 * 1024
+_CANCEL_COOPERATIVE_GRACE_SECONDS = 1.0
+_CANCEL_CHILD_EXIT_BUDGET_SECONDS = 3.0
 _THREAD_ENVIRONMENT_NAMES = (
     "OMP_NUM_THREADS",
     "OPENBLAS_NUM_THREADS",
@@ -38,6 +41,10 @@ class ResearchExecutionInputInvalid(ResearchExecutionError):
 
 
 class ResearchExecutionInsufficientWarmup(ResearchExecutionError):
+    pass
+
+
+class ResearchExecutionCancelled(ResearchExecutionError):
     pass
 
 
@@ -64,18 +71,69 @@ class SupervisedResearchExecution:
         self._acknowledged = False
         self._exit_emitted = False
 
-    def acknowledge(self) -> None:
+    def acknowledge(self, *, cancel_requested: Callable[[], bool]) -> None:
         if self._acknowledged:
             raise ResearchExecutionError("Research execution child was already acknowledged")
+        if cancel_requested():
+            self.cancel()
+            raise ResearchExecutionCancelled("Research execution was cancelled")
         assert self._process.stdin is not None
         self._process.stdin.write('{"command":"acknowledge"}\n')
         self._process.stdin.flush()
         self._process.stdin.close()
-        self._process.wait(timeout=10)
+        cancellation_started: float | None = None
+        termination_sent = False
+        while self._process.poll() is None:
+            now = monotonic()
+            if cancellation_started is None and cancel_requested():
+                cancellation_started = now
+                self._emit(self._event("research_execution_child_cancel_requested"))
+            if cancellation_started is not None:
+                termination_sent = _enforce_cancellation_deadline(
+                    self._process,
+                    elapsed=now - cancellation_started,
+                    termination_sent=termination_sent,
+                    emit_termination=lambda: self._emit(
+                        self._event("research_execution_child_termination_requested")
+                    ),
+                )
+            try:
+                self._process.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                continue
+        if cancellation_started is not None:
+            self._emit_exit()
+            raise ResearchExecutionCancelled("Research execution was cancelled")
         if self._process.returncode != 0:
             raise ResearchExecutionError(self._child_failure("after acknowledgement"))
         self._acknowledged = True
         self._emit(self._event("research_execution_child_acknowledged"))
+        self._emit_exit()
+
+    def cancel(self) -> None:
+        if self._process.poll() is not None:
+            self._emit_exit()
+            return
+        assert self._process.stdin is not None
+        if not self._process.stdin.closed:
+            self._process.stdin.write('{"command":"cancel"}\n')
+            self._process.stdin.flush()
+        self._emit(self._event("research_execution_child_cancel_requested"))
+        started = monotonic()
+        termination_sent = False
+        while self._process.poll() is None:
+            termination_sent = _enforce_cancellation_deadline(
+                self._process,
+                elapsed=monotonic() - started,
+                termination_sent=termination_sent,
+                emit_termination=lambda: self._emit(
+                    self._event("research_execution_child_termination_requested")
+                ),
+            )
+            try:
+                self._process.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                continue
         self._emit_exit()
 
     def close(self) -> None:
@@ -131,6 +189,7 @@ class SupervisedResearchExecutor:
         request: ResearchExecutionRequest,
         *,
         emit: ExecutionEvent,
+        cancel_requested: Callable[[], bool],
     ) -> SupervisedResearchExecution:
         process = subprocess.Popen(
             [sys.executable, "-m", "thesistrace.entrypoints.research_child"],
@@ -166,7 +225,15 @@ class SupervisedResearchExecutor:
             )
             process.stdin.flush()
             try:
-                response = _read_message(process.stdout)
+                response = _read_message(
+                    process,
+                    request,
+                    emit=emit,
+                    cancel_requested=cancel_requested,
+                )
+            except ResearchExecutionCancelled:
+                process.wait(timeout=1)
+                raise
             except ResearchExecutionError as error:
                 process.wait(timeout=5)
                 raise ResearchExecutionError(
@@ -175,6 +242,8 @@ class SupervisedResearchExecutor:
             if response.get("status") != "succeeded":
                 category = response.get("category")
                 message = str(response.get("message", "Research execution child failed"))
+                if category == "cancelled":
+                    raise ResearchExecutionCancelled(message)
                 if category == "insufficient_warmup":
                     raise ResearchExecutionInsufficientWarmup(message)
                 if category == "invalid_input":
@@ -208,15 +277,27 @@ class SupervisedResearchExecutor:
             raise
 
 
-def execute_request(value: Mapping[str, object]) -> dict[str, object]:
+def execute_request(
+    value: Mapping[str, object],
+    *,
+    cancel_requested: Callable[[], bool],
+) -> dict[str, object]:
     try:
         if value.get("schema_version") != "research-child-request-v1":
             raise ResearchExecutionInputInvalid("Research child request is incompatible")
         data_mount = Path(str(value["data_mount"]))
         generation_id = str(value["data_generation_id"])
         immutable_input = ImmutableRunInput.model_validate(value["immutable_input"])
-        result = _calculate_result(data_mount, generation_id, immutable_input)
+        _require_not_cancelled(cancel_requested)
+        result = _calculate_result(
+            data_mount,
+            generation_id,
+            immutable_input,
+            cancel_requested=cancel_requested,
+        )
         return {"status": "succeeded", "result": result}
+    except ResearchExecutionCancelled as error:
+        return {"status": "cancelled", "category": "cancelled", "message": str(error)}
     except ResearchExecutionInsufficientWarmup as error:
         return {
             "status": "failed",
@@ -235,9 +316,13 @@ def _calculate_result(
     data_mount: Path,
     generation_id: str,
     immutable_input: ImmutableRunInput,
+    *,
+    cancel_requested: Callable[[], bool],
 ) -> dict[str, object]:
+    _require_not_cancelled(cancel_requested)
     store = MountedGenerationStore(data_mount)
     admission = store.open_admission(generation_id)
+    _require_not_cancelled(cancel_requested)
     start_session, end_session = _selected_research_period(
         immutable_input,
         research_sessions=list(admission.research_calendar),
@@ -258,6 +343,7 @@ def _calculate_result(
         neutralization=immutable_input.neutralization,
         field_bindings=immutable_input.field_bindings,
     )
+    _require_not_cancelled(cancel_requested)
     try:
         output = run_columnar_chunk(
             _kernel_input(
@@ -265,7 +351,8 @@ def _calculate_result(
                 research_data,
                 research_start_session=start_session,
                 research_end_session=end_session,
-            )
+            ),
+            cancellation_check=lambda: _require_not_cancelled(cancel_requested),
         )
     except InsufficientCalculationWarmupError as error:
         raise ResearchExecutionInsufficientWarmup(str(error)) from error
@@ -345,18 +432,94 @@ def _child_environment() -> dict[str, str]:
     return environment
 
 
-def _read_message(stream: IO[str] | None) -> dict[str, object]:
+def _read_message(
+    process: subprocess.Popen[str],
+    request: ResearchExecutionRequest,
+    *,
+    emit: ExecutionEvent,
+    cancel_requested: Callable[[], bool],
+) -> dict[str, object]:
+    stream = process.stdout
     if stream is None:
         raise ResearchExecutionError("Research execution child has no output pipe")
-    line = stream.readline(_MAX_PROTOCOL_LINE_BYTES + 1)
-    if not line:
-        raise ResearchExecutionError("Research execution child exited without a response")
+    selector = selectors.DefaultSelector()
+    selector.register(stream, selectors.EVENT_READ)
+    cancellation_started: float | None = None
+    termination_sent = False
+    try:
+        while True:
+            now = monotonic()
+            if cancellation_started is None and cancel_requested():
+                cancellation_started = now
+                assert process.stdin is not None
+                process.stdin.write('{"command":"cancel"}\n')
+                process.stdin.flush()
+                emit(
+                    {
+                        "event": "research_execution_child_cancel_requested",
+                        "resource_type": "ResearchRun",
+                        "resource_id": request.run_id,
+                        "attempt_id": request.attempt_id,
+                        "child_pid": process.pid,
+                    }
+                )
+            if cancellation_started is not None:
+                termination_sent = _enforce_cancellation_deadline(
+                    process,
+                    elapsed=now - cancellation_started,
+                    termination_sent=termination_sent,
+                    emit_termination=lambda: emit(
+                        {
+                            "event": "research_execution_child_termination_requested",
+                            "resource_type": "ResearchRun",
+                            "resource_id": request.run_id,
+                            "attempt_id": request.attempt_id,
+                            "child_pid": process.pid,
+                        }
+                    ),
+                )
+            if selector.select(timeout=0.05):
+                line = stream.readline(_MAX_PROTOCOL_LINE_BYTES + 1)
+                if line:
+                    break
+            if process.poll() is not None:
+                if cancellation_started is not None:
+                    raise ResearchExecutionCancelled("Research execution was cancelled")
+                raise ResearchExecutionError("Research execution child exited without a response")
+    finally:
+        selector.close()
+    if cancellation_started is not None:
+        raise ResearchExecutionCancelled("Research execution was cancelled")
     if len(line.encode()) > _MAX_PROTOCOL_LINE_BYTES or not line.endswith("\n"):
         raise ResearchExecutionError("Research execution child response exceeds its bound")
     value = json.loads(line)
     if not isinstance(value, dict):
         raise ResearchExecutionError("Research execution child response is invalid")
     return value
+
+
+def _require_not_cancelled(cancel_requested: Callable[[], bool]) -> None:
+    if cancel_requested():
+        raise ResearchExecutionCancelled("Research execution was cancelled")
+
+
+def _enforce_cancellation_deadline(
+    process: subprocess.Popen[str],
+    *,
+    elapsed: float,
+    termination_sent: bool,
+    emit_termination: Callable[[], None],
+) -> bool:
+    if process.poll() is not None:
+        return termination_sent
+    if elapsed >= _CANCEL_CHILD_EXIT_BUDGET_SECONDS:
+        process.kill()
+        return termination_sent
+    if elapsed >= _CANCEL_COOPERATIVE_GRACE_SECONDS and not termination_sent:
+        process.terminate()
+        emit_termination()
+        return True
+    return termination_sent
 
 
 def _child_stderr_detail(process: subprocess.Popen[str]) -> str:

@@ -137,6 +137,7 @@ describe("UseAsDraftPanel", () => {
     expect(isTerminalResearch("cancelled")).toBe(true);
     expect(isTerminalResearch("queued")).toBe(false);
     expect(isTerminalResearch("running")).toBe(false);
+    expect(isTerminalResearch("cancelling")).toBe(false);
   });
 
   it("offers explicit local reuse without a Rerun action", () => {

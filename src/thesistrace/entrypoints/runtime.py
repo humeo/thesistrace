@@ -8,6 +8,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import boto3
+from botocore.config import Config
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
@@ -37,6 +38,7 @@ CORE_ENVIRONMENT_NAMES = (
     "THESISTRACE_S3_BUCKET",
     "THESISTRACE_DATA_MOUNT",
 )
+PUBLICATION_REQUEST_TIMEOUT_SECONDS = 0.5
 
 
 @dataclass(frozen=True)
@@ -117,6 +119,11 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             aws_access_key_id=settings.s3_access_key_id,
             aws_secret_access_key=settings.s3_secret_access_key,
             region_name=settings.s3_region,
+            config=Config(
+                connect_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
+                read_timeout=PUBLICATION_REQUEST_TIMEOUT_SECONDS,
+                retries={"total_max_attempts": 1, "mode": "standard"},
+            ),
         )
         s3.list_buckets()
         publication = Publication(database, s3, bucket=settings.s3_bucket)

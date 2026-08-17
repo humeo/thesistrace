@@ -245,6 +245,8 @@ def evaluate_columnar_execution_matrix(
     sessions: tuple[str, ...],
     field_matrices: Mapping[str, np.ndarray],
     universe_members: Mapping[str, tuple[str, ...]],
+    *,
+    cancellation_check: Callable[[], None],
 ) -> np.ndarray:
     shape = (len(instruments), len(sessions))
     if any(matrix.shape != shape for matrix in field_matrices.values()):
@@ -252,6 +254,7 @@ def evaluate_columnar_execution_matrix(
     values: list[float | int | np.ndarray | None] = []
     remaining = [0] * len(plan.nodes)
     for node in plan.nodes:
+        cancellation_check()
         for input_index in node.inputs:
             remaining[input_index] += 1
     builtins = {definition.identifier: definition for definition in BUILTIN_DEFINITIONS}
@@ -284,6 +287,7 @@ def evaluate_columnar_execution_matrix(
             child = _columnar_array(values[node.inputs[0]], shape)
             ranked = np.full(shape, np.nan, dtype=np.float64)
             for session_index, session in enumerate(sessions):
+                cancellation_check()
                 finite = sorted(
                     (
                         instrument_id,
@@ -313,6 +317,7 @@ def evaluate_columnar_execution_matrix(
             if value.shape != shape:
                 raise ValueError("columnar Alpha builtin produced a misaligned result")
         values.append(value)
+        cancellation_check()
         for input_index in node.inputs:
             remaining[input_index] -= 1
             if remaining[input_index] == 0 and input_index != plan.root:

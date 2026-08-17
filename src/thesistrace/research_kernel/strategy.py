@@ -69,6 +69,7 @@ def transition_columnar_strategy(
     *,
     origin_session: str,
     continuation: dict[str, object] | None = None,
+    cancellation_check: Callable[[], None],
 ) -> StrategyTransition:
     return _transition_strategy(
         research_data,
@@ -77,6 +78,7 @@ def transition_columnar_strategy(
         origin_session=origin_session,
         continuation=continuation,
         slice_resumable=lambda sessions: research_data.slice_sessions(sessions),
+        cancellation_check=cancellation_check,
     )
 
 
@@ -90,6 +92,7 @@ def _transition_strategy(
     slice_resumable: Callable[
         [tuple[str, ...]], AlignedResearchData | ColumnarResearchSeries
     ],
+    cancellation_check: Callable[[], None] | None = None,
 ) -> StrategyTransition:
     ledger: list[dict[str, object]] = []
     finalized = run_strategy(
@@ -99,6 +102,7 @@ def _transition_strategy(
         origin_session=origin_session,
         continuation=continuation,
         ledger=ledger,
+        cancellation_check=cancellation_check,
     )
     calendar = list(research_data.sessions)
     resumable_research_data = (
@@ -113,6 +117,7 @@ def _transition_strategy(
         origin_session=origin_session,
         terminal_cutoff=False,
         continuation=continuation,
+        cancellation_check=cancellation_check,
     )
     return StrategyTransition(
         finalized=finalized,
@@ -217,6 +222,7 @@ def run_strategy(
     continuation: dict[str, object] | None = None,
     skip_execution_sessions: set[str] | None = None,
     ledger: list[dict[str, object]] | None = None,
+    cancellation_check: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     calendar = list(research_data.sessions)
     if continuation is None:
@@ -307,6 +313,8 @@ def run_strategy(
             turnover_events = []
 
     for session in report_calendar:
+        if cancellation_check is not None:
+            cancellation_check()
         global_index = calendar.index(session)
         report_index = global_index - origin_index
         marks, valuation_events = mark_positions(session, positions, prices, states, instruments)
@@ -672,6 +680,8 @@ def run_strategy(
                     "valuation_events": unique_events(valuation_events),
                 }
             )
+        if cancellation_check is not None:
+            cancellation_check()
 
     if prior_metric_state is None:
         metrics = strategy_metrics(

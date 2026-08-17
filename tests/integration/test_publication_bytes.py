@@ -267,11 +267,20 @@ def test_concurrent_prepare_uses_conditional_create_without_overwrite(
     barrier = Barrier(2)
     original_object_exists = Publication._object_exists
 
-    def synchronize_absence(self: Publication, candidate_digest: str) -> bool:
+    def synchronize_absence(
+        self: Publication,
+        candidate_digest: str,
+        *,
+        staging_authority,
+    ) -> bool:
         if candidate_digest == digest:
             barrier.wait(timeout=5)
             return False
-        return original_object_exists(self, candidate_digest)
+        return original_object_exists(
+            self,
+            candidate_digest,
+            staging_authority=staging_authority,
+        )
 
     with open_core_runtime(core_settings) as runtime:
         runtime.publication.prepare(
