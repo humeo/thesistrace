@@ -629,7 +629,9 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "rerun_receipts" not in run_schema
     assert "compile_formula" not in run_source[run_source.index("    def process_next(") :]
     assert "self._publication.record(" in run_source
-    assert "runtime.research_runs.process_next(on_claim=claim)" in worker_source
+    assert "runtime.research_runs.process_next(" in worker_source
+    assert "on_claim=claim" in worker_source
+    assert "on_execution_event=emit" in worker_source
     assert "while runtime.daily_tracks.process_next" not in worker_source
     for removed in ("outbox", "dispatch", "global job", "temporal"):
         assert removed not in run_source.lower()
@@ -637,6 +639,41 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     for foreign_schema in ("data", "definitions", "publication", "daily_tracks"):
         for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
             assert f"{sql_verb} {foreign_schema}." not in run_source
+
+
+def test_research_execution_child_has_one_columnar_calculation_route() -> None:
+    execution_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "execution.py"
+    ).read_text()
+    service_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "service.py"
+    ).read_text()
+    compose_source = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
+    test_compose_source = (
+        ROOT / "deploy" / "core" / "compose.test-run.yaml"
+    ).read_text()
+
+    assert "read_columnar_slice(" in execution_source
+    assert "run_columnar_chunk(" in execution_source
+    assert "read_composite_slice(" not in execution_source
+    assert "run_kernel(" not in execution_source
+    assert "to_pylist(" not in execution_source
+    assert "deepcopy(" not in execution_source
+    assert "run_kernel(" not in service_source
+    assert "canonical-data:/var/lib/thesistrace/canonical-data:ro" in compose_source
+    assert ":/var/lib/thesistrace/canonical-data:ro" in test_compose_source
+    child_environment = execution_source[
+        execution_source.index("def _child_environment(") : execution_source.index(
+            "def _read_message("
+        )
+    ]
+    for authority in (
+        "THESISTRACE_DATABASE_URL",
+        "THESISTRACE_S3_ENDPOINT_URL",
+        "THESISTRACE_S3_ACCESS_KEY_ID",
+        "THESISTRACE_S3_SECRET_ACCESS_KEY",
+    ):
+        assert authority not in child_environment
 
 
 def test_daily_track_owns_activation_sql_and_copied_origin() -> None:

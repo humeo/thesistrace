@@ -26,7 +26,6 @@ from thesistrace.data import (
     DatasetAdmissionSnapshot,
     DatasetLifecycle,
     DatasetWarmupUnavailable,
-    GenerationStoreError,
     MountedGenerationStore,
 )
 from thesistrace.publication import (
@@ -44,16 +43,18 @@ from thesistrace.research_kernel.alpha_expression import (
     MAX_ALPHA_RUN_ESTIMATED_WORK,
     estimate_alpha_run_work,
 )
-from thesistrace.research_kernel.kernel_run import (
-    InsufficientCalculationWarmupError,
-    KernelRunError,
-    RunInput,
-)
-from thesistrace.research_kernel.kernel_run import run as run_kernel
 from thesistrace.research_kernel.numeric import (
     NUMERIC_CONTRACT_ID,
     NumericContractError,
     require_current_numeric_contract,
+)
+from thesistrace.research_run.execution import (
+    ExecutionEvent,
+    ResearchExecutionInputInvalid,
+    ResearchExecutionInsufficientWarmup,
+    ResearchExecutionRequest,
+    SupervisedResearchExecution,
+    SupervisedResearchExecutor,
 )
 from thesistrace.research_run.models import (
     AlphaAdmissionFacts,
@@ -72,12 +73,10 @@ from thesistrace.research_run.models import (
 )
 from thesistrace.research_run.result import (
     ResearchResultError,
-    build_result_payload,
     enforce_result_bundle_budget,
     read_result_bundle,
     result_publication_payloads,
 )
-from thesistrace.research_series import AlignedResearchData
 
 logger = logging.getLogger(__name__)
 ATTEMPT_LEASE_SECONDS = 15 * 60
@@ -212,6 +211,7 @@ class ResearchRunService:
         compile_formula: CompileFormula | None = None,
         current_dataset: CurrentDataset | None = None,
         track_references_result: TrackReferencesResult | None = None,
+        execution: SupervisedResearchExecutor | None = None,
     ) -> None:
         if lease_seconds <= 0 or heartbeat_seconds <= 0:
             raise ValueError("ResearchRun lease and heartbeat intervals must be positive")
@@ -226,6 +226,7 @@ class ResearchRunService:
         self._compile_formula = compile_formula
         self._current_dataset = current_dataset
         self._track_references_result = track_references_result
+        self._execution = execution
 
     def admit(
         self,
@@ -334,6 +335,7 @@ class ResearchRunService:
         self,
         *,
         on_claim: Callable[[str, str], None] | None = None,
+        on_execution_event: ExecutionEvent | None = None,
     ) -> bool:
         self._require_execution_dependencies()
         claim = self._claim_next()
@@ -343,9 +345,17 @@ class ResearchRunService:
             on_claim(claim.run_id, claim.attempt_id)
         with self._maintain_claim(claim):
             self._progress("claimed", claim.run_id)
+            execution: SupervisedResearchExecution | None = None
             try:
-                prepared, provenance = self._execute(claim)
+                execution = self._execute(
+                    claim,
+                    emit=on_execution_event or (lambda _event: None),
+                )
+                self._validate_current_execution(claim)
+                prepared, provenance = self._prepare_execution_result(claim, execution)
                 self._progress("prepared", claim.run_id)
+                self._validate_current_execution(claim)
+                execution.acknowledge()
                 self._publish_success(claim, prepared, provenance)
                 self._progress("succeeded", claim.run_id)
             except ResearchRunFenced:
@@ -358,7 +368,11 @@ class ResearchRunService:
                 logger.error(
                     "ResearchRun execution failed",
                     extra={"run_id": claim.run_id, "error_type": type(error).__name__},
+                    exc_info=True,
                 )
+            finally:
+                if execution is not None:
+                    execution.close()
         return True
 
     def list(
@@ -831,8 +845,8 @@ class ResearchRunService:
     def _require_execution_dependencies(self) -> None:
         if (
             self._dataset_lifecycle is None
-            or self._generation_store is None
             or self._publication is None
+            or self._execution is None
         ):
             raise RuntimeError("ResearchRun execution dependencies are not configured")
 
@@ -1074,59 +1088,38 @@ class ResearchRunService:
     def _execute(
         self,
         claim: _ExecutionClaim,
-    ) -> tuple[PreparedPublication, dict[str, object]]:
-        assert self._generation_store is not None
-        assert self._publication is not None
+        *,
+        emit: ExecutionEvent,
+    ) -> SupervisedResearchExecution:
+        assert self._execution is not None
         immutable_input = claim.immutable_input
         require_current_numeric_contract(
             immutable_input.numeric_execution_contract
         )
         try:
-            admission = self._generation_store.open_admission(claim.data_generation_id)
-        except GenerationStoreError as error:
-            raise ResearchRunInputInvalid("selected Data Generation is invalid") from error
-        calendar = list(admission.research_calendar)
-        start_session, end_session = _selected_research_period(
-            immutable_input,
-            research_sessions=calendar,
-            available_field_ids=frozenset(admission.generation.field_availability),
-        )
-        start_index = calendar.index(start_session)
-        warmup_start = start_index - immutable_input.alpha_admission.effective_lookback
-        if warmup_start < 0:
-            raise ResearchRunInsufficientWarmup(
-                "insufficient Calculation Warm-up for selected Research Period"
+            return self._execution.execute(
+                ResearchExecutionRequest(
+                    run_id=claim.run_id,
+                    attempt_id=claim.attempt_id,
+                    data_generation_id=claim.data_generation_id,
+                    immutable_input=immutable_input,
+                ),
+                emit=emit,
             )
-        calculation_sessions = calendar[warmup_start : calendar.index(end_session) + 1]
-        try:
-            generation = self._generation_store.read_composite_slice(
-                claim.data_generation_id,
-                sessions=calculation_sessions,
-                universe_name=immutable_input.universe,
-                neutralization=immutable_input.neutralization,
-                field_bindings=immutable_input.field_bindings,
-            )
-        except GenerationStoreError as error:
+        except ResearchExecutionInsufficientWarmup as error:
+            raise ResearchRunInsufficientWarmup(str(error)) from error
+        except ResearchExecutionInputInvalid as error:
             raise ResearchRunInputInvalid(
                 "selected Data Generation cannot resolve Formula"
             ) from error
-        kernel_input = _kernel_input(
-            immutable_input,
-            generation.research_data,
-            research_start_session=start_session,
-            research_end_session=end_session,
-        )
-        try:
-            output = run_kernel(kernel_input)
-        except InsufficientCalculationWarmupError as error:
-            raise ResearchRunInsufficientWarmup(str(error)) from error
-        except KernelRunError as error:
-            raise ResearchRunInputInvalid(str(error)) from error
-        result = build_result_payload(
-            output,
-            rebalance_interval=int(immutable_input.strategy["rebalance_every_sessions"]),
-            universe=immutable_input.universe,
-        )
+
+    def _prepare_execution_result(
+        self,
+        claim: _ExecutionClaim,
+        execution: SupervisedResearchExecution,
+    ) -> tuple[PreparedPublication, dict[str, object]]:
+        assert self._publication is not None
+        result = execution.result
         provenance = _result_provenance(claim)
         prepared = self._publication.prepare(
             kind="research.result",
@@ -1138,6 +1131,30 @@ class ResearchRunService:
             raise ResearchResultError("Result Strategy Daily Observations are invalid")
         enforce_result_bundle_budget(prepared.exact_bytes, len(observations))
         return prepared, provenance
+
+    def _validate_current_execution(self, claim: _ExecutionClaim) -> None:
+        with self._database.transaction() as transaction:
+            current = transaction.execute(
+                """
+                SELECT status, execution_fence
+                FROM research_runs.runs
+                WHERE id = %s
+                FOR UPDATE
+                """,
+                (claim.run_id,),
+            ).fetchone()
+            if current != {"status": "running", "execution_fence": claim.fence}:
+                raise ResearchRunFenced
+            attempt = transaction.execute(
+                """
+                SELECT 1
+                FROM research_runs.attempts
+                WHERE id = %s AND run_id = %s AND fence = %s AND status = 'running'
+                """,
+                (claim.attempt_id, claim.run_id, claim.fence),
+            ).fetchone()
+            if attempt is None:
+                raise ResearchRunFenced
 
     def _publish_success(
         self,
@@ -1521,58 +1538,6 @@ def _generation_matches_frozen_facts(
         and generation.research_sessions[-1] == facts.coverage_end.isoformat()
         and set(immutable_input.field_bindings)
         <= set(getattr(generation, "field_availability", ()))
-    )
-
-
-def _selected_research_period(
-    immutable_input: ImmutableRunInput,
-    *,
-    research_sessions: list[str],
-    available_field_ids: frozenset[str],
-) -> tuple[str, str]:
-    if not research_sessions:
-        raise ResearchRunInputInvalid("selected Data Generation has no Research Sessions")
-    sessions = [str(session) for session in research_sessions]
-    requested_start = immutable_input.requested_start_date.isoformat()
-    requested_end = immutable_input.requested_end_date.isoformat()
-    if requested_start < sessions[0] or requested_end > sessions[-1]:
-        raise ResearchRunInputInvalid("requested Research Period is outside Dataset Coverage")
-    selected = [
-        session for session in sessions if requested_start <= session <= requested_end
-    ]
-    if not selected:
-        raise ResearchRunInputInvalid("requested dates contain no Research Session")
-    missing_fields = set(immutable_input.field_bindings) - available_field_ids
-    if missing_fields:
-        raise ResearchRunInputInvalid("selected Data Generation lacks a frozen field")
-    return selected[0], selected[-1]
-
-
-def _kernel_input(
-    immutable_input: ImmutableRunInput,
-    research_data: AlignedResearchData,
-    *,
-    research_start_session: str,
-    research_end_session: str,
-) -> RunInput:
-    strategy = immutable_input.strategy
-    costs = immutable_input.costs
-    return RunInput(
-        research_data=research_data,
-        alpha_expression=immutable_input.alpha_expression,
-        field_bindings=immutable_input.field_bindings,
-        effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
-        universe=immutable_input.universe,
-        neutralization=immutable_input.neutralization,
-        holdings_count=int(strategy["holdings_count"]),
-        rebalance_interval=int(strategy["rebalance_every_sessions"]),
-        initial_cash_cny=str(strategy["initial_cash_cny"]),
-        commission_rate_all_in=str(costs["commission_rate_all_in"]),
-        commission_min_cny=str(costs["commission_min_cny"]),
-        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-        transfer_fee_rate=str(costs["transfer_fee_rate"]),
-        research_start_session=research_start_session,
-        research_end_session=research_end_session,
     )
 
 

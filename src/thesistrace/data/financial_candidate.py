@@ -709,6 +709,24 @@ class FinancialCandidateStore:
         sessions: tuple[str, ...],
         instrument_ids: frozenset[str],
     ) -> tuple[dict[str, object], ...]:
+        return tuple(
+            self.read_financial_table(
+                manifest_sha256,
+                endpoint,
+                source_columns,
+                sessions,
+                instrument_ids,
+            ).to_pylist()
+        )
+
+    def read_financial_table(
+        self,
+        manifest_sha256: str,
+        endpoint: str,
+        source_columns: tuple[str, ...],
+        sessions: tuple[str, ...],
+        instrument_ids: frozenset[str],
+    ) -> pa.Table:
         if endpoint not in FINANCIAL_ENDPOINTS:
             raise FinancialCandidateError("FINANCIAL_ENDPOINT_INVALID")
         manifest = self._read_family(manifest_sha256)
@@ -769,7 +787,7 @@ class FinancialCandidateStore:
         ):
             raise FinancialCandidateError("FINANCIAL_TABLE_MANIFEST_INVALID")
         expected_schema = pa.schema([contract.schema.field(name) for name in source_columns])
-        rows: list[dict[str, object]] = []
+        tables: list[pa.Table] = []
         for ordinal, object_ref in enumerate(objects):
             if not isinstance(object_ref, Mapping) or object_ref.get("ordinal") != ordinal:
                 raise FinancialCandidateError("FINANCIAL_OBJECT_REFERENCE_INVALID")
@@ -805,8 +823,10 @@ class FinancialCandidateStore:
             )
             if table.schema != expected_schema:
                 raise FinancialCandidateError("FINANCIAL_OBJECT_SCHEMA_INVALID")
-            rows.extend(row for row in table.to_pylist())
-        return tuple(rows)
+            tables.append(table)
+        if not tables:
+            return pa.Table.from_batches([], schema=expected_schema)
+        return pa.concat_tables(tables)
 
     def quarantined_row_count(self, manifest_sha256: str) -> int:
         manifest = self._read_family(manifest_sha256)

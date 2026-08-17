@@ -60,6 +60,8 @@ from thesistrace.research_kernel import (
     run,
 )
 from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.execution import SupervisedResearchExecutor
+from thesistrace.research_run.models import ImmutableRunInput
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 from thesistrace.research_series import research_sessions, slice_research_sessions
 
@@ -85,6 +87,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
     generation_id = _publish_composite_head(settings, sessions=sessions)
 
     with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
         catalog = client.get("/api/alpha/catalog").json()
         assert "cs_rank" in {item["identifier"] for item in catalog["builtins"]}
         accepted = client.post(
@@ -97,11 +100,71 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         assert accepted.status_code == 202
         run_id = accepted.json()["id"]
         assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "queued"
-        assert client.app.state.core_runtime.research_runs.process_next() is True
+        execution_events: list[dict[str, object]] = []
+        attempt_status_at_child_exit: list[object] = []
+
+        def capture_execution_lifecycle(event: dict[str, object]) -> None:
+            execution_events.append(event)
+            if event["event"] == "research_execution_child_exited":
+                attempt_status_at_child_exit.append(
+                    _stored_execution(settings, run_id)["attempt_status"]
+                )
+
+        assert (
+            client.app.state.core_runtime.research_runs.process_next(
+                on_execution_event=capture_execution_lifecycle
+            )
+            is True
+        )
+        assert [event["event"] for event in execution_events] == [
+            "research_execution_child_started",
+            "research_execution_child_acknowledged",
+            "research_execution_child_exited",
+        ]
+        assert attempt_status_at_child_exit == ["running"]
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
         stored = _stored_execution(settings, run_id)
         assert stored["attempt_data_generation_id"] == generation_id
+        actual = read_result_bundle(
+            runtime.publication.read(
+                PublishedRef(
+                    manifest_sha256=str(stored["result_manifest_sha256"]),
+                    kind="research.result",
+                    provenance=stored["result_provenance"],
+                )
+            )
+        )
+        assert canonical_json_bytes(actual) == canonical_json_bytes(
+            _reference_result(settings, generation_id, runtime.database, run_id)
+        )
+
+        financial_only = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "financial-only-formula",
+                formula="total_revenue_latest_fy",
+            ),
+        ).json()["id"]
+        assert runtime.research_runs.process_next() is True
+        financial_stored = _stored_execution(settings, financial_only)
+        financial_actual = read_result_bundle(
+            runtime.publication.read(
+                PublishedRef(
+                    manifest_sha256=str(financial_stored["result_manifest_sha256"]),
+                    kind="research.result",
+                    provenance=financial_stored["result_provenance"],
+                )
+            )
+        )
+        assert canonical_json_bytes(financial_actual) == canonical_json_bytes(
+            _reference_result(
+                settings,
+                generation_id,
+                runtime.database,
+                financial_only,
+            )
+        )
         started = client.post(
             f"/api/research-runs/{run_id}/daily-tracks",
             json={"request_id": "composite-track"},
@@ -318,6 +381,29 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
             for event in _worker_events(worker)
             if event["event"] == "worker_claim"
         } == set(run_ids)
+        research_events = [
+            event
+            for worker in research_workers
+            for event in _worker_events(worker)
+        ]
+        assert {
+            (event["resource_id"], event["attempt_id"])
+            for event in research_events
+            if event["event"] == "research_execution_child_started"
+        } == {
+            (event["resource_id"], event["attempt_id"])
+            for event in research_events
+            if event["event"] == "worker_claim"
+        }
+        assert {
+            (event["resource_id"], event["attempt_id"])
+            for event in research_events
+            if event["event"] == "research_execution_child_acknowledged"
+        } == {
+            (event["resource_id"], event["attempt_id"])
+            for event in research_events
+            if event["event"] == "worker_claim"
+        }
 
         guarded_track_id = client.post(
             f"/api/research-runs/{guarded_run_id}/daily-tracks",
@@ -1815,6 +1901,7 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
             progress=barrier,
         )
         worker = Thread(target=processor.process_next)
@@ -1857,18 +1944,16 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_claim_commits_before_generation_parquet_is_opened(
+def test_claim_commits_before_execution_child_receives_generation_request(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
     _publish_head(settings, sessions=sessions, price_offset=0)
-    generation_opened = Event()
-    allow_generation_open = Event()
-    opened_generations: list[str] = []
+    child_started = Event()
+    allow_child_request = Event()
     worker_errors: list[BaseException] = []
 
     with TestClient(create_app(settings)) as client:
@@ -1879,53 +1964,113 @@ def test_claim_commits_before_generation_parquet_is_opened(
         assert accepted.status_code == 202
         run_id = accepted.json()["id"]
         runtime = client.app.state.core_runtime
-        original_read_composite_slice = MountedGenerationStore.read_composite_slice
-
-        def blocking_read_composite_slice(
-            store: MountedGenerationStore,
-            manifest_sha256: str,
-            **kwargs,
-        ):
-            opened_generations.append(manifest_sha256)
-            generation_opened.set()
-            if not allow_generation_open.wait(timeout=10):
-                raise AssertionError("Generation open was not released by the test")
-            return original_read_composite_slice(store, manifest_sha256, **kwargs)
-
-        monkeypatch.setattr(
-            MountedGenerationStore,
-            "read_composite_slice",
-            blocking_read_composite_slice,
-        )
         processor = ResearchRunService(
             runtime.database,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
         )
 
         def process_one() -> None:
             try:
-                processor.process_next()
+                def hold_before_request(event: dict[str, object]) -> None:
+                    if event["event"] == "research_execution_child_started":
+                        child_started.set()
+                        assert allow_child_request.wait(timeout=10)
+
+                processor.process_next(on_execution_event=hold_before_request)
             except BaseException as error:  # pragma: no cover - asserted below
                 worker_errors.append(error)
 
         worker = Thread(target=process_one)
         worker.start()
         try:
-            assert generation_opened.wait(timeout=5)
-            status_during_generation_open = client.get(
+            assert child_started.wait(timeout=5)
+            status_before_child_request = client.get(
                 f"/api/research-runs/{run_id}"
             ).json()["status"]
         finally:
-            allow_generation_open.set()
+            allow_child_request.set()
             worker.join(timeout=15)
 
         assert not worker.is_alive()
         assert worker_errors == []
-        assert status_during_generation_open == "running"
-        assert len(opened_generations) == 1
+        assert status_before_child_request == "running"
         assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "succeeded"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_orphaned_research_child_exits_without_mutating_product_state(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    generation_id = _publish_head(
+        settings,
+        sessions=("2026-08-03", "2026-08-04", "2026-08-05"),
+        price_offset=0,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("orphaned-research-child"),
+        ).json()["id"]
+        runtime = client.app.state.core_runtime
+        with runtime.database.transaction() as transaction:
+            immutable_input = transaction.execute(
+                "SELECT immutable_input FROM research_runs.runs WHERE id = %s",
+                (run_id,),
+            ).fetchone()["immutable_input"]
+        publication_count = _publication_manifest_count(settings)
+        child_environment = {
+            "PATH": os.environ.get("PATH", ""),
+            "PYTHONUNBUFFERED": "1",
+            "OMP_NUM_THREADS": "1",
+            "OPENBLAS_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+            "NUMEXPR_NUM_THREADS": "1",
+        }
+        child = subprocess.Popen(
+            [sys.executable, "-m", "thesistrace.entrypoints.research_child"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=child_environment,
+        )
+        assert child.stdin is not None
+        child.stdin.write(
+            json.dumps(
+                {
+                    "schema_version": "research-child-request-v1",
+                    "data_mount": str(settings.data_mount),
+                    "data_generation_id": generation_id,
+                    "immutable_input": immutable_input,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        child.stdin.flush()
+        child.stdin.close()
+        child.wait(timeout=15)
+
+        assert child.returncode == 74
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "queued"
+        with runtime.database.transaction() as transaction:
+            attempt_count = transaction.execute(
+                "SELECT count(*) AS count FROM research_runs.attempts WHERE run_id = %s",
+                (run_id,),
+            ).fetchone()["count"]
+        assert attempt_count == 0
+        assert _publication_manifest_count(settings) == publication_count
 
 
 @pytest.mark.skipif(
@@ -2148,10 +2293,12 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
                 denied_s3,
                 bucket=settings.s3_bucket,
             ),
+            execution=SupervisedResearchExecutor(settings.data_mount),
         )
         manifest_count = _publication_manifest_count(settings)
+        execution_events: list[dict[str, object]] = []
 
-        assert processor.process_next() is True
+        assert processor.process_next(on_execution_event=execution_events.append) is True
         assert processor.process_next() is False
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
@@ -2163,6 +2310,11 @@ def test_denied_rustfs_write_never_publishes_or_keeps_a_pin(
         assert stored["result_manifest_sha256"] is None
         assert stored["active_pin_count"] == 0
         assert _publication_manifest_count(settings) == manifest_count
+        assert [event["event"] for event in execution_events] == [
+            "research_execution_child_started",
+            "research_execution_child_exited",
+        ]
+        assert execution_events[-1]["acknowledged"] is False
 
 
 @pytest.mark.skipif(
@@ -2760,6 +2912,66 @@ def _kernel_input(
         transfer_fee_rate="0.00001",
         research_start_session=sessions[0],
         research_end_session=sessions[-1],
+    )
+
+
+def _reference_result(
+    settings: CoreSettings,
+    generation_id: str,
+    database: PostgresDatabase,
+    run_id: str,
+) -> dict[str, object]:
+    with database.transaction() as transaction:
+        row = transaction.execute(
+            "SELECT immutable_input FROM research_runs.runs WHERE id = %s",
+            (run_id,),
+        ).fetchone()
+    immutable = ImmutableRunInput.model_validate(row["immutable_input"])
+    admission = MountedGenerationStore(settings.data_mount).open_admission(generation_id)
+    calendar = list(admission.research_calendar)
+    selected = [
+        session
+        for session in calendar
+        if immutable.requested_start_date.isoformat()
+        <= session
+        <= immutable.requested_end_date.isoformat()
+    ]
+    start_index = calendar.index(selected[0])
+    calculation_sessions = calendar[
+        start_index - immutable.alpha_admission.effective_lookback : calendar.index(selected[-1])
+        + 1
+    ]
+    research_data = MountedGenerationStore(settings.data_mount).read_composite_slice(
+        generation_id,
+        sessions=calculation_sessions,
+        universe_name=immutable.universe,
+        neutralization=immutable.neutralization,
+        field_bindings=immutable.field_bindings,
+    ).research_data
+    strategy = immutable.strategy
+    costs = immutable.costs
+    return build_result_payload(
+        run(
+            RunInput(
+                research_data=research_data,
+                alpha_expression=immutable.alpha_expression,
+                field_bindings=immutable.field_bindings,
+                effective_alpha_lookback=immutable.alpha_admission.effective_lookback,
+                universe=immutable.universe,
+                neutralization=immutable.neutralization,
+                holdings_count=int(strategy["holdings_count"]),
+                rebalance_interval=int(strategy["rebalance_every_sessions"]),
+                initial_cash_cny=str(strategy["initial_cash_cny"]),
+                commission_rate_all_in=str(costs["commission_rate_all_in"]),
+                commission_min_cny=str(costs["commission_min_cny"]),
+                stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+                transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                research_start_session=selected[0],
+                research_end_session=selected[-1],
+            )
+        ),
+        rebalance_interval=int(strategy["rebalance_every_sessions"]),
+        universe=immutable.universe,
     )
 
 

@@ -7,6 +7,7 @@ from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionService, DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.execution import SupervisedResearchExecutor
 
 
 def main() -> None:
@@ -28,6 +29,7 @@ def main() -> None:
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
             progress=progress,
             activate_track=runtime.daily_tracks.activate,
             compile_formula=alpha_language.compile,

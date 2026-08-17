@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import numpy as np
 import pytest
 from contracts import field, literal, operation
 
@@ -11,6 +12,8 @@ from thesistrace.research_kernel.alpha import evaluate_series
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.series_plan import (
     build_series_execution_plan,
+    evaluate_columnar_execution_matrix,
+    evaluate_series_execution_matrix,
     evaluate_series_execution_plan,
 )
 
@@ -122,3 +125,45 @@ def test_compiled_expression_builds_a_canonical_field_plan() -> None:
         plan,
         {"price.close.adjusted": [1.0, 2.0, 4.0]},
     ) == [None, 3.5, 5.0]
+
+
+def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section() -> None:
+    compiled = alpha_language.compile(
+        "cs_rank(pct_change(close_adj, 1)) + ts_mean(volume_shares, 2)"
+    )
+    plan = build_series_execution_plan(compiled)
+    instruments = ("instrument_a", "instrument_b")
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06")
+    close = np.asarray(((10.0, 11.0, 12.0, 13.0), (20.0, 18.0, 21.0, 22.0)))
+    volume = np.asarray(((100.0, 110.0, 120.0, 130.0), (200.0, 190.0, 180.0, 170.0)))
+    universes = {session: instruments for session in sessions}
+
+    columnar = evaluate_columnar_execution_matrix(
+        plan,
+        instruments,
+        sessions,
+        {
+            "price.close.adjusted": close,
+            "market.volume.shares": volume,
+        },
+        universes,
+    )
+    legacy = evaluate_series_execution_matrix(
+        plan,
+        instruments,
+        lambda instrument_id: {
+            "price.close.adjusted": close[instruments.index(instrument_id)].tolist(),
+            "market.volume.shares": volume[instruments.index(instrument_id)].tolist(),
+        },
+        length=len(sessions),
+        universe_members=universes,
+        sessions=sessions,
+    )
+    expected = np.asarray(
+        [
+            [np.nan if value is None else value for value in legacy[instrument_id]]
+            for instrument_id in instruments
+        ]
+    )
+
+    np.testing.assert_array_equal(columnar, expected)

@@ -26,6 +26,7 @@ from thesistrace.research_run import (
     research_result_manifest_is_referenced,
     research_run_exists,
 )
+from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.result import read_result_bundle
 
 CORE_ENVIRONMENT_NAMES = (
@@ -143,6 +144,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             compile_formula=alpha_language.compile,
             current_dataset=dataset_admission.current,
             track_references_result=daily_tracks.references_result_manifest,
+            execution=SupervisedResearchExecutor(settings.data_mount),
         )
         yield CoreRuntime(
             database=database,

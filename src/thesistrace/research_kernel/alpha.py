@@ -1,7 +1,7 @@
 import hashlib
 import math
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from thesistrace.research_kernel.alpha_expression import (
     AlphaExpression,
@@ -13,10 +13,11 @@ from thesistrace.research_kernel.numeric import canonical_binary64_bytes
 from thesistrace.research_kernel.series_plan import (
     CompiledAlphaLike,
     build_series_execution_plan,
+    evaluate_columnar_execution_matrix,
     evaluate_series_execution_matrix,
     evaluate_series_execution_plan,
 )
-from thesistrace.research_series import AlignedResearchData
+from thesistrace.research_series import AlignedResearchData, ColumnarResearchSeries
 
 
 def validate_alpha(
@@ -73,7 +74,11 @@ def evaluate_alpha_matrix(
             field_id: [
                 (
                     finite_or_missing(float(value))
-                    if (value := research_data.fields[field_id].get((session, instrument_id)))
+                    if (
+                        value := research_data.fields[field_id].get(
+                            (session, instrument_id)
+                        )
+                    )
                     is not None
                     else None
                 )
@@ -85,16 +90,61 @@ def evaluate_alpha_matrix(
         universe_members=research_data.universe_members,
         sessions=tuple(calendar),
     )
+    return _compose_alpha_matrix(
+        research_data,
+        compiled_alpha=compiled_alpha,
+        neutralization=neutralization,
+        value_at=lambda instrument_id, session_index: evaluated[instrument_id][session_index],
+    )
+
+
+def evaluate_columnar_alpha_matrix(
+    research_data: ColumnarResearchSeries,
+    *,
+    compiled_alpha: CompiledAlphaLike,
+    neutralization: str,
+) -> dict[str, object]:
+    if neutralization not in {"none", "industry"}:
+        raise ValueError("neutralization must be none or industry")
+    calendar = tuple(research_data.sessions)
+    instruments = tuple(sorted(research_data.instruments))
+    plan = build_series_execution_plan(compiled_alpha)
+    evaluated = evaluate_columnar_execution_matrix(
+        plan,
+        instruments,
+        calendar,
+        research_data.numeric_field_matrices(plan.field_names, instruments),
+        research_data.universe_members,
+    )
+    positions = {instrument_id: index for index, instrument_id in enumerate(instruments)}
+    return _compose_alpha_matrix(
+        research_data,
+        compiled_alpha=compiled_alpha,
+        neutralization=neutralization,
+        value_at=lambda instrument_id, session_index: evaluated[
+            positions[instrument_id], session_index
+        ],
+    )
+
+
+def _compose_alpha_matrix(
+    research_data: AlignedResearchData | ColumnarResearchSeries,
+    *,
+    compiled_alpha: CompiledAlphaLike,
+    neutralization: str,
+    value_at: Callable[[str, int], float | None],
+) -> dict[str, object]:
+    calendar = list(research_data.sessions)
     session_results: list[dict[str, object]] = []
     for session_index, session in enumerate(calendar):
         coverage = Counter()
         raw_values: dict[str, float] = {}
         for instrument_id in research_data.universe_members.get(session, ()):
-            value = evaluated[instrument_id][session_index]
-            if value is None:
+            value = value_at(instrument_id, session_index)
+            if value is None or not math.isfinite(float(value)):
                 coverage["missing_expression"] += 1
                 continue
-            raw_values[instrument_id] = value
+            raw_values[instrument_id] = float(value)
         final_values = raw_values
         if neutralization == "industry":
             groups: dict[str, list[tuple[str, float]]] = {}

@@ -5,6 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Event
 
+import boto3
 import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
@@ -16,6 +17,7 @@ from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.execution import SupervisedResearchExecutor
 
 
 @pytest.mark.skipif(
@@ -102,6 +104,7 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
             progress=pause_after_prepare,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -129,6 +132,57 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
         assert replay.status_code == 200
         assert replay.json() == cancelled.json()
         assert restarted.app.state.core_runtime.research_runs.process_next() is False
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_stale_claim_is_rejected_before_any_result_objects_are_staged(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0)
+    claimed = Event()
+    release_stale = Event()
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="current-data-pre-stage-fence")
+        before = _publication_object_keys(settings)
+
+        def pause_after_claim(stage: str, _run_id: str) -> None:
+            if stage == "claimed":
+                claimed.set()
+                assert release_stale.wait(timeout=30)
+
+        stale = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+            progress=pause_after_claim,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(stale.process_next)
+            assert claimed.wait(timeout=20)
+            try:
+                cancelled = client.post(
+                    f"/api/research-runs/{run_id}/cancel",
+                    json={"request_id": "current-data-pre-stage-fence-cancel"},
+                )
+                assert cancelled.status_code == 200
+                assert cancelled.json()["status"] == "cancelled"
+            finally:
+                release_stale.set()
+            assert future.result(timeout=30) is True
+
+        assert _publication_object_keys(settings) == before
+        assert _attempt_status(runtime.database, run_id) == "cancelled"
+        assert _run_storage(runtime.database, run_id)["result_count"] == 0
 
 
 @pytest.mark.skipif(
@@ -204,3 +258,20 @@ def _cancel_receipt_count(database: PostgresDatabase) -> int:
         ).fetchone()
     assert row is not None
     return int(row["count"])
+
+
+def _publication_object_keys(settings: CoreSettings) -> set[str]:
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint_url,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        region_name=settings.s3_region,
+    )
+    return {
+        str(item["Key"])
+        for item in s3.list_objects_v2(
+            Bucket=settings.s3_bucket,
+            Prefix="publication/v1/sha256/",
+        ).get("Contents", [])
+    }

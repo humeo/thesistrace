@@ -5,6 +5,8 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
+import numpy as np
+
 from thesistrace.research_kernel.alpha_builtins import (
     BUILTIN_DEFINITIONS,
     NumericSeries,
@@ -235,6 +237,121 @@ def evaluate_series_execution_matrix(
         instrument_id: list(_broadcast(_matrix_value(root, instrument_id), length))
         for instrument_id in instruments
     }
+
+
+def evaluate_columnar_execution_matrix(
+    plan: SeriesExecutionPlan,
+    instruments: tuple[str, ...],
+    sessions: tuple[str, ...],
+    field_matrices: Mapping[str, np.ndarray],
+    universe_members: Mapping[str, tuple[str, ...]],
+) -> np.ndarray:
+    shape = (len(instruments), len(sessions))
+    if any(matrix.shape != shape for matrix in field_matrices.values()):
+        raise ValueError("columnar Alpha fields are misaligned")
+    values: list[float | int | np.ndarray | None] = []
+    remaining = [0] * len(plan.nodes)
+    for node in plan.nodes:
+        for input_index in node.inputs:
+            remaining[input_index] += 1
+    builtins = {definition.identifier: definition for definition in BUILTIN_DEFINITIONS}
+    instrument_positions = {instrument_id: index for index, instrument_id in enumerate(instruments)}
+
+    for node in plan.nodes:
+        if node.kind == "number":
+            value: float | int | np.ndarray | None = node.value
+        elif node.kind == "field":
+            value = field_matrices[node.identifier]
+        elif node.kind == "unary":
+            operand = _columnar_array(values[node.inputs[0]], shape)
+            value = np.where(np.isfinite(operand), -operand, np.nan)
+        elif node.kind == "binary":
+            left = _columnar_array(values[node.inputs[0]], shape)
+            right = _columnar_array(values[node.inputs[1]], shape)
+            valid = np.isfinite(left) & np.isfinite(right)
+            if node.identifier == "divide":
+                valid &= right != 0.0
+            value = np.full(shape, np.nan, dtype=np.float64)
+            operation = {
+                "add": np.add,
+                "subtract": np.subtract,
+                "multiply": np.multiply,
+                "divide": np.divide,
+            }[node.identifier]
+            with np.errstate(all="ignore"):
+                operation(left, right, out=value, where=valid)
+        elif node.identifier == "cs_rank":
+            child = _columnar_array(values[node.inputs[0]], shape)
+            ranked = np.full(shape, np.nan, dtype=np.float64)
+            for session_index, session in enumerate(sessions):
+                finite = sorted(
+                    (
+                        instrument_id,
+                        float(child[instrument_positions[instrument_id], session_index]),
+                    )
+                    for instrument_id in universe_members.get(session, ())
+                    if instrument_id in instrument_positions
+                    and math.isfinite(
+                        float(child[instrument_positions[instrument_id], session_index])
+                    )
+                )
+                for instrument_id, rank in _cross_section_ranks(finite).items():
+                    ranked[instrument_positions[instrument_id], session_index] = rank
+            value = ranked
+        else:
+            arguments = tuple(values[input_index] for input_index in node.inputs)
+            rows = [
+                _evaluate_columnar_builtin_row(
+                    builtins[node.identifier].evaluator,
+                    arguments,
+                    instrument_index,
+                    len(sessions),
+                )
+                for instrument_index in range(len(instruments))
+            ]
+            value = np.asarray(rows, dtype=np.float64)
+            if value.shape != shape:
+                raise ValueError("columnar Alpha builtin produced a misaligned result")
+        values.append(value)
+        for input_index in node.inputs:
+            remaining[input_index] -= 1
+            if remaining[input_index] == 0 and input_index != plan.root:
+                values[input_index] = None
+    return _columnar_array(values[plan.root], shape)
+
+
+def _evaluate_columnar_builtin_row(
+    evaluator,
+    arguments: tuple[float | int | np.ndarray | None, ...],
+    instrument_index: int,
+    length: int,
+) -> tuple[float, ...]:
+    projected = tuple(
+        (
+            tuple(
+                None if not math.isfinite(value) else float(value)
+                for value in argument[instrument_index]
+            )
+            if isinstance(argument, np.ndarray)
+            else argument
+        )
+        for argument in arguments
+    )
+    result = evaluator(projected)
+    series = _broadcast(result, length)
+    return tuple(math.nan if value is None else float(value) for value in series)
+
+
+def _columnar_array(
+    value: float | int | np.ndarray | None,
+    shape: tuple[int, int],
+) -> np.ndarray:
+    if isinstance(value, np.ndarray):
+        if value.shape != shape:
+            raise ValueError("columnar Alpha node is misaligned")
+        return value
+    fill = math.nan if value is None else float(value)
+    return np.full(shape, fill, dtype=np.float64)
 
 
 def _matrix_value(value: PlanValue | dict[str, PlanValue], instrument_id: str) -> PlanValue:

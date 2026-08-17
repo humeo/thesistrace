@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pyarrow import ArrowException
 
@@ -77,6 +78,7 @@ _FINANCIAL_PERFORMANCE_EVIDENCE = (
     "financial-io-2010-baseline.json#sha256="
     "6f053d3a506e0e345a254c6caf0bdd17664500bb6ce812ff5e0b66608608f2e6"
 )
+_COLUMNAR_RECORD_BATCH_ROWS = 65_536
 
 
 class GenerationStoreError(RuntimeError):
@@ -743,6 +745,149 @@ class MountedGenerationStore:
             ),
         )
 
+    def read_columnar_slice(
+        self,
+        manifest_sha256: str,
+        *,
+        sessions: list[str],
+        universe_name: str,
+        neutralization: str,
+        field_bindings: Mapping[str, str],
+    ):
+        from thesistrace.data.columnar_series import ColumnarResearchData
+        from thesistrace.data.fields import FINANCIAL_FIELDS, MARKET_FIELDS
+        from thesistrace.data.financial_candidate import FinancialCandidateStore
+        from thesistrace.data.financial_series import FinancialSeriesResolver
+
+        if not sessions or sessions != sorted(set(sessions)):
+            raise GenerationStoreError("Columnar Research sessions are invalid")
+        if universe_name not in _UNIVERSE_NAMES:
+            raise GenerationStoreError("Columnar Research Universe is invalid")
+        if neutralization not in {"none", "industry"}:
+            raise GenerationStoreError("Columnar Research Neutralization is invalid")
+        market_field_ids = {field.field_id for field in MARKET_FIELDS}
+        financial_field_ids = {field.field_id for field in FINANCIAL_FIELDS}
+        unknown = set(field_bindings) - market_field_ids - financial_field_ids
+        if unknown:
+            raise GenerationStoreError("Columnar Research field binding is unsupported")
+        market_bindings = {
+            field_id: evaluation_name
+            for field_id, evaluation_name in field_bindings.items()
+            if field_id in market_field_ids
+        }
+        financial_bindings = tuple(
+            field_id for field_id in field_bindings if field_id in financial_field_ids
+        )
+        requested_columns = market_field_columns(market_bindings)
+        root = self._read_family_generation_root(manifest_sha256)
+        descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
+        if any(session not in descriptor.research_sessions for session in sessions):
+            raise GenerationStoreError("Columnar Research sessions are outside Coverage")
+        selected = set(sessions)
+        universe_spec, universe_reference = self._family_table_reference(
+            root,
+            "equity.liquidity_universe",
+            "liquidity_universes",
+        )
+        universes = self._open_table_sessions_columnar(
+            universe_spec,
+            universe_reference,
+            selected_sessions=selected,
+            columns={"session", "universe", "instrument_ids"},
+        )
+        universes = universes.filter(pc.equal(universes["universe"], universe_name))
+        actual_sessions = tuple(
+            str(universes["session"][index].as_py()) for index in range(universes.num_rows)
+        )
+        if actual_sessions != tuple(sessions):
+            raise GenerationStoreError("Columnar Research Universe is incomplete")
+        instrument_ids = frozenset(
+            str(instrument_id)
+            for index in range(universes.num_rows)
+            for instrument_id in universes["instrument_ids"][index].as_py()
+        )
+        tables: dict[str, pa.Table] = {}
+        required_families = {
+            "market.instrument_identity",
+            "equity.eod_price",
+            "equity.trading_state",
+            "equity.price_limit",
+        }
+        if neutralization == "industry":
+            required_families.add("equity.industry_membership")
+        for family in descriptor.families:
+            if family.family_id not in required_families:
+                continue
+            for table_name in family.table_names:
+                spec, reference = self._family_table_reference(
+                    root, family.family_id, table_name
+                )
+                if spec.session_field is not None:
+                    columns = None
+                    if table_name == "eod_prices":
+                        columns = {
+                            "session_date",
+                            "instrument_id",
+                            "open_raw",
+                            "open_adj",
+                            *requested_columns,
+                        }
+                    tables[table_name] = self._open_table_sessions_columnar(
+                        spec,
+                        reference,
+                        selected_sessions=selected,
+                        columns=columns,
+                        instrument_ids=instrument_ids,
+                    )
+                else:
+                    columns = (
+                        {"instrument_id", "board", "listed_to"}
+                        if table_name == "instruments"
+                        else {"instrument_id", "active_from", "active_to", "sw2021_l1"}
+                    )
+                    tables[table_name] = self._open_table_instruments_columnar(
+                        spec,
+                        reference,
+                        instrument_ids=instrument_ids,
+                        columns=columns,
+                    )
+        industries = tables.get(
+            "industry_membership",
+            pa.table(
+                {
+                    name: pa.array([], type=pa.string())
+                    for name in ("instrument_id", "active_from", "active_to", "sw2021_l1")
+                }
+            ),
+        )
+        financial_values = None
+        if financial_bindings:
+            financial_manifest = descriptor.financial_candidate_manifest_sha256
+            if financial_manifest is None:
+                raise GenerationStoreError("Columnar Research lacks Financial Data")
+            financial_values = FinancialSeriesResolver(
+                FinancialCandidateStore(self._root)
+            ).resolve_table(
+                manifest_sha256=financial_manifest,
+                field_ids=financial_bindings,
+                sessions=tuple(sessions),
+                instrument_ids=tuple(sorted(instrument_ids)),
+            )
+        return ColumnarResearchData(
+            sessions=tuple(sessions),
+            _instruments=tables["instruments"],
+            _eod_prices=tables["eod_prices"],
+            _universes=universes,
+            _trading_states=tables["trading_states"],
+            _price_limits=tables["price_limits"],
+            _industries=industries,
+            _financial_values=financial_values,
+            _field_columns={
+                **market_bindings,
+                **{field_id: field_id for field_id in financial_bindings},
+            },
+        )
+
     def open_admission(self, manifest_sha256: str) -> MountedGenerationAdmission:
         root = self._read_family_generation_root(manifest_sha256)
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
@@ -1363,6 +1508,52 @@ class MountedGenerationStore:
         except ParquetContractError as error:
             raise GenerationStoreError("Market Series rows are incompatible") from error
 
+    def _open_table_sessions_columnar(
+        self,
+        spec: _TableSpec,
+        reference: Mapping[str, object],
+        *,
+        selected_sessions: set[str],
+        columns: set[str] | None,
+        instrument_ids: frozenset[str] | None = None,
+    ) -> pa.Table:
+        if spec.session_field is None:
+            raise ValueError("Selected-session read requires a session table")
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
+        first_session = min(selected_sessions)
+        last_session = max(selected_sessions)
+        tables: list[pa.Table] = []
+        for ordinal, object_ref in enumerate(objects):
+            _validate_object_reference(object_ref, ordinal)
+            assert isinstance(object_ref, Mapping)
+            first_key = object_ref["first_sort_key"]
+            last_key = object_ref["last_sort_key"]
+            if first_key is None or last_key is None:
+                continue
+            if str(last_key[0]) < first_session or str(first_key[0]) > last_session:
+                continue
+            table = self._open_partition_table(
+                spec,
+                object_ref,
+                ordinal,
+                columns=columns,
+                instrument_ids=instrument_ids,
+            )
+            mask = pc.is_in(
+                table[spec.session_field],
+                value_set=pa.array(sorted(selected_sessions)),
+            )
+            tables.append(table.filter(mask))
+        if not tables:
+            raise GenerationStoreError("Columnar Research table has no selected rows")
+        table = pa.concat_tables(tables)
+        sort_keys = [
+            (key, "ascending") for key in spec.contract.sort_keys if key in table.column_names
+        ]
+        return table.take(pc.sort_indices(table, sort_keys=sort_keys))
+
     def _open_table_instruments(
         self,
         spec: _TableSpec,
@@ -1404,6 +1595,32 @@ class MountedGenerationStore:
             )
         return sorted(rows, key=lambda row: tuple(row[key] for key in spec.contract.sort_keys))
 
+    def _open_table_instruments_columnar(
+        self,
+        spec: _TableSpec,
+        reference: Mapping[str, object],
+        *,
+        instrument_ids: frozenset[str],
+        columns: set[str],
+    ) -> pa.Table:
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
+        tables = [
+            self._open_partition_table(
+                spec,
+                object_ref,
+                ordinal,
+                columns=columns,
+                instrument_ids=instrument_ids,
+            )
+            for ordinal, object_ref in enumerate(objects)
+        ]
+        if not tables:
+            raise GenerationStoreError("Columnar Research instrument table is empty")
+        table = pa.concat_tables(tables)
+        return table.take(pc.sort_indices(table, sort_keys=[("instrument_id", "ascending")]))
+
     def _open_partition_projection(
         self,
         spec: _TableSpec,
@@ -1413,6 +1630,23 @@ class MountedGenerationStore:
         columns: set[str] | None,
         instrument_ids: frozenset[str] | None,
     ) -> list[dict[str, object]]:
+        return self._open_partition_table(
+            spec,
+            object_ref,
+            ordinal,
+            columns=columns,
+            instrument_ids=instrument_ids,
+        ).to_pylist()
+
+    def _open_partition_table(
+        self,
+        spec: _TableSpec,
+        object_ref: object,
+        ordinal: int,
+        *,
+        columns: set[str] | None,
+        instrument_ids: frozenset[str] | None,
+    ) -> pa.Table:
         _validate_object_reference(object_ref, ordinal)
         assert isinstance(object_ref, Mapping)
         sha256 = str(object_ref["sha256"])
@@ -1423,15 +1657,31 @@ class MountedGenerationStore:
             max_byte_count=GENERATION_OBJECT_MAX_BYTES,
         )
         try:
-            table = pq.read_table(
-                pa.BufferReader(content),
-                columns=None if columns is None else sorted(columns),
-                filters=(
-                    None
-                    if instrument_ids is None
-                    else [("instrument_id", "in", sorted(instrument_ids))]
-                ),
+            parquet = pq.ParquetFile(pa.BufferReader(content))
+            batches: list[pa.RecordBatch] = []
+            projected_columns = None if columns is None else sorted(columns)
+            instrument_values = (
+                None
+                if instrument_ids is None
+                else pa.array(sorted(instrument_ids), type=pa.string())
             )
+            for batch in parquet.iter_batches(
+                batch_size=_COLUMNAR_RECORD_BATCH_ROWS,
+                columns=projected_columns,
+            ):
+                if instrument_values is not None:
+                    batch = batch.filter(
+                        pc.is_in(batch.column("instrument_id"), value_set=instrument_values)
+                    )
+                batches.append(batch)
+            schema = (
+                parquet.schema_arrow
+                if projected_columns is None
+                else pa.schema(
+                    [parquet.schema_arrow.field(column) for column in projected_columns]
+                )
+            )
+            table = pa.Table.from_batches(batches, schema=schema)
             record_parquet_scan(
                 source="market",
                 row_count=table.num_rows,
@@ -1439,7 +1689,7 @@ class MountedGenerationStore:
             )
         except (ArrowException, TypeError, ValueError) as error:
             raise GenerationStoreError("Generation object projection is incompatible") from error
-        return table.to_pylist()
+        return table
 
     def _materialize_refresh_table(
         self,

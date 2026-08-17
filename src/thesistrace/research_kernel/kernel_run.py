@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
     evaluate_alpha_matrix,
+    evaluate_columnar_alpha_matrix,
 )
 from thesistrace.research_kernel.alpha_expression import AlphaExpression
 from thesistrace.research_kernel.factor import build_forward_labels, evaluate_factor
@@ -18,8 +19,15 @@ from thesistrace.research_kernel.series_plan import (
     SeriesExecutionPlan,
     build_series_execution_plan,
 )
-from thesistrace.research_kernel.strategy import transition_strategy
-from thesistrace.research_series import AlignedResearchData, slice_research_sessions
+from thesistrace.research_kernel.strategy import (
+    transition_columnar_strategy,
+    transition_strategy,
+)
+from thesistrace.research_series import (
+    AlignedResearchData,
+    ColumnarResearchSeries,
+    slice_research_sessions,
+)
 
 
 class KernelRunError(ValueError):
@@ -32,7 +40,7 @@ class InsufficientCalculationWarmupError(KernelRunError):
 
 @dataclass(frozen=True, init=False)
 class RunInput:
-    _research_data: AlignedResearchData = field(repr=False)
+    _research_data: AlignedResearchData | ColumnarResearchSeries = field(repr=False)
     _alpha_expression_json: bytes = field(repr=False)
     _field_bindings: tuple[tuple[str, str], ...] = field(repr=False)
     _effective_alpha_lookback: int = field(repr=False)
@@ -51,7 +59,7 @@ class RunInput:
     def __init__(
         self,
         *,
-        research_data: AlignedResearchData,
+        research_data: AlignedResearchData | ColumnarResearchSeries,
         alpha_expression: AlphaExpression,
         field_bindings: Mapping[str, str],
         effective_alpha_lookback: int,
@@ -98,7 +106,7 @@ class RunInput:
         object.__setattr__(self, "research_start_session", research_start_session)
         object.__setattr__(self, "research_end_session", research_end_session)
 
-    def research_data_snapshot(self) -> AlignedResearchData:
+    def research_data_snapshot(self) -> AlignedResearchData | ColumnarResearchSeries:
         return self._research_data.snapshot()
 
     def alpha_expression_snapshot(self) -> AlphaExpression:
@@ -125,7 +133,7 @@ class RunInput:
 
     def with_research_data(
         self,
-        research_data: AlignedResearchData,
+        research_data: AlignedResearchData | ColumnarResearchSeries,
         *,
         research_end_session: str | None = None,
     ) -> RunInput:
@@ -244,6 +252,8 @@ class RunOutput:
 
 def run(run_input: RunInput) -> RunOutput:
     research_data = run_input.research_data_snapshot()
+    if not isinstance(research_data, AlignedResearchData):
+        raise KernelRunError("Kernel Run requires row-aligned Research Data")
     calendar = list(research_data.sessions)
     if not calendar:
         raise KernelRunError("Kernel Run requires aligned Research Sessions")
@@ -252,11 +262,52 @@ def run(run_input: RunInput) -> RunOutput:
     return _run_explicit_period(run_input, research_data, calendar)
 
 
+def run_columnar_chunk(run_input: RunInput) -> RunOutput:
+    research_data = run_input.research_data_snapshot()
+    if not isinstance(research_data, ColumnarResearchSeries):
+        raise KernelRunError("Research Chunk requires columnar input")
+    calendar = list(research_data.sessions)
+    if not calendar:
+        raise KernelRunError("Research Chunk requires aligned Research Sessions")
+    if run_input.research_start_session is None or run_input.research_end_session is None:
+        raise KernelRunError("Research Period requires both first and last Research Sessions")
+    start_session, period_sessions, calculation_sessions = _period_boundaries(
+        run_input,
+        calendar,
+    )
+    calculation_data = research_data.slice_sessions(tuple(calculation_sessions))
+    calculation_input = run_input.with_research_data(calculation_data)
+    return _calculate_columnar(
+        calculation_input,
+        calculation_data,
+        origin_session=start_session,
+        period_sessions=period_sessions,
+    )
+
+
 def _run_explicit_period(
     run_input: RunInput,
     research_data: AlignedResearchData,
     calendar: list[str],
 ) -> RunOutput:
+    start_session, period_sessions, calculation_sessions = _period_boundaries(
+        run_input,
+        calendar,
+    )
+    calculation_data = slice_research_sessions(research_data, calculation_sessions)
+    calculation_input = run_input.with_research_data(calculation_data)
+    return _calculate(
+        calculation_input,
+        calculation_data,
+        origin_session=start_session,
+        period_sessions=period_sessions,
+    )
+
+
+def _period_boundaries(
+    run_input: RunInput,
+    calendar: list[str],
+) -> tuple[str, list[str], list[str]]:
     start_session = str(run_input.research_start_session)
     end_session = str(run_input.research_end_session)
     try:
@@ -279,14 +330,7 @@ def _run_explicit_period(
         )
     period_sessions = calendar[start_index : end_index + 1]
     calculation_sessions = calendar[warmup_start : end_index + 1]
-    calculation_data = slice_research_sessions(research_data, calculation_sessions)
-    calculation_input = run_input.with_research_data(calculation_data)
-    return _calculate(
-        calculation_input,
-        calculation_data,
-        origin_session=start_session,
-        period_sessions=period_sessions,
-    )
+    return start_session, period_sessions, calculation_sessions
 
 
 def _calculate(
@@ -303,6 +347,49 @@ def _calculate(
         compiled_alpha=run_input.compiled_alpha_snapshot(),
         neutralization=run_input.neutralization,
     )
+    return _calculate_from_matrix(
+        run_input,
+        research_data,
+        matrix,
+        definition,
+        origin_session=origin_session,
+        period_sessions=period_sessions,
+    )
+
+
+def _calculate_columnar(
+    run_input: RunInput,
+    research_data: ColumnarResearchSeries,
+    *,
+    origin_session: str,
+    period_sessions: list[str],
+) -> RunOutput:
+    alpha_expression = run_input.alpha_expression_snapshot()
+    definition = calculation_definition(run_input, alpha_expression)
+    matrix = evaluate_columnar_alpha_matrix(
+        research_data,
+        compiled_alpha=run_input.compiled_alpha_snapshot(),
+        neutralization=run_input.neutralization,
+    )
+    return _calculate_from_matrix(
+        run_input,
+        research_data,
+        matrix,
+        definition,
+        origin_session=origin_session,
+        period_sessions=period_sessions,
+    )
+
+
+def _calculate_from_matrix(
+    run_input: RunInput,
+    research_data: AlignedResearchData | ColumnarResearchSeries,
+    matrix: dict[str, object],
+    definition: dict[str, object],
+    *,
+    origin_session: str,
+    period_sessions: list[str],
+) -> RunOutput:
     selected = set(period_sessions)
     matrix["sessions"] = [
         session for session in matrix["sessions"] if str(session["session"]) in selected
@@ -310,11 +397,20 @@ def _calculate(
     matrix["checksum"] = alpha_matrix_checksum(matrix["sessions"])
     labels = build_forward_labels(research_data, matrix, signal_sessions=period_sessions)
     factor = evaluate_factor(labels)
-    strategy = transition_strategy(
-        research_data,
-        matrix,
-        definition,
-        origin_session=origin_session,
+    strategy = (
+        transition_strategy(
+            research_data,
+            matrix,
+            definition,
+            origin_session=origin_session,
+        )
+        if isinstance(research_data, AlignedResearchData)
+        else transition_columnar_strategy(
+            research_data,
+            matrix,
+            definition,
+            origin_session=origin_session,
+        )
     )
     artifacts = compose_output(matrix, labels, factor, strategy.finalized)
     track_state = KernelState(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pyarrow as pa
 import pytest
 
 from thesistrace.data.fields import FINANCIAL_FIELDS, authorable_fields
@@ -25,6 +26,34 @@ class RecordingReader:
         assert manifest_sha256 == "a" * 64
         self.requests.append((endpoint, source_columns, sessions[-1], instrument_ids))
         return tuple(self.rows.get(endpoint, ()))
+
+    def read_financial_table(
+        self,
+        manifest_sha256: str,
+        endpoint: str,
+        source_columns: tuple[str, ...],
+        sessions: tuple[str, ...],
+        instrument_ids: frozenset[str],
+    ) -> pa.Table:
+        assert manifest_sha256 == "a" * 64
+        self.requests.append((endpoint, source_columns, sessions[-1], instrument_ids))
+        return pa.Table.from_pylist(
+            self.rows.get(endpoint, ()),
+            schema=pa.schema([pa.field(column, pa.string()) for column in source_columns]),
+        )
+
+
+class ColumnarOnlyReader(RecordingReader):
+    def read_financial_rows(
+        self,
+        manifest_sha256: str,
+        endpoint: str,
+        source_columns: tuple[str, ...],
+        sessions: tuple[str, ...],
+        instrument_ids: frozenset[str],
+    ) -> tuple[dict[str, object], ...]:
+        del manifest_sha256, endpoint, source_columns, sessions, instrument_ids
+        raise AssertionError("columnar Research used the row-oriented financial reader")
 
 
 def test_catalog_declares_six_complete_financial_field_meanings() -> None:
@@ -53,8 +82,7 @@ def test_catalog_declares_six_complete_financial_field_meanings() -> None:
     )
     assert all(field.reporting_scope == "report_type_1_consolidated" for field in FINANCIAL_FIELDS)
     assert all(
-        field.missingness == "missing_when_no_visible_eligible_fact"
-        for field in FINANCIAL_FIELDS
+        field.missingness == "missing_when_no_visible_eligible_fact" for field in FINANCIAL_FIELDS
     )
     assert all(field.source_lineage.startswith("tushare.") for field in FINANCIAL_FIELDS)
     assert all(field.applicable_company_types == ("1", "2", "3", "4") for field in FINANCIAL_FIELDS)
@@ -131,18 +159,24 @@ def test_resolves_annual_and_latest_reported_fields_without_fallback() -> None:
     assert revenue[("2010-04-22", "equity:000001.SZ")] == "101"
     assert ("2011-04-25", "equity:000001.SZ") not in revenue
     assert revenue[("2011-04-25", "equity:000002.SZ")] == "200"
-    assert values["financial.cashflow.operating_cash_flow.latest_fy"][
-        ("2011-04-25", "equity:000001.SZ")
-    ] == "30"
+    assert (
+        values["financial.cashflow.operating_cash_flow.latest_fy"][
+            ("2011-04-25", "equity:000001.SZ")
+        ]
+        == "30"
+    )
     assets = values["financial.balance_sheet.total_assets.latest_reported"]
     assert assets[("2010-04-21", "equity:000001.SZ")] == "500"
     assert assets[("2010-04-22", "equity:000001.SZ")] == "550"
     assert ("2010-04-22", "equity:000001.SZ") not in values[
         "financial.balance_sheet.total_liabilities.latest_reported"
     ]
-    assert values["financial.balance_sheet.equity_parent.latest_reported"][
-        ("2010-04-22", "equity:000001.SZ")
-    ] == "300"
+    assert (
+        values["financial.balance_sheet.equity_parent.latest_reported"][
+            ("2010-04-22", "equity:000001.SZ")
+        ]
+        == "300"
+    )
     assert len(reader.requests) == 3
     assert all(
         request[2] == sessions[-1] and request[3] == instruments for request in reader.requests
@@ -154,6 +188,46 @@ def test_resolves_annual_and_latest_reported_fields_without_fallback() -> None:
         "total_assets",
         "total_liab",
         "total_hldr_eqy_exc_min_int",
+    }
+
+
+def test_columnar_financial_resolution_keeps_pit_selection_in_arrow() -> None:
+    reader = ColumnarOnlyReader(
+        {
+            "income": [
+                _row("equity:000001.SZ", "20091231", "2010-04-21", revenue="100"),
+                _row("equity:000001.SZ", "20091231", "2010-04-22", revenue="101"),
+                _row("equity:000001.SZ", "20100331", "2010-04-20", revenue="25"),
+                _row("equity:000002.SZ", "20091231", "2010-04-21", revenue="200"),
+            ]
+        }
+    )
+
+    table = FinancialSeriesResolver(reader).resolve_table(
+        manifest_sha256="a" * 64,
+        field_ids=("financial.income.total_revenue.latest_fy",),
+        sessions=("2010-04-20", "2010-04-21", "2010-04-22"),
+        instrument_ids=("equity:000001.SZ", "equity:000002.SZ"),
+    )
+
+    assert table.to_pydict() == {
+        "session": [
+            "2010-04-20",
+            "2010-04-20",
+            "2010-04-21",
+            "2010-04-21",
+            "2010-04-22",
+            "2010-04-22",
+        ],
+        "instrument_id": [
+            "equity:000001.SZ",
+            "equity:000002.SZ",
+            "equity:000001.SZ",
+            "equity:000002.SZ",
+            "equity:000001.SZ",
+            "equity:000002.SZ",
+        ],
+        "financial.income.total_revenue.latest_fy": [None, None, "100", "200", "101", "200"],
     }
 
 

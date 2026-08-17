@@ -23,7 +23,8 @@ class _ProductQueue:
     has_work: bool
     calls: int = 0
 
-    def process_next(self, *, on_claim=None) -> bool:
+    def process_next(self, *, on_claim=None, on_execution_event=None) -> bool:
+        del on_execution_event
         self.calls += 1
         if self.has_work and on_claim is not None:
             on_claim(self.resource_id, f"attempt-{self.resource_id}")

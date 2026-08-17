@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TypeVar
+from typing import Protocol, TypeVar, runtime_checkable
+
+import numpy as np
 
 type Coordinate = tuple[str, str]
 type NumericValue = Decimal | int | float | str
@@ -43,6 +46,27 @@ class AlignedResearchData:
 
     def snapshot(self) -> AlignedResearchData:
         return deepcopy(self)
+
+
+@runtime_checkable
+class ColumnarResearchSeries(Protocol):
+    sessions: tuple[str, ...]
+    instruments: Mapping[str, InstrumentProfile]
+    universe_members: Mapping[str, tuple[str, ...]]
+    industries: Mapping[Coordinate, str]
+    execution_prices: Mapping[Coordinate, ExecutionPrice]
+    trading_states: Mapping[Coordinate, str]
+    price_limits: Mapping[Coordinate, PriceLimit]
+
+    def snapshot(self) -> ColumnarResearchSeries: ...
+
+    def slice_sessions(self, sessions: tuple[str, ...]) -> ColumnarResearchSeries: ...
+
+    def numeric_field_matrices(
+        self,
+        field_ids: tuple[str, ...],
+        instruments: tuple[str, ...],
+    ) -> Mapping[str, np.ndarray]: ...
 
 
 def research_sessions(data: AlignedResearchData) -> list[str]:

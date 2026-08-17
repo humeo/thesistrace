@@ -1,7 +1,7 @@
 import hashlib
 import math
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
@@ -15,6 +15,7 @@ from thesistrace.research_kernel.numeric import (
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_series import (
     AlignedResearchData,
+    ColumnarResearchSeries,
     ExecutionPrice,
     InstrumentProfile,
     PriceLimit,
@@ -51,6 +52,45 @@ def transition_strategy(
     continuation: dict[str, object] | None = None,
 ) -> StrategyTransition:
     """Calculate a boundary and retain the state immediately before its terminal."""
+    return _transition_strategy(
+        research_data,
+        alpha_matrix,
+        definition,
+        origin_session=origin_session,
+        continuation=continuation,
+        slice_resumable=lambda sessions: slice_research_sessions(research_data, sessions),
+    )
+
+
+def transition_columnar_strategy(
+    research_data: ColumnarResearchSeries,
+    alpha_matrix: dict[str, object],
+    definition: dict[str, object],
+    *,
+    origin_session: str,
+    continuation: dict[str, object] | None = None,
+) -> StrategyTransition:
+    return _transition_strategy(
+        research_data,
+        alpha_matrix,
+        definition,
+        origin_session=origin_session,
+        continuation=continuation,
+        slice_resumable=lambda sessions: research_data.slice_sessions(sessions),
+    )
+
+
+def _transition_strategy(
+    research_data: AlignedResearchData | ColumnarResearchSeries,
+    alpha_matrix: dict[str, object],
+    definition: dict[str, object],
+    *,
+    origin_session: str,
+    continuation: dict[str, object] | None,
+    slice_resumable: Callable[
+        [tuple[str, ...]], AlignedResearchData | ColumnarResearchSeries
+    ],
+) -> StrategyTransition:
     ledger: list[dict[str, object]] = []
     finalized = run_strategy(
         research_data,
@@ -64,7 +104,7 @@ def transition_strategy(
     resumable_research_data = (
         research_data
         if calendar[-1] == origin_session
-        else slice_research_sessions(research_data, calendar[:-1])
+        else slice_resumable(tuple(calendar[:-1]))
     )
     resumable = run_strategy(
         resumable_research_data,
@@ -168,7 +208,7 @@ def market_rejection_reason(
 
 
 def run_strategy(
-    research_data: AlignedResearchData,
+    research_data: AlignedResearchData | ColumnarResearchSeries,
     alpha_matrix: dict[str, object],
     definition: dict[str, object],
     *,

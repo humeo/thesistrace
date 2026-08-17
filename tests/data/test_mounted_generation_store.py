@@ -441,14 +441,18 @@ def test_market_slice_projects_only_required_auxiliary_and_field_columns(
         source_lineage={"snapshot": "fixed"},
     )
     projected_columns: list[tuple[str, ...] | None] = []
-    original_read_table = pq.read_table
+    original_iter_batches = pq.ParquetFile.iter_batches
 
-    def recording_read_table(*args: object, **kwargs: object) -> pa.Table:
+    def recording_iter_batches(
+        parquet: pq.ParquetFile,
+        *args: object,
+        **kwargs: object,
+    ) -> Iterator[pa.RecordBatch]:
         columns = kwargs.get("columns")
         projected_columns.append(None if columns is None else tuple(columns))
-        return original_read_table(*args, **kwargs)
+        return original_iter_batches(parquet, *args, **kwargs)
 
-    monkeypatch.setattr(pq, "read_table", recording_read_table)
+    monkeypatch.setattr(pq.ParquetFile, "iter_batches", recording_iter_batches)
 
     store.read_market_slice(
         generation.manifest_sha256,

@@ -6,6 +6,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Protocol
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
@@ -26,6 +27,15 @@ class FinancialSeriesReader(Protocol):
         sessions: tuple[str, ...],
         instrument_ids: frozenset[str],
     ) -> tuple[dict[str, object], ...]: ...
+
+    def read_financial_table(
+        self,
+        manifest_sha256: str,
+        endpoint: str,
+        source_columns: tuple[str, ...],
+        sessions: tuple[str, ...],
+        instrument_ids: frozenset[str],
+    ) -> pa.Table: ...
 
 
 @dataclass(frozen=True)
@@ -127,6 +137,68 @@ class FinancialSeriesResolver:
                 )
         return resolved
 
+    def resolve_table(
+        self,
+        *,
+        manifest_sha256: str,
+        field_ids: Sequence[str],
+        sessions: Sequence[str],
+        instrument_ids: Sequence[str],
+    ) -> pa.Table:
+        fields = tuple(str(value) for value in field_ids)
+        requested_sessions = tuple(str(value) for value in sessions)
+        requested_instruments = tuple(str(value) for value in instrument_ids)
+        _validate_request(
+            manifest_sha256,
+            fields,
+            requested_sessions,
+            requested_instruments,
+        )
+        unknown = set(fields) - set(_PROJECTION_BY_ID)
+        if unknown:
+            raise FinancialSeriesError("FINANCIAL_FIELD_UNSUPPORTED")
+        projections = tuple(_PROJECTION_BY_ID[field_id] for field_id in fields)
+        instrument_set = frozenset(requested_instruments)
+        coordinates = _coordinate_table(requested_sessions, tuple(sorted(instrument_set)))
+        result = coordinates.select(("session", "instrument_id"))
+        for endpoint in _ENDPOINTS:
+            endpoint_projections = tuple(
+                projection for projection in projections if projection.endpoint == endpoint
+            )
+            if not endpoint_projections:
+                continue
+            source_columns = tuple(
+                dict.fromkeys(
+                    (
+                        *_METADATA_COLUMNS,
+                        *(projection.source_column for projection in endpoint_projections),
+                    )
+                )
+            )
+            table = self._reader.read_financial_table(
+                manifest_sha256,
+                endpoint,
+                source_columns,
+                requested_sessions,
+                instrument_set,
+            )
+            for selection in {item.period_selection for item in endpoint_projections}:
+                selected = tuple(
+                    item for item in endpoint_projections if item.period_selection == selection
+                )
+                aligned = _resolve_projection_group_table(
+                    table,
+                    selected,
+                    requested_sessions,
+                    instrument_set,
+                )
+                for projection in selected:
+                    result = result.append_column(
+                        projection.field_id,
+                        aligned[projection.field_id],
+                    )
+        return result.select(("session", "instrument_id", *fields))
+
 
 def _resolve_projection_group(
     rows: Sequence[Mapping[str, object]],
@@ -136,16 +208,14 @@ def _resolve_projection_group(
     output: dict[str, dict[Coordinate, NumericValue]],
 ) -> None:
     annual = projections[0].period_selection == "annual"
-    transitions = _state_transitions(rows, projections, instrument_ids, annual=annual)
-    if transitions.num_rows == 0:
-        return
-    coordinates = _coordinate_table(sessions, tuple(sorted(instrument_ids)))
-    aligned = coordinates.join_asof(
-        transitions,
-        on="session_date",
-        by="instrument_id",
-        tolerance=-100_000,
+    aligned = _align_projection_group(
+        _state_transitions_rows(rows, projections, instrument_ids, annual=annual),
+        projections,
+        sessions,
+        instrument_ids,
     )
+    if aligned.num_rows == 0:
+        return
     for projection in projections:
         available = aligned.filter(pc.is_valid(aligned[projection.field_id]))
         values = available.select(("session", "instrument_id", projection.field_id)).to_pydict()
@@ -162,7 +232,48 @@ def _resolve_projection_group(
         )
 
 
-def _state_transitions(
+def _resolve_projection_group_table(
+    table: pa.Table,
+    projections: Sequence[_FieldProjection],
+    sessions: tuple[str, ...],
+    instrument_ids: frozenset[str],
+) -> pa.Table:
+    annual = projections[0].period_selection == "annual"
+    transitions = _state_transitions_table(
+        table,
+        projections,
+        instrument_ids,
+        annual=annual,
+    )
+    return _align_projection_group(transitions, projections, sessions, instrument_ids)
+
+
+def _align_projection_group(
+    transitions: pa.Table,
+    projections: Sequence[_FieldProjection],
+    sessions: tuple[str, ...],
+    instrument_ids: frozenset[str],
+) -> pa.Table:
+    if transitions.num_rows == 0:
+        empty = _coordinate_table(sessions, tuple(sorted(instrument_ids))).select(
+            ("session", "instrument_id")
+        )
+        for projection in projections:
+            empty = empty.append_column(
+                projection.field_id,
+                pa.nulls(empty.num_rows, type=pa.string()),
+            )
+        return empty
+    coordinates = _coordinate_table(sessions, tuple(sorted(instrument_ids)))
+    return coordinates.join_asof(
+        transitions,
+        on="session_date",
+        by="instrument_id",
+        tolerance=-100_000,
+    ).select(("session", "instrument_id", *(item.field_id for item in projections)))
+
+
+def _state_transitions_rows(
     rows: Sequence[Mapping[str, object]],
     projections: Sequence[_FieldProjection],
     instrument_ids: frozenset[str],
@@ -217,19 +328,116 @@ def _state_transitions(
     )
 
 
+def _state_transitions_table(
+    table: pa.Table,
+    projections: Sequence[_FieldProjection],
+    instrument_ids: frozenset[str],
+    *,
+    annual: bool,
+) -> pa.Table:
+    schema = _transition_schema(projections)
+    if table.num_rows == 0:
+        return pa.Table.from_batches([], schema=schema)
+    accepted_mask = pc.and_kleene(
+        pc.and_kleene(
+            pc.is_in(table["instrument_id"], value_set=pa.array(sorted(instrument_ids))),
+            pc.equal(table["availability_status"], "available"),
+        ),
+        pc.and_kleene(
+            pc.equal(table["source_report_type"], "1"),
+            pc.is_in(table["source_company_type"], value_set=pa.array(sorted(_COMPANY_TYPES))),
+        ),
+    )
+    if annual:
+        accepted_mask = pc.and_kleene(
+            accepted_mask,
+            pc.ends_with(table["source_report_period"], "1231"),
+        )
+    accepted = table.filter(pc.fill_null(accepted_mask, False))
+    transitions: list[pa.Table] = []
+    for instrument_id in sorted(instrument_ids):
+        instrument = accepted.filter(pc.equal(accepted["instrument_id"], instrument_id))
+        if instrument.num_rows == 0:
+            continue
+        instrument = instrument.append_column(
+            "_report_period_order",
+            pc.cast(instrument["source_report_period"], pa.int64()),
+        ).append_column(
+            "_update_order",
+            pc.cast(
+                pc.fill_null(pc.equal(instrument["update_flag"], "1"), False),
+                pa.int8(),
+            ),
+        )
+        instrument = instrument.sort_by(
+            [
+                ("effective_available_session", "ascending"),
+                ("_report_period_order", "ascending"),
+                ("_update_order", "ascending"),
+                ("source_published_date", "ascending"),
+                ("first_observed_at", "ascending"),
+                ("source_row_sha256", "ascending"),
+            ]
+        )
+        candidates = instrument.filter(
+            pc.equal(
+                instrument["_report_period_order"],
+                pc.cumulative_max(instrument["_report_period_order"]),
+            )
+        )
+        available_sessions = candidates["effective_available_session"].combine_chunks()
+        last_at_session = pa.concat_arrays(
+            [
+                pc.not_equal(
+                    available_sessions.slice(0, max(0, len(available_sessions) - 1)),
+                    available_sessions.slice(1),
+                ),
+                pa.array([True]),
+            ]
+        )
+        latest = candidates.filter(last_at_session)
+        transitions.append(
+            pa.table(
+                {
+                    "session_date": pc.cast(latest["effective_available_session"], pa.date32()),
+                    "instrument_id": latest["instrument_id"],
+                    **{
+                        projection.field_id: latest[projection.source_column]
+                        for projection in projections
+                    },
+                },
+                schema=schema,
+            )
+        )
+    if not transitions:
+        return pa.Table.from_batches([], schema=schema)
+    return pa.concat_tables(transitions).sort_by(
+        [("session_date", "ascending"), ("instrument_id", "ascending")]
+    )
+
+
+def _transition_schema(projections: Sequence[_FieldProjection]) -> pa.Schema:
+    return pa.schema(
+        [pa.field("session_date", pa.date32()), pa.field("instrument_id", pa.string())]
+        + [pa.field(projection.field_id, pa.string()) for projection in projections]
+    )
+
+
 def _coordinate_table(sessions: tuple[str, ...], instruments: tuple[str, ...]) -> pa.Table:
-    session_dates = [date.fromisoformat(session) for session in sessions]
+    session_axis = pa.array(sessions, type=pa.string())
+    instrument_axis = pa.array(instruments, type=pa.string())
+    session_indices = pa.array(
+        np.repeat(np.arange(len(sessions), dtype=np.int64), len(instruments))
+    )
+    instrument_indices = pa.array(
+        np.tile(np.arange(len(instruments), dtype=np.int64), len(sessions))
+    )
+    expanded_sessions = pc.take(session_axis, session_indices)
     return pa.table(
         {
-            "session_date": pa.array(
-                [session for session in session_dates for _instrument in instruments],
-                type=pa.date32(),
-            ),
-            "instrument_id": pa.array(instruments * len(sessions), type=pa.string()),
-            "session": pa.array(
-                [session for session in sessions for _instrument in instruments],
-                type=pa.string(),
-            ),
+            "session_date": pc.cast(expanded_sessions, pa.date32()),
+            "instrument_id": pc.take(instrument_axis, instrument_indices),
+            "session": expanded_sessions,
         }
     )
 

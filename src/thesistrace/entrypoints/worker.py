@@ -138,7 +138,10 @@ def process_one_poll(
 ) -> None:
     claim = _claim_event(configuration, emit)
     if configuration.role is WorkerRole.RESEARCH:
-        product_worked = runtime.research_runs.process_next(on_claim=claim)
+        product_worked = runtime.research_runs.process_next(
+            on_claim=claim,
+            on_execution_event=emit,
+        )
     else:
         product_worked = _process_tracking(runtime, claim)
     if product_worked:

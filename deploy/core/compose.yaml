@@ -71,6 +71,8 @@ services:
 
   research-worker:
     <<: *backend
+    volumes:
+      - canonical-data:/var/lib/thesistrace/canonical-data:ro
     command:
       - thesistrace-core-worker
       - --role
