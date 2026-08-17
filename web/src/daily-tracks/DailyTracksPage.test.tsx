@@ -1,7 +1,36 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { TrackingOriginView, type DailyTrackDetail } from "./DailyTracksPage";
+import {
+  TrackingOriginView,
+  TrackingProgressView,
+  type DailyTrackDetail,
+} from "./DailyTracksPage";
+
+describe("TrackingProgressView", () => {
+  it("shows the frozen target without claiming unpublished sessions are complete", () => {
+    const markup = renderToStaticMarkup(
+      <TrackingProgressView
+        progress={{
+          head_session: "2026-08-05",
+          lag_sessions: 65,
+          phase: "calculating",
+          target_start_session: "2026-08-06",
+          target_end_session: "2026-11-03",
+          target_session_count: 63,
+          completed_target_sessions: 0,
+          current_session: "2026-08-06",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Advance phase");
+    expect(markup).toContain("calculating");
+    expect(markup).toContain("2026-08-06 – 2026-11-03");
+    expect(markup).toContain("63 sessions");
+    expect(markup).not.toContain("completed");
+  });
+});
 
 describe("TrackingOriginView", () => {
   it("shows the exact historical account from which tracking continues", () => {

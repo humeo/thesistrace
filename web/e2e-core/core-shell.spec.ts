@@ -219,6 +219,9 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     trackId = acceptedTrack.id;
     await expect(page).toHaveURL(/\/daily-tracks\/track_[a-f0-9]+$/);
     await expect(page.locator(".research-run-facts").first()).toContainText("Status active");
+    await expect(page.locator(".research-run-facts").first()).toContainText(
+      "Advance phase up_to_date",
+    );
 
     publishFinancialTrackHead("lagged");
     await expect.poll(async () => (
@@ -226,6 +229,12 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     ), { timeout: 90_000 }).toBe("blocked");
     await page.getByRole("button", { name: "Reload" }).click();
     await expect(page.locator(".research-run-facts").first()).toContainText("Status blocked");
+    await expect(page.locator(".research-run-facts").first()).toContainText(
+      "Advance phase blocked",
+    );
+    await expect(page.locator(".research-run-facts").first()).toContainText(
+      "Frozen target",
+    );
     await expect(page.getByText("Financial Coverage ends before the next Research Session.")).toBeVisible();
 
     publishFinancialTrackHead("recovered");

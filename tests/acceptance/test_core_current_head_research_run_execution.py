@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import selectors
+import signal
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -52,7 +53,6 @@ from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
-    KernelRunError,
     RunInput,
     advance,
     advance_continuation,
@@ -365,10 +365,262 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         )
         assert retry.status_code == 202
         assert client.app.state.core_runtime.daily_tracks.process_next() is True
+        first_recovery = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert first_recovery["strategy_session"] == "2026-08-07"
+        assert client.app.state.core_runtime.daily_tracks.process_next() is True
         recovered = client.get(f"/api/daily-tracks/{track_id}").json()
         assert recovered["status"] == "active"
         assert recovered["strategy_session"] == recovered_sessions[-1]
         assert _tracking_checkpoint_history(settings, track_id)[: len(before)] == before
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_tracking_advance_freezes_and_publishes_only_the_oldest_63_sessions(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = ("2026-01-02", "2026-01-05", "2026-01-06")
+    head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "tracking-target-63-seed",
+                start_date=seed_sessions[0],
+                end_date=seed_sessions[-1],
+            ),
+        ).json()["id"]
+        assert runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "tracking-target-63-activation"},
+        ).json()["id"]
+        backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
+        _publish_head(
+            settings,
+            sessions=(*seed_sessions, *backlog),
+            price_offset=1,
+            expected_manifest=head,
+        )
+
+        execution_events: list[dict[str, object]] = []
+        assert runtime.daily_tracks.process_next(
+            on_execution_event=execution_events.append
+        ) is True
+
+        detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert detail["strategy_session"] == backlog[62]
+        assert detail["lag_sessions"] == 7
+        with runtime.database.transaction() as transaction:
+            progression = transaction.execute(
+                """
+                SELECT target_sessions, status
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+            attempt_count = transaction.execute(
+                """
+                SELECT count(*) AS count
+                FROM daily_tracks.session_progression_attempts
+                WHERE track_id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+        assert progression is not None
+        assert [item.isoformat() for item in progression["target_sessions"]] == list(
+            backlog[:63]
+        )
+        assert progression["status"] == "succeeded"
+        assert attempt_count == {"count": 1}
+        assert [event["event"] for event in execution_events] == [
+            "tracking_execution_child_started",
+            "tracking_execution_progress",
+            "tracking_execution_progress",
+            "tracking_execution_result_received",
+            "tracking_execution_child_acknowledged",
+            "tracking_execution_child_exited",
+        ]
+        assert execution_events[-1]["acknowledged"] is True
+        assert execution_events[-1]["exit_code"] == 0
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_tracking_advance_blocks_one_session_before_creating_an_attempt(
+    tmp_path: Path,
+) -> None:
+    settings = replace(
+        CoreSettings.from_environment(),
+        data_mount=tmp_path,
+        tracking_execution_memory_bytes=1,
+    )
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("tracking-capacity-block-seed"),
+        ).json()["id"]
+        assert runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "tracking-capacity-block-activation"},
+        ).json()["id"]
+        target_sessions = (*seed_sessions, "2026-08-06", "2026-08-07")
+        _publish_head(
+            settings,
+            sessions=target_sessions,
+            price_offset=1,
+            expected_manifest=head,
+        )
+
+        assert runtime.daily_tracks.process_next() is True
+
+        detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert detail["status"] == "blocked"
+        assert detail["strategy_session"] == seed_sessions[-1]
+        assert detail["blocked_reason"] == (
+            "DailyTrack target exceeds Tracking Worker capacity."
+        )
+        assert detail["progress"] == {
+            "head_session": seed_sessions[-1],
+            "lag_sessions": 2,
+            "phase": "blocked",
+            "target_start_session": "2026-08-06",
+            "target_end_session": "2026-08-06",
+            "target_session_count": 1,
+            "completed_target_sessions": 0,
+            "current_session": None,
+        }
+        with runtime.database.transaction() as transaction:
+            progression = transaction.execute(
+                """
+                SELECT target_sessions, status
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+            counts = transaction.execute(
+                """
+                SELECT
+                    (SELECT count(*) FROM daily_tracks.session_progression_attempts
+                     WHERE track_id = %s) AS attempts,
+                    (SELECT count(*) FROM data.generation_pins
+                     WHERE owner_kind = 'tracking_advance_attempt'
+                       AND status = 'active') AS active_pins
+                """,
+                (track_id,),
+            ).fetchone()
+        assert progression is not None
+        assert progression["target_sessions"] == [date(2026, 8, 6)]
+        assert progression["status"] == "blocked"
+        assert counts == {"attempts": 0, "active_pins": 0}
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_tracking_retry_blocks_when_current_generation_breaks_the_frozen_target(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("tracking-generation-mismatch-seed"),
+        ).json()["id"]
+        assert runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "tracking-generation-mismatch-activation"},
+        ).json()["id"]
+        frozen_target = ("2026-08-06", "2026-08-07", "2026-08-10")
+        target_head = _publish_head(
+            settings,
+            sessions=(*seed_sessions, *frozen_target),
+            price_offset=1,
+            expected_manifest=seed_head,
+        )
+
+        def kill_first_attempt(event: dict[str, object]) -> None:
+            if event["event"] == "tracking_execution_child_started":
+                os.kill(int(event["child_pid"]), 9)
+
+        with pytest.raises(DailyTrackProgressionFailed):
+            runtime.daily_tracks.process_next(on_execution_event=kill_first_attempt)
+
+        mismatched_generation = _publish_head(
+            settings,
+            sessions=(*seed_sessions, frozen_target[0], frozen_target[-1]),
+            price_offset=2,
+            expected_manifest=target_head,
+        )
+        retry = client.post(
+            f"/api/daily-tracks/{track_id}/retry",
+            json={"request_id": "tracking-generation-mismatch-retry"},
+        )
+        assert retry.status_code == 202
+        with pytest.raises(DailyTrackProgressionFailed):
+            runtime.daily_tracks.process_next()
+
+        detail = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert detail["status"] == "blocked"
+        assert detail["strategy_session"] == seed_sessions[-1]
+        with runtime.database.transaction() as transaction:
+            progression = transaction.execute(
+                """
+                SELECT target_sessions, status
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s
+                """,
+                (track_id,),
+            ).fetchone()
+            attempts = transaction.execute(
+                """
+                SELECT ordinal, data_generation_id, status
+                FROM daily_tracks.session_progression_attempts
+                WHERE track_id = %s
+                ORDER BY ordinal
+                """,
+                (track_id,),
+            ).fetchall()
+        assert progression is not None
+        assert [value.isoformat() for value in progression["target_sessions"]] == list(
+            frozen_target
+        )
+        assert progression["status"] == "blocked"
+        assert [row["data_generation_id"] for row in attempts] == [
+            target_head,
+            mismatched_generation,
+        ]
+        assert [row["status"] for row in attempts] == ["failed", "failed"]
+        state = _stored_tracking_activation(settings, str(track_id))
+        assert state["current_checkpoint_session"].isoformat() == seed_sessions[-1]
+        assert state["checkpoint_count"] == 1
+        assert state["active_pin_count"] == 0
 
 
 @pytest.mark.skipif(
@@ -922,9 +1174,10 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         )
         stop_claimed = Event()
         finish_stopped_advance = Event()
+        publication_count_before_stop = _publication_manifest_count(settings)
 
         def stop_barrier(stage: str, _track_id: str, _target: str) -> None:
-            if stage == "claimed":
+            if stage == "prepared":
                 stop_claimed.set()
                 assert finish_stopped_advance.wait(timeout=10)
 
@@ -945,6 +1198,12 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             )
             assert stopped.status_code == 202
             assert stopped.json()["status"] == "stopped"
+            stopped_while_child_live = _stored_tracking_activation(
+                settings,
+                track["id"],
+            )
+            assert stopped_while_child_live["active_pin_count"] == 1
+            assert _publication_manifest_count(settings) == publication_count_before_stop
             finish_stopped_advance.set()
             assert future.result(timeout=20) is True
         stopped_replay = client.post(
@@ -962,6 +1221,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert stopped_state["cancelled_progression_count"] == 1
         assert stopped_state["cancelled_attempt_count"] == 1
         assert stopped_state["active_pin_count"] == 0
+        assert _publication_manifest_count(settings) == publication_count_before_stop
 
     with TestClient(create_app(settings)) as restarted:
         reopened = restarted.get(f"/api/research-runs/{run_id}")
@@ -1437,11 +1697,14 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
         )
         runtime = client.app.state.core_runtime
 
-        def block_kernel(value: AdvanceInput):
+        def block_started_child(event: dict[str, object]) -> None:
+            if event["event"] != "tracking_execution_progress" or event.get(
+                "phase"
+            ) != "calculating":
+                return
             entered_kernel.set()
             if not release_kernel.wait(timeout=10):
-                raise TimeoutError("live-owner kernel was not released")
-            return advance(value)
+                raise TimeoutError("live-owner child was not released")
 
         owner = DailyTrackService(
             runtime.database,
@@ -1449,7 +1712,6 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             read_result_bundle=read_result_bundle,
-            advance_kernel=block_kernel,
             lease_seconds=0.4,
             heartbeat_seconds=0.05,
         )
@@ -1461,8 +1723,22 @@ def test_live_tracking_owner_renews_lease_and_blocks_duplicate_claim(
             read_result_bundle=read_result_bundle,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(owner.process_next)
+            future = executor.submit(
+                owner.process_next,
+                on_execution_event=block_started_child,
+            )
             assert entered_kernel.wait(timeout=10)
+            live = client.get(f"/api/daily-tracks/{track_id}").json()
+            assert live["progress"] == {
+                "head_session": seed_sessions[-1],
+                "lag_sessions": 1,
+                "phase": "calculating",
+                "target_start_session": "2026-08-06",
+                "target_end_session": "2026-08-06",
+                "target_session_count": 1,
+                "completed_target_sessions": 0,
+                "current_session": "2026-08-06",
+            }
             initial_timing = _live_tracking_attempt_timing(settings, track_id)
             try:
                 renewed_timing = _wait_for_tracking_lease_renewal(
@@ -1527,20 +1803,20 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         )
         runtime = client.app.state.core_runtime
 
-        def fail_after_calculation(value: AdvanceInput):
-            advance(value)
-            raise KernelRunError("injected private calculation failure")
-
         failing = DailyTrackService(
             runtime.database,
             publication=runtime.publication,
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             read_result_bundle=read_result_bundle,
-            advance_kernel=fail_after_calculation,
         )
+
+        def kill_tracking_child(event: dict[str, object]) -> None:
+            if event["event"] == "tracking_execution_child_started":
+                os.kill(int(event["child_pid"]), 9)
+
         with pytest.raises(DailyTrackProgressionFailed):
-            failing.process_next()
+            failing.process_next(on_execution_event=kill_tracking_child)
 
         blocked = client.get(f"/api/daily-tracks/{first_track['id']}")
         assert blocked.status_code == 200
@@ -1599,6 +1875,11 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
+        frozen_target = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
+        assert frozen_target["strategy_session"] == catch_up_sessions[-1]
+        completed = _run_worker_once(settings, "tracking")
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
         recovered = restarted.get(f"/api/daily-tracks/{first_track['id']}")
         assert recovered.status_code == 200
         detail = recovered.json()
@@ -1615,9 +1896,9 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             settings,
             str(first_track["id"]),
         )
-        assert recovered_state["checkpoint_count"] == 2
+        assert recovered_state["checkpoint_count"] == 3
         assert recovered_state["cancelled_progression_count"] == 0
-        assert recovered_state["succeeded_progression_count"] == 1
+        assert recovered_state["succeeded_progression_count"] == 2
         assert recovered_state["active_pin_count"] == 0
         recovered_canonical = open_complete_refresh_basis(
             MountedGenerationStore(settings.data_mount), recovered_head
@@ -1664,8 +1945,8 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         release_stale_worker = Event()
         runtime = restarted.app.state.core_runtime
 
-        def stale_barrier(stage: str, _track_id: str, _target: str) -> None:
-            if stage == "claimed":
+        def stale_barrier(event: dict[str, object]) -> None:
+            if event["event"] == "tracking_execution_result_received":
                 stale_claimed.set()
                 assert release_stale_worker.wait(timeout=10)
 
@@ -1675,15 +1956,17 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
             generation_store=MountedGenerationStore(settings.data_mount),
             read_result_bundle=read_result_bundle,
-            progress=stale_barrier,
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
-            stale_future = executor.submit(stale_processor.process_next)
+            stale_future = executor.submit(
+                stale_processor.process_next,
+                on_execution_event=stale_barrier,
+            )
             assert stale_claimed.wait(timeout=10)
             _expire_current_tracking_attempt(settings, str(first_track["id"]))
             assert runtime.daily_tracks.process_next() is True
             lost = restarted.get(f"/api/daily-tracks/{first_track['id']}").json()
-            assert lost["status"] == "blocked"
+            assert lost["status"] == "active"
             assert lost["strategy_session"] == recovered_sessions[-1]
             lost_state = _stored_tracking_activation(
                 settings,
@@ -1692,18 +1975,10 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             assert lost_state["current_checkpoint_session"].isoformat() == (
                 recovered_sessions[-1]
             )
-            assert lost_state["checkpoint_count"] == 2
-            assert lost_state["blocked_progression_count"] == 1
-            assert lost_state["latest_attempt_failure_reason"] == "WorkerLost"
-            assert lost_state["active_pin_count"] == 0
-
-            retry_lost = restarted.post(
-                f"/api/daily-tracks/{first_track['id']}/retry",
-                json={"request_id": "track-recovery-lost-worker-retry"},
-            )
-            assert retry_lost.status_code == 202
-            completed = _run_worker_once(settings, "tracking")
-            assert completed.returncode == 0, completed.stdout + completed.stderr
+            assert lost_state["checkpoint_count"] == 3
+            assert lost_state["blocked_progression_count"] == 0
+            assert lost_state["latest_attempt_failure_reason"] is None
+            assert lost_state["active_pin_count"] == 1
             release_stale_worker.set()
             assert stale_future.result(timeout=20) is True
 
@@ -2206,6 +2481,90 @@ def test_orphaned_research_child_exits_without_mutating_product_state(
             ).fetchone()["count"]
         assert attempt_count == 0
         assert _publication_manifest_count(settings) == publication_count
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_orphaned_tracking_child_exits_before_recovery_releases_its_pin(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("orphaned-tracking-child"),
+        ).json()["id"]
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "orphaned-tracking-child-activation"},
+        ).json()["id"]
+        _publish_head(
+            settings,
+            sessions=(*seed_sessions, "2026-08-06"),
+            price_offset=1,
+            expected_manifest=seed_head,
+        )
+        publication_count = _publication_manifest_count(settings)
+        owner = _start_claim_barrier_worker(
+            settings,
+            "tracking",
+            "tracking_execution_result_received",
+        )
+        try:
+            result_event = _wait_for_worker_event(
+                owner,
+                "tracking_execution_result_received",
+            )
+            child_pid = int(result_event["child_pid"])
+            live_state = _stored_tracking_activation(settings, str(track_id))
+            assert live_state["active_pin_count"] == 1
+            assert live_state["current_checkpoint_session"].isoformat() == (
+                seed_sessions[-1]
+            )
+
+            os.kill(owner.pid, signal.SIGSTOP)
+            deadline = monotonic() + 10
+            while monotonic() < deadline:
+                if _process_state(child_pid).startswith("Z"):
+                    break
+            else:
+                raise AssertionError("Tracking child watchdog did not stop the child")
+
+            owner.kill()
+            owner.communicate(timeout=10)
+            deadline = monotonic() + 10
+            while monotonic() < deadline:
+                if not _process_state(child_pid):
+                    break
+            else:
+                raise AssertionError("orphaned Tracking child was not reaped")
+
+            before_recovery = _stored_tracking_activation(settings, str(track_id))
+            assert before_recovery["active_pin_count"] == 1
+            _expire_current_tracking_attempt(settings, str(track_id))
+            assert client.app.state.core_runtime.daily_tracks.process_next() is True
+
+            recovered = _stored_tracking_activation(settings, str(track_id))
+            assert recovered["track_status"] == "blocked"
+            assert recovered["latest_attempt_failure_reason"] == "WorkerLost"
+            assert recovered["current_checkpoint_session"].isoformat() == (
+                seed_sessions[-1]
+            )
+            assert recovered["checkpoint_count"] == 1
+            assert recovered["active_pin_count"] == 0
+            assert _publication_manifest_count(settings) == publication_count
+        finally:
+            if owner.poll() is None:
+                owner.kill()
+                owner.communicate(timeout=10)
 
 
 @pytest.mark.skipif(
@@ -3334,6 +3693,16 @@ def _expire_current_tracking_attempt(settings: CoreSettings, track_id: str) -> N
         database.close()
 
 
+def _process_state(process_id: int) -> str:
+    completed = subprocess.run(
+        ["/bin/ps", "-o", "stat=", "-p", str(process_id)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
+
+
 def _live_tracking_attempt_timing(
     settings: CoreSettings,
     track_id: str,
@@ -3580,12 +3949,14 @@ def _run_worker_replicas(
 def _start_claim_barrier_worker(
     settings: CoreSettings,
     role: str,
+    barrier_event: str = "worker_claim",
 ) -> subprocess.Popen[str]:
     return subprocess.Popen(
         [
             sys.executable,
             "tests/acceptance/process_worker_with_claim_barrier.py",
             role,
+            barrier_event,
         ],
         cwd=ROOT,
         env=_worker_environment(settings),
@@ -3609,6 +3980,32 @@ def _wait_for_barrier_claim(process: subprocess.Popen[str]) -> dict[str, object]
     event = json.loads(line)
     assert event["event"] == "worker_claim"
     return event
+
+
+def _wait_for_worker_event(
+    process: subprocess.Popen[str],
+    event_name: str,
+) -> dict[str, object]:
+    assert process.stdout is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    try:
+        deadline = monotonic() + 30
+        while monotonic() < deadline:
+            assert selector.select(timeout=max(0.01, deadline - monotonic())), (
+                f"Worker did not emit {event_name}"
+            )
+            line = process.stdout.readline()
+            assert line, (
+                f"Worker exited before {event_name}: "
+                f"{process.stderr.read() if process.stderr else ''}"
+            )
+            event = json.loads(line)
+            if event.get("event") == event_name:
+                return event
+    finally:
+        selector.close()
+    raise AssertionError(f"Worker did not emit {event_name}")
 
 
 def _release_claim_barrier_worker(process: subprocess.Popen[str]) -> None:

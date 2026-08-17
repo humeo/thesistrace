@@ -65,7 +65,7 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
                     date(2026, 8, 5),
                 ),
                 target_sessions=(date(2026, 8, 4), date(2026, 8, 5)),
-                data_generation_id="generation_advance",
+                planning_data_generation_id="generation_advance",
                 provenance={"kind": "advance", "private": True},
             )
             repository.start_attempt(
@@ -111,7 +111,10 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
         date(2026, 8, 4),
         date(2026, 8, 5),
     )
-    assert snapshot.progressions[0].data_generation_id == "generation_advance"
+    assert (
+        snapshot.progressions[0].planning_data_generation_id
+        == "generation_advance"
+    )
     assert snapshot.progressions[0].status == "succeeded"
     assert len(snapshot.attempts) == 1
     assert snapshot.attempts[0].status == "succeeded"
@@ -177,7 +180,7 @@ def test_invalid_session_coordinates_leave_no_partial_progression(
                         date(2026, 8, 6),
                     ),
                     target_sessions=target_sessions,
-                    data_generation_id="generation_invalid",
+                    planning_data_generation_id="generation_invalid",
                     provenance={"kind": "invalid"},
                 )
 
@@ -227,7 +230,7 @@ def test_track_rejects_a_second_unresolved_progression(
                     date(2026, 8, 5),
                 ),
                 target_sessions=(date(2026, 8, 4),),
-                data_generation_id="generation_first",
+                planning_data_generation_id="generation_first",
                 provenance={"kind": "first"},
             )
             if unresolved_status == "blocked":
@@ -255,7 +258,7 @@ def test_track_rejects_a_second_unresolved_progression(
                         date(2026, 8, 5),
                     ),
                     target_sessions=(date(2026, 8, 4), date(2026, 8, 5)),
-                    data_generation_id="generation_competing",
+                    planning_data_generation_id="generation_competing",
                     provenance={"kind": "competing"},
                 )
 
@@ -316,7 +319,7 @@ def test_terminal_state_validation_rolls_back_activation_and_publication() -> No
                 expected_checkpoint_manifest_sha256="a" * 64,
                 generation_sessions=(date(2026, 8, 3), date(2026, 8, 4)),
                 target_sessions=(date(2026, 8, 4),),
-                data_generation_id="generation_advance",
+                planning_data_generation_id="generation_advance",
                 provenance={"kind": "advance"},
             )
             repository.start_attempt(
@@ -396,7 +399,7 @@ def test_reader_observes_one_snapshot_while_checkpoint_commit_is_pending() -> No
                 expected_checkpoint_manifest_sha256="a" * 64,
                 generation_sessions=(date(2026, 8, 3), date(2026, 8, 4)),
                 target_sessions=(date(2026, 8, 4),),
-                data_generation_id="generation_advance",
+                planning_data_generation_id="generation_advance",
                 provenance={"kind": "advance"},
             )
             repository.start_attempt(
@@ -484,7 +487,7 @@ def test_relational_coordinates_cannot_disagree_with_checkpoint_ancestry() -> No
                     date(2026, 8, 5),
                 ),
                 target_sessions=(date(2026, 8, 4), date(2026, 8, 5)),
-                data_generation_id="generation_advance",
+                planning_data_generation_id="generation_advance",
                 provenance={"kind": "advance"},
             )
 

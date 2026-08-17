@@ -33,7 +33,7 @@ class SessionProgressionRecord:
     predecessor_checkpoint_manifest_sha256: str
     predecessor_checkpoint_session: date
     target_sessions: tuple[date, ...]
-    data_generation_id: str
+    planning_data_generation_id: str
     status: Literal["running", "succeeded", "blocked", "cancelled"]
     checkpoint_manifest_sha256: str | None
     provenance: dict[str, object]
@@ -130,7 +130,7 @@ class SessionCoordinateRepository:
         expected_checkpoint_manifest_sha256: str,
         generation_sessions: tuple[date, ...],
         target_sessions: tuple[date, ...],
-        data_generation_id: str,
+        planning_data_generation_id: str,
         provenance: dict[str, object],
     ) -> None:
         state = transaction.execute(
@@ -165,7 +165,7 @@ class SessionCoordinateRepository:
                 INSERT INTO daily_tracks.session_progressions (
                     id, track_id, predecessor_checkpoint_manifest_sha256,
                     target_sessions, target_start_session, target_end_session,
-                    data_generation_id, status, provenance
+                    planning_data_generation_id, status, provenance
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
                 """,
                 (
@@ -175,7 +175,7 @@ class SessionCoordinateRepository:
                     list(target_sessions),
                     target_sessions[0],
                     target_sessions[-1],
-                    data_generation_id,
+                    planning_data_generation_id,
                     Jsonb(provenance),
                 ),
             )
@@ -199,7 +199,7 @@ class SessionCoordinateRepository:
     ) -> None:
         progression = transaction.execute(
             """
-            SELECT track_id, data_generation_id, target_end_session, status
+            SELECT track_id, target_end_session, status
             FROM daily_tracks.session_progressions
             WHERE id = %s
             FOR UPDATE
@@ -208,8 +208,6 @@ class SessionCoordinateRepository:
         ).fetchone()
         if progression is None or progression["status"] != "running":
             raise SessionCoordinateConflict("Progression is not running")
-        if progression["data_generation_id"] != data_generation_id:
-            raise SessionCoordinateConflict("Attempt Generation changed")
         if data_through_session < progression["target_end_session"]:
             raise SessionCoordinateConflict("Attempt Generation does not reach target")
         transaction.execute(
@@ -217,9 +215,9 @@ class SessionCoordinateRepository:
             INSERT INTO daily_tracks.session_progression_attempts (
                 id, progression_id, track_id, ordinal, fence,
                 generation_pin_id, data_generation_id, data_through_session,
-                status, lease_expires_at
+                status, execution_phase, lease_expires_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, 'running',
+                %s, %s, %s, %s, %s, %s, %s, %s, 'running', 'starting',
                 now() + make_interval(secs => %s)
             )
             """,
@@ -252,7 +250,7 @@ class SessionCoordinateRepository:
             SELECT progression.track_id,
                    progression.predecessor_checkpoint_manifest_sha256,
                    progression.target_end_session,
-                   progression.data_generation_id,
+                   attempt.data_generation_id,
                    progression.status AS progression_status,
                    attempt.status AS attempt_status,
                    attempt.fence,
@@ -351,7 +349,8 @@ class SessionCoordinateRepository:
                                    'predecessor_checkpoint_session',
                                        predecessor.boundary_session,
                                    'target_sessions', progression.target_sessions,
-                                   'data_generation_id', progression.data_generation_id,
+                                   'planning_data_generation_id',
+                                       progression.planning_data_generation_id,
                                    'status', progression.status,
                                    'checkpoint_manifest_sha256',
                                        progression.checkpoint_manifest_sha256,

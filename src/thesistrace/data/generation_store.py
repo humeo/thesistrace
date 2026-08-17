@@ -129,6 +129,10 @@ class MountedGenerationStore:
         self._root = Path(root).resolve()
         self._files = AddressedFileStore(self._root)
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
     def materialize(
         self,
         canonical: Mapping[str, object],

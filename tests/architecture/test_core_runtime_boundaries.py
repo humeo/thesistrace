@@ -704,9 +704,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     assert "research_runs." not in track_schema
     for sql_verb in ("FROM", "JOIN", "INSERT INTO", "UPDATE", "DELETE FROM"):
         assert f"{sql_verb} data." not in track_source
-    assert "AdvanceInput(" in track_source
     assert 'kind="daily-track.checkpoint"' in track_source
-    assert "runtime.daily_tracks.process_next(on_claim=on_claim)" in worker_source
     assert "runtime.daily_tracks.reconcile_working_cache()" in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
     assert '"/api/daily-tracks/{track_id}/retry"' in http_source

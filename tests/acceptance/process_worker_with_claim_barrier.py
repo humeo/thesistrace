@@ -18,6 +18,7 @@ from thesistrace.entrypoints.worker import (
 
 def main() -> None:
     role = WorkerRole(sys.argv[1])
+    barrier_event = sys.argv[2] if len(sys.argv) > 2 else "worker_claim"
     configuration = WorkerConfiguration(
         role=role,
         capacity=WorkerCapacity(
@@ -30,7 +31,7 @@ def main() -> None:
 
     def emit(event: dict[str, object]) -> None:
         print(json.dumps(event, sort_keys=True), flush=True)
-        if event.get("event") == "worker_claim":
+        if event.get("event") == barrier_event:
             if not sys.stdin.readline():
                 raise RuntimeError("claim barrier closed before release")
 

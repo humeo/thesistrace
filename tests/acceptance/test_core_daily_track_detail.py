@@ -90,7 +90,14 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         assert tracking_events[1]["resource_type"] == "TrackingAdvance"
         assert tracking_events[1]["resource_id"] == track_id
         first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert first_detail["strategy_session"] == sessions[302]
+        assert first_detail["strategy_session"] == sessions[65]
+        assert first_detail["lag_sessions"] == 237
+        for _ in range(4):
+            catch_up = _run_worker_once(settings, "tracking")
+            assert catch_up.returncode == 0, catch_up.stdout + catch_up.stderr
+        assert client.get(f"/api/daily-tracks/{track_id}").json()[
+            "strategy_session"
+        ] == sessions[302]
 
         _publish_head(
             settings,
@@ -98,8 +105,11 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             expected_manifest=head_b,
             operation_id="daily-track-504-head-c",
         )
-        second_advance = _run_worker_once(settings, "tracking")
-        assert second_advance.returncode == 0, second_advance.stdout + second_advance.stderr
+        for _ in range(4):
+            second_advance = _run_worker_once(settings, "tracking")
+            assert second_advance.returncode == 0, (
+                second_advance.stdout + second_advance.stderr
+            )
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
 
     expected_window = list(sessions[-504:])

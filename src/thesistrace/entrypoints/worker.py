@@ -150,7 +150,14 @@ def process_one_poll(
             on_execution_event=emit,
         )
     else:
-        product_worked = _process_tracking(runtime, claim)
+        if (
+            runtime.daily_tracks.execution_memory_bytes
+            > configuration.capacity.execution_memory_bytes
+        ):
+            raise WorkerCapacityError(
+                "Tracking Worker execution memory cannot fit planning capacity"
+            )
+        product_worked = _process_tracking(runtime, claim, emit)
     if product_worked:
         return
     _collect_one_publication(runtime)
@@ -274,11 +281,15 @@ def _claim_event(
 def _process_tracking(
     runtime: CoreRuntime,
     on_claim: Callable[[str, str], None],
+    emit: WorkerEventSink,
 ) -> bool:
     from thesistrace.daily_track import DailyTrackProgressionFailed
 
     try:
-        return runtime.daily_tracks.process_next(on_claim=on_claim)
+        return runtime.daily_tracks.process_next(
+            on_claim=on_claim,
+            on_execution_event=emit,
+        )
     except DailyTrackProgressionFailed as error:
         logger.error(
             "Tracking Worker isolated one DailyTrack failure at its current target",

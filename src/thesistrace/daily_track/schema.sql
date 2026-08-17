@@ -58,6 +58,8 @@ CREATE TABLE daily_tracks.session_progression_attempts (
     data_generation_id text NOT NULL,
     data_through_session date NOT NULL,
     status text NOT NULL,
+    execution_phase text NOT NULL,
+    current_session date,
     started_at timestamp with time zone DEFAULT now() NOT NULL,
     heartbeat_at timestamp with time zone DEFAULT now() NOT NULL,
     lease_expires_at timestamp with time zone NOT NULL,
@@ -65,6 +67,7 @@ CREATE TABLE daily_tracks.session_progression_attempts (
     failure_reason text,
     CONSTRAINT session_progression_attempts_fence_check CHECK ((fence > 0)),
     CONSTRAINT session_progression_attempts_ordinal_check CHECK ((ordinal > 0)),
+    CONSTRAINT session_progression_attempts_execution_phase_check CHECK ((execution_phase = ANY (ARRAY['starting'::text, 'calculating'::text, 'result_ready'::text, 'staging'::text]))),
     CONSTRAINT session_progression_attempts_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 
@@ -80,7 +83,7 @@ CREATE TABLE daily_tracks.session_progressions (
     target_sessions date[] NOT NULL,
     target_start_session date NOT NULL,
     target_end_session date NOT NULL,
-    data_generation_id text NOT NULL,
+    planning_data_generation_id text NOT NULL,
     status text NOT NULL,
     checkpoint_manifest_sha256 text,
     provenance jsonb NOT NULL,

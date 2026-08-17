@@ -184,6 +184,29 @@ class DailyTrackStrategyResult(BaseModel):
     observations: list[DailyTrackStrategyObservation]
 
 
+class DailyTrackProgress(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    head_session: str
+    lag_sessions: int
+    phase: Literal[
+        "waiting",
+        "queued",
+        "starting",
+        "calculating",
+        "result_ready",
+        "staging",
+        "blocked",
+        "up_to_date",
+        "stopped",
+    ]
+    target_start_session: str | None
+    target_end_session: str | None
+    target_session_count: int
+    completed_target_sessions: int
+    current_session: str | None
+
+
 class DailyTrackDetail(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -193,6 +216,7 @@ class DailyTrackDetail(BaseModel):
     strategy_session: str
     data_through_session: str
     lag_sessions: int
+    progress: DailyTrackProgress
     blocked_reason: str | None
     factor: DailyTrackFactorResult
     strategy: DailyTrackStrategyResult

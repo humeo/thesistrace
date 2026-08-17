@@ -541,6 +541,24 @@ class DatasetLifecycle:
         if result.rowcount != 1:
             raise DataLifecycleError("active Generation pin was not found")
 
+    def release_pin_if_active_in_transaction(
+        self,
+        transaction: PostgresTransaction,
+        pin_id: str,
+        *,
+        owner_id: str,
+    ) -> bool:
+        lock_data_lifecycle(transaction)
+        result = transaction.execute(
+            """
+            UPDATE data.generation_pins
+            SET status = 'released', released_at = now()
+            WHERE id = %s AND owner_id = %s AND status = 'active'
+            """,
+            (pin_id, owner_id),
+        )
+        return result.rowcount == 1
+
     def active_pins(self) -> tuple[GenerationPin, ...]:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)

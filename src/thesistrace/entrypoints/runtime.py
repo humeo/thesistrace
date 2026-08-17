@@ -13,6 +13,7 @@ from botocore.config import Config
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.daily_track import DailyTrackService, SessionCoordinateRepository
+from thesistrace.daily_track.planning import DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
 from thesistrace.data import (
     DatasetAdmissionService,
     DatasetLifecycle,
@@ -52,6 +53,7 @@ class CoreSettings:
     data_mount: Path
     s3_region: str = "us-east-1"
     research_execution_memory_bytes: int = DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES
+    tracking_execution_memory_bytes: int = DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES
 
     @classmethod
     def from_environment(cls) -> CoreSettings:
@@ -87,6 +89,14 @@ class CoreSettings:
         )
         if research_execution_memory_bytes <= 0:
             raise RuntimeError("Research execution memory must be positive")
+        tracking_execution_memory_bytes = int(
+            os.environ.get(
+                "THESISTRACE_TRACKING_WORKER_EXECUTION_MEMORY_BYTES",
+                str(DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES),
+            )
+        )
+        if tracking_execution_memory_bytes <= 0:
+            raise RuntimeError("Tracking execution memory must be positive")
         return cls(
             database_url=values["database_url"],
             s3_endpoint_url=values["s3_endpoint_url"],
@@ -96,6 +106,7 @@ class CoreSettings:
             data_mount=Path(values["data_mount"]),
             s3_region=os.environ.get("THESISTRACE_S3_REGION", "us-east-1"),
             research_execution_memory_bytes=research_execution_memory_bytes,
+            tracking_execution_memory_bytes=tracking_execution_memory_bytes,
         )
 
 
@@ -152,6 +163,7 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             working_cache_root=Path(working_cache.name) / "daily-tracks",
             seed_research_exists=research_run_exists,
             research_references_result=research_result_manifest_is_referenced,
+            execution_memory_bytes=settings.tracking_execution_memory_bytes,
         )
         research_runs = ResearchRunService(
             database,

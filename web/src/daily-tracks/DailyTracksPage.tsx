@@ -28,6 +28,16 @@ export type DailyTrackDetail = {
   strategy_session: string;
   data_through_session: string;
   lag_sessions: number;
+  progress: {
+    head_session: string;
+    lag_sessions: number;
+    phase: "waiting" | "queued" | "starting" | "calculating" | "result_ready" | "staging" | "blocked" | "up_to_date" | "stopped";
+    target_start_session: string | null;
+    target_end_session: string | null;
+    target_session_count: number;
+    completed_target_sessions: number;
+    current_session: string | null;
+  };
   blocked_reason: string | null;
   factor: DailyTrackAnalysis["factor"];
   strategy: DailyTrackAnalysis["strategy"];
@@ -253,6 +263,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
               : `${track.lag_sessions} ${track.lag_sessions === 1 ? "session" : "sessions"} behind`}
           </p>
           <p><strong>Strategy session</strong> {track.strategy_session}</p>
+          <TrackingProgressView progress={track.progress} />
           {track.blocked_reason ? (
             <p><strong>Blocked</strong> {track.blocked_reason}</p>
           ) : null}
@@ -277,6 +288,28 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
         ))}
       </ol>
     </section>
+  );
+}
+
+export function TrackingProgressView({
+  progress,
+}: {
+  progress: DailyTrackDetail["progress"];
+}) {
+  return (
+    <>
+      <p><strong>Advance phase</strong> {progress.phase}</p>
+      {progress.target_start_session && progress.target_end_session ? (
+        <p>
+          <strong>Frozen target</strong>{" "}
+          {progress.target_start_session} – {progress.target_end_session}{" "}
+          ({progress.target_session_count} sessions)
+        </p>
+      ) : null}
+      {progress.current_session ? (
+        <p><strong>Current session</strong> {progress.current_session}</p>
+      ) : null}
+    </>
   );
 }
 

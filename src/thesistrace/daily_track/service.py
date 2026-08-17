@@ -15,11 +15,18 @@ from psycopg.types.json import Jsonb
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track.cache import _DailyTrackWorkingCache
-from thesistrace.daily_track.checkpoint import (
-    project_tracking_checkpoint,
-    restore_tracking_checkpoint,
-    restore_tracking_origin,
-    terminal_strategy_state,
+from thesistrace.daily_track.calculation import (
+    origin_calculation_start_index,
+    origin_neutralization,
+    origin_universe,
+)
+from thesistrace.daily_track.checkpoint import restore_tracking_checkpoint
+from thesistrace.daily_track.execution import (
+    ExecutionEvent,
+    SupervisedTrackingExecution,
+    SupervisedTrackingExecutor,
+    TrackingExecutionRequest,
+    TrackingExecutionResult,
 )
 from thesistrace.daily_track.models import (
     DailyTrackDetail,
@@ -29,6 +36,10 @@ from thesistrace.daily_track.models import (
     RetryDailyTrackCommand,
     StopDailyTrackCommand,
     TrackingOrigin,
+)
+from thesistrace.daily_track.planning import (
+    DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
+    plan_tracking_advance,
 )
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
 from thesistrace.data import (
@@ -48,26 +59,16 @@ from thesistrace.publication import (
 )
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
-    AdvanceInput,
-    KernelState,
-    advance,
-    advance_continuation,
-    continuation_snapshot,
-    empty_continuation,
     equivalence_bytes,
     first_divergence,
 )
-from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_series import (
-    AlignedResearchData,
-    research_data_identity,
     research_sessions,
     slice_research_sessions,
 )
 
 logger = logging.getLogger(__name__)
 
-KernelAdvance = Callable[[AdvanceInput], KernelState]
 Progress = Callable[[str, str, str], None]
 ResultBundleReader = Callable[[VerifiedBundle], dict[str, object]]
 SeedResearchExists = Callable[[PostgresTransaction, str], bool]
@@ -77,8 +78,13 @@ ATTEMPT_HEARTBEAT_SECONDS = 30
 WORKER_LOST_FAILURE = "WorkerLost"
 ACTIVE_DAILY_TRACK_LIMIT = 10
 PUBLIC_BLOCKED_REASON = "DailyTrack could not process the current dataset."
+CAPACITY_BLOCKED_REASON = "DailyTrack target exceeds Tracking Worker capacity."
 FINANCIAL_COVERAGE_BLOCKED_REASON = "Financial Coverage ends before the next Research Session."
 _FINANCIAL_FIELD_IDS = frozenset(field.field_id for field in FINANCIAL_FIELDS)
+
+
+def _attempt_owner_lock(attempt_id: str) -> str:
+    return f"daily-track-attempt-owner:{attempt_id}"
 
 
 class DailyTrackFenced(RuntimeError):
@@ -153,6 +159,12 @@ class _SessionProgressionClaim:
     financial_coverage_unavailable: bool
 
 
+@dataclass(frozen=True)
+class _BlockedProgressionCreated:
+    track_id: str
+    progression_id: str
+
+
 class DailyTrackService:
     def __init__(
         self,
@@ -162,15 +174,19 @@ class DailyTrackService:
         dataset_lifecycle: DatasetLifecycle | None = None,
         generation_store: MountedGenerationStore | None = None,
         read_result_bundle: ResultBundleReader,
-        advance_kernel: KernelAdvance = advance,
         progress: Progress | None = None,
         lease_seconds: float = ATTEMPT_LEASE_SECONDS,
         heartbeat_seconds: float = ATTEMPT_HEARTBEAT_SECONDS,
         working_cache_root: Path | None = None,
         seed_research_exists: SeedResearchExists | None = None,
         research_references_result: ResearchReferencesResult | None = None,
+        execution_memory_bytes: int = DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
     ) -> None:
-        if lease_seconds <= 0 or heartbeat_seconds <= 0:
+        if (
+            lease_seconds <= 0
+            or heartbeat_seconds <= 0
+            or execution_memory_bytes <= 0
+        ):
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
         self._database = database
         self._publication = publication
@@ -178,7 +194,14 @@ class DailyTrackService:
         self._generation_store = generation_store
         self._read_result_bundle = read_result_bundle
         self._session_coordinates = SessionCoordinateRepository(database)
-        self._advance_kernel = advance_kernel
+        self._executor = (
+            None
+            if generation_store is None
+            else SupervisedTrackingExecutor(
+                generation_store.root,
+                execution_memory_bytes=execution_memory_bytes,
+            )
+        )
         self._progress = progress or (lambda _stage, _track_id, _target_id: None)
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
@@ -187,6 +210,17 @@ class DailyTrackService:
         )
         self._seed_research_exists = seed_research_exists
         self._research_references_result = research_references_result
+        self._execution_memory_bytes = execution_memory_bytes
+        self._child_watchdog_grace_seconds = min(
+            5.0,
+            (lease_seconds - heartbeat_seconds) / 2,
+        )
+        if self._child_watchdog_grace_seconds <= 0:
+            raise ValueError("DailyTrack lease must exceed its heartbeat interval")
+
+    @property
+    def execution_memory_bytes(self) -> int:
+        return self._execution_memory_bytes
 
     def references_result_manifest(
         self,
@@ -299,66 +333,109 @@ class DailyTrackService:
         self,
         *,
         on_claim: Callable[[str, str], None] | None = None,
+        on_execution_event: ExecutionEvent | None = None,
     ) -> bool:
+        if self._release_cancelled_pin_after_owner_death():
+            return True
         if self._recover_expired_current():
             return True
-        current_claim = self._claim_current()
+        selected = self._claim_current(self._execution_memory_bytes)
+        if isinstance(selected, _BlockedProgressionCreated):
+            self._progress("blocked", selected.track_id, selected.progression_id)
+            return True
+        current_claim = selected
         if current_claim is not None:
-            if on_claim is not None:
-                on_claim(current_claim.track_id, current_claim.attempt_id)
-            self._progress(
-                "claimed",
-                current_claim.track_id,
-                current_claim.data_generation_id,
-            )
-            with self._maintain_current_claim(current_claim):
-                try:
-                    prepared, provenance, state = self._execute_current(current_claim)
-                    self._progress(
-                        "prepared",
-                        current_claim.track_id,
-                        current_claim.data_generation_id,
-                    )
-                    published = self._publish_current(
-                        current_claim,
-                        prepared,
-                        provenance,
-                        state,
-                    )
-                    self._store_current_working_cache(
-                        current_claim,
-                        published,
-                        state,
-                    )
-                    self._progress(
-                        "published",
-                        current_claim.track_id,
-                        current_claim.data_generation_id,
-                    )
-                except DailyTrackFenced:
+            with self._database.session_advisory_lock(
+                _attempt_owner_lock(current_claim.attempt_id)
+            ):
+                if on_claim is not None:
+                    on_claim(current_claim.track_id, current_claim.attempt_id)
+                self._progress(
+                    "claimed",
+                    current_claim.track_id,
+                    current_claim.data_generation_id,
+                )
+                external_event = on_execution_event or (lambda _event: None)
+
+                def execution_event(event: dict[str, object]) -> None:
+                    if event.get("event") == "tracking_execution_progress":
+                        self._record_current_progress(
+                            current_claim,
+                            phase=str(event["phase"]),
+                            current_session=str(event["current_session"]),
+                        )
+                    external_event(event)
+
+                execution: SupervisedTrackingExecution | None = None
+                failure: Exception | None = None
+                with self._maintain_current_claim(current_claim) as authority_lost:
+                    try:
+                        execution = self._execute_current(
+                            current_claim,
+                            emit=execution_event,
+                            authority_lost=authority_lost,
+                        )
+                        self._record_current_progress(
+                            current_claim,
+                            phase="staging",
+                            current_session=current_claim.target_sessions[-1],
+                        )
+                        prepared, provenance = self._prepare_current_result(
+                            current_claim,
+                            execution.result,
+                        )
+                        self._progress(
+                            "prepared",
+                            current_claim.track_id,
+                            current_claim.data_generation_id,
+                        )
+                        execution.acknowledge()
+                        published = self._publish_current(
+                            current_claim,
+                            prepared,
+                            provenance,
+                            execution.result.terminal_strategy_state,
+                        )
+                        self._store_current_working_cache(
+                            current_claim,
+                            published,
+                            execution.result,
+                        )
+                        self._progress(
+                            "published",
+                            current_claim.track_id,
+                            current_claim.data_generation_id,
+                        )
+                    except Exception as error:
+                        failure = error
+                    finally:
+                        if execution is not None:
+                            execution.close()
+                if isinstance(failure, DailyTrackFenced):
                     logger.info(
                         "DailyTrack session progression rejected by execution fence",
                         extra={"track_id": current_claim.track_id},
                     )
-                except FinancialCoverageUnavailable as error:
+                elif isinstance(failure, FinancialCoverageUnavailable):
                     if not self._record_current_failure(
                         current_claim,
-                        error,
+                        failure,
                         blocked_reason=FINANCIAL_COVERAGE_BLOCKED_REASON,
                     ):
                         logger.info(
                             "DailyTrack Financial Coverage block rejected by execution fence",
                             extra={"track_id": current_claim.track_id},
                         )
-                except Exception as error:
-                    if self._record_current_failure(current_claim, error):
+                elif failure is not None:
+                    if self._record_current_failure(current_claim, failure):
                         raise DailyTrackProgressionFailed(
                             "DailyTrack progression failed at its current target"
-                        ) from error
+                        ) from failure
                     logger.info(
                         "DailyTrack session failure rejected by execution fence",
                         extra={"track_id": current_claim.track_id},
                     )
+                self._release_cancelled_pin(current_claim)
             return True
         return False
 
@@ -518,20 +595,11 @@ class DailyTrackService:
                     raise DailyTrackStopUnavailable(
                         "DailyTrack Stop requires active or blocked status"
                     )
-                current_attempts = transaction.execute(
-                    """
-                    SELECT id, generation_pin_id
-                    FROM daily_tracks.session_progression_attempts
-                    WHERE track_id = %s AND status = 'running'
-                    FOR UPDATE
-                    """,
-                    (track_id,),
-                ).fetchall()
                 transaction.execute(
                     """
                     UPDATE daily_tracks.session_progression_attempts
                     SET status = 'cancelled', heartbeat_at = now(),
-                        lease_expires_at = now(), finished_at = now(),
+                        finished_at = now(),
                         failure_reason = 'UserStopped'
                     WHERE track_id = %s AND status = 'running'
                     """,
@@ -545,15 +613,6 @@ class DailyTrackService:
                     """,
                     (track_id,),
                 )
-                if current_attempts and self._dataset_lifecycle is None:
-                    raise RuntimeError("current-data DailyTrack stop is not configured")
-                for attempt in current_attempts:
-                    assert self._dataset_lifecycle is not None
-                    self._dataset_lifecycle.release_pin_in_transaction(
-                        transaction,
-                        str(attempt["generation_pin_id"]),
-                        owner_id=str(attempt["id"]),
-                    )
                 stopped = transaction.execute(
                     """
                     UPDATE daily_tracks.tracks
@@ -705,6 +764,28 @@ class DailyTrackService:
                         persisted_origin.seed_run_id,
                     )
                 )
+                row["unresolved_progression"] = transaction.execute(
+                    """
+                    SELECT progression.status,
+                           progression.target_start_session::text,
+                           progression.target_end_session::text,
+                           cardinality(progression.target_sessions) AS target_session_count,
+                           attempt.status AS attempt_status,
+                           attempt.execution_phase,
+                           attempt.current_session::text AS current_session
+                    FROM daily_tracks.session_progressions AS progression
+                    LEFT JOIN LATERAL (
+                        SELECT status, execution_phase, current_session
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE progression_id = progression.id
+                        ORDER BY ordinal DESC
+                        LIMIT 1
+                    ) AS attempt ON true
+                    WHERE progression.track_id = %s
+                      AND progression.status IN ('running', 'blocked')
+                    """,
+                    (track_id,),
+                ).fetchone()
         if row is None:
             return None
         origin = TrackingOrigin.model_validate(row["origin"])
@@ -725,6 +806,18 @@ class DailyTrackService:
             calendar = list(admission.research_calendar)
             current_session = snapshot.track.current_checkpoint_session.isoformat()
             current_index = calendar.index(current_session)
+            lag_sessions = len(calendar) - current_index - 1
+            unresolved = row["unresolved_progression"]
+            if row["status"] == "stopped":
+                progress_phase = "stopped"
+            elif unresolved is None:
+                progress_phase = "up_to_date" if lag_sessions == 0 else "waiting"
+            elif unresolved["status"] == "blocked":
+                progress_phase = "blocked"
+            elif unresolved["attempt_status"] == "running":
+                progress_phase = unresolved["execution_phase"]
+            else:
+                progress_phase = "queued"
             factor_value = _mapping_value(
                 seed_result.get("factor_summary"),
                 "Factor Summary",
@@ -775,7 +868,7 @@ class DailyTrackService:
                 ):
                     observations_by_session[str(observation["session"])] = dict(observation)
             factor = _public_factor(factor_value)
-            universe = _origin_universe(origin)
+            universe = origin_universe(origin)
             recent_strategy_sessions = sorted(observations_by_session)[-504:]
             return DailyTrackDetail.model_validate(
                 {
@@ -806,7 +899,32 @@ class DailyTrackService:
                     },
                     "strategy_session": current_session,
                     "data_through_session": admission.generation.data_through_session,
-                    "lag_sessions": len(calendar) - current_index - 1,
+                    "lag_sessions": lag_sessions,
+                    "progress": {
+                        "head_session": current_session,
+                        "lag_sessions": lag_sessions,
+                        "phase": progress_phase,
+                        "target_start_session": (
+                            None
+                            if unresolved is None
+                            else unresolved["target_start_session"]
+                        ),
+                        "target_end_session": (
+                            None
+                            if unresolved is None
+                            else unresolved["target_end_session"]
+                        ),
+                        "target_session_count": (
+                            0 if unresolved is None else unresolved["target_session_count"]
+                        ),
+                        "completed_target_sessions": 0,
+                        "current_session": (
+                            unresolved["current_session"]
+                            if unresolved is not None
+                            and unresolved["attempt_status"] == "running"
+                            else None
+                        ),
+                    },
                     "blocked_reason": row["blocked_reason"],
                     "factor": factor,
                     "strategy": {
@@ -854,13 +972,13 @@ class DailyTrackService:
         if head is None:
             raise RuntimeError("Dataset Head is not ready")
         calendar = list(head.research_calendar)
-        calculation_start_index = _origin_calculation_start_index(origin, calendar)
+        calculation_start_index = origin_calculation_start_index(origin, calendar)
         calculation_calendar = calendar[calculation_start_index:]
         generation = self._generation_store.read_composite_slice(
             head.generation.manifest_sha256,
             sessions=calculation_calendar,
-            universe_name=_origin_universe(origin),
-            neutralization=_origin_neutralization(origin),
+            universe_name=origin_universe(origin),
+            neutralization=origin_neutralization(origin),
             field_bindings={
                 str(key): str(value)
                 for key, value in origin.immutable_input["field_bindings"].items()
@@ -975,7 +1093,10 @@ class DailyTrackService:
             final_evidence_sha256=final_evidence,
         )
 
-    def _claim_current(self) -> _SessionProgressionClaim | None:
+    def _claim_current(
+        self,
+        execution_memory_bytes: int,
+    ) -> _SessionProgressionClaim | _BlockedProgressionCreated | None:
         if self._dataset_lifecycle is None or self._generation_store is None:
             return None
         current_head = self._dataset_lifecycle.current_pointer()
@@ -1016,18 +1137,10 @@ class DailyTrackService:
                 (current_head.data_through_session,),
             ).fetchall()
             for row in rows:
-                attempt_id = f"track_attempt_{uuid4().hex[:20]}"
-                pinned = self._dataset_lifecycle.pin_current_in_transaction(
-                    transaction,
-                    owner_kind="tracking_advance_attempt",
-                    owner_id=attempt_id,
-                    lease_seconds=self._lease_seconds,
+                admission = self._generation_store.open_admission(
+                    current_head.generation_manifest_sha256
                 )
-                pin = pinned.pin
-                admission = self._generation_store.open_admission(pinned.descriptor.manifest_sha256)
-                if admission.generation != pinned.descriptor:
-                    raise RuntimeError("Pinned Data Generation metadata changed")
-                generation = pinned.descriptor
+                generation = admission.generation
                 calendar = list(admission.research_calendar)
                 current_session = row["boundary_session"].isoformat()
                 try:
@@ -1036,11 +1149,6 @@ class DailyTrackService:
                     raise RuntimeError("DailyTrack Checkpoint is outside current data") from error
                 target_sessions = tuple(calendar[current_index + 1 :])
                 if not target_sessions:
-                    self._dataset_lifecycle.release_pin_in_transaction(
-                        transaction,
-                        pin.id,
-                        owner_id=attempt_id,
-                    )
                     continue
                 origin = TrackingOrigin.model_validate(row["origin"])
                 financial_coverage_unavailable = False
@@ -1056,16 +1164,11 @@ class DailyTrackService:
                     else:
                         target_sessions = (target_sessions[0],)
                         financial_coverage_unavailable = True
-                fence = int(row["execution_fence"]) + 1
-                progression_provenance: dict[str, object] = {
-                    "schema_version": "daily-track-progression-v1",
-                    "target_start_session": target_sessions[0],
-                    "target_end_session": target_sessions[-1],
-                }
                 existing = transaction.execute(
                     """
                     SELECT id,
                            predecessor_checkpoint_manifest_sha256,
+                           target_sessions,
                            COALESCE((
                                SELECT max(ordinal)
                                FROM daily_tracks.session_progression_attempts
@@ -1077,6 +1180,60 @@ class DailyTrackService:
                     """,
                     (row["id"],),
                 ).fetchone()
+                if existing is not None:
+                    if existing["predecessor_checkpoint_manifest_sha256"] != row["manifest_sha256"]:
+                        raise DailyTrackFenced
+                    target_sessions = tuple(
+                        value.isoformat() for value in existing["target_sessions"]
+                    )
+                    financial_coverage_unavailable = (
+                        _uses_financial_fields(origin)
+                        and (
+                            admission.financial_observation_through_session is None
+                            or target_sessions[-1]
+                            > admission.financial_observation_through_session
+                        )
+                    )
+                planning_candidates = target_sessions[:63]
+                planning = _origin_planning_facts(origin)
+                maximum_universe_cardinality = (
+                    self._generation_store.maximum_universe_cardinality(
+                        generation.manifest_sha256,
+                        universe=origin_universe(origin),
+                        start_session=planning_candidates[0],
+                        end_session=planning_candidates[-1],
+                    )
+                )
+                plan = plan_tracking_advance(
+                    unpublished_sessions=tuple(
+                        _session_date(value) for value in planning_candidates
+                    ),
+                    formula_work=planning["formula_work"],
+                    node_count=planning["node_count"],
+                    field_count=planning["field_count"],
+                    maximum_universe_cardinality=maximum_universe_cardinality,
+                    effective_lookback=planning["effective_lookback"],
+                    execution_memory_bytes=execution_memory_bytes,
+                )
+                planned_target_sessions = tuple(
+                    value.isoformat() for value in plan.target_sessions
+                )
+                if existing is None:
+                    target_sessions = planned_target_sessions
+                target_fits = (
+                    not plan.capacity_blocked
+                    and len(planned_target_sessions) >= len(target_sessions)
+                )
+                progression_provenance: dict[str, object] = {
+                    "schema_version": "daily-track-progression-v1",
+                    "target_start_session": target_sessions[0],
+                    "target_end_session": target_sessions[-1],
+                    "planning_data_generation_id": generation.manifest_sha256,
+                    "execution_memory_bytes": execution_memory_bytes,
+                    "estimated_peak_bytes": plan.estimated_peak_bytes,
+                    "estimated_target_work": plan.estimated_target_work,
+                    "time_target_exceeded": plan.time_target_exceeded,
+                }
                 if existing is None:
                     progression_id = f"track_progression_{uuid4().hex[:20]}"
                     ordinal = 1
@@ -1087,36 +1244,52 @@ class DailyTrackService:
                         expected_checkpoint_manifest_sha256=str(row["manifest_sha256"]),
                         generation_sessions=tuple(_session_date(value) for value in calendar),
                         target_sessions=tuple(_session_date(value) for value in target_sessions),
-                        data_generation_id=generation.manifest_sha256,
+                        planning_data_generation_id=generation.manifest_sha256,
                         provenance=progression_provenance,
                     )
                 else:
-                    if existing["predecessor_checkpoint_manifest_sha256"] != row["manifest_sha256"]:
-                        raise DailyTrackFenced
                     progression_id = str(existing["id"])
                     ordinal = int(existing["latest_ordinal"]) + 1
-                    updated_progression = transaction.execute(
+                if not target_fits:
+                    progression = transaction.execute(
                         """
                         UPDATE daily_tracks.session_progressions
-                        SET target_sessions = %s, target_start_session = %s,
-                            target_end_session = %s, data_generation_id = %s,
-                            provenance = %s, finished_at = NULL
+                        SET status = 'blocked', finished_at = now()
                         WHERE id = %s AND track_id = %s AND status = 'running'
-                          AND predecessor_checkpoint_manifest_sha256 = %s
+                        """,
+                        (progression_id, row["id"]),
+                    )
+                    track = transaction.execute(
+                        """
+                        UPDATE daily_tracks.tracks
+                        SET status = 'blocked', blocked_progression_id = %s,
+                            blocked_reason = %s
+                        WHERE id = %s AND status = 'active'
+                          AND execution_fence = %s
                         """,
                         (
-                            [_session_date(value) for value in target_sessions],
-                            _session_date(target_sessions[0]),
-                            _session_date(target_sessions[-1]),
-                            generation.manifest_sha256,
-                            Jsonb(progression_provenance),
                             progression_id,
+                            CAPACITY_BLOCKED_REASON,
                             row["id"],
-                            row["manifest_sha256"],
+                            row["execution_fence"],
                         ),
                     )
-                    if updated_progression.rowcount != 1:
+                    if progression.rowcount != 1 or track.rowcount != 1:
                         raise DailyTrackFenced
+                    return _BlockedProgressionCreated(
+                        track_id=str(row["id"]),
+                        progression_id=progression_id,
+                    )
+                attempt_id = f"track_attempt_{uuid4().hex[:20]}"
+                pinned = self._dataset_lifecycle.pin_generation_in_transaction(
+                    transaction,
+                    generation_manifest_sha256=generation.manifest_sha256,
+                    owner_kind="tracking_advance_attempt",
+                    owner_id=attempt_id,
+                    lease_seconds=self._lease_seconds,
+                )
+                pin = pinned.pin
+                fence = int(row["execution_fence"]) + 1
                 self._session_coordinates.start_attempt(
                     transaction,
                     attempt_id=attempt_id,
@@ -1175,83 +1348,214 @@ class DailyTrackService:
                   AND attempt.status = 'running'
                   AND attempt.lease_expires_at <= now()
                 ORDER BY attempt.lease_expires_at, attempt.id
-                FOR UPDATE OF track, progression, attempt SKIP LOCKED
                 LIMIT 1
                 """
             ).fetchone()
+        if row is None:
+            return False
+        with self._database.try_session_advisory_lock(
+            _attempt_owner_lock(str(row["attempt_id"]))
+        ) as owner_is_dead:
+            if not owner_is_dead:
+                return False
+            with self._database.transaction() as transaction:
+                current = transaction.execute(
+                    """
+                    SELECT track.id AS track_id, track.execution_fence,
+                           progression.id AS progression_id,
+                           attempt.id AS attempt_id, attempt.fence,
+                           attempt.generation_pin_id
+                    FROM daily_tracks.session_progression_attempts AS attempt
+                    JOIN daily_tracks.session_progressions AS progression
+                      ON progression.id = attempt.progression_id
+                    JOIN daily_tracks.tracks AS track ON track.id = progression.track_id
+                    WHERE attempt.id = %s
+                      AND track.status = 'active'
+                      AND track.execution_fence = attempt.fence
+                      AND progression.status = 'running'
+                      AND attempt.status = 'running'
+                      AND attempt.lease_expires_at <= now()
+                    FOR UPDATE OF track, progression, attempt
+                    """,
+                    (row["attempt_id"],),
+                ).fetchone()
+                if current is None:
+                    return False
+                attempt = transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progression_attempts
+                    SET status = 'failed', heartbeat_at = now(),
+                        lease_expires_at = now(), finished_at = now(),
+                        failure_reason = %s
+                    WHERE id = %s AND progression_id = %s
+                      AND status = 'running' AND fence = %s
+                      AND lease_expires_at <= now()
+                    """,
+                    (
+                        WORKER_LOST_FAILURE,
+                        current["attempt_id"],
+                        current["progression_id"],
+                        current["fence"],
+                    ),
+                )
+                progression = transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET status = 'blocked', finished_at = now()
+                    WHERE id = %s AND track_id = %s AND status = 'running'
+                    """,
+                    (current["progression_id"], current["track_id"]),
+                )
+                track = transaction.execute(
+                    """
+                    UPDATE daily_tracks.tracks
+                    SET status = 'blocked', blocked_progression_id = %s,
+                        blocked_reason = %s
+                    WHERE id = %s AND status = 'active' AND execution_fence = %s
+                    """,
+                    (
+                        current["progression_id"],
+                        PUBLIC_BLOCKED_REASON,
+                        current["track_id"],
+                        current["fence"],
+                    ),
+                )
+                if (
+                    attempt.rowcount != 1
+                    or progression.rowcount != 1
+                    or track.rowcount != 1
+                ):
+                    raise DailyTrackFenced
+                self._dataset_lifecycle.release_pin_in_transaction(
+                    transaction,
+                    str(current["generation_pin_id"]),
+                    owner_id=str(current["attempt_id"]),
+                )
+            return True
+
+    def _release_cancelled_pin(self, claim: _SessionProgressionClaim) -> bool:
+        if self._dataset_lifecycle is None:
+            return False
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT attempt.id, attempt.generation_pin_id
+                FROM daily_tracks.session_progression_attempts AS attempt
+                WHERE attempt.id = %s AND attempt.status = 'cancelled'
+                FOR UPDATE OF attempt
+                """,
+                (claim.attempt_id,),
+            ).fetchone()
             if row is None:
                 return False
-            attempt = transaction.execute(
-                """
-                UPDATE daily_tracks.session_progression_attempts
-                SET status = 'failed', heartbeat_at = now(),
-                    lease_expires_at = now(), finished_at = now(),
-                    failure_reason = %s
-                WHERE id = %s AND progression_id = %s
-                  AND status = 'running' AND fence = %s
-                  AND lease_expires_at <= now()
-                """,
-                (
-                    WORKER_LOST_FAILURE,
-                    row["attempt_id"],
-                    row["progression_id"],
-                    row["fence"],
-                ),
-            )
-            progression = transaction.execute(
-                """
-                UPDATE daily_tracks.session_progressions
-                SET status = 'blocked', finished_at = now()
-                WHERE id = %s AND track_id = %s AND status = 'running'
-                """,
-                (row["progression_id"], row["track_id"]),
-            )
-            track = transaction.execute(
-                """
-                UPDATE daily_tracks.tracks
-                SET status = 'blocked', blocked_progression_id = %s,
-                    blocked_reason = %s
-                WHERE id = %s AND status = 'active' AND execution_fence = %s
-                """,
-                (
-                    row["progression_id"],
-                    PUBLIC_BLOCKED_REASON,
-                    row["track_id"],
-                    row["fence"],
-                ),
-            )
-            if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
-                raise DailyTrackFenced
-            self._dataset_lifecycle.release_pin_in_transaction(
+            return self._dataset_lifecycle.release_pin_if_active_in_transaction(
                 transaction,
                 str(row["generation_pin_id"]),
-                owner_id=str(row["attempt_id"]),
+                owner_id=str(row["id"]),
             )
-        return True
+
+    def _release_cancelled_pin_after_owner_death(self) -> bool:
+        if self._dataset_lifecycle is None:
+            return False
+        for pin in self._dataset_lifecycle.active_pins():
+            if pin.owner_kind != "tracking_advance_attempt":
+                continue
+            attempt_id = pin.owner_id
+            with self._database.try_session_advisory_lock(
+                _attempt_owner_lock(attempt_id)
+            ) as owner_is_dead:
+                if not owner_is_dead:
+                    continue
+                with self._database.transaction() as transaction:
+                    current = transaction.execute(
+                        """
+                        SELECT attempt.id, attempt.generation_pin_id
+                        FROM daily_tracks.session_progression_attempts AS attempt
+                        WHERE attempt.id = %s AND attempt.status = 'cancelled'
+                          AND attempt.lease_expires_at <= now()
+                        FOR UPDATE OF attempt
+                        """,
+                        (attempt_id,),
+                    ).fetchone()
+                    if current is None:
+                        continue
+                    released = (
+                        self._dataset_lifecycle.release_pin_if_active_in_transaction(
+                            transaction,
+                            str(current["generation_pin_id"]),
+                            owner_id=str(current["id"]),
+                        )
+                    )
+                if released:
+                    return True
+        return False
 
     @contextmanager
     def _maintain_current_claim(
         self,
         claim: _SessionProgressionClaim,
-    ) -> Iterator[None]:
+    ) -> Iterator[Event]:
         stopped = Event()
+        authority_lost = Event()
         heartbeat = Thread(
             target=self._heartbeat_current_claim,
-            args=(claim, stopped),
+            args=(claim, stopped, authority_lost),
             name=f"daily-track-session-heartbeat-{claim.track_id}",
             daemon=True,
         )
         heartbeat.start()
         try:
-            yield
+            yield authority_lost
         finally:
             stopped.set()
             heartbeat.join(timeout=5)
+
+    def _record_current_progress(
+        self,
+        claim: _SessionProgressionClaim,
+        *,
+        phase: str,
+        current_session: str,
+    ) -> None:
+        if phase not in {"calculating", "result_ready", "staging"}:
+            raise ValueError("Tracking execution phase is invalid")
+        if current_session not in claim.target_sessions:
+            raise ValueError("Tracking execution session is outside its Target")
+        with self._database.transaction() as transaction:
+            updated = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progression_attempts AS attempt
+                SET execution_phase = %s, current_session = %s
+                WHERE attempt.id = %s AND attempt.progression_id = %s
+                  AND attempt.fence = %s AND attempt.status = 'running'
+                  AND EXISTS (
+                      SELECT 1
+                      FROM daily_tracks.tracks AS track
+                      JOIN daily_tracks.session_progressions AS progression
+                        ON progression.track_id = track.id
+                       AND progression.id = attempt.progression_id
+                      WHERE track.id = %s AND track.status = 'active'
+                        AND track.execution_fence = attempt.fence
+                        AND progression.status = 'running'
+                  )
+                """,
+                (
+                    phase,
+                    _session_date(current_session),
+                    claim.attempt_id,
+                    claim.progression_id,
+                    claim.fence,
+                    claim.track_id,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise DailyTrackFenced
 
     def _heartbeat_current_claim(
         self,
         claim: _SessionProgressionClaim,
         stopped: Event,
+        authority_lost: Event,
     ) -> None:
         assert self._dataset_lifecycle is not None
         while not stopped.wait(self._heartbeat_seconds):
@@ -1291,6 +1595,7 @@ class DailyTrackService:
                             lease_seconds=self._lease_seconds,
                         )
             except Exception as error:
+                authority_lost.set()
                 logger.error(
                     "DailyTrack session claim heartbeat failed",
                     extra={
@@ -1300,29 +1605,22 @@ class DailyTrackService:
                 )
                 return
             if renewed.rowcount != 1:
+                authority_lost.set()
                 return
 
     def _execute_current(
         self,
         claim: _SessionProgressionClaim,
-    ) -> tuple[PreparedPublication, dict[str, object], KernelState]:
+        *,
+        emit: ExecutionEvent,
+        authority_lost: Event,
+    ) -> SupervisedTrackingExecution:
         assert self._publication is not None
-        assert self._generation_store is not None
-        require_current_numeric_contract(
-            claim.origin.calculation_contracts.get(
-                "numeric_execution_contract"
-            )
-        )
-        admission = self._generation_store.open_admission(claim.data_generation_id)
-        if admission.generation.data_through_session != claim.data_through_session:
-            raise RuntimeError("Pinned Data Generation metadata changed")
+        assert self._executor is not None
         if claim.financial_coverage_unavailable:
             raise FinancialCoverageUnavailable(
                 "Financial Coverage does not include the next Research Session"
             )
-        full_calendar = list(admission.research_calendar)
-        current_full_index = full_calendar.index(claim.current_session)
-        target_end_index = full_calendar.index(claim.target_sessions[-1])
         predecessor = _read_publication_json(
             self._publication,
             PublishedRef(
@@ -1332,68 +1630,37 @@ class DailyTrackService:
             ),
             payload_name="checkpoint",
         )
-        dependency_session_count = 504 + _origin_effective_lookback(claim.origin)
-        calculation_start_index = _origin_calculation_start_index(
-            claim.origin,
-            full_calendar,
+        return self._executor.execute(
+            TrackingExecutionRequest(
+                track_id=claim.track_id,
+                attempt_id=claim.attempt_id,
+                data_generation_id=claim.data_generation_id,
+                data_through_session=claim.data_through_session,
+                origin=claim.origin.model_dump(mode="json"),
+                predecessor=predecessor,
+                predecessor_manifest_sha256=claim.predecessor_manifest_sha256,
+                current_session=claim.current_session,
+                target_sessions=claim.target_sessions,
+                watchdog_grace_seconds=self._child_watchdog_grace_seconds,
+            ),
+            emit=emit,
+            authority_lost=authority_lost,
         )
-        dependency_sessions = full_calendar[
-            max(
-                calculation_start_index,
-                current_full_index - dependency_session_count + 1,
-            ) : target_end_index + 1
-        ]
-        generation = self._generation_store.read_composite_slice(
-            claim.data_generation_id,
-            sessions=dependency_sessions,
-            universe_name=_origin_universe(claim.origin),
-            neutralization=_origin_neutralization(claim.origin),
-            field_bindings={
-                str(key): str(value)
-                for key, value in claim.origin.immutable_input["field_bindings"].items()
-            },
-        )
-        research_data = generation.research_data
-        calendar = research_sessions(research_data)
-        current_index = calendar.index(claim.current_session)
-        prior_research_data = slice_research_sessions(
-            research_data,
-            calendar[: current_index + 1],
-        )
-        continuation_basis_sha256 = _continuation_basis_sha256(prior_research_data)
-        cached_continuation = self._load_current_continuation(
-            claim,
-            predecessor,
-            basis_sha256=continuation_basis_sha256,
-        )
-        if predecessor.get("schema_version") == ("daily-track-activation-checkpoint-v1"):
-            terminal = _mapping_value(
-                predecessor.get("terminal_strategy_state"),
-                "Activation Terminal Strategy State",
-            )
-            prior = restore_tracking_origin(claim.origin, terminal, prior_research_data)
-        else:
-            prior = _state_from_payload(predecessor, prior_research_data)
-        continuation = cached_continuation or self._rebuild_current_continuation(
-            prior,
-            prior_research_data,
-        )
-        state = self._advance_kernel(
-            AdvanceInput(
-                prior_state=prior,
-                target_research_data=research_data,
-                appended_sessions=list(claim.target_sessions),
-                continuation=continuation,
-                calculation_scope="forward_tracking",
-            )
-        )
-        if state.boundary_session != claim.target_sessions[-1]:
-            raise RuntimeError("DailyTrack Advance returned an invalid boundary")
+
+    def _prepare_current_result(
+        self,
+        claim: _SessionProgressionClaim,
+        result: TrackingExecutionResult,
+    ) -> tuple[PreparedPublication, dict[str, object]]:
+        assert self._publication is not None
+        checkpoint = KernelStateCheckpoint.model_validate(result.checkpoint)
+        if checkpoint.boundary_session != claim.target_sessions[-1]:
+            raise RuntimeError("Tracking child returned an invalid Target boundary")
         provenance = {
             "schema_version": "daily-track-checkpoint-v2",
             "daily_track_id": claim.track_id,
             "predecessor_manifest_sha256": claim.predecessor_manifest_sha256,
-            "boundary_session": state.boundary_session,
+            "boundary_session": checkpoint.boundary_session,
             "data_generation_id": claim.data_generation_id,
             "data_through_session": claim.data_through_session,
             "calculation_contracts": claim.origin.calculation_contracts,
@@ -1401,70 +1668,21 @@ class DailyTrackService:
         prepared = self._publication.prepare(
             kind="daily-track.checkpoint",
             payloads={
-                "checkpoint": JsonPayload(
-                    _state_payload(
-                        state,
-                        retained_strategy_sessions=[
-                            claim.current_session,
-                            *claim.target_sessions,
-                        ],
-                    )
-                )
+                "checkpoint": JsonPayload(checkpoint.model_dump(mode="json"))
             },
             provenance=provenance,
         )
-        return prepared, provenance, state
-
-    def _load_current_continuation(
-        self,
-        claim: _SessionProgressionClaim,
-        predecessor: Mapping[str, object],
-        *,
-        basis_sha256: str,
-    ) -> Mapping[str, object] | None:
-        if (
-            self._working_cache is not None
-            and predecessor.get("schema_version") != "daily-track-activation-checkpoint-v1"
-        ):
-            checkpoint = KernelStateCheckpoint.model_validate(predecessor)
-            cached = self._working_cache.load(
-                track_id=claim.track_id,
-                basis_sha256=basis_sha256,
-                head_manifest_sha256=claim.predecessor_manifest_sha256,
-                fence=claim.fence - 1,
-                continuation_sha256=checkpoint.continuation_sha256,
-                pending_alpha_sessions=checkpoint.pending_alpha_sessions,
-                rolling_factor_rows=checkpoint.rolling_factor_rows,
-            )
-            if cached is not None:
-                return cached
-        elif self._working_cache is not None:
-            self._working_cache.delete(claim.track_id)
-        return None
-
-    def _rebuild_current_continuation(
-        self,
-        prior: KernelState,
-        prior_research_data: AlignedResearchData,
-    ) -> Mapping[str, object]:
-        rebuild_sessions = research_sessions(prior_research_data)[-504:]
-        return advance_continuation(
-            run_input=prior.run_input_with_research_data(prior_research_data),
-            prior_continuation=empty_continuation(),
-            target_research_data=prior_research_data,
-            appended_sessions=rebuild_sessions,
-        )
+        return prepared, provenance
 
     def _publish_current(
         self,
         claim: _SessionProgressionClaim,
         prepared: PreparedPublication,
         provenance: dict[str, object],
-        state: KernelState,
+        published_state: Mapping[str, object],
     ) -> PublishedRef:
         assert self._publication is not None
         assert self._dataset_lifecycle is not None
-        published_state = terminal_strategy_state(state)
         with self._database.transaction() as transaction:
             lock_publication_mutation(transaction)
             track = transaction.execute(
@@ -1506,17 +1724,17 @@ class DailyTrackService:
         self,
         claim: _SessionProgressionClaim,
         published: PublishedRef,
-        state: KernelState,
+        result: TrackingExecutionResult,
     ) -> None:
         if self._working_cache is None:
             return
         try:
             stored = self._working_cache.store(
                 track_id=claim.track_id,
-                basis_sha256=_continuation_basis_sha256(_continuation_dependency_slice(state)),
+                basis_sha256=result.continuation_basis_sha256,
                 head_manifest_sha256=published.manifest_sha256,
                 fence=claim.fence,
-                verified_continuation=continuation_snapshot(state),
+                verified_continuation=result.continuation,
             )
         except Exception:
             logger.warning(
@@ -1638,55 +1856,25 @@ def _uses_financial_fields(origin: TrackingOrigin) -> bool:
     return bool(set(field_bindings) & _FINANCIAL_FIELD_IDS)
 
 
-def _origin_calculation_start_index(
-    origin: TrackingOrigin,
-    calendar: list[str],
-) -> int:
-    requested_start = origin.immutable_input.get("requested_start_date")
+def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:
     admission = origin.immutable_input.get("alpha_admission")
-    if not isinstance(requested_start, str) or not isinstance(admission, Mapping):
-        raise RuntimeError("DailyTrack frozen calculation input is invalid")
+    field_bindings = origin.immutable_input.get("field_bindings")
+    if not isinstance(admission, Mapping) or not isinstance(field_bindings, Mapping):
+        raise RuntimeError("DailyTrack frozen planning input is invalid")
     try:
-        first_research_index = next(
-            index for index, session in enumerate(calendar) if session >= requested_start
-        )
-        lookback = int(admission["effective_lookback"])
-    except (KeyError, StopIteration, TypeError, ValueError) as error:
-        raise RuntimeError("DailyTrack frozen calculation input is outside current data") from error
-    calculation_start = first_research_index - lookback
-    if calculation_start < 0:
-        raise RuntimeError("DailyTrack frozen calculation warm-up is outside current data")
-    return calculation_start
-
-
-def _origin_effective_lookback(origin: TrackingOrigin) -> int:
-    admission = origin.immutable_input.get("alpha_admission")
-    if not isinstance(admission, Mapping):
-        raise RuntimeError("DailyTrack frozen Alpha admission is invalid")
-    try:
-        return int(admission["effective_lookback"])
+        facts = {
+            "formula_work": int(admission["formula_work"]),
+            "node_count": int(admission["node_count"]),
+            "field_count": len(field_bindings),
+            "effective_lookback": int(admission["effective_lookback"]),
+        }
     except (KeyError, TypeError, ValueError) as error:
-        raise RuntimeError("DailyTrack frozen Alpha admission is invalid") from error
-
-
-def _continuation_dependency_slice(state: KernelState) -> AlignedResearchData:
-    research_data = state.research_data_snapshot()
-    calendar = research_sessions(research_data)
-    boundary_index = calendar.index(state.boundary_session)
-    dependency_session_count = (
-        504
-        + state.run_input_with_research_data(
-            research_data
-        ).alpha_execution_plan().effective_lookback
-    )
-    return slice_research_sessions(
-        research_data,
-        calendar[max(0, boundary_index - dependency_session_count + 1) : boundary_index + 1],
-    )
-
-
-def _continuation_basis_sha256(research_data: AlignedResearchData) -> str:
-    return hashlib.sha256(canonical_json_bytes(research_data_identity(research_data))).hexdigest()
+        raise RuntimeError("DailyTrack frozen planning input is invalid") from error
+    if any(value <= 0 for key, value in facts.items() if key != "effective_lookback"):
+        raise RuntimeError("DailyTrack frozen planning input is invalid")
+    if facts["effective_lookback"] < 0:
+        raise RuntimeError("DailyTrack frozen planning input is invalid")
+    return facts
 
 
 _TRACK_SELECT = """
@@ -1758,20 +1946,6 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
     }
 
 
-def _origin_universe(origin: TrackingOrigin) -> str:
-    universe = origin.immutable_input.get("universe")
-    if not isinstance(universe, str) or not universe:
-        raise RuntimeError("Tracking Universe is invalid")
-    return universe
-
-
-def _origin_neutralization(origin: TrackingOrigin) -> str:
-    neutralization = origin.immutable_input.get("neutralization")
-    if neutralization not in {"none", "industry"}:
-        raise RuntimeError("Tracking Neutralization is invalid")
-    return str(neutralization)
-
-
 def _collect_publication_deletions(publication: Publication) -> None:
     try:
         while publication.collect_one_pending_deletion():
@@ -1837,27 +2011,3 @@ def _assert_equivalent(actual: object, expected: object, coordinate: str) -> Non
         return
     suffix = divergence[1:] if divergence.startswith("$") else divergence
     raise DailyTrackEquivalenceMismatch(f"EQUIVALENCE_MISMATCH at {coordinate}{suffix}")
-
-
-def _state_payload(
-    state: KernelState,
-    *,
-    retained_strategy_sessions: list[str],
-) -> dict[str, object]:
-    return KernelStateCheckpoint.model_validate(
-        project_tracking_checkpoint(
-            state,
-            retained_strategy_sessions=retained_strategy_sessions,
-        )
-    ).model_dump(mode="json")
-
-
-def _state_from_payload(
-    value: Mapping[str, object],
-    research_data: AlignedResearchData,
-) -> KernelState:
-    checkpoint = KernelStateCheckpoint.model_validate(value)
-    return restore_tracking_checkpoint(
-        checkpoint.model_dump(mode="json"),
-        research_data=research_data,
-    )
