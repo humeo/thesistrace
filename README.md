@@ -23,11 +23,14 @@ Start the complete Development topology with Compose Watch:
 mise exec -- pnpm dev
 ```
 
-Open `http://127.0.0.1:5173`. Web, API, Worker, PostgreSQL, RustFS, and the
-one-shot schema initializer all belong to the canonical Compose project. For a
+Open `http://127.0.0.1:5173`. Web, API, fixed-role Research and Tracking Workers,
+PostgreSQL, RustFS, and the one-shot schema initializer all belong to the canonical
+Compose project. For a
 detached start use `mise exec -- pnpm dev:up`; use
 `mise exec -- pnpm dev:stop` to stop services without deleting data, and
-`mise exec -- pnpm dev:reset` only when the Development data should be erased.
+`mise exec -- pnpm dev:reset` to hard-cut Product State while preserving Canonical
+Data. Use `mise exec -- pnpm dev:erase` only when all Development data should be
+deleted.
 
 The complete command contract, Test isolation rules, and failure evidence are
 documented in the [local lifecycle guide](docs/runbook/local-lifecycle.md).

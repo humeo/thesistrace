@@ -32,9 +32,16 @@ mise exec -- pnpm dev
 ```
 
 Web changes are synchronized for Vite HMR, API changes reload Uvicorn, Worker
-changes restart the Worker, and dependency manifest changes rebuild the
-affected image. Pressing Ctrl-C exits the foreground command without deleting
+changes restart both fixed-role Workers, and dependency manifest changes rebuild
+the affected image. Pressing Ctrl-C exits the foreground command without deleting
 Development volumes.
+
+Development runs one `research-worker` and one `tracking-worker`. Each process has
+one execution slot, 2 vCPU, 2 GiB hard memory, a 1.5-GiB execution-planning budget,
+and at most two calculation threads. The role-specific Compose variables can change
+capacity independently, and Compose `--scale research-worker=N` or
+`--scale tracking-worker=N` changes concurrency by replica count; a process never
+adds a second execution slot or switches roles.
 
 For a background runtime that waits for health:
 
@@ -95,8 +102,8 @@ project:
 mise exec -- pnpm test:integration
 ```
 
-Run host Playwright against a fresh complete Web/API/Worker/PostgreSQL/RustFS
-topology:
+Run host Playwright against a fresh complete Web/API/fixed-role
+Workers/PostgreSQL/RustFS topology:
 
 ```sh
 mise exec -- pnpm test:e2e
@@ -110,10 +117,12 @@ mise exec -- pnpm test:image-smoke
 ```
 
 The image smoke initializes a fresh database, prepares deterministic mounted data,
-executes one short dated ResearchRun through the real Worker, restarts API and
-Worker, and verifies the same Head, Result manifest, readiness, and single
-Attempt remain authoritative. It records image identities, health/exit state,
-network isolation, and before/after results under the run evidence directory.
+executes short Research and Tracking work through the real fixed-role Workers,
+restarts API and both Workers, and verifies the same Head, Result manifest,
+readiness, and single Attempts remain authoritative. It also rejects capacity
+declarations above the actual cgroup limits and records structured startup/claim
+events, image identities, health/exit state, network isolation, and before/after
+results under the run evidence directory.
 
 Before merge, run the standard fail-fast gate:
 

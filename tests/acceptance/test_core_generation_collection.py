@@ -163,7 +163,14 @@ def _publish_head(
 
 def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            "research",
+            "--once",
+        ],
         check=False,
         capture_output=True,
         text=True,

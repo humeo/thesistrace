@@ -36,8 +36,24 @@ services:
         - path: ./Dockerfile.backend
           action: rebuild
 
-  worker:
-    environment:
+  research-worker:
+    develop:
+      watch:
+        - path: ../../src
+          action: sync+restart
+          target: /app/src
+          initial_sync: true
+          ignore:
+            - thesistrace/entrypoints/http.py
+            - thesistrace/entrypoints/initialize.py
+        - path: ../../pyproject.toml
+          action: rebuild
+        - path: ../../uv.lock
+          action: rebuild
+        - path: ./Dockerfile.backend
+          action: rebuild
+
+  tracking-worker:
     develop:
       watch:
         - path: ../../src

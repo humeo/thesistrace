@@ -76,7 +76,8 @@ build_runtime_images() {
   compose build initialize web
   built_backend_image=$(runtime_image_name initialize)
   docker image tag "$built_backend_image" "$(runtime_image_name api)"
-  docker image tag "$built_backend_image" "$(runtime_image_name worker)"
+  docker image tag "$built_backend_image" "$(runtime_image_name research-worker)"
+  docker image tag "$built_backend_image" "$(runtime_image_name tracking-worker)"
 }
 
 mapped_port() {
@@ -127,6 +128,42 @@ capture_evidence() {
     test -n "$container_id" || continue
     docker inspect "$container_id" || true
   done >"$evidence_dir/container-inspect.txt" 2>&1
+}
+
+capture_worker_log_evidence() {
+  worker_log="$evidence_dir/worker-events.jsonl"
+  compose logs --no-color research-worker tracking-worker >"$worker_log"
+  grep -F '"event":"worker_started"' "$worker_log" >/dev/null
+  grep -F '"event":"worker_claim"' "$worker_log" >/dev/null
+  grep -F '"role":"research"' "$worker_log" >/dev/null
+  grep -F '"role":"tracking"' "$worker_log" >/dev/null
+}
+
+verify_worker_capacity_rejection() {
+  for role in research tracking; do
+    service="${role}-worker"
+    stdout="$evidence_dir/${role}-worker-cpu-capacity.stdout.log"
+    stderr="$evidence_dir/${role}-worker-cpu-capacity.stderr.log"
+    if compose run --rm --no-deps -T "$service" \
+      thesistrace-core-worker --role "$role" --once --cpu-count 3 \
+      >"$stdout" 2>"$stderr"; then
+      echo "$role Worker accepted a CPU declaration above its cgroup limit" >&2
+      return 1
+    fi
+    grep -F "$role Worker requires 3 CPU; cgroup provides 2" "$stderr" >/dev/null
+
+    stdout="$evidence_dir/${role}-worker-memory-capacity.stdout.log"
+    stderr="$evidence_dir/${role}-worker-memory-capacity.stderr.log"
+    if compose run --rm --no-deps -T "$service" \
+      thesistrace-core-worker --role "$role" --once \
+      --memory-bytes 3221225472 \
+      >"$stdout" 2>"$stderr"; then
+      echo "$role Worker accepted a memory declaration above its cgroup limit" >&2
+      return 1
+    fi
+    grep -F "$role Worker requires 3221225472 memory bytes; cgroup provides 2147483648" \
+      "$stderr" >/dev/null
+  done
 }
 
 cleanup_project() {
@@ -369,7 +406,7 @@ case "$command" in
       tests/browser/prepare_current_data.py
     run_phase e2e-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      api worker web
+      api research-worker tracking-worker web
     api_port=$(mapped_port api 8100)
     web_port=$(mapped_port web 5173)
     printf 'postgres_port=%s\ns3_port=%s\napi_port=%s\nweb_port=%s\n' \
@@ -379,6 +416,7 @@ case "$command" in
   image-smoke)
     smoke_state=/smoke-evidence/image-smoke-state.json
     run_phase image-smoke-images build_runtime_images
+    run_phase image-smoke-worker-capacity-rejection verify_worker_capacity_rejection
     run_phase image-smoke-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 \
       postgres rustfs initialize
@@ -393,7 +431,7 @@ case "$command" in
       python /smoke/browser/prepare_current_data.py
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
-      api worker web
+      api research-worker tracking-worker web
     network_internal=$(docker network inspect "${project_name}_default" \
       --format '{{.Internal}}')
     test "$network_internal" = true
@@ -407,9 +445,9 @@ case "$command" in
       initialize python /smoke/production_image_smoke.py before \
       >"$evidence_dir/smoke-before.json" \
       2>"$evidence_dir/smoke-before.stderr.log"
-    run_phase image-smoke-restart compose restart api worker
+    run_phase image-smoke-restart compose restart api research-worker tracking-worker
     run_phase image-smoke-reopen compose up --detach --no-build \
-      --wait --wait-timeout 120 api worker
+      --wait --wait-timeout 120 api research-worker tracking-worker
     run_phase image-smoke-after compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
@@ -417,6 +455,7 @@ case "$command" in
       initialize python /smoke/production_image_smoke.py after \
       >"$evidence_dir/smoke-after.json" \
       2>"$evidence_dir/smoke-after.stderr.log"
+    run_phase image-smoke-worker-logs capture_worker_log_evidence
     compose ps --all >"$evidence_dir/compose-ps-after-restart.txt"
     ;;
 esac

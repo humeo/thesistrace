@@ -125,7 +125,13 @@ elif "ps" in arguments and "--quiet" in arguments:
 elif "ps" in arguments:
     print("test services")
 elif "logs" in arguments:
-    print("test logs")
+    if "research-worker" in arguments and "tracking-worker" in arguments:
+        print('{"event":"worker_started","role":"research"}')
+        print('{"event":"worker_started","role":"tracking"}')
+        print('{"event":"worker_claim","role":"research"}')
+        print('{"event":"worker_claim","role":"tracking"}')
+    else:
+        print("test logs")
 elif "images" in arguments:
     print('{"ID":"sha256:test-image"}')
 smoke_script = next(
@@ -138,6 +144,21 @@ if "run" in arguments and smoke_script is not None:
     if phase == failing_phase and os.environ.get("FAKE_IMAGE_SMOKE_STATUS"):
         print(f"fake {phase} image smoke failure", file=sys.stderr)
         raise SystemExit(int(os.environ["FAKE_IMAGE_SMOKE_STATUS"]))
+if "run" in arguments and "--cpu-count" in arguments:
+    role = arguments[arguments.index("--role") + 1]
+    print(
+        f"Worker startup failed: {role} Worker requires 3 CPU; cgroup provides 2",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+if "run" in arguments and "--memory-bytes" in arguments:
+    role = arguments[arguments.index("--role") + 1]
+    print(
+        f"Worker startup failed: {role} Worker requires 3221225472 memory bytes; "
+        "cgroup provides 2147483648",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 if "down" in arguments:
     raise SystemExit(int(os.environ.get("FAKE_CLEANUP_STATUS", "0")))
 """
@@ -330,19 +351,40 @@ def test_development_erase_removes_every_development_volume(tmp_path: Path) -> N
 def test_development_topology_declares_every_core_service_and_pinned_infrastructure() -> None:
     compose = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
 
-    for service in ("postgres", "rustfs", "initialize", "api", "worker", "web"):
+    for service in (
+        "postgres",
+        "rustfs",
+        "initialize",
+        "api",
+        "research-worker",
+        "tracking-worker",
+        "web",
+    ):
         assert f"  {service}:\n" in compose
     assert "postgres:16.10-alpine" in compose
     assert "rustfs/rustfs:1.0.0-beta.12" in compose
     assert ":latest" not in compose
     assert "service_completed_successfully" in compose
-    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split(
+    research_worker = compose.split("  research-worker:\n", maxsplit=1)[1].split(
+        "  tracking-worker:\n", maxsplit=1
+    )[0]
+    tracking_worker = compose.split("  tracking-worker:\n", maxsplit=1)[1].split(
         "  web:\n", maxsplit=1
     )[0]
-    assert "healthcheck:" not in worker_service
+    for role, service in (("research", research_worker), ("tracking", tracking_worker)):
+        assert f"      - {role}\n" in service
+        variable_role = role.upper()
+        assert f"THESISTRACE_{variable_role}_WORKER_CPU_COUNT:-2" in service
+        assert f"THESISTRACE_{variable_role}_WORKER_MEMORY_BYTES:-2147483648" in service
+        assert (
+            f"THESISTRACE_{variable_role}_WORKER_EXECUTION_MEMORY_BYTES:-1610612736"
+            in service
+        )
+        assert f"THESISTRACE_{variable_role}_WORKER_CALCULATION_THREADS:-2" in service
+        assert "healthcheck:" not in service
     assert "--healthcheck" not in compose
     api_service = compose.split("  api:\n", maxsplit=1)[1].split(
-        "  worker:\n", maxsplit=1
+        "  research-worker:\n", maxsplit=1
     )[0]
     assert "/health/live" in api_service
     assert "/api/data" not in api_service
@@ -699,15 +741,20 @@ def test_e2e_runtime_starts_full_topology_and_runs_only_host_playwright(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    assert (
-        f"docker image tag {project_name}-initialize {project_name}-worker\n" in commands
-    )
+    for role in ("research-worker", "tracking-worker"):
+        assert (
+            f"docker image tag {project_name}-initialize {project_name}-{role}\n"
+            in commands
+        )
     assert (
         "up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize\n"
         in commands
     )
     assert "wait initialize\n" in commands
-    assert "up --detach --no-build --wait --wait-timeout 300 api worker web\n" in commands
+    assert (
+        "up --detach --no-build --wait --wait-timeout 300 "
+        "api research-worker tracking-worker web\n" in commands
+    )
     assert "--build" not in commands
     assert "uv run thesistrace-initialize" not in commands
     assert "bun run --cwd web test:e2e origin=http://127.0.0.1:41004" in commands
@@ -752,8 +799,14 @@ def test_production_image_smoke_runs_entirely_inside_an_internal_network() -> No
     assert "thesistrace-data-operator bootstrap" in test_runtime
     assert "python /smoke/browser/prepare_current_data.py" in test_runtime
     assert test_runtime.count("python /smoke/production_image_smoke.py") == 2
-    assert "compose restart api worker" in test_runtime
+    assert "compose restart api research-worker tracking-worker" in test_runtime
     assert "compose images --format json" in test_runtime
+    assert 'worker-events.jsonl' in test_runtime
+    assert '"event":"worker_started"' in test_runtime
+    assert '"event":"worker_claim"' in test_runtime
+    assert "image-smoke-worker-capacity-rejection" in test_runtime
+    assert "--cpu-count 3" in test_runtime
+    assert "--memory-bytes 3221225472" in test_runtime
     assert 'test "$network_internal" = true' in test_runtime
     assert 'expected["attempt_count"] == 1' in smoke
     assert "read_result_bundle" in smoke
@@ -782,16 +835,24 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert (
         f"docker image tag {project_name}-initialize {project_name}-api\n" in commands
     )
-    assert (
-        f"docker image tag {project_name}-initialize {project_name}-worker\n" in commands
-    )
+    for role in ("research-worker", "tracking-worker"):
+        assert (
+            f"docker image tag {project_name}-initialize {project_name}-{role}\n"
+            in commands
+        )
     assert (
         "up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize\n"
         in commands
     )
     assert "wait initialize\n" in commands
-    assert "up --detach --no-build --wait --wait-timeout 300 api worker web\n" in commands
-    assert "up --detach --no-build --wait --wait-timeout 120 api worker\n" in commands
+    assert (
+        "up --detach --no-build --wait --wait-timeout 300 "
+        "api research-worker tracking-worker web\n" in commands
+    )
+    assert (
+        "up --detach --no-build --wait --wait-timeout 120 "
+        "api research-worker tracking-worker\n" in commands
+    )
     assert "--build" not in commands
 
 

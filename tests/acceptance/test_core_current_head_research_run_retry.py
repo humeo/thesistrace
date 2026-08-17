@@ -615,7 +615,14 @@ def _blocked_worker(
             ),
         )
         process = subprocess.Popen(
-            [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+            [
+                sys.executable,
+                "-m",
+                "thesistrace.entrypoints.worker",
+                "--role",
+                "research",
+                "--once",
+            ],
             env=_worker_environment(worker_settings),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -658,7 +665,14 @@ def _drop_worker_block(settings: CoreSettings) -> None:
 
 def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            "research",
+            "--once",
+        ],
         check=False,
         capture_output=True,
         text=True,

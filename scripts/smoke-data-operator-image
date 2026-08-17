@@ -32,7 +32,8 @@ trap cleanup EXIT INT TERM
 compose config --quiet
 compose build initialize
 docker image tag "$project_name-initialize" "$project_name-api"
-docker image tag "$project_name-initialize" "$project_name-worker"
+docker image tag "$project_name-initialize" "$project_name-research-worker"
+docker image tag "$project_name-initialize" "$project_name-tracking-worker"
 compose up --detach --wait --wait-timeout 300 postgres rustfs initialize
 compose run --rm --no-deps \
   --volume "$replay:/operator/bootstrap-replay.json:ro" \
@@ -46,8 +47,8 @@ compose run --rm --no-deps \
   --idempotency-key image-bootstrap \
   --as-of 2026-08-03T18:00:00+08:00 \
   --replay /operator/bootstrap-replay.json
-compose up --detach --wait --wait-timeout 300 api worker
-compose restart api worker
-compose up --detach --wait --wait-timeout 300 api worker
+compose up --detach --wait --wait-timeout 300 api research-worker tracking-worker
+compose restart api research-worker tracking-worker
+compose up --detach --wait --wait-timeout 300 api research-worker tracking-worker
 compose exec --no-TTY api python -c \
   "from thesistrace.data import MountedDatasetHeadStore; h = MountedDatasetHeadStore('/var/lib/thesistrace/canonical-data').current(); assert h is not None and h.data_through_session == '2026-08-03'"

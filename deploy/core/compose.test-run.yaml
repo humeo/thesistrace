@@ -37,7 +37,13 @@ services:
     volumes:
       - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
 
-  worker:
+  research-worker:
+    environment:
+      <<: *test-environment
+    volumes:
+      - ${THESISTRACE_TEST_DATA_MOUNT}:/var/lib/thesistrace/canonical-data
+
+  tracking-worker:
     environment:
       <<: *test-environment
     volumes:

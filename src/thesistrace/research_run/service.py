@@ -330,11 +330,17 @@ class ResearchRunService:
         assert row is not None
         return _summary(row)
 
-    def process_next(self) -> bool:
+    def process_next(
+        self,
+        *,
+        on_claim: Callable[[str, str], None] | None = None,
+    ) -> bool:
         self._require_execution_dependencies()
         claim = self._claim_next()
         if claim is None:
             return False
+        if on_claim is not None:
+            on_claim(claim.run_id, claim.attempt_id)
         with self._maintain_claim(claim):
             self._progress("claimed", claim.run_id)
             try:

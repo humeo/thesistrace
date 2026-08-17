@@ -25,7 +25,14 @@ def test_explicit_schema_initialization_is_idempotent_and_required_before_startu
             pass
 
     missing_worker = subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            "research",
+            "--once",
+        ],
         capture_output=True,
         check=False,
         text=True,
@@ -41,7 +48,14 @@ def test_explicit_schema_initialization_is_idempotent_and_required_before_startu
     with TestClient(create_app(settings)) as client:
         assert client.get("/api/data").status_code == 200
     worker = subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            "research",
+            "--once",
+        ],
         capture_output=True,
         check=False,
         text=True,

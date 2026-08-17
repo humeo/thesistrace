@@ -102,9 +102,9 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
         "financial_research_readiness": False,
     }
 
-    for _ in range(2):
+    for role in ("research", "tracking"):
         worker = subprocess.run(
-            [worker_command, "--once"],
+            [worker_command, "--role", role, "--once"],
             cwd=ROOT,
             env=environment,
             capture_output=True,

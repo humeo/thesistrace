@@ -277,7 +277,14 @@ def test_failed_object_deletion_remains_durable_until_worker_retry(
         )["ResponseMetadata"]["HTTPStatusCode"] == 200
 
     completed = subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            "research",
+            "--once",
+        ],
         check=False,
         capture_output=True,
         text=True,

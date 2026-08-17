@@ -597,7 +597,7 @@ async function attachResponses(testInfo: TestInfo, responses: string[]): Promise
   });
 }
 
-function testContainer(service: "postgres" | "worker"): string {
+function testContainer(service: "postgres" | "research-worker"): string {
   const project = process.env.THESISTRACE_TEST_PROJECT_NAME;
   if (!project?.startsWith("thesistrace-test-")) {
     throw new Error("Browser acceptance requires an isolated ThesisTrace Test project");
@@ -606,7 +606,7 @@ function testContainer(service: "postgres" | "worker"): string {
 }
 
 function controlWorker(action: "pause" | "unpause"): void {
-  execFileSync("docker", [action, testContainer("worker")], { stdio: "pipe" });
+  execFileSync("docker", [action, testContainer("research-worker")], { stdio: "pipe" });
 }
 
 function startControlledResearchRun(runId: string) {

@@ -208,15 +208,19 @@ def test_current_runtime_initializes_before_starting_long_running_processes() ->
         "  api:\n", maxsplit=1
     )[0]
     api_service = compose.split("  api:\n", maxsplit=1)[1].split(
-        "  worker:\n", maxsplit=1
+        "  research-worker:\n", maxsplit=1
     )[0]
-    worker_service = compose.split("  worker:\n", maxsplit=1)[1].split(
+    research_worker = compose.split("  research-worker:\n", maxsplit=1)[1].split(
+        "  tracking-worker:\n", maxsplit=1
+    )[0]
+    tracking_worker = compose.split("  tracking-worker:\n", maxsplit=1)[1].split(
         "  web:\n", maxsplit=1
     )[0]
 
     assert 'command: ["thesistrace-initialize"]' in initialize_service
     assert "condition: service_completed_successfully" in api_service
-    assert "condition: service_completed_successfully" in worker_service
+    assert "condition: service_completed_successfully" in research_worker
+    assert "condition: service_completed_successfully" in tracking_worker
 
     script = """
 import json
@@ -625,7 +629,8 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "rerun_receipts" not in run_schema
     assert "compile_formula" not in run_source[run_source.index("    def process_next(") :]
     assert "self._publication.record(" in run_source
-    assert "runtime.research_runs.process_next()" in worker_source
+    assert "runtime.research_runs.process_next(on_claim=claim)" in worker_source
+    assert "while runtime.daily_tracks.process_next" not in worker_source
     for removed in ("outbox", "dispatch", "global job", "temporal"):
         assert removed not in run_source.lower()
         assert removed not in run_schema.lower()
@@ -671,7 +676,7 @@ def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
         assert f"{sql_verb} data." not in track_source
     assert "AdvanceInput(" in track_source
     assert 'kind="daily-track.checkpoint"' in track_source
-    assert "while runtime.daily_tracks.process_next()" in worker_source
+    assert "runtime.daily_tracks.process_next(on_claim=on_claim)" in worker_source
     assert "runtime.daily_tracks.reconcile_working_cache()" in worker_source
     assert '"/api/research-runs/{run_id}/daily-tracks"' in http_source
     assert '"/api/daily-tracks/{track_id}/retry"' in http_source

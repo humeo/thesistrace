@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 import subprocess
@@ -51,8 +52,19 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
         )
         assert accepted.status_code == 202
         run_id = accepted.json()["id"]
-        completed = _run_worker_once(settings)
+        completed = _run_worker_once(settings, "research")
         assert completed.returncode == 0, completed.stdout + completed.stderr
+        research_events = _worker_events(completed)
+        assert research_events[0]["event"] == "worker_started"
+        assert research_events[0]["role"] == "research"
+        assert research_events[0]["slot_count"] == 1
+        assert research_events[0]["declared_cpu_count"] == 2
+        assert research_events[0]["declared_memory_bytes"] == 2 * 1024**3
+        assert research_events[0]["execution_memory_bytes"] == 1536 * 1024**2
+        assert research_events[0]["calculation_threads"] == 2
+        assert research_events[1]["event"] == "worker_claim"
+        assert research_events[1]["resource_type"] == "ResearchRun"
+        assert research_events[1]["resource_id"] == run_id
 
         started = client.post(
             f"/api/research-runs/{run_id}/daily-tracks",
@@ -71,8 +83,12 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             expected_manifest=head_a,
             operation_id="daily-track-504-head-b",
         )
-        first_advance = _run_worker_once(settings)
+        first_advance = _run_worker_once(settings, "tracking")
         assert first_advance.returncode == 0, first_advance.stdout + first_advance.stderr
+        tracking_events = _worker_events(first_advance)
+        assert tracking_events[0]["role"] == "tracking"
+        assert tracking_events[1]["resource_type"] == "TrackingAdvance"
+        assert tracking_events[1]["resource_id"] == track_id
         first_detail = client.get(f"/api/daily-tracks/{track_id}").json()
         assert first_detail["strategy_session"] == sessions[302]
 
@@ -82,7 +98,7 @@ def test_daily_track_detail_keeps_latest_504_sessions_and_full_origin_metrics(
             expected_manifest=head_b,
             operation_id="daily-track-504-head-c",
         )
-        second_advance = _run_worker_once(settings)
+        second_advance = _run_worker_once(settings, "tracking")
         assert second_advance.returncode == 0, second_advance.stdout + second_advance.stderr
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
 
@@ -198,7 +214,10 @@ def _run_command(
     }
 
 
-def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
+def _run_worker_once(
+    settings: CoreSettings,
+    role: str,
+) -> subprocess.CompletedProcess[str]:
     environment = {
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
@@ -210,13 +229,30 @@ def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
     }
     return subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            role,
+            "--once",
+        ],
         check=False,
         capture_output=True,
         text=True,
         timeout=30,
         env=environment,
     )
+
+
+def _worker_events(
+    completed: subprocess.CompletedProcess[str],
+) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in completed.stderr.splitlines()
+        if line.startswith("{")
+    ]
 
 
 def _business_sessions(start: date, *, count: int) -> tuple[str, ...]:

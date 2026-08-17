@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import selectors
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -61,6 +62,8 @@ from thesistrace.research_kernel import (
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 from thesistrace.research_series import research_sessions, slice_research_sessions
+
+ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.skipif(
@@ -262,6 +265,106 @@ def test_product_state_hard_cut_reuses_the_exact_canonical_head(tmp_path: Path) 
         .manifest_sha256
         == head
     )
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head = _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        guarded_run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("single-research-owner"),
+        ).json()["id"]
+        research_owner = _start_claim_barrier_worker(settings, "research")
+        assert _wait_for_barrier_claim(research_owner)["resource_id"] == guarded_run_id
+        rejected_research_owner = _run_worker_once(settings, "research")
+        assert rejected_research_owner.returncode == 0, (
+            rejected_research_owner.stdout + rejected_research_owner.stderr
+        )
+        assert not [
+            event
+            for event in _worker_events(rejected_research_owner)
+            if event["event"] == "worker_claim"
+        ]
+        _release_claim_barrier_worker(research_owner)
+        assert _stored_execution(settings, guarded_run_id)["attempt_count"] == 1
+
+        run_ids = [
+            client.post(
+                "/api/research-runs",
+                json=_run_command(f"replicated-research-worker-{index}"),
+            ).json()["id"]
+            for index in range(2)
+        ]
+        research_workers = _run_worker_replicas(settings, "research", 2)
+        assert all(worker.returncode == 0 for worker in research_workers)
+        assert {
+            client.get(f"/api/research-runs/{run_id}").json()["status"]
+            for run_id in run_ids
+        } == {"succeeded"}
+        assert {
+            event["resource_id"]
+            for worker in research_workers
+            for event in _worker_events(worker)
+            if event["event"] == "worker_claim"
+        } == set(run_ids)
+
+        guarded_track_id = client.post(
+            f"/api/research-runs/{guarded_run_id}/daily-tracks",
+            json={"request_id": "single-tracking-owner"},
+        ).json()["id"]
+        extended_sessions = (*sessions, "2026-08-06")
+        _publish_head(
+            settings,
+            sessions=extended_sessions,
+            price_offset=1,
+            expected_manifest=head,
+        )
+        tracking_owner = _start_claim_barrier_worker(settings, "tracking")
+        assert _wait_for_barrier_claim(tracking_owner)["resource_id"] == guarded_track_id
+        rejected_tracking_owner = _run_worker_once(settings, "tracking")
+        assert rejected_tracking_owner.returncode == 0, (
+            rejected_tracking_owner.stdout + rejected_tracking_owner.stderr
+        )
+        assert not [
+            event
+            for event in _worker_events(rejected_tracking_owner)
+            if event["event"] == "worker_claim"
+        ]
+        _release_claim_barrier_worker(tracking_owner)
+        guarded_track_state = _stored_tracking_activation(settings, guarded_track_id)
+        assert guarded_track_state["progression_count"] == 1
+        assert guarded_track_state["attempt_count"] == 1
+
+        track_ids = [
+            client.post(
+                f"/api/research-runs/{run_id}/daily-tracks",
+                json={"request_id": f"replicated-tracking-worker-{index}"},
+            ).json()["id"]
+            for index, run_id in enumerate(run_ids)
+        ]
+        tracking_workers = _run_worker_replicas(settings, "tracking", 2)
+        assert all(worker.returncode == 0 for worker in tracking_workers)
+        assert {
+            client.get(f"/api/daily-tracks/{track_id}").json()["strategy_session"]
+            for track_id in track_ids
+        } == {extended_sessions[-1]}
+        assert {
+            event["resource_id"]
+            for worker in tracking_workers
+            for event in _worker_events(worker)
+            if event["event"] == "worker_claim"
+        } == set(track_ids)
 
 
 @pytest.mark.skipif(
@@ -504,7 +607,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert pinned_detail["data_through_session"] == latest_sessions[-1]
         assert pinned_detail["lag_sessions"] == 1
 
-        completed = _run_worker_once(settings)
+        completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
         caught_up = client.get(f"/api/daily-tracks/{track['id']}")
@@ -1235,7 +1338,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert failed_state["failed_attempt_count"] == 1
         assert failed_state["active_pin_count"] == 0
 
-        completed = _run_worker_once(settings)
+        completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
         control = client.get(f"/api/daily-tracks/{control_track['id']}").json()
         assert control["strategy_session"] == catch_up_sessions[-1]
@@ -1272,7 +1375,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
         assert retry_conflict.json() == {
             "detail": "DailyTrack Retry request_id conflicts"
         }
-        completed = _run_worker_once(settings)
+        completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
         recovered = restarted.get(f"/api/daily-tracks/{first_track['id']}")
@@ -1378,7 +1481,7 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
                 json={"request_id": "track-recovery-lost-worker-retry"},
             )
             assert retry_lost.status_code == 202
-            completed = _run_worker_once(settings)
+            completed = _run_worker_once(settings, "tracking")
             assert completed.returncode == 0, completed.stdout + completed.stderr
             release_stale_worker.set()
             assert stale_future.result(timeout=20) is True
@@ -1496,8 +1599,10 @@ def test_daily_track_recovers_from_its_last_authoritative_checkpoint(
             price_offset=4,
             expected_manifest=cache_head,
         )
-        completed = _run_worker_once(settings)
+        completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
+        next_track = _run_worker_once(settings, "tracking")
+        assert next_track.returncode == 0, next_track.stdout + next_track.stderr
         intact_after_failure = restarted.get(
             f"/api/daily-tracks/{control_track['id']}"
         ).json()
@@ -1589,7 +1694,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert correction_head.generation_manifest_sha256 != seed_head
         assert correction_head.data_through_session == seed_sessions[-1]
 
-        completed = _run_worker_once(settings)
+        completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
         assert _tracking_checkpoint_history(settings, track_id) == before_history
         unchanged_state = _stored_tracking_activation(settings, track_id)
@@ -1625,7 +1730,7 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         )
         assert impact_outcome["status"] == "succeeded"
         assert impact_outcome["outcome"] == "published"
-        completed = _run_worker_once(settings)
+        completed = _run_worker_once(settings, "tracking")
         assert completed.returncode == 0, completed.stdout + completed.stderr
 
         impact_detail = client.get(f"/api/daily-tracks/{track_id}")
@@ -2773,6 +2878,9 @@ def _stored_tracking_activation(
                         FROM daily_tracks.session_progressions
                         WHERE track_id = state.track_id) AS progression_count,
                        (SELECT count(*)
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE track_id = state.track_id) AS attempt_count,
+                       (SELECT count(*)
                         FROM daily_tracks.session_progressions
                         WHERE track_id = state.track_id
                           AND status = 'cancelled') AS cancelled_progression_count,
@@ -3063,8 +3171,30 @@ def _remove_publication_rejection(
         database.close()
 
 
-def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]:
-    environment = {
+def _run_worker_once(
+    settings: CoreSettings,
+    role: str = "research",
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "thesistrace.entrypoints.worker",
+            "--role",
+            role,
+            "--once",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=ROOT,
+        env=_worker_environment(settings),
+    )
+
+
+def _worker_environment(settings: CoreSettings) -> dict[str, str]:
+    return {
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
         "THESISTRACE_S3_ENDPOINT_URL": settings.s3_endpoint_url,
@@ -3074,14 +3204,71 @@ def _run_worker_once(settings: CoreSettings) -> subprocess.CompletedProcess[str]
         "THESISTRACE_S3_REGION": settings.s3_region,
         "THESISTRACE_DATA_MOUNT": str(settings.data_mount),
     }
-    return subprocess.run(
-        [sys.executable, "-m", "thesistrace.entrypoints.worker", "--once"],
-        check=False,
-        capture_output=True,
+
+
+def _run_worker_replicas(
+    settings: CoreSettings,
+    role: str,
+    count: int,
+) -> list[subprocess.CompletedProcess[str]]:
+    with ThreadPoolExecutor(max_workers=count) as executor:
+        futures = [
+            executor.submit(_run_worker_once, settings, role)
+            for _ in range(count)
+        ]
+        return [future.result(timeout=30) for future in futures]
+
+
+def _start_claim_barrier_worker(
+    settings: CoreSettings,
+    role: str,
+) -> subprocess.Popen[str]:
+    return subprocess.Popen(
+        [
+            sys.executable,
+            "tests/acceptance/process_worker_with_claim_barrier.py",
+            role,
+        ],
+        cwd=ROOT,
+        env=_worker_environment(settings),
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=30,
-        env=environment,
     )
+
+
+def _wait_for_barrier_claim(process: subprocess.Popen[str]) -> dict[str, object]:
+    assert process.stdout is not None
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    try:
+        assert selector.select(timeout=30), "Worker did not reach its claim barrier"
+        line = process.stdout.readline()
+    finally:
+        selector.close()
+    assert line, f"Worker exited before claim: {process.stderr.read() if process.stderr else ''}"
+    event = json.loads(line)
+    assert event["event"] == "worker_claim"
+    return event
+
+
+def _release_claim_barrier_worker(process: subprocess.Popen[str]) -> None:
+    assert process.stdin is not None
+    process.stdin.write("release\n")
+    process.stdin.flush()
+    stdout, stderr = process.communicate(timeout=30)
+    assert process.returncode == 0, stdout + stderr
+
+
+def _worker_events(
+    completed: subprocess.CompletedProcess[str],
+) -> list[dict[str, object]]:
+    return [
+        json.loads(line)
+        for line in completed.stderr.splitlines()
+        if line.startswith("{")
+    ]
 
 
 def _run_data_operator(

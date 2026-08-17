@@ -295,11 +295,17 @@ class DailyTrackService:
         )
         return {**row, "current_strategy_session": boundary}
 
-    def process_next(self) -> bool:
+    def process_next(
+        self,
+        *,
+        on_claim: Callable[[str, str], None] | None = None,
+    ) -> bool:
         if self._recover_expired_current():
             return True
         current_claim = self._claim_current()
         if current_claim is not None:
+            if on_claim is not None:
+                on_claim(current_claim.track_id, current_claim.attempt_id)
             self._progress(
                 "claimed",
                 current_claim.track_id,
@@ -972,6 +978,9 @@ class DailyTrackService:
     def _claim_current(self) -> _SessionProgressionClaim | None:
         if self._dataset_lifecycle is None or self._generation_store is None:
             return None
+        current_head = self._dataset_lifecycle.current_pointer()
+        if current_head is None:
+            return None
         with self._database.transaction() as transaction:
             rows = transaction.execute(
                 """
@@ -987,6 +996,7 @@ class DailyTrackService:
                  AND checkpoint.manifest_sha256 =
                         state.current_checkpoint_manifest_sha256
                 WHERE track.status = 'active'
+                  AND checkpoint.boundary_session < %s
                   AND NOT EXISTS (
                       SELECT 1
                       FROM daily_tracks.session_progressions AS progression
@@ -1001,7 +1011,9 @@ class DailyTrackService:
                   )
                 ORDER BY track.created_at, track.id
                 FOR UPDATE OF track, state SKIP LOCKED
-                """
+                LIMIT 1
+                """,
+                (current_head.data_through_session,),
             ).fetchall()
             for row in rows:
                 attempt_id = f"track_attempt_{uuid4().hex[:20]}"
