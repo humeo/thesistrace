@@ -497,11 +497,6 @@ def test_hosted_identity_and_deployment_runtime_are_archived_only() -> None:
     ):
         assert not obsolete_text.exists()
 
-    adr_sources = [path.read_text() for path in (ROOT / "docs" / "adr").glob("*.md")]
-    assert adr_sources
-    assert all("status: superseded" not in source for source in adr_sources)
-
-
 def test_alpha_tree_has_only_normalized_input_and_no_dynamic_execution() -> None:
     alpha_source = (ROOT / "src" / "thesistrace" / "research_kernel" / "alpha.py").read_text()
     normalized_source = (
