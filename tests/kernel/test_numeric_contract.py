@@ -13,6 +13,7 @@ from thesistrace.research_kernel.numeric import (
     canonical_binary64_bytes,
     canonical_decimal,
     canonical_integer,
+    require_current_numeric_contract,
 )
 
 
@@ -24,6 +25,13 @@ def test_canonical_integer_and_decimal_encodings_are_minimal() -> None:
     assert canonical_decimal(Decimal("123.4500")) == "12345e-2"
     assert canonical_decimal(Decimal("1")) == "1e+0"
     assert canonical_decimal(Decimal("-0.0012300")) == "-123e-5"
+
+
+def test_execution_refuses_a_different_numeric_contract_identity() -> None:
+    require_current_numeric_contract(NUMERIC_CONTRACT_ID)
+
+    with pytest.raises(NumericContractError, match="Numeric Execution Contract"):
+        require_current_numeric_contract("obsolete-numeric-contract")
 
 
 def test_accounting_context_is_34_digit_half_even_and_traps_invalid_values() -> None:

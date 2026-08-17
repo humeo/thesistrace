@@ -7,6 +7,7 @@ project_name=${THESISTRACE_DEV_PROJECT_NAME-$canonical_project_name}
 base_file="$repo_root/deploy/core/compose.yaml"
 development_file="$repo_root/deploy/core/compose.dev.yaml"
 environment_file="$repo_root/deploy/core/dev.env"
+product_state_volumes="$repo_root/scripts/product-state-volumes"
 
 compose() {
   docker compose \
@@ -41,6 +42,19 @@ validate_compose() {
 start() {
   validate_compose
   compose up --detach --build --wait --wait-timeout 300
+}
+
+reset_product_state() {
+  validate_compose
+  compose down --remove-orphans
+  "$product_state_volumes" reset "$project_name"
+  start
+}
+
+erase_development_environment() {
+  validate_compose
+  compose down --remove-orphans
+  "$product_state_volumes" erase "$project_name"
 }
 
 watch_runtime() {
@@ -132,12 +146,13 @@ case "${1:-}" in
     compose logs --follow --timestamps
     ;;
   reset)
-    validate_compose
-    compose down --volumes --remove-orphans
-    start
+    reset_product_state
+    ;;
+  erase)
+    erase_development_environment
     ;;
   *)
-    echo "usage: $0 {bootstrap|up|watch|stop|reset|logs}" >&2
+    echo "usage: $0 {bootstrap|up|watch|stop|reset|erase|logs}" >&2
     exit 2
     ;;
 esac

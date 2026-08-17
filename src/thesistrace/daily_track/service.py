@@ -57,6 +57,7 @@ from thesistrace.research_kernel import (
     equivalence_bytes,
     first_divergence,
 )
+from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_series import (
     AlignedResearchData,
     research_data_identity,
@@ -1295,6 +1296,11 @@ class DailyTrackService:
     ) -> tuple[PreparedPublication, dict[str, object], KernelState]:
         assert self._publication is not None
         assert self._generation_store is not None
+        require_current_numeric_contract(
+            claim.origin.calculation_contracts.get(
+                "numeric_execution_contract"
+            )
+        )
         admission = self._generation_store.open_admission(claim.data_generation_id)
         if admission.generation.data_through_session != claim.data_through_session:
             raise RuntimeError("Pinned Data Generation metadata changed")

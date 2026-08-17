@@ -226,6 +226,126 @@ def test_financial_admission_explains_coverage_without_blocking_market_only_form
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_product_state_hard_cut_reuses_the_exact_canonical_head(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head = _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("removed-by-product-state-hard-cut"),
+        ).json()["id"]
+        assert client.get(f"/api/research-runs/{run_id}").status_code == 200
+
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+
+    with TestClient(create_app(settings)) as reset_runtime:
+        overview = reset_runtime.get("/api/data")
+        assert overview.status_code == 200
+        assert overview.json()["data_through_session"] == sessions[-1]
+        assert reset_runtime.get(f"/api/research-runs/{run_id}").status_code == 404
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        current_head = DatasetLifecycle(database, settings.data_mount).current_pointer()
+        assert current_head is not None
+        assert current_head.generation_manifest_sha256 == head
+    finally:
+        database.close()
+    assert (
+        MountedGenerationStore(settings.data_mount)
+        .validate_generation(head)
+        .manifest_sha256
+        == head
+    )
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_research_execution_refuses_obsolete_numeric_contract(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command("obsolete-research-numeric-contract"),
+        )
+        run_id = accepted.json()["id"]
+        _replace_research_numeric_contract(
+            settings,
+            run_id,
+            "obsolete-numeric-contract",
+        )
+
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+
+        detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "failed"
+        assert "result" not in detail
+        stored = _stored_execution(settings, run_id)
+        assert stored["attempt_failure_reason"] == "PermanentExecutionFailure"
+        assert stored["result_manifest_sha256"] is None
+        assert stored["active_pin_count"] == 0
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_tracking_execution_refuses_obsolete_numeric_contract(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head = _publish_head(settings, sessions=sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("obsolete-tracking-numeric-contract"),
+        ).json()["id"]
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "obsolete-tracking-contract-activation"},
+        ).json()["id"]
+        _replace_tracking_numeric_contract(
+            settings,
+            track_id,
+            "obsolete-numeric-contract",
+        )
+        extended_sessions = (*sessions, "2026-08-06")
+        _publish_head(
+            settings,
+            sessions=extended_sessions,
+            price_offset=1,
+            expected_manifest=head,
+        )
+
+        with pytest.raises(DailyTrackProgressionFailed):
+            client.app.state.core_runtime.daily_tracks.process_next()
+
+        stored = _stored_tracking_activation(settings, track_id)
+        assert stored["track_status"] == "blocked"
+        assert stored["latest_attempt_failure_reason"] == "NumericContractError"
+        assert stored["current_checkpoint_session"].isoformat() == sessions[-1]
+        assert stored["active_pin_count"] == 0
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -2573,6 +2693,58 @@ def _stored_execution(settings: CoreSettings, run_id: str) -> dict[str, object]:
             ).fetchone()
         assert row is not None
         return row
+    finally:
+        database.close()
+
+
+def _replace_research_numeric_contract(
+    settings: CoreSettings,
+    run_id: str,
+    contract_id: str,
+) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            updated = transaction.execute(
+                """
+                UPDATE research_runs.runs
+                SET immutable_input = jsonb_set(
+                    immutable_input,
+                    '{numeric_execution_contract}',
+                    to_jsonb(%s::text)
+                )
+                WHERE id = %s
+                """,
+                (contract_id, run_id),
+            )
+            assert updated.rowcount == 1
+    finally:
+        database.close()
+
+
+def _replace_tracking_numeric_contract(
+    settings: CoreSettings,
+    track_id: str,
+    contract_id: str,
+) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            updated = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET origin = jsonb_set(
+                    origin,
+                    '{calculation_contracts,numeric_execution_contract}',
+                    to_jsonb(%s::text)
+                )
+                WHERE id = %s
+                """,
+                (contract_id, track_id),
+            )
+            assert updated.rowcount == 1
     finally:
         database.close()
 

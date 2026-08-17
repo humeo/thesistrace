@@ -31,6 +31,13 @@ class NumericContractError(ArithmeticError):
     pass
 
 
+def require_current_numeric_contract(contract_id: object) -> None:
+    if contract_id != NUMERIC_CONTRACT_ID:
+        raise NumericContractError(
+            "Product State Numeric Execution Contract does not match this runtime"
+        )
+
+
 def accounting_divide(left: Decimal, right: Decimal) -> Decimal:
     try:
         with localcontext(ACCOUNTING_CONTEXT):

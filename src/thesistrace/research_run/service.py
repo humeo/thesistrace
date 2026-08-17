@@ -50,7 +50,11 @@ from thesistrace.research_kernel.kernel_run import (
     RunInput,
 )
 from thesistrace.research_kernel.kernel_run import run as run_kernel
-from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
+from thesistrace.research_kernel.numeric import (
+    NUMERIC_CONTRACT_ID,
+    NumericContractError,
+    require_current_numeric_contract,
+)
 from thesistrace.research_run.models import (
     AlphaAdmissionFacts,
     DataAdmissionFacts,
@@ -756,6 +760,12 @@ class ResearchRunService:
         if self._publication is None:
             raise ResearchRunTrackingUnavailable
         immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+        try:
+            require_current_numeric_contract(
+                immutable_input.numeric_execution_contract
+            )
+        except NumericContractError as error:
+            raise ResearchRunTrackingUnavailable from error
         manifest_sha256 = row.get("result_manifest_sha256")
         provenance = row.get("result_provenance")
         if not isinstance(manifest_sha256, str) or not isinstance(provenance, Mapping):
@@ -1062,6 +1072,9 @@ class ResearchRunService:
         assert self._generation_store is not None
         assert self._publication is not None
         immutable_input = claim.immutable_input
+        require_current_numeric_contract(
+            immutable_input.numeric_execution_contract
+        )
         try:
             admission = self._generation_store.open_admission(claim.data_generation_id)
         except GenerationStoreError as error:

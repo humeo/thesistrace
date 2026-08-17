@@ -13,6 +13,62 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def _fake_development_docker(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
+    command_log = tmp_path / "development-commands.log"
+    volume_root = tmp_path / "volumes"
+    volume_root.mkdir()
+    for volume in (
+        "thesistrace-dev_canonical-data",
+        "thesistrace-dev_postgres-data",
+        "thesistrace-dev_rustfs-data",
+    ):
+        target = volume_root / volume
+        target.mkdir()
+        (target / "preserved-marker").write_text(volume)
+    docker = tmp_path / "docker"
+    docker.write_text(
+        """#!/usr/bin/env python3
+from pathlib import Path
+import os
+import shutil
+import sys
+
+arguments = sys.argv[1:]
+log = Path(os.environ["DEVELOPMENT_COMMAND_LOG"])
+with log.open("a") as stream:
+    stream.write(f"docker {' '.join(arguments)}\\n")
+volume_root = Path(os.environ["DEVELOPMENT_VOLUME_ROOT"])
+if arguments[:2] == ["volume", "inspect"]:
+    raise SystemExit(0 if (volume_root / arguments[2]).exists() else 1)
+if arguments[:2] == ["volume", "rm"]:
+    for volume in arguments[2:]:
+        shutil.rmtree(volume_root / volume)
+    raise SystemExit(0)
+if arguments[0] != "compose":
+    raise SystemExit(2)
+if "down" in arguments and "--volumes" in arguments:
+    for volume in volume_root.iterdir():
+        shutil.rmtree(volume)
+if "up" in arguments:
+    for volume in (
+        "thesistrace-dev_canonical-data",
+        "thesistrace-dev_postgres-data",
+        "thesistrace-dev_rustfs-data",
+    ):
+        (volume_root / volume).mkdir(exist_ok=True)
+raise SystemExit(0)
+"""
+    )
+    docker.chmod(0o755)
+    environment = {
+        **os.environ,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
+        "DEVELOPMENT_COMMAND_LOG": str(command_log),
+        "DEVELOPMENT_VOLUME_ROOT": str(volume_root),
+    }
+    return command_log, volume_root, environment
+
+
 def _fake_test_runtime_commands(tmp_path: Path) -> tuple[Path, dict[str, str]]:
     command_log = tmp_path / "commands.log"
     docker = tmp_path / "docker"
@@ -173,6 +229,7 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     assert scripts["dev:logs"] == "./scripts/dev-runtime logs"
     assert scripts["dev:up"] == "./scripts/dev-runtime up"
     assert scripts["dev:reset"] == "./scripts/dev-runtime reset"
+    assert scripts["dev:erase"] == "./scripts/dev-runtime erase"
     assert scripts["dev:stop"] == "./scripts/dev-runtime stop"
     assert "dev:down" not in scripts
 
@@ -185,6 +242,7 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
     assert "compose stop" in lifecycle
 
 
+@pytest.mark.parametrize("command", ("reset", "erase"))
 @pytest.mark.parametrize(
     "project_name",
     (
@@ -195,8 +253,29 @@ def test_development_commands_use_the_canonical_compose_runtime() -> None:
         "unrelated-project",
     ),
 )
-def test_development_reset_rejects_every_noncanonical_project(project_name: str) -> None:
+def test_destructive_development_commands_reject_every_noncanonical_project(
+    command: str,
+    project_name: str,
+) -> None:
     environment = {**os.environ, "THESISTRACE_DEV_PROJECT_NAME": project_name}
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "dev-runtime", command],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert "refusing non-canonical Development project" in completed.stderr
+
+
+def test_development_reset_recreates_only_product_state_volumes(tmp_path: Path) -> None:
+    command_log, volume_root, environment = _fake_development_docker(tmp_path)
+    canonical_head = volume_root / "thesistrace-dev_canonical-data" / "HEAD.json"
+    canonical_head.write_text("frozen-dataset-head")
 
     completed = subprocess.run(
         [ROOT / "scripts" / "dev-runtime", "reset"],
@@ -207,8 +286,45 @@ def test_development_reset_rejects_every_noncanonical_project(project_name: str)
         text=True,
     )
 
-    assert completed.returncode == 2
-    assert "refusing non-canonical Development project" in completed.stderr
+    assert completed.returncode == 0, completed.stderr
+    assert canonical_head.read_text() == "frozen-dataset-head"
+    assert (
+        volume_root / "thesistrace-dev_canonical-data" / "preserved-marker"
+    ).exists()
+    for volume in ("postgres-data", "rustfs-data"):
+        recreated = volume_root / f"thesistrace-dev_{volume}"
+        assert recreated.is_dir()
+        assert not (recreated / "preserved-marker").exists()
+    commands = command_log.read_text()
+    assert "down --remove-orphans" in commands
+    assert "down --volumes" not in commands
+    assert "volume rm thesistrace-dev_postgres-data" in commands
+    assert "volume rm thesistrace-dev_rustfs-data" in commands
+    assert "volume rm thesistrace-dev_canonical-data" not in commands
+    assert "up --detach --build --wait --wait-timeout 300" in commands
+
+
+def test_development_erase_removes_every_development_volume(tmp_path: Path) -> None:
+    command_log, volume_root, environment = _fake_development_docker(tmp_path)
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "dev-runtime", "erase"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert list(volume_root.iterdir()) == []
+    commands = command_log.read_text()
+    assert "down --remove-orphans" in commands
+    assert "down --volumes" not in commands
+    assert "volume rm thesistrace-dev_postgres-data" in commands
+    assert "volume rm thesistrace-dev_rustfs-data" in commands
+    assert "volume rm thesistrace-dev_canonical-data" in commands
+    assert "up --detach" not in commands
 
 
 def test_development_topology_declares_every_core_service_and_pinned_infrastructure() -> None:
