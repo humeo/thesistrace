@@ -613,14 +613,8 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "def _maintain_claim(" in run_source
     assert "def _heartbeat_claim(" in run_source
     assert "MAX_RESEARCH_RUN_ATTEMPTS = 3" in run_source
-    assert "MAX_RESOURCE_EXHAUSTED_ATTEMPTS = 2" in run_source
     assert "def _failure_policy(" in run_source
     assert "PublicationUnavailableError" in run_source
-    failure_policy_source = run_source[
-        run_source.index("def _failure_policy(") : run_source.index("def _cancel_fingerprint(")
-    ]
-    assert "PublicationPreparationError" not in failure_policy_source
-    assert "PublicationVerificationError" not in failure_policy_source
     assert "failure_reason text" in run_schema
     assert "def cancel(" in run_source
     assert "CREATE TABLE research_runs.cancel_receipts" in run_schema

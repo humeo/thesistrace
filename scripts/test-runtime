@@ -166,6 +166,89 @@ verify_worker_capacity_rejection() {
   done
 }
 
+verify_research_child_cgroup_oom_detection() {
+  backend_image=$(runtime_image_name initialize)
+  output="$evidence_dir/research-child-cgroup-oom.json"
+  docker run --rm \
+    --memory 201326592 \
+    --memory-swap 201326592 \
+    --entrypoint python \
+    "$backend_image" -c '
+import json
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from thesistrace.research_run.execution import (
+    ResearchExecutionResourceExhausted,
+    SupervisedResearchExecution,
+)
+
+def oom_kill_count():
+    for path in (
+        Path("/sys/fs/cgroup/memory.events.local"),
+        Path("/sys/fs/cgroup/memory.events"),
+    ):
+        if not path.exists():
+            continue
+        values = dict(line.split(maxsplit=1) for line in path.read_text().splitlines())
+        if "oom_kill" in values:
+            return int(values["oom_kill"])
+    return None
+
+before = oom_kill_count()
+if before is None:
+    raise SystemExit("cgroup v2 oom_kill evidence is unavailable")
+child = subprocess.Popen(
+    [
+        sys.executable,
+        "-c",
+        "values=[]\nwhile True: values.append(bytearray(16 * 1024 * 1024))",
+    ],
+    stdin=subprocess.PIPE,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+    text=True,
+)
+events = []
+execution = SupervisedResearchExecution(
+    child,
+    SimpleNamespace(run_id="image-smoke-oom", attempt_id="attempt-1"),
+    {"final": False},
+    events.append,
+    1536 * 1024 * 1024,
+    before,
+)
+classified = False
+try:
+    execution.advance(cancel_requested=lambda: False)
+except ResearchExecutionResourceExhausted:
+    classified = True
+finally:
+    execution.close()
+after = oom_kill_count()
+if not classified:
+    raise SystemExit(
+        f"child OOM was not classified: returncode={child.returncode}, "
+        f"before={before}, after={after}"
+    )
+if child.poll() is None:
+    raise SystemExit("OOM child was not reaped by the production supervisor")
+if not any(event["event"] == "research_execution_child_exited" for event in events):
+    raise SystemExit("production supervisor emitted no child-exit evidence")
+print(json.dumps({
+    "after_oom_kill": after,
+    "before_oom_kill": before,
+    "classified": True,
+    "child_returncode": child.returncode,
+    "child_exit_emitted": True,
+}, sort_keys=True, separators=(",", ":")))
+' >"$output"
+  grep -F '"classified":true' "$output" >/dev/null
+  grep -F '"child_returncode":-9' "$output" >/dev/null
+}
+
 cleanup_project() {
   validate_cleanup_target
   compose_status=0
@@ -417,6 +500,8 @@ case "$command" in
     smoke_state=/smoke-evidence/image-smoke-state.json
     run_phase image-smoke-images build_runtime_images
     run_phase image-smoke-worker-capacity-rejection verify_worker_capacity_rejection
+    run_phase image-smoke-research-child-cgroup-oom \
+      verify_research_child_cgroup_oom_detection
     run_phase image-smoke-infrastructure compose up --detach --no-build \
       --wait --wait-timeout 300 \
       postgres rustfs initialize

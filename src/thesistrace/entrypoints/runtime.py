@@ -162,7 +162,10 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             compile_formula=alpha_language.compile,
             current_dataset=dataset_admission.current,
             track_references_result=daily_tracks.references_result_manifest,
-            execution=SupervisedResearchExecutor(settings.data_mount),
+            execution=SupervisedResearchExecutor(
+                settings.data_mount,
+                execution_memory_bytes=settings.research_execution_memory_bytes,
+            ),
             execution_memory_bytes=settings.research_execution_memory_bytes,
         )
         yield CoreRuntime(

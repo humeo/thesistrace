@@ -4,6 +4,7 @@ import json
 import os
 import resource
 import selectors
+import signal
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping
@@ -47,12 +48,31 @@ class ResearchExecutionCancelled(ResearchExecutionError):
     pass
 
 
+class ResearchExecutionCalculationFailed(ResearchExecutionError):
+    pass
+
+
+class ResearchExecutionResourceExhausted(ResearchExecutionError):
+    pass
+
+
 @dataclass(frozen=True)
 class ResearchExecutionRequest:
     run_id: str
     attempt_id: str
     data_generation_id: str
     immutable_input: ImmutableRunInput
+    resume_from: ResearchExecutionResume | None = None
+
+
+@dataclass(frozen=True)
+class ResearchExecutionResume:
+    completed_chunk_ordinal: int
+    boundary_session: str
+    completed_warmup_sessions: int
+    completed_research_sessions: int
+    continuation: Mapping[str, object]
+    final_values: Mapping[str, object] | None
 
 
 class SupervisedResearchExecution:
@@ -62,11 +82,15 @@ class SupervisedResearchExecution:
         request: ResearchExecutionRequest,
         chunk: dict[str, object],
         emit: ExecutionEvent,
+        execution_memory_bytes: int,
+        oom_kill_count_before: int | None,
     ) -> None:
         self._process = process
         self._request = request
         self.chunk = chunk
         self._emit = emit
+        self._execution_memory_bytes = execution_memory_bytes
+        self._oom_kill_count_before = oom_kill_count_before
         self._acknowledged = False
         self._exit_emitted = False
 
@@ -84,13 +108,18 @@ class SupervisedResearchExecution:
             self._request,
             emit=self._emit,
             cancel_requested=cancel_requested,
+            oom_kill_count_before=self._oom_kill_count_before,
         )
-        self.chunk = _chunk_from_response(response)
+        self.chunk = _chunk_from_response(
+            response,
+            execution_memory_bytes=self._execution_memory_bytes,
+        )
         self._emit(
             {
                 **self._event("research_execution_chunk_received"),
                 "chunk_ordinal": self.chunk["ordinal"],
                 "boundary_session": self.chunk["boundary_session"],
+                "reused_checkpoint": self.chunk["reused_checkpoint"],
                 "child_peak_rss_bytes": _peak_rss_bytes(response),
             }
         )
@@ -207,8 +236,16 @@ class SupervisedResearchExecution:
 
 
 class SupervisedResearchExecutor:
-    def __init__(self, data_mount: Path) -> None:
+    def __init__(
+        self,
+        data_mount: Path,
+        *,
+        execution_memory_bytes: int = 1536 * 1024**2,
+    ) -> None:
+        if execution_memory_bytes <= 0:
+            raise ValueError("Research execution memory must be positive")
         self._data_mount = data_mount.resolve()
+        self._execution_memory_bytes = execution_memory_bytes
 
     def execute(
         self,
@@ -217,6 +254,7 @@ class SupervisedResearchExecutor:
         emit: ExecutionEvent,
         cancel_requested: Callable[[], bool],
     ) -> SupervisedResearchExecution:
+        oom_kill_count_before = _cgroup_oom_kill_count()
         process = subprocess.Popen(
             [sys.executable, "-m", "thesistrace.entrypoints.research_child"],
             stdin=subprocess.PIPE,
@@ -243,6 +281,28 @@ class SupervisedResearchExecutor:
                         "data_mount": str(self._data_mount),
                         "data_generation_id": request.data_generation_id,
                         "immutable_input": request.immutable_input.model_dump(mode="json"),
+                        "resume_from": (
+                            None
+                            if request.resume_from is None
+                            else {
+                                "completed_chunk_ordinal": (
+                                    request.resume_from.completed_chunk_ordinal
+                                ),
+                                "boundary_session": request.resume_from.boundary_session,
+                                "completed_warmup_sessions": (
+                                    request.resume_from.completed_warmup_sessions
+                                ),
+                                "completed_research_sessions": (
+                                    request.resume_from.completed_research_sessions
+                                ),
+                                "continuation": dict(request.resume_from.continuation),
+                                "final_values": (
+                                    None
+                                    if request.resume_from.final_values is None
+                                    else dict(request.resume_from.final_values)
+                                ),
+                            }
+                        ),
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -256,16 +316,23 @@ class SupervisedResearchExecutor:
                     request,
                     emit=emit,
                     cancel_requested=cancel_requested,
+                    oom_kill_count_before=oom_kill_count_before,
                 )
             except ResearchExecutionCancelled:
                 process.wait(timeout=1)
+                raise
+            except ResearchExecutionResourceExhausted:
+                process.wait(timeout=5)
                 raise
             except ResearchExecutionError as error:
                 process.wait(timeout=5)
                 raise ResearchExecutionError(
                     f"{error}{_child_stderr_detail(process)}"
                 ) from error
-            chunk = _chunk_from_response(response)
+            chunk = _chunk_from_response(
+                response,
+                execution_memory_bytes=self._execution_memory_bytes,
+            )
             emit(
                 {
                     "event": "research_execution_chunk_received",
@@ -275,10 +342,18 @@ class SupervisedResearchExecutor:
                     "child_pid": process.pid,
                     "chunk_ordinal": chunk["ordinal"],
                     "boundary_session": chunk["boundary_session"],
+                    "reused_checkpoint": chunk["reused_checkpoint"],
                     "child_peak_rss_bytes": _peak_rss_bytes(response),
                 }
             )
-            return SupervisedResearchExecution(process, request, chunk, emit)
+            return SupervisedResearchExecution(
+                process,
+                request,
+                chunk,
+                emit,
+                self._execution_memory_bytes,
+                oom_kill_count_before,
+            )
         except Exception:
             if process.stdin is not None and not process.stdin.closed:
                 process.stdin.close()
@@ -314,11 +389,13 @@ def execute_request_chunks(
         data_mount = Path(str(value["data_mount"]))
         generation_id = str(value["data_generation_id"])
         immutable_input = ImmutableRunInput.model_validate(value["immutable_input"])
+        resume_from = _resume_from_request(value.get("resume_from"), immutable_input)
         _require_not_cancelled(cancel_requested)
         yield from _calculate_chunks(
             data_mount,
             generation_id,
             immutable_input,
+            resume_from=resume_from,
             cancel_requested=cancel_requested,
         )
     except ResearchExecutionCancelled as error:
@@ -329,11 +406,19 @@ def execute_request_chunks(
             "category": "insufficient_warmup",
             "message": str(error),
         }
-    except (ResearchExecutionInputInvalid, GenerationStoreError, KernelRunError) as error:
+    except (ResearchExecutionInputInvalid, GenerationStoreError) as error:
         yield {
             "status": "failed",
             "category": "invalid_input",
             "message": str(error),
+        }
+    except KernelRunError as error:
+        yield {"status": "failed", "category": "calculation", "message": str(error)}
+    except MemoryError:
+        yield {
+            "status": "failed",
+            "category": "resource_exhausted",
+            "message": "Research execution exceeded its memory limit",
         }
 
 
@@ -342,6 +427,7 @@ def _calculate_chunks(
     generation_id: str,
     immutable_input: ImmutableRunInput,
     *,
+    resume_from: ResearchExecutionResume | None,
     cancel_requested: Callable[[], bool],
 ) -> Iterator[dict[str, object]]:
     _require_not_cancelled(cancel_requested)
@@ -364,8 +450,32 @@ def _calculate_chunks(
         raise ResearchExecutionInsufficientWarmup(
             "frozen Research Chunk plan does not match selected Data Generation"
         )
-    continuation = empty_research_continuation()
-    for chunk in plan.chunks:
+    continuation = (
+        empty_research_continuation()
+        if resume_from is None
+        else dict(resume_from.continuation)
+    )
+    completed_ordinal = 0 if resume_from is None else resume_from.completed_chunk_ordinal
+    if completed_ordinal == len(plan.chunks):
+        assert resume_from is not None and resume_from.final_values is not None
+        yield {
+            "status": "chunk_succeeded",
+            "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+            "chunk": {
+                "ordinal": completed_ordinal,
+                "boundary_session": resume_from.boundary_session,
+                "phase": "research",
+                "completed_warmup_sessions": resume_from.completed_warmup_sessions,
+                "completed_research_sessions": resume_from.completed_research_sessions,
+                "continuation": continuation,
+                "strategy_daily_observations": [],
+                "final_values": dict(resume_from.final_values),
+                "final": True,
+                "reused_checkpoint": True,
+            },
+        }
+        return
+    for chunk in plan.chunks[completed_ordinal:]:
         _require_not_cancelled(cancel_requested)
         chunk_sessions = tuple(
             session
@@ -434,8 +544,50 @@ def _calculate_chunks(
                 "strategy_daily_observations": list(observations),
                 "final_values": final_values,
                 "final": final_chunk,
+                "reused_checkpoint": False,
             },
         }
+
+
+def _resume_from_request(
+    value: object,
+    immutable_input: ImmutableRunInput,
+) -> ResearchExecutionResume | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ResearchExecutionInputInvalid("Research resume boundary is invalid")
+    continuation = value.get("continuation")
+    final_values = value.get("final_values")
+    if not isinstance(continuation, Mapping) or (
+        final_values is not None and not isinstance(final_values, Mapping)
+    ):
+        raise ResearchExecutionInputInvalid("Research resume payload is invalid")
+    try:
+        ordinal = int(value["completed_chunk_ordinal"])
+        boundary = str(value["boundary_session"])
+        completed_warmup = int(value["completed_warmup_sessions"])
+        completed_research = int(value["completed_research_sessions"])
+        chunk = immutable_input.execution_plan.chunks[ordinal - 1]
+    except (IndexError, KeyError, TypeError, ValueError) as error:
+        raise ResearchExecutionInputInvalid("Research resume boundary is invalid") from error
+    if (
+        ordinal < 1
+        or boundary != chunk.last_session.isoformat()
+        or completed_warmup < 0
+        or completed_research < 0
+        or (ordinal == len(immutable_input.execution_plan.chunks))
+        != (final_values is not None)
+    ):
+        raise ResearchExecutionInputInvalid("Research resume boundary is incompatible")
+    return ResearchExecutionResume(
+        completed_chunk_ordinal=ordinal,
+        boundary_session=boundary,
+        completed_warmup_sessions=completed_warmup,
+        completed_research_sessions=completed_research,
+        continuation=dict(continuation),
+        final_values=None if final_values is None else dict(final_values),
+    )
 
 
 def _selected_research_period(
@@ -513,6 +665,7 @@ def _read_message(
     *,
     emit: ExecutionEvent,
     cancel_requested: Callable[[], bool],
+    oom_kill_count_before: int | None,
 ) -> dict[str, object]:
     stream = process.stdout
     if stream is None:
@@ -560,6 +713,10 @@ def _read_message(
             if process.poll() is not None:
                 if cancellation_started is not None:
                     raise ResearchExecutionCancelled("Research execution was cancelled")
+                if _is_confirmed_cgroup_oom(process, oom_kill_count_before):
+                    raise ResearchExecutionResourceExhausted(
+                        "Research execution child exceeded its cgroup memory limit"
+                    )
                 raise ResearchExecutionError("Research execution child exited without a response")
     finally:
         selector.close()
@@ -573,7 +730,11 @@ def _read_message(
     return value
 
 
-def _chunk_from_response(response: Mapping[str, object]) -> dict[str, object]:
+def _chunk_from_response(
+    response: Mapping[str, object],
+    *,
+    execution_memory_bytes: int,
+) -> dict[str, object]:
     if response.get("status") != "chunk_succeeded":
         category = response.get("category")
         message = str(response.get("message", "Research execution child failed"))
@@ -583,6 +744,10 @@ def _chunk_from_response(response: Mapping[str, object]) -> dict[str, object]:
             raise ResearchExecutionInsufficientWarmup(message)
         if category == "invalid_input":
             raise ResearchExecutionInputInvalid(message)
+        if category == "calculation":
+            raise ResearchExecutionCalculationFailed(message)
+        if category == "resource_exhausted":
+            raise ResearchExecutionResourceExhausted(message)
         raise ResearchExecutionError(message)
     chunk = response.get("chunk")
     if not isinstance(chunk, dict):
@@ -597,10 +762,50 @@ def _chunk_from_response(response: Mapping[str, object]) -> dict[str, object]:
         "strategy_daily_observations",
         "final_values",
         "final",
+        "reused_checkpoint",
     }
     if set(chunk) != required:
         raise ResearchExecutionError("Research execution child returned an invalid Chunk")
+    if _peak_rss_bytes(response) > execution_memory_bytes:
+        raise ResearchExecutionResourceExhausted(
+            "Research execution child exceeded its execution memory budget"
+        )
     return chunk
+
+
+def _cgroup_oom_kill_count() -> int | None:
+    for path in (
+        Path("/sys/fs/cgroup/memory.events.local"),
+        Path("/sys/fs/cgroup/memory.events"),
+    ):
+        try:
+            values = dict(
+                line.split(maxsplit=1)
+                for line in path.read_text(encoding="utf-8").splitlines()
+            )
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        value = values.get("oom_kill")
+        if value is not None:
+            try:
+                return int(value)
+            except ValueError:
+                return None
+    return None
+
+
+def _is_confirmed_cgroup_oom(
+    process: subprocess.Popen[str],
+    oom_kill_count_before: int | None,
+) -> bool:
+    if process.returncode not in {-signal.SIGKILL, 128 + signal.SIGKILL}:
+        return False
+    oom_kill_count_after = _cgroup_oom_kill_count()
+    return (
+        oom_kill_count_before is not None
+        and oom_kill_count_after is not None
+        and oom_kill_count_after > oom_kill_count_before
+    )
 
 
 def _peak_rss_bytes(response: Mapping[str, object]) -> int:

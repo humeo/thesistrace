@@ -12,11 +12,20 @@ type PostgresTransaction = Connection[dict[str, Any]]
 
 
 class PostgresDatabase:
-    def __init__(self, database_url: str) -> None:
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        pool_max_size: int = 4,
+        pool_timeout_seconds: float = 30,
+    ) -> None:
+        if pool_max_size <= 0 or pool_timeout_seconds <= 0:
+            raise ValueError("PostgreSQL pool capacity and timeout must be positive")
+        self._pool_timeout_seconds = pool_timeout_seconds
         self._pool = ConnectionPool(
             conninfo=database_url,
             min_size=1,
-            max_size=4,
+            max_size=pool_max_size,
             open=False,
             kwargs={"row_factory": dict_row},
         )
@@ -111,6 +120,6 @@ class PostgresDatabase:
 
     @contextmanager
     def transaction(self) -> Iterator[PostgresTransaction]:
-        with self._pool.connection() as connection:
+        with self._pool.connection(timeout=self._pool_timeout_seconds) as connection:
             with connection.transaction():
                 yield connection

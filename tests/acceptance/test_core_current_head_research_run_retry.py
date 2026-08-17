@@ -7,12 +7,14 @@ import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from threading import Event
+from threading import Event, Thread
 from uuid import uuid4
 
+import boto3
 import pytest
+from botocore.config import Config
 from canonical_store import align_canonical_market_data, open_complete_refresh_basis
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
@@ -20,6 +22,7 @@ from fastapi.testclient import TestClient
 from psycopg import Connection, connect
 from psycopg.conninfo import make_conninfo
 
+import thesistrace.research_run.service as research_run_service
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import (
     DatasetLifecycle,
@@ -28,13 +31,33 @@ from thesistrace.data import (
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
-from thesistrace.publication import PublishedRef
+from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import RunInput, run
+from thesistrace.research_run import ResearchRunService
+from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
 
 SESSIONS = ("2026-08-03", "2026-08-04", "2026-08-05")
+
+
+def _weekday_sessions(start: date, count: int) -> tuple[str, ...]:
+    sessions: list[str] = []
+    cursor = start
+    while len(sessions) < count:
+        if cursor.weekday() < 5:
+            sessions.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return tuple(sessions)
+
+
+LONG_SESSIONS = _weekday_sessions(date(2025, 1, 2), 140)
 ADVISORY_KEY = 150015
+
+
+class _InspectablePostgresDatabase(PostgresDatabase):
+    def failed_request_count(self) -> int:
+        return int(self._pool.get_stats().get("requests_errors", 0))
 
 
 @dataclass
@@ -137,16 +160,25 @@ class _BlockedWorker:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_worker_loss_retry_recomputes_on_the_frozen_generation(tmp_path: Path) -> None:
+def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
+    tmp_path: Path,
+) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
-    head_a = _publish_head(settings, price_offset=0)
+    head_a = _publish_head(settings, price_offset=0, sessions=LONG_SESSIONS)
 
     with TestClient(create_app(settings)) as first_process:
-        run_id = _admit_run(first_process, request_id="retry-current-head")
-        with _blocked_worker(settings, run_id) as blocked:
+        run_id = _admit_run(
+            first_process,
+            request_id="retry-current-head",
+            sessions=LONG_SESSIONS,
+        )
+        with _blocked_worker(settings, run_id, after_checkpoint_count=2) as blocked:
             blocked.wait_until_blocked()
+            assert _checkpoint_ordinals(settings, run_id) == [1, 2]
+            committed = first_process.get(f"/api/research-runs/{run_id}").json()
+            assert committed["progress"]["committed_chunk_count"] == 2
             blocked.terminate()
             assert blocked.process.returncode != 0, blocked.stdout + blocked.stderr
         assert _attempts(settings, run_id) == [
@@ -158,7 +190,12 @@ def test_worker_loss_retry_recomputes_on_the_frozen_generation(tmp_path: Path) -
             }
         ]
         _expire_live_attempt(settings, run_id)
-        _publish_head(settings, price_offset=7, expected_manifest=head_a)
+        _publish_head(
+            settings,
+            price_offset=7,
+            sessions=LONG_SESSIONS,
+            expected_manifest=head_a,
+        )
 
     with TestClient(create_app(settings)) as restarted_process:
         runtime = restarted_process.app.state.core_runtime
@@ -186,16 +223,327 @@ def test_worker_loss_retry_recomputes_on_the_frozen_generation(tmp_path: Path) -
         ]
         stored = _stored_run(settings, run_id)
         assert stored["result_provenance"]["data_generation_id"] == head_a
-        assert stored["result_provenance"]["data_through_session"] == SESSIONS[-1]
+        assert stored["result_provenance"]["data_through_session"] == LONG_SESSIONS[-1]
         assert set(_read_result(runtime, stored)) == {
             "factor_summary",
             "strategy_summary",
             "strategy_daily_observations",
             "terminal_strategy_state",
         }
-        expected = _reference_result(settings, head_a)
+        expected = _reference_result(settings, head_a, sessions=LONG_SESSIONS)
         assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(expected)
         assert len(_attempts(settings, run_id)) == 2
+        assert _checkpoint_ordinals(settings, run_id) == []
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_publication_retry_reuses_the_validated_final_checkpoint(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    head = _publish_head(settings, price_offset=0, sessions=LONG_SESSIONS)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(
+            client,
+            request_id="retry-final-publication",
+            sessions=LONG_SESSIONS,
+        )
+        _install_transient_result_publication_failure(settings)
+        try:
+            assert runtime.research_runs.process_next() is True
+        finally:
+            _remove_transient_result_publication_failure(settings)
+
+        retry_wait = client.get(f"/api/research-runs/{run_id}").json()
+        assert retry_wait["status"] == "running"
+        checkpoint_ordinals = _checkpoint_ordinals(settings, run_id)
+        plan = _stored_run(settings, run_id)["immutable_input"]["execution_plan"]
+        assert checkpoint_ordinals == list(range(1, len(plan["chunks"]) + 1))
+        assert _attempts(settings, run_id)[0]["failure_reason"] == (
+            "InfrastructureUnavailable"
+        )
+
+        events: list[dict[str, object]] = []
+        assert runtime.research_runs.process_next(on_execution_event=events.append) is True
+        assert [
+            event["reused_checkpoint"]
+            for event in events
+            if event["event"] == "research_execution_chunk_received"
+        ] == [True]
+        completed = client.get(f"/api/research-runs/{run_id}").json()
+        assert completed["status"] == "succeeded"
+        assert [row["status"] for row in _attempts(settings, run_id)] == [
+            "failed",
+            "succeeded",
+        ]
+        assert _checkpoint_ordinals(settings, run_id) == []
+        stored = _stored_run(settings, run_id)
+        assert stored["result_provenance"]["data_generation_id"] == head
+        assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(
+            _reference_result(settings, head, sessions=LONG_SESSIONS)
+        )
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_corrupt_checkpoint_payload_is_a_terminal_integrity_failure(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0, sessions=LONG_SESSIONS)
+
+    with TestClient(create_app(settings)) as client:
+        run_id = _admit_run(
+            client,
+            request_id="retry-corrupt-checkpoint",
+            sessions=LONG_SESSIONS,
+        )
+        with _blocked_worker(settings, run_id, after_checkpoint_count=2) as blocked:
+            blocked.wait_until_blocked()
+            blocked.terminate()
+            assert blocked.process.returncode != 0, blocked.stdout + blocked.stderr
+        _expire_live_attempt(settings, run_id)
+        with _corrupt_first_checkpoint_payload(settings, run_id):
+            retry = _run_worker_once(settings)
+            assert retry.returncode == 0, retry.stdout + retry.stderr
+            failed = client.get(f"/api/research-runs/{run_id}").json()
+            assert failed["status"] == "failed"
+            assert failed["failure_reason"] == (
+                "Research execution checkpoint integrity validation failed."
+            )
+            assert [row["failure_reason"] for row in _attempts(settings, run_id)] == [
+                "WorkerLost",
+                "CheckpointIntegrityFailure",
+            ]
+            assert _checkpoint_ordinals(settings, run_id) == []
+            assert _research_result_manifest_count(settings) == 0
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_retry_rejects_checkpoint_after_runtime_semantics_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0, sessions=LONG_SESSIONS)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(
+            client,
+            request_id="retry-obsolete-runtime-contract",
+            sessions=LONG_SESSIONS,
+        )
+        with _blocked_worker(settings, run_id, after_checkpoint_count=2) as blocked:
+            blocked.wait_until_blocked()
+            blocked.terminate()
+            assert blocked.process.returncode != 0, blocked.stdout + blocked.stderr
+        _expire_live_attempt(settings, run_id)
+        monkeypatch.setattr(
+            research_run_service,
+            "SEMANTIC_VERSIONS",
+            {"factor": "factor-v2", "strategy": "strategy-v1", "kernel": "kernel-v1"},
+        )
+
+        assert runtime.research_runs.process_next() is True
+        failed = client.get(f"/api/research-runs/{run_id}").json()
+        assert failed["status"] == "failed"
+        assert failed["failure_reason"] == (
+            "Research execution contract does not match this runtime."
+        )
+        assert [row["failure_reason"] for row in _attempts(settings, run_id)] == [
+            "WorkerLost",
+            "ContractMismatch",
+        ]
+        assert _checkpoint_ordinals(settings, run_id) == []
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_real_pool_timeout_retries_without_replacing_the_run(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    head = _publish_head(settings, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="retry-pool-timeout")
+        constrained = _InspectablePostgresDatabase(
+            settings.database_url,
+            pool_max_size=1,
+            pool_timeout_seconds=0.1,
+        )
+        constrained.open()
+        holder: Thread | None = None
+        holder_errors: list[BaseException] = []
+
+        def reserve_pool_after_claim(_run_id: str, _attempt_id: str) -> None:
+            nonlocal holder
+            reserved = Event()
+
+            def hold_until_timeout() -> None:
+                try:
+                    poll = Event()
+                    with constrained.transaction():
+                        failed_requests = constrained.failed_request_count()
+                        reserved.set()
+                        for _ in range(500):
+                            if constrained.failed_request_count() > failed_requests:
+                                return
+                            poll.wait(0.01)
+                        raise AssertionError("PostgreSQL pool request did not time out")
+                except BaseException as error:
+                    holder_errors.append(error)
+                    reserved.set()
+
+            holder = Thread(target=hold_until_timeout, daemon=True)
+            holder.start()
+            assert reserved.wait(timeout=5)
+
+        processor = ResearchRunService(
+            constrained,
+            dataset_lifecycle=DatasetLifecycle(constrained, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(settings.data_mount),
+        )
+        try:
+            assert processor.process_next(on_claim=reserve_pool_after_claim) is True
+            assert holder is not None
+            holder.join(timeout=5)
+            assert not holder.is_alive()
+            assert holder_errors == []
+        finally:
+            constrained.close()
+
+        retry_wait = client.get(f"/api/research-runs/{run_id}").json()
+        assert retry_wait["status"] == "running"
+        assert _attempts(settings, run_id)[0]["failure_reason"] == (
+            "InfrastructureUnavailable"
+        )
+        assert runtime.research_runs.process_next() is True
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == (
+            "succeeded"
+        )
+        attempts = _attempts(settings, run_id)
+        assert [row["status"] for row in attempts] == ["failed", "succeeded"]
+        assert {row["data_generation_id"] for row in attempts} == {head}
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_real_publication_unavailability_retries_without_replacing_the_run(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    head = _publish_head(settings, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="retry-publication-unavailable")
+        unavailable_s3 = boto3.client(
+            "s3",
+            endpoint_url="http://127.0.0.1:1",
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+            config=Config(
+                connect_timeout=0.1,
+                read_timeout=0.1,
+                retries={"max_attempts": 0},
+            ),
+        )
+        unavailable_processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=Publication(
+                runtime.database,
+                unavailable_s3,
+                bucket=settings.s3_bucket,
+            ),
+            execution=SupervisedResearchExecutor(settings.data_mount),
+        )
+        assert unavailable_processor.process_next() is True
+
+        retry_wait = client.get(f"/api/research-runs/{run_id}").json()
+        assert retry_wait["status"] == "running"
+        assert _attempts(settings, run_id)[0]["failure_reason"] == (
+            "InfrastructureUnavailable"
+        )
+        assert runtime.research_runs.process_next() is True
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == (
+            "succeeded"
+        )
+        attempts = _attempts(settings, run_id)
+        assert [row["status"] for row in attempts] == ["failed", "succeeded"]
+        assert {row["data_generation_id"] for row in attempts} == {head}
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_real_child_execution_memory_breach_is_terminal_capacity_failure(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _publish_head(settings, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_id = _admit_run(client, request_id="real-child-memory-breach")
+        processor = ResearchRunService(
+            runtime.database,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            publication=runtime.publication,
+            execution=SupervisedResearchExecutor(
+                settings.data_mount,
+                execution_memory_bytes=1,
+            ),
+        )
+        events: list[dict[str, object]] = []
+        assert processor.process_next(on_execution_event=events.append) is True
+
+        failed = client.get(f"/api/research-runs/{run_id}").json()
+        assert failed["status"] == "failed"
+        assert failed["failure_reason"] == (
+            "Research execution exceeded its resource limit."
+        )
+        assert [row["failure_reason"] for row in _attempts(settings, run_id)] == [
+            "ResourceExhausted"
+        ]
+        assert _checkpoint_ordinals(settings, run_id) == []
+        assert [event["event"] for event in events] == [
+            "research_execution_child_started",
+            "research_execution_child_exited",
+        ]
 
 
 @pytest.mark.skipif(
@@ -300,12 +648,6 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
         try:
             first = _run_worker_once(settings)
             assert first.returncode == 0, first.stdout + first.stderr
-            retrying = client.get(f"/api/research-runs/{run_id}").json()
-            assert retrying["status"] == "running"
-            assert "failure_reason" not in retrying
-
-            second = _run_worker_once(settings)
-            assert second.returncode == 0, second.stdout + second.stderr
         finally:
             _remove_resource_exhaustion(settings)
         failed = client.get(f"/api/research-runs/{run_id}").json()
@@ -313,29 +655,40 @@ def test_resource_exhaustion_is_bounded_sanitized_and_restart_stable(
         assert failed["failure_reason"] == ("Research execution exceeded its resource limit.")
         assert "secret-resource-pressure-detail" not in str(failed)
         assert [row["failure_reason"] for row in _attempts(settings, run_id)] == [
-            "ResourceExhausted",
-            "ResourceExhausted",
+            "ResourceExhausted"
         ]
         assert _research_result_manifest_count(settings) == 0
 
     with TestClient(create_app(settings)) as restarted:
         assert restarted.get(f"/api/research-runs/{run_id}").json() == failed
-        assert len(_attempts(settings, run_id)) == 2
+        assert len(_attempts(settings, run_id)) == 1
 
 
-def _admit_run(client: TestClient, *, request_id: str) -> str:
-    response = client.post("/api/research-runs", json=_run_command(request_id))
+def _admit_run(
+    client: TestClient,
+    *,
+    request_id: str,
+    sessions: tuple[str, ...] = SESSIONS,
+) -> str:
+    response = client.post(
+        "/api/research-runs",
+        json=_run_command(request_id, sessions=sessions),
+    )
     assert response.status_code == 202
     return str(response.json()["id"])
 
 
-def _run_command(request_id: str) -> dict[str, object]:
+def _run_command(
+    request_id: str,
+    *,
+    sessions: tuple[str, ...] = SESSIONS,
+) -> dict[str, object]:
     return {
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": "Same research question on current data",
-        "start_date": SESSIONS[0],
-        "end_date": SESSIONS[-1],
+        "start_date": sessions[0],
+        "end_date": sessions[-1],
         "formula": "close_adj",
         "universe": "top300",
         "neutralization": "none",
@@ -348,10 +701,11 @@ def _publish_head(
     settings: CoreSettings,
     *,
     price_offset: int,
+    sessions: tuple[str, ...] = SESSIONS,
     expected_manifest: str | None = None,
 ) -> str:
     generation = MountedGenerationStore(settings.data_mount).materialize(
-        _canonical(price_offset=price_offset),
+        _canonical(price_offset=price_offset, sessions=sessions),
         prepared_at=datetime(2026, 8, 10, 0, price_offset, tzinfo=UTC),
         source_name="retry-current-head-test",
         source_lineage={"price_offset": price_offset},
@@ -376,31 +730,40 @@ def _publish_head(
     return generation.manifest_sha256
 
 
-def _canonical(*, price_offset: int) -> dict[str, object]:
+def _canonical(
+    *,
+    price_offset: int,
+    sessions: tuple[str, ...] = SESSIONS,
+) -> dict[str, object]:
     template = build_minimal_canonical_fixture(price_offset=price_offset)
     instrument_id = str(template["instruments"][0]["instrument_id"])
     universe = {"instrument_ids": [instrument_id], "status": "available"}
     return {
         **template,
-        "research_calendar": list(SESSIONS),
-        "prices": [{**template["prices"][0], "session": session} for session in SESSIONS],
+        "research_calendar": list(sessions),
+        "prices": [{**template["prices"][0], "session": session} for session in sessions],
         "trading_states": [
-            {**template["trading_states"][0], "session": session} for session in SESSIONS
+            {**template["trading_states"][0], "session": session} for session in sessions
         ],
         "price_limits": [
-            {**template["price_limits"][0], "session": session} for session in SESSIONS
+            {**template["price_limits"][0], "session": session} for session in sessions
         ],
         "base_pool": [
-            {"session": session, "instrument_ids": [instrument_id]} for session in SESSIONS
+            {"session": session, "instrument_ids": [instrument_id]} for session in sessions
         ],
         "liquidity_universes": {
-            name: [{"session": session, **universe} for session in SESSIONS]
+            name: [{"session": session, **universe} for session in sessions]
             for name in ("top300", "top1000", "top2000", "top3000")
         },
     }
 
 
-def _reference_result(settings: CoreSettings, generation_id: str) -> dict[str, object]:
+def _reference_result(
+    settings: CoreSettings,
+    generation_id: str,
+    *,
+    sessions: tuple[str, ...] = SESSIONS,
+) -> dict[str, object]:
     canonical = open_complete_refresh_basis(
         MountedGenerationStore(settings.data_mount), generation_id
     )
@@ -425,8 +788,8 @@ def _reference_result(settings: CoreSettings, generation_id: str) -> dict[str, o
             commission_min_cny="5",
             stamp_duty_sell_rate="0.0005",
             transfer_fee_rate="0.00001",
-            research_start_session=SESSIONS[0],
-            research_end_session=SESSIONS[-1],
+            research_start_session=sessions[0],
+            research_end_session=sessions[-1],
         )
     )
     return build_result_payload(output, rebalance_interval=1, universe="top300")
@@ -500,6 +863,88 @@ def _stored_run(settings: CoreSettings, run_id: str) -> dict[str, object]:
         database.close()
 
 
+def _checkpoint_ordinals(settings: CoreSettings, run_id: str) -> list[int]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT ordinal
+                FROM research_runs.execution_checkpoints
+                WHERE run_id = %s
+                ORDER BY ordinal
+                """,
+                (run_id,),
+            ).fetchall()
+        return [int(row["ordinal"]) for row in rows]
+    finally:
+        database.close()
+
+
+@contextmanager
+def _corrupt_first_checkpoint_payload(
+    settings: CoreSettings,
+    run_id: str,
+) -> Iterator[None]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT continuation_payload
+                FROM research_runs.execution_checkpoints
+                WHERE run_id = %s
+                ORDER BY ordinal
+                LIMIT 1
+                """,
+                (run_id,),
+            ).fetchone()
+        assert row is not None
+        digest = str(row["continuation_payload"]["sha256"])
+    finally:
+        database.close()
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint_url,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        region_name=settings.s3_region,
+    )
+    key = f"publication/v1/sha256/{digest[:2]}/{digest}"
+    original = s3.get_object(Bucket=settings.s3_bucket, Key=key)["Body"].read()
+    try:
+        s3.put_object(
+            Bucket=settings.s3_bucket,
+            Key=key,
+            Body=b"corrupt-checkpoint-payload",
+        )
+        yield
+    finally:
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            with database.transaction() as transaction:
+                referenced = transaction.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1
+                        FROM publication.manifest_objects
+                        WHERE object_sha256 = %s
+                    ) AS referenced
+                    """,
+                    (digest,),
+                ).fetchone()
+            assert referenced is not None
+        finally:
+            database.close()
+        if referenced["referenced"]:
+            s3.put_object(Bucket=settings.s3_bucket, Key=key, Body=original)
+        else:
+            s3.delete_object(Bucket=settings.s3_bucket, Key=key)
+
+
 def _research_result_manifest_count(settings: CoreSettings) -> int:
     database = PostgresDatabase(settings.database_url)
     database.open()
@@ -514,6 +959,48 @@ def _research_result_manifest_count(settings: CoreSettings) -> int:
             ).fetchone()
         assert row is not None
         return int(row["count"])
+    finally:
+        database.close()
+
+
+def _install_transient_result_publication_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION publication.reject_ticket06_result_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected transient Result publication failure'
+                        USING ERRCODE = '08006';
+                END
+                $$;
+                CREATE TRIGGER reject_ticket06_result_transiently
+                BEFORE INSERT ON publication.manifests
+                FOR EACH ROW
+                WHEN (NEW.kind = 'research.result')
+                EXECUTE FUNCTION publication.reject_ticket06_result_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_result_publication_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_ticket06_result_transiently
+                    ON publication.manifests;
+                DROP FUNCTION publication.reject_ticket06_result_transiently();
+                """
+            )
     finally:
         database.close()
 
@@ -576,7 +1063,11 @@ def _terminate_backend(settings: CoreSettings, backend_pid: int) -> None:
 def _blocked_worker(
     settings: CoreSettings,
     run_id: str,
+    *,
+    after_checkpoint_count: int = 0,
 ) -> Iterator[_BlockedWorker]:
+    if not 0 <= after_checkpoint_count <= 100:
+        raise ValueError("Checkpoint barrier count is invalid")
     advisory_owner: Connection[object] | None = None
     trigger_created = False
     blocked: _BlockedWorker | None = None
@@ -589,11 +1080,38 @@ def _blocked_worker(
             with database.transaction() as transaction:
                 transaction.execute(
                     """
+                    CREATE TABLE publication.ticket15_barrier_config (
+                        after_checkpoint_count integer NOT NULL
+                    )
+                    """
+                )
+                transaction.execute(
+                    """
+                    INSERT INTO publication.ticket15_barrier_config
+                    VALUES (%s)
+                    """,
+                    (after_checkpoint_count,),
+                )
+                transaction.execute(
+                    """
                     CREATE FUNCTION publication.block_ticket15_manifest()
                     RETURNS trigger
                     LANGUAGE plpgsql AS $$
+                    DECLARE
+                        configured_count integer;
                     BEGIN
-                        PERFORM pg_advisory_xact_lock(150015);
+                        SELECT after_checkpoint_count INTO configured_count
+                        FROM publication.ticket15_barrier_config;
+                        IF configured_count = 0 OR (
+                            NEW.kind = 'research.execution-checkpoint'
+                            AND (
+                                SELECT count(*)
+                                FROM publication.manifests
+                                WHERE kind = 'research.execution-checkpoint'
+                            ) >= configured_count
+                        ) THEN
+                            PERFORM pg_advisory_xact_lock(150015);
+                        END IF;
                         RETURN NEW;
                     END
                     $$;
@@ -657,6 +1175,7 @@ def _drop_worker_block(settings: CoreSettings) -> None:
                 DROP TRIGGER IF EXISTS block_ticket15_manifest
                     ON publication.manifests;
                 DROP FUNCTION IF EXISTS publication.block_ticket15_manifest();
+                DROP TABLE IF EXISTS publication.ticket15_barrier_config;
                 """
             )
     finally:

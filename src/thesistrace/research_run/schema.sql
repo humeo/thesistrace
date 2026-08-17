@@ -108,6 +108,7 @@ CREATE TABLE research_runs.execution_checkpoints (
     completed_research_sessions integer NOT NULL,
     continuation_payload jsonb NOT NULL,
     observation_payload jsonb,
+    final_values_payload jsonb,
     observation_row_count integer NOT NULL,
     observation_first_session date,
     observation_last_session date,
@@ -123,6 +124,7 @@ CREATE TABLE research_runs.execution_checkpoints (
     ),
     CONSTRAINT execution_checkpoints_continuation_check CHECK (jsonb_typeof(continuation_payload) = 'object'),
     CONSTRAINT execution_checkpoints_observation_check CHECK (observation_payload IS NULL OR jsonb_typeof(observation_payload) = 'object'),
+    CONSTRAINT execution_checkpoints_final_values_check CHECK (final_values_payload IS NULL OR jsonb_typeof(final_values_payload) = 'object'),
     CONSTRAINT execution_checkpoints_manifest_check CHECK (checkpoint_manifest_sha256 ~ '^[0-9a-f]{64}$')
 );
 

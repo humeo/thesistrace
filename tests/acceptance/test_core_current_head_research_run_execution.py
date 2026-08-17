@@ -611,9 +611,12 @@ def test_research_execution_refuses_obsolete_numeric_contract(tmp_path: Path) ->
 
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "failed"
+        assert detail["failure_reason"] == (
+            "Research execution contract does not match this runtime."
+        )
         assert "result" not in detail
         stored = _stored_execution(settings, run_id)
-        assert stored["attempt_failure_reason"] == "PermanentExecutionFailure"
+        assert stored["attempt_failure_reason"] == "ContractMismatch"
         assert stored["result_manifest_sha256"] is None
         assert stored["active_pin_count"] == 0
 

@@ -20,9 +20,7 @@ from fastapi.testclient import TestClient
 from psycopg import connect
 from test_core_current_head_research_run_retry import (
     _admit_run,
-    _install_resource_exhaustion,
     _publish_head,
-    _remove_resource_exhaustion,
 )
 
 from thesistrace._postgres import PostgresDatabase
@@ -602,11 +600,11 @@ def test_cancel_during_retry_wait_prevents_another_attempt(tmp_path: Path) -> No
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         run_id = _admit_run(client, request_id="cancel-retry-wait")
-        _install_resource_exhaustion(settings)
+        _install_transient_publication_failure(settings)
         try:
             assert runtime.research_runs.process_next() is True
         finally:
-            _remove_resource_exhaustion(settings)
+            _remove_transient_publication_failure(settings)
         assert client.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
         assert _attempt_status(runtime.database, run_id) == "failed"
 
@@ -619,6 +617,46 @@ def test_cancel_during_retry_wait_prevents_another_attempt(tmp_path: Path) -> No
         assert runtime.research_runs.process_next() is False
         assert _run_storage(runtime.database, run_id)["attempt_count"] == 1
         assert _active_pin_count(runtime.database) == 0
+
+
+def _install_transient_publication_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION publication.reject_ticket06_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    RAISE EXCEPTION 'injected transient publication failure'
+                        USING ERRCODE = '08006';
+                END
+                $$;
+                CREATE TRIGGER reject_ticket06_transiently
+                BEFORE INSERT ON publication.manifests
+                FOR EACH ROW
+                EXECUTE FUNCTION publication.reject_ticket06_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_publication_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_ticket06_transiently ON publication.manifests;
+                DROP FUNCTION publication.reject_ticket06_transiently();
+                """
+            )
+    finally:
+        database.close()
 
 
 def _run_storage(database: PostgresDatabase, run_id: str) -> dict[str, object]:
