@@ -260,27 +260,18 @@ def test_prepare_never_overwrites_a_conflicting_content_address(
 def test_concurrent_prepare_uses_conditional_create_without_overwrite(
     core_settings: CoreSettings,
     rustfs_admin: BaseClient,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     expected = canonical_json_bytes({"race": "ticket-05"})
-    digest = hashlib.sha256(expected).hexdigest()
     barrier = Barrier(2)
-    original_object_exists = Publication._object_exists
 
-    def synchronize_absence(
-        self: Publication,
-        candidate_digest: str,
-        *,
-        staging_authority,
-    ) -> bool:
-        if candidate_digest == digest:
-            barrier.wait(timeout=5)
-            return False
-        return original_object_exists(
-            self,
-            candidate_digest,
-            staging_authority=staging_authority,
-        )
+    class ConcurrentPutClient:
+        def __getattr__(self, name: str):
+            return getattr(rustfs_admin, name)
+
+        def put_object(self, **arguments):
+            if arguments.get("Body") == expected:
+                barrier.wait(timeout=5)
+            return rustfs_admin.put_object(**arguments)
 
     with open_core_runtime(core_settings) as runtime:
         runtime.publication.prepare(
@@ -288,10 +279,14 @@ def test_concurrent_prepare_uses_conditional_create_without_overwrite(
             payloads={"warmup": JsonPayload({"warmup": True})},
             provenance={"ticket": 5},
         )
-        monkeypatch.setattr(Publication, "_object_exists", synchronize_absence)
+        publication = Publication(
+            runtime.database,
+            ConcurrentPutClient(),
+            bucket=core_settings.s3_bucket,
+        )
 
         def prepare_once() -> str:
-            return runtime.publication.prepare(
+            return publication.prepare(
                 kind="race.concurrent",
                 payloads={"only": JsonPayload({"race": "ticket-05"})},
                 provenance={"ticket": 5},

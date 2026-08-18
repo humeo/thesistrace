@@ -1,0 +1,13 @@
+{
+  "format": "thesistrace-long-research-profile",
+  "version": 1,
+  "generation_calendar_start": "2009-12-07",
+  "workload_start_date": "2010-01-04",
+  "workload_end_date": "2026-08-13",
+  "ordinary_a_share_instrument_count": 5541,
+  "execution_universe_size": 3000,
+  "market_dense_session_count": 4354,
+  "formula": "cs_rank(pct_change(close_adj, 20))",
+  "universe": "top3000",
+  "repetitions_per_phase": 5
+}

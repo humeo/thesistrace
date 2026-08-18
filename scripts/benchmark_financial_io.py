@@ -4,8 +4,12 @@ import argparse
 import hashlib
 import json
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
+
+import pyarrow as pa
 
 from thesistrace.data.financial_candidate import FinancialCandidateStore
 from thesistrace.data.financial_collection import (
@@ -16,12 +20,20 @@ from thesistrace.data.financial_collection import (
     FinancialShardCheckpoint,
     RawFinancialBatchStore,
 )
+from thesistrace.data.generation_schema import (
+    GENERATION_SESSION_PARTITION_COUNT,
+    MARKET_CANDIDATE_TABLE_SPECS,
+)
 from thesistrace.data.generation_store import MountedGenerationStore
 from thesistrace.data.io_benchmark import (
     assert_benchmark_budgets,
     derive_repository_budgets,
     measure_operation,
     summarize_samples,
+)
+from thesistrace.data.source import (
+    CanonicalBootstrapStream,
+    CanonicalColumnarSessionPartition,
 )
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
@@ -379,6 +391,289 @@ def _market_fixture(
         ],
         "field_catalog": [field],
     }
+
+
+def build_market_benchmark_stream(
+    sessions: list[str],
+    instrument_count: int,
+    universe_size: int,
+    dense_count: int,
+) -> CanonicalBootstrapStream:
+    template = build_minimal_canonical_fixture()
+    instruments = [_instrument(index, sessions[0]) for index in range(1, instrument_count + 1)]
+    instrument_ids = [str(item["instrument_id"]) for item in instruments]
+    dense_start = len(sessions) - dense_count
+    price_template = dict(template["prices"][0])
+    limit_template = dict(template["price_limits"][0])
+    field = dict(template["field_catalog"][0])
+    field["release_available_from"] = sessions[0]
+    static = {
+        "schema_version": "canonical-eod",
+        "research_calendar": sessions,
+        "instruments": instruments,
+        "industry_membership": [
+            {
+                "instrument_id": item["instrument_id"],
+                "active_from": sessions[0],
+                "active_to": "",
+                "sw2021_l1": f"Industry-{index % 31:02d}",
+                "sw2021_l2": f"Industry-{index % 31:02d}",
+                "sw2021_l3": f"Industry-{index % 31:02d}",
+            }
+            for index, item in enumerate(instruments)
+        ],
+        "field_catalog": [field],
+    }
+
+    session_specs = {
+        spec.name: spec
+        for spec in MARKET_CANDIDATE_TABLE_SPECS
+        if spec.session_field is not None and spec.name != "research_calendar"
+    }
+
+    def partitions() -> Iterator[CanonicalColumnarSessionPartition]:
+        represented_instruments: set[str] = set()
+        for start in range(0, len(sessions), GENERATION_SESSION_PARTITION_COUNT):
+            partition_sessions = sessions[start : start + GENERATION_SESSION_PARTITION_COUNT]
+            session_rankings: list[list[str]] = []
+            for session_index, _session in enumerate(partition_sessions, start=start):
+                if session_index < dense_start:
+                    ranking: list[str] = []
+                else:
+                    dense_index = session_index - dense_start
+                    rotation = (
+                        (dense_index // GENERATION_SESSION_PARTITION_COUNT) * universe_size
+                    ) % instrument_count
+                    ranking = instrument_ids[rotation:] + instrument_ids[:rotation]
+                    represented_instruments.update(ranking[:universe_size])
+                session_rankings.append(ranking)
+            yield CanonicalColumnarSessionPartition(
+                sessions=tuple(partition_sessions),
+                tables={
+                    "trading_states": _benchmark_trading_states_table(
+                        partition_sessions,
+                        instrument_ids,
+                        session_rankings,
+                        universe_size,
+                        session_specs["trading_states"].contract.schema,
+                    ),
+                    "price_limits": _benchmark_price_limits_table(
+                        partition_sessions,
+                        session_rankings,
+                        universe_size,
+                        limit_template,
+                        session_specs["price_limits"].contract.schema,
+                    ),
+                    "base_pool": _benchmark_base_pool_table(
+                        partition_sessions,
+                        instrument_ids,
+                        session_specs["base_pool"].contract.schema,
+                    ),
+                    "liquidity_universes": _benchmark_liquidity_table(
+                        partition_sessions,
+                        session_rankings,
+                        universe_size,
+                        session_specs["liquidity_universes"].contract.schema,
+                    ),
+                    "eod_prices": _benchmark_eod_prices_table(
+                        partition_sessions,
+                        session_rankings,
+                        universe_size,
+                        price_template,
+                        session_specs["eod_prices"].contract.schema,
+                    ),
+                    "adjustment_factors": _benchmark_adjustment_factors_table(
+                        partition_sessions,
+                        session_rankings,
+                        universe_size,
+                        price_template,
+                        session_specs["adjustment_factors"].contract.schema,
+                    ),
+                },
+            )
+        if represented_instruments != set(instrument_ids):
+            raise RuntimeError("benchmark market rotation does not represent every instrument")
+
+    return CanonicalBootstrapStream(
+        source_name="financial-io-2010-benchmark",
+        source_lineage={"profile": "financial-io-2010-profile-v1"},
+        static=static,
+        covered_session_range=(sessions[0], sessions[-1]),
+        partitions=partitions,
+    )
+
+
+def _partition_positions(
+    sessions: list[str],
+    session_rankings: list[list[str]],
+    *,
+    selected_count: int | None = None,
+) -> tuple[list[str], list[str]]:
+    session_values: list[str] = []
+    instrument_values: list[str] = []
+    for session, ranking in zip(sessions, session_rankings, strict=True):
+        selected = ranking if selected_count is None else ranking[:selected_count]
+        ordered = sorted(selected)
+        session_values.extend([session] * len(ordered))
+        instrument_values.extend(ordered)
+    return session_values, instrument_values
+
+
+def _benchmark_trading_states_table(
+    sessions: list[str],
+    instrument_ids: list[str],
+    session_rankings: list[list[str]],
+    universe_size: int,
+    schema: pa.Schema,
+) -> pa.Table:
+    session_values: list[str] = []
+    state_values: list[str] = []
+    for session, ranking in zip(sessions, session_rankings, strict=True):
+        selected = set(ranking[:universe_size])
+        session_values.extend([session] * len(instrument_ids))
+        state_values.extend(
+            "normal" if instrument_id in selected else "data_unavailable"
+            for instrument_id in instrument_ids
+        )
+    return pa.Table.from_arrays(
+        (
+            pa.array(session_values, type=schema.field("session").type),
+            pa.concat_arrays([pa.array(instrument_ids)] * len(sessions)),
+            pa.array(state_values, type=schema.field("state").type),
+        ),
+        schema=schema,
+    )
+
+
+def _benchmark_price_limits_table(
+    sessions: list[str],
+    session_rankings: list[list[str]],
+    universe_size: int,
+    template: dict[str, object],
+    schema: pa.Schema,
+) -> pa.Table:
+    session_values, instruments = _partition_positions(
+        sessions, session_rankings, selected_count=universe_size
+    )
+    row_count = len(session_values)
+    return pa.Table.from_arrays(
+        (
+            pa.array(session_values),
+            pa.array(instruments),
+            pa.repeat(pa.scalar(str(template["upper"])), row_count),
+            pa.repeat(pa.scalar(str(template["lower"])), row_count),
+        ),
+        schema=schema,
+    )
+
+
+def _benchmark_base_pool_table(
+    sessions: list[str],
+    instrument_ids: list[str],
+    schema: pa.Schema,
+) -> pa.Table:
+    return pa.Table.from_arrays(
+        (
+            pa.array(sessions),
+            pa.array(
+                [instrument_ids for _session in sessions],
+                type=schema.field("instrument_ids").type,
+            ),
+        ),
+        schema=schema,
+    )
+
+
+def _benchmark_liquidity_table(
+    sessions: list[str],
+    session_rankings: list[list[str]],
+    universe_size: int,
+    schema: pa.Schema,
+) -> pa.Table:
+    names_and_counts = tuple(
+        sorted((("top300", 300), ("top1000", 1000), ("top2000", 2000), ("top3000", 3000)))
+    )
+    session_values: list[str] = []
+    names: list[str] = []
+    memberships: list[list[str]] = []
+    for session, ranking in zip(sessions, session_rankings, strict=True):
+        for name, count in names_and_counts:
+            session_values.append(session)
+            names.append(name)
+            memberships.append(ranking[: min(count, universe_size)])
+    return pa.Table.from_arrays(
+        (
+            pa.array(session_values),
+            pa.array(names),
+            pa.array(memberships, type=schema.field("instrument_ids").type),
+            pa.repeat(pa.scalar("available"), len(session_values)),
+        ),
+        schema=schema,
+    )
+
+
+def _benchmark_eod_prices_table(
+    sessions: list[str],
+    session_rankings: list[list[str]],
+    universe_size: int,
+    template: dict[str, object],
+    schema: pa.Schema,
+) -> pa.Table:
+    session_values, instruments = _partition_positions(
+        sessions, session_rankings, selected_count=universe_size
+    )
+    row_count = len(session_values)
+    values: dict[str, object] = {
+        "open_raw": Decimal(str(template["open_raw"])),
+        "high_raw": Decimal(str(template["high_raw"])),
+        "low_raw": Decimal(str(template["low_raw"])),
+        "close_raw": Decimal(str(template["close_raw"])),
+        "pre_close_reference_raw": Decimal(str(template["pre_close_raw"])),
+        "price_change_raw": Decimal(str(template["change_raw"])),
+        "pct_change_ratio": Decimal(str(template["pct_change_raw"])) / Decimal(100),
+        "volume_shares": int(str(template["volume_shares"])),
+        "turnover_amount_cny": Decimal(str(template["turnover_cny"])),
+        "adjustment_scale": Decimal(str(template["adjustment_factor"])),
+        "open_adj": Decimal(str(template["open_adj"])),
+        "high_adj": Decimal(str(template["high_adj"])),
+        "low_adj": Decimal(str(template["low_adj"])),
+        "close_adj": Decimal(str(template["close_adj"])),
+    }
+    arrays: list[pa.Array] = [
+        pa.array((date.fromisoformat(value) for value in session_values), type=pa.date32()),
+        pa.array(instruments),
+    ]
+    arrays.extend(
+        pa.repeat(pa.scalar(values[field.name], type=field.type), row_count)
+        for field in tuple(schema)[2:]
+    )
+    return pa.Table.from_arrays(arrays, schema=schema)
+
+
+def _benchmark_adjustment_factors_table(
+    sessions: list[str],
+    session_rankings: list[list[str]],
+    universe_size: int,
+    template: dict[str, object],
+    schema: pa.Schema,
+) -> pa.Table:
+    session_values, instruments = _partition_positions(
+        sessions, session_rankings, selected_count=universe_size
+    )
+    return pa.Table.from_arrays(
+        (
+            pa.array((date.fromisoformat(value) for value in session_values), type=pa.date32()),
+            pa.array(instruments),
+            pa.repeat(
+                pa.scalar(
+                    Decimal(str(template["adjustment_factor"])),
+                    type=schema.field("source_adjustment_factor").type,
+                ),
+                len(session_values),
+            ),
+        ),
+        schema=schema,
+    )
 
 
 def _financial_candidate(

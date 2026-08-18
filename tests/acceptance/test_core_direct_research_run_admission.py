@@ -62,10 +62,13 @@ def test_formula_rejection_matches_preview_and_leaves_no_durable_admission_state
         assert issue["range"] == diagnostic["range"]
         assert issue["field"] == "formula"
         assert client.get("/api/definitions").status_code == 404
-        assert client.post(
-            "/api/research-runs/run_missing/rerun",
-            json={"request_id": "removed-rerun"},
-        ).status_code == 404
+        assert (
+            client.post(
+                "/api/research-runs/run_missing/rerun",
+                json={"request_id": "removed-rerun"},
+            ).status_code
+            == 404
+        )
 
     assert _admission_counts(settings) == {"requests": 0, "runs": 0}
 
@@ -168,8 +171,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
     assert plan["chunks"][0]["first_session"] == sessions[1].isoformat()
     assert plan["chunks"][-1]["last_session"] == sessions[-1].isoformat()
     assert all(
-        chunk["session_count"] == plan["chunk_session_count"]
-        for chunk in plan["chunks"][:-1]
+        chunk["session_count"] == plan["chunk_session_count"] for chunk in plan["chunks"][:-1]
     )
     assert _admission_counts(settings) == {"requests": 1, "runs": 1}
 
@@ -255,7 +257,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "semantic_versions": {
                 "factor": "factor-v1",
                 "strategy": "strategy-v1",
-                "kernel": "kernel-v1",
+                "kernel": "kernel-v2",
             },
             "alpha_admission": {
                 "effective_lookback": 0,
@@ -265,9 +267,9 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
                 "estimated_run_work": 2,
             },
             "data_admission": {
-                "generation_manifest_sha256": frozen["immutable_input"][
-                    "data_admission"
-                ]["generation_manifest_sha256"],
+                "generation_manifest_sha256": frozen["immutable_input"]["data_admission"][
+                    "generation_manifest_sha256"
+                ],
                 "data_through_session": "2026-08-11",
                 "coverage_start": "2026-08-03",
                 "coverage_end": "2026-08-11",
@@ -372,9 +374,9 @@ def test_research_organization_changes_without_changing_evidence(tmp_path: Path)
         ).json()
         assert [item["id"] for item in custom_page["items"]] == [first["id"]]
         assert [item["id"] for item in default_page["items"]] == [second["id"]]
-        assert client.get(
-            "/api/research-runs", params={"cursor": "not-a-cursor"}
-        ).status_code == 422
+        assert (
+            client.get("/api/research-runs", params={"cursor": "not-a-cursor"}).status_code == 422
+        )
 
 
 @pytest.mark.skipif(
@@ -450,8 +452,7 @@ def test_direct_admission_reopens_and_replays_after_database_restart(
     restarted_settings = replace(
         settings,
         database_url=(
-            "postgresql://thesistrace:thesistrace-test@127.0.0.1:"
-            f"{restarted_port}/thesistrace"
+            f"postgresql://thesistrace:thesistrace-test@127.0.0.1:{restarted_port}/thesistrace"
         ),
     )
     monkeypatch.setenv("THESISTRACE_DATABASE_URL", restarted_settings.database_url)
@@ -588,8 +589,7 @@ def _publish_current_data(settings: CoreSettings) -> None:
         "trading_states": [{**state, "session": session} for session in SESSIONS],
         "price_limits": [{**limit, "session": session} for session in SESSIONS],
         "base_pool": [
-            {"session": session, "instrument_ids": [instrument_id]}
-            for session in SESSIONS
+            {"session": session, "instrument_ids": [instrument_id]} for session in SESSIONS
         ],
         "liquidity_universes": {
             name: [{"session": session, **universe} for session in SESSIONS]

@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from threading import Event, Thread
+from time import monotonic
 from uuid import uuid4
 
 from psycopg import OperationalError
@@ -104,19 +105,13 @@ INFRASTRUCTURE_PUBLIC_REASON = "Research execution could not access required inf
 RESOURCE_EXHAUSTED_PUBLIC_REASON = "Research execution exceeded its resource limit."
 AUTOMATIC_RETRIES_PUBLIC_REASON = "Research execution could not complete after automatic retries."
 PERMANENT_FAILURE_PUBLIC_REASON = "Research execution failed."
-CHECKPOINT_INTEGRITY_PUBLIC_REASON = (
-    "Research execution checkpoint integrity validation failed."
-)
-CONTRACT_MISMATCH_PUBLIC_REASON = (
-    "Research execution contract does not match this runtime."
-)
+CHECKPOINT_INTEGRITY_PUBLIC_REASON = "Research execution checkpoint integrity validation failed."
+CONTRACT_MISMATCH_PUBLIC_REASON = "Research execution contract does not match this runtime."
 CALCULATION_PUBLIC_REASON = "Research calculation failed."
 INSUFFICIENT_WARMUP_PUBLIC_REASON = (
     "Selected data does not contain the complete Calculation Warm-up."
 )
-SELECTED_DATA_INVALID_PUBLIC_REASON = (
-    "Current data cannot execute the requested Research Period."
-)
+SELECTED_DATA_INVALID_PUBLIC_REASON = "Current data cannot execute the requested Research Period."
 RETRYABLE_FAILURES = (
     INFRASTRUCTURE_FAILURE,
     WORKER_LOST_FAILURE,
@@ -201,7 +196,7 @@ FIXED_COSTS = {
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
     "strategy": "strategy-v1",
-    "kernel": "kernel-v1",
+    "kernel": "kernel-v2",
 }
 
 
@@ -277,9 +272,7 @@ class ResearchRunService:
             receipt = _admission_receipt(transaction, command.request_id)
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunAdmissionConflict(
-                        "ResearchRun request_id conflicts"
-                    )
+                    raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
                 return _summary(receipt)
         try:
             compiled = self._compile_formula(command.formula)
@@ -314,9 +307,7 @@ class ResearchRunService:
             receipt = _admission_receipt(transaction, command.request_id)
             if receipt is not None:
                 if receipt["request_fingerprint"] != fingerprint:
-                    raise ResearchRunAdmissionConflict(
-                        "ResearchRun request_id conflicts"
-                    )
+                    raise ResearchRunAdmissionConflict("ResearchRun request_id conflicts")
                 return _summary(receipt)
             folder = transaction.execute(
                 "SELECT id FROM research_folders.folders WHERE id = %s FOR KEY SHARE",
@@ -399,6 +390,7 @@ class ResearchRunService:
             return False
         if on_claim is not None:
             on_claim(claim.run_id, claim.attempt_id)
+        emit_execution_event = on_execution_event or (lambda _event: None)
         with self._maintain_claim(claim):
             self._progress("claimed", claim.run_id)
             execution: SupervisedResearchExecution | None = None
@@ -407,12 +399,24 @@ class ResearchRunService:
             try:
                 execution = self._execute(
                     claim,
-                    emit=on_execution_event or (lambda _event: None),
+                    emit=emit_execution_event,
                 )
                 while True:
                     chunk = execution.chunk
                     if chunk.get("reused_checkpoint") is not True:
+                        commit_started = monotonic()
                         self._commit_execution_chunk(claim, chunk)
+                        emit_execution_event(
+                            {
+                                "event": "research_execution_chunk_committed",
+                                "resource_type": "ResearchRun",
+                                "resource_id": claim.run_id,
+                                "attempt_id": claim.attempt_id,
+                                "chunk_ordinal": int(chunk["ordinal"]),
+                                "boundary_session": str(chunk["boundary_session"]),
+                                "supervisor_commit_seconds": monotonic() - commit_started,
+                            }
+                        )
                         self._progress("checkpoint", claim.run_id)
                     if chunk["final"] is True:
                         prepared, provenance = self._prepare_execution_result(
@@ -427,9 +431,7 @@ class ResearchRunService:
                         self._publish_success(claim, prepared, provenance)
                         self._progress("succeeded", claim.run_id)
                         break
-                    execution.advance(
-                        cancel_requested=lambda: self._cancellation_is_pending(claim)
-                    )
+                    execution.advance(cancel_requested=lambda: self._cancellation_is_pending(claim))
             except ResearchExecutionCancelled:
                 cancellation_pending = True
             except ResearchRunFenced:
@@ -451,9 +453,7 @@ class ResearchRunService:
                         execution.close()
             if execution_failure is not None:
                 self._record_failure(claim, execution_failure)
-                cancellation_pending = (
-                    cancellation_pending or self._cancellation_is_pending(claim)
-                )
+                cancellation_pending = cancellation_pending or self._cancellation_is_pending(claim)
                 logger.error(
                     "ResearchRun execution failed",
                     extra={
@@ -543,9 +543,7 @@ class ResearchRunService:
                     (command.folder_id,),
                 ).fetchone()
                 if folder is None:
-                    raise ResearchRunOrganizationConflict(
-                        "Research Folder does not exist"
-                    )
+                    raise ResearchRunOrganizationConflict("Research Folder does not exist")
             row = transaction.execute(
                 """
                 UPDATE research_runs.runs
@@ -584,9 +582,7 @@ class ResearchRunService:
             if row is None:
                 return False
             if row["status"] not in {"succeeded", "failed", "cancelled"}:
-                raise ResearchRunDeleteConflict(
-                    "ResearchRun deletion requires terminal status"
-                )
+                raise ResearchRunDeleteConflict("ResearchRun deletion requires terminal status")
             manifest_sha256 = row.get("result_manifest_sha256")
             transaction.execute(
                 "DELETE FROM research_runs.start_tracking_receipts WHERE seed_run_id = %s",
@@ -1022,9 +1018,7 @@ class ResearchRunService:
             raise ResearchRunTrackingUnavailable
         immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
         try:
-            require_current_numeric_contract(
-                immutable_input.numeric_execution_contract
-            )
+            require_current_numeric_contract(immutable_input.numeric_execution_contract)
         except NumericContractError as error:
             raise ResearchRunTrackingUnavailable from error
         manifest_sha256 = row.get("result_manifest_sha256")
@@ -1084,11 +1078,7 @@ class ResearchRunService:
         )
 
     def _require_execution_dependencies(self) -> None:
-        if (
-            self._dataset_lifecycle is None
-            or self._publication is None
-            or self._execution is None
-        ):
+        if self._dataset_lifecycle is None or self._publication is None or self._execution is None:
             raise RuntimeError("ResearchRun execution dependencies are not configured")
 
     def _claim_next(self) -> _ExecutionClaim | None:
@@ -1347,9 +1337,7 @@ class ResearchRunService:
         immutable_input: ImmutableRunInput,
     ) -> None:
         try:
-            require_current_numeric_contract(
-                immutable_input.numeric_execution_contract
-            )
+            require_current_numeric_contract(immutable_input.numeric_execution_contract)
             compiled = alpha_language.compile(immutable_input.formula_source)
         except (NumericContractError, FormulaCompilationError) as error:
             raise ResearchRunContractMismatch(
@@ -1375,9 +1363,7 @@ class ResearchRunService:
             or immutable_input.costs != FIXED_COSTS
             or immutable_input.risk_free_rate != "0"
         ):
-            raise ResearchRunContractMismatch(
-                "frozen Research execution contract is obsolete"
-            )
+            raise ResearchRunContractMismatch("frozen Research execution contract is obsolete")
 
     def _validated_resume_checkpoint(
         self,
@@ -1416,9 +1402,7 @@ class ResearchRunService:
             completed_warmup = 0
             completed_research = 0
             for expected_ordinal, row in enumerate(rows, start=1):
-                plan_chunk = claim.immutable_input.execution_plan.chunks[
-                    expected_ordinal - 1
-                ]
+                plan_chunk = claim.immutable_input.execution_plan.chunks[expected_ordinal - 1]
                 completed_warmup += plan_chunk.warmup_session_count
                 completed_research += plan_chunk.research_session_count
                 observation_value = row["observation_payload"]
@@ -1439,21 +1423,13 @@ class ResearchRunService:
                         None if observation_value is None else dict(observation_value)
                     ),
                     final_values_payload=(
-                        None
-                        if final_values_value is None
-                        else dict(final_values_value)
+                        None if final_values_value is None else dict(final_values_value)
                     ),
                     prior_chain_sha256=prior_chain,
                 )
-                chain_sha256 = hashlib.sha256(
-                    canonical_json_bytes(binding)
-                ).hexdigest()
-                is_final = expected_ordinal == len(
-                    claim.immutable_input.execution_plan.chunks
-                )
-                expected_phase = (
-                    "research" if plan_chunk.research_session_count else "warmup"
-                )
+                chain_sha256 = hashlib.sha256(canonical_json_bytes(binding)).hexdigest()
+                is_final = expected_ordinal == len(claim.immutable_input.execution_plan.chunks)
+                expected_phase = "research" if plan_chunk.research_session_count else "warmup"
                 if (
                     int(row["ordinal"]) != expected_ordinal
                     or str(row["chain_sha256"]) != chain_sha256
@@ -1462,8 +1438,7 @@ class ResearchRunService:
                     or str(row["phase"]) != expected_phase
                     or int(row["completed_warmup_sessions"]) != completed_warmup
                     or int(row["completed_research_sessions"]) != completed_research
-                    or int(row["observation_row_count"])
-                    != plan_chunk.research_session_count
+                    or int(row["observation_row_count"]) != plan_chunk.research_session_count
                     or (final_values_value is not None) != is_final
                 ):
                     raise ResearchCheckpointIntegrityError
@@ -1499,31 +1474,32 @@ class ResearchRunService:
                     or observation.serialization
                     != {
                         "format": "canonical-parquet",
-                        "writer_contract": (
-                            STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor()
-                        ),
+                        "writer_contract": (STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor()),
                     }
                 ):
                     raise ResearchCheckpointIntegrityError
                 prior_chain = chain_sha256
             latest = rows[-1]
-            if continuation is None or progress is None or progress != {
-                "completed_warmup_sessions": completed_warmup,
-                "completed_research_sessions": completed_research,
-                "committed_chunk_count": len(rows),
-                "last_completed_warmup_session": (
-                    None
-                    if completed_warmup == 0
-                    else claim.immutable_input.execution_plan.calculation_sessions[
-                        completed_warmup - 1
-                    ]
-                ),
-                "last_completed_research_session": (
-                    None
-                    if completed_research == 0
-                    else latest["observation_last_session"]
-                ),
-            }:
+            if (
+                continuation is None
+                or progress is None
+                or progress
+                != {
+                    "completed_warmup_sessions": completed_warmup,
+                    "completed_research_sessions": completed_research,
+                    "committed_chunk_count": len(rows),
+                    "last_completed_warmup_session": (
+                        None
+                        if completed_warmup == 0
+                        else claim.immutable_input.execution_plan.calculation_sessions[
+                            completed_warmup - 1
+                        ]
+                    ),
+                    "last_completed_research_session": (
+                        None if completed_research == 0 else latest["observation_last_session"]
+                    ),
+                }
+            ):
                 raise ResearchCheckpointIntegrityError
             return ResearchExecutionResume(
                 completed_chunk_ordinal=len(rows),
@@ -1684,9 +1660,7 @@ class ResearchRunService:
             raise ResearchRunFenced
         continuation_value = _staged_payload_value(continuation_payload)
         observation_value = (
-            _staged_payload_value(observation_payload)
-            if observation_payload is not None
-            else None
+            _staged_payload_value(observation_payload) if observation_payload is not None else None
         )
         final_values_value = (
             _staged_payload_value(final_values_payload)
@@ -1709,9 +1683,7 @@ class ResearchRunService:
             final_values_payload=final_values_value,
             prior_chain_sha256=expected_prior_chain,
         )
-        chain_sha256 = hashlib.sha256(
-            canonical_json_bytes(checkpoint_identity)
-        ).hexdigest()
+        chain_sha256 = hashlib.sha256(canonical_json_bytes(checkpoint_identity)).hexdigest()
         checkpoint_prepared = self._publication.prepare(
             kind="research.execution-checkpoint",
             payloads={
@@ -1802,9 +1774,7 @@ class ResearchRunService:
                         math.ceil(elapsed_seconds / (ordinal - 1) * remaining_chunks),
                     )
             last_warmup_session = (
-                claim.immutable_input.execution_plan.calculation_sessions[
-                    completed_warmup - 1
-                ]
+                claim.immutable_input.execution_plan.calculation_sessions[completed_warmup - 1]
                 if completed_warmup > 0
                 else None
             )
@@ -1987,10 +1957,7 @@ class ResearchRunService:
             ).fetchone()
             if attempt is None or attempt["status"] != "running":
                 return
-            retry = (
-                policy.retryable
-                and int(attempt["attempt_count"]) < policy.max_attempts
-            )
+            retry = policy.retryable and int(attempt["attempt_count"]) < policy.max_attempts
             failed_attempt = transaction.execute(
                 """
                 UPDATE research_runs.attempts
@@ -2314,9 +2281,7 @@ def _result_provenance(claim: _ExecutionClaim) -> dict[str, object]:
     return {
         "schema_version": "research-result-v1",
         "research_run_id": claim.run_id,
-        "immutable_input_sha256": hashlib.sha256(
-            canonical_json_bytes(value)
-        ).hexdigest(),
+        "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
         "data_generation_id": claim.data_generation_id,
         "data_through_session": claim.data_through_session,
         "calculation_contracts": {
@@ -2430,9 +2395,7 @@ def _summary(row: object) -> ResearchRunSummary:
     immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
     compact_formula = " ".join(immutable_input.formula_source.split())
     formula_summary = (
-        compact_formula
-        if len(compact_formula) <= 120
-        else f"{compact_formula[:117]}..."
+        compact_formula if len(compact_formula) <= 120 else f"{compact_formula[:117]}..."
     )
     return ResearchRunSummary.model_validate(
         {
@@ -2460,9 +2423,7 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
         holdings_count=int(immutable_input.strategy["holdings_count"]),
-        rebalance_every_sessions=int(
-            immutable_input.strategy["rebalance_every_sessions"]
-        ),
+        rebalance_every_sessions=int(immutable_input.strategy["rebalance_every_sessions"]),
     )
 
 
@@ -2476,9 +2437,7 @@ def _research_progress(row: Mapping[str, object]) -> ResearchRunProgress:
         committed_chunk_count=int(row["committed_chunk_count"]),
         last_completed_warmup_session=row.get("last_completed_warmup_session"),
         last_completed_research_session=row.get("last_completed_research_session"),
-        remaining_duration_estimate_seconds=row.get(
-            "remaining_duration_estimate_seconds"
-        ),
+        remaining_duration_estimate_seconds=row.get("remaining_duration_estimate_seconds"),
     )
 
 
@@ -2528,9 +2487,7 @@ def _checkpoint_binding(
         "run_id": run_id,
         "creator_attempt_id": creator_attempt_id,
         "creator_fence": creator_fence,
-        "immutable_input_sha256": hashlib.sha256(
-            canonical_json_bytes(immutable_value)
-        ).hexdigest(),
+        "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(immutable_value)).hexdigest(),
         "data_generation_id": data_generation_id,
         "compiler_contract": {
             "alpha_expression_sha256": hashlib.sha256(
@@ -2542,9 +2499,7 @@ def _checkpoint_binding(
             "alpha_admission": immutable_value["alpha_admission"],
         },
         "calculation_contracts": {
-            "numeric_execution_contract": immutable_value[
-                "numeric_execution_contract"
-            ],
+            "numeric_execution_contract": immutable_value["numeric_execution_contract"],
             "semantic_versions": immutable_value["semantic_versions"],
             "strategy": immutable_value["strategy"],
             "costs": immutable_value["costs"],
@@ -2559,9 +2514,7 @@ def _checkpoint_binding(
         "completed_warmup_sessions": completed_warmup_sessions,
         "completed_research_sessions": completed_research_sessions,
         "continuation_payload": dict(continuation_payload),
-        "observation_payload": (
-            None if observation_payload is None else dict(observation_payload)
-        ),
+        "observation_payload": (None if observation_payload is None else dict(observation_payload)),
         "final_values_payload": (
             None if final_values_payload is None else dict(final_values_payload)
         ),
@@ -2573,18 +2526,19 @@ def _checkpoint_json_payload(payload: object, *, subject: str) -> dict[str, obje
     media_type = getattr(payload, "media_type", None)
     serialization = getattr(payload, "serialization", None)
     content = getattr(payload, "content", None)
-    if media_type != "application/json" or serialization != {
-        "format": "canonical-json",
-        "version": 1,
-    } or not isinstance(content, bytes):
-        raise ResearchCheckpointIntegrityError(
-            f"Research Checkpoint {subject} encoding is invalid"
-        )
+    if (
+        media_type != "application/json"
+        or serialization
+        != {
+            "format": "canonical-json",
+            "version": 1,
+        }
+        or not isinstance(content, bytes)
+    ):
+        raise ResearchCheckpointIntegrityError(f"Research Checkpoint {subject} encoding is invalid")
     value = json.loads(content)
     if not isinstance(value, dict):
-        raise ResearchCheckpointIntegrityError(
-            f"Research Checkpoint {subject} is invalid"
-        )
+        raise ResearchCheckpointIntegrityError(f"Research Checkpoint {subject} is invalid")
     return value
 
 
@@ -2675,22 +2629,28 @@ def _collect_publication_deletions(publication: Publication) -> None:
 
 
 def research_run_exists(transaction: PostgresTransaction, run_id: str) -> bool:
-    return transaction.execute(
-        "SELECT 1 FROM research_runs.runs WHERE id = %s",
-        (run_id,),
-    ).fetchone() is not None
+    return (
+        transaction.execute(
+            "SELECT 1 FROM research_runs.runs WHERE id = %s",
+            (run_id,),
+        ).fetchone()
+        is not None
+    )
 
 
 def research_result_manifest_is_referenced(
     transaction: PostgresTransaction,
     manifest_sha256: str,
 ) -> bool:
-    return transaction.execute(
-        """
+    return (
+        transaction.execute(
+            """
         SELECT 1
         FROM research_runs.runs
         WHERE result_manifest_sha256 = %s
         LIMIT 1
         """,
-        (manifest_sha256,),
-    ).fetchone() is not None
+            (manifest_sha256,),
+        ).fetchone()
+        is not None
+    )

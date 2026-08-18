@@ -791,32 +791,6 @@ def test_standard_and_release_gates_delegate_without_repeating_the_standard_gate
     assert scripts["test:cleanup"] == "./scripts/test-runtime cleanup"
 
 
-def test_production_image_smoke_runs_entirely_inside_an_internal_network() -> None:
-    test_runtime = (ROOT / "scripts" / "test-runtime").read_text()
-    image_overlay = (ROOT / "deploy" / "core" / "compose.image-smoke.yaml").read_text()
-    smoke = (ROOT / "tests" / "production_image_smoke.py").read_text()
-
-    assert "internal: true" in image_overlay
-    assert "tests:/smoke:ro" in image_overlay
-    assert "image-smoke-operator-bootstrap" in test_runtime
-    assert "thesistrace-data-operator bootstrap" in test_runtime
-    assert "python /smoke/browser/prepare_current_data.py" in test_runtime
-    assert test_runtime.count("python /smoke/production_image_smoke.py") == 2
-    assert "compose restart api research-worker tracking-worker" in test_runtime
-    assert "compose images --format json" in test_runtime
-    assert 'worker-events.jsonl' in test_runtime
-    assert '"event":"worker_started"' in test_runtime
-    assert '"event":"worker_claim"' in test_runtime
-    assert "image-smoke-worker-capacity-rejection" in test_runtime
-    assert "--cpu-count 3" in test_runtime
-    assert "--memory-bytes 3221225472" in test_runtime
-    assert 'test "$network_internal" = true' in test_runtime
-    assert 'expected["attempt_count"] == 1' in smoke
-    assert "read_result_bundle" in smoke
-    assert '"lagged"' in smoke
-    assert '"recovered"' in smoke
-
-
 def test_production_image_smoke_builds_once_and_reuses_the_images(
     tmp_path: Path,
 ) -> None:

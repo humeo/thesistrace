@@ -62,11 +62,17 @@ class ColumnarResearchSeries(Protocol):
 
     def slice_sessions(self, sessions: tuple[str, ...]) -> ColumnarResearchSeries: ...
 
+    def append_sessions(self, later: ColumnarResearchSeries) -> ColumnarResearchSeries: ...
+
     def numeric_field_matrices(
         self,
         field_ids: tuple[str, ...],
         instruments: tuple[str, ...],
     ) -> Mapping[str, np.ndarray]: ...
+
+    def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray: ...
+
+    def adjusted_open_decimal_matrix(self, instruments: tuple[str, ...]) -> np.ndarray: ...
 
 
 def research_sessions(data: AlignedResearchData) -> list[str]:

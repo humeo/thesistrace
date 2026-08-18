@@ -1,22 +1,232 @@
 import math
+from dataclasses import dataclass
 
+import numpy as np
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS, PCT_CHANGE_20
 from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
+from thesistrace.research_kernel.equivalence import equivalence_bytes
 from thesistrace.research_kernel.factor import (
     FactorDataError,
     build_forward_labels,
+    columnar_forward_factor_days_by_horizon,
     evaluate_factor,
     factor_day,
+    pearson,
 )
 from thesistrace.research_series import (
     AlignedResearchData,
     ExecutionPrice,
     InstrumentProfile,
 )
+
+
+@dataclass(frozen=True)
+class _ColumnarFactorFixture:
+    sessions: tuple[str, ...]
+    instruments: dict[str, InstrumentProfile]
+    universe_members: dict[str, tuple[str, ...]]
+    execution_prices: dict[tuple[str, str], ExecutionPrice]
+    trading_states: dict[tuple[str, str], str]
+
+    def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
+        return np.asarray(
+            [
+                [
+                    (
+                        float(self.execution_prices[(session, instrument_id)].adjusted_open)
+                        if (session, instrument_id) in self.execution_prices
+                        else np.nan
+                    )
+                    for session in self.sessions
+                ]
+                for instrument_id in instruments
+            ],
+            dtype=np.float64,
+        )
+
+
+def test_columnar_factor_days_are_binary64_equal_to_row_reference() -> None:
+    sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    instrument_ids = tuple(f"equity:{index:03d}.SH" for index in range(35))
+    instruments = {
+        instrument_id: InstrumentProfile(
+            board="main",
+            listed_to=(sessions[2] if index == 32 else ""),
+        )
+        for index, instrument_id in enumerate(instrument_ids)
+    }
+    prices = {
+        (session, instrument_id): ExecutionPrice(
+            raw_open=str(10 + index + session_index / 7),
+            adjusted_open=str(10 + index + session_index / 7),
+        )
+        for session_index, session in enumerate(sessions)
+        for index, instrument_id in enumerate(instrument_ids)
+        if not (
+            (session == sessions[1] and index == 34)
+            or (session == sessions[2] and index in {32, 33})
+        )
+    }
+    states = {
+        (sessions[1], instrument_ids[34]): "data_unavailable",
+        (sessions[2], instrument_ids[33]): "full_session_suspension",
+    }
+    alpha_matrix = {
+        "checksum": "a" * 64,
+        "sessions": [
+            {
+                "session": session,
+                "values": [
+                    {"instrument_id": instrument_id, "value": float(index // 5)}
+                    for index, instrument_id in enumerate(instrument_ids)
+                ],
+            }
+            for session in sessions
+        ],
+    }
+    row_data = AlignedResearchData(
+        sessions=sessions,
+        instruments=instruments,
+        fields={},
+        universe_members={session: instrument_ids for session in sessions},
+        industries={},
+        execution_prices=prices,
+        trading_states=states,
+        price_limits={},
+    )
+    labels = build_forward_labels(
+        row_data,
+        alpha_matrix,
+        signal_sessions=(sessions[0],),
+        horizons=(1,),
+    )
+    expected = [
+        {
+            "session": sessions[0],
+            "sample_count": len(labels["horizons"]["1"]["sessions"][0]["samples"]),
+            **factor_day(labels["horizons"]["1"]["sessions"][0]["samples"]),
+        }
+    ]
+    fixture = _ColumnarFactorFixture(
+        sessions=sessions,
+        instruments=instruments,
+        universe_members={session: instrument_ids for session in sessions},
+        execution_prices=prices,
+        trading_states=states,
+    )
+
+    actual = columnar_forward_factor_days_by_horizon(
+        fixture,
+        alpha_matrix,
+        signal_sessions_by_horizon={1: (sessions[0],)},
+        cancellation_check=lambda: None,
+    )["1"]
+
+    assert equivalence_bytes(actual) == equivalence_bytes(expected)
+
+
+def test_columnar_factor_days_preserve_multi_horizon_ties_and_order() -> None:
+    sessions = tuple(f"2026-07-{day:02d}" for day in range(1, 24))
+    instrument_ids = tuple(f"equity:{index:03d}.SH" for index in range(35))
+    instruments = {
+        instrument_id: InstrumentProfile(board="main", listed_to="")
+        for instrument_id in instrument_ids
+    }
+    prices = {
+        (session, instrument_id): ExecutionPrice(
+            raw_open=str(20 + index + session_index / 13),
+            adjusted_open=str(20 + index + session_index / 13),
+        )
+        for session_index, session in enumerate(sessions)
+        for index, instrument_id in enumerate(instrument_ids)
+    }
+    alpha_matrix = {
+        "checksum": "b" * 64,
+        "sessions": [
+            {
+                "session": session,
+                "values": [
+                    {"instrument_id": instrument_id, "value": float(index // 4)}
+                    for index, instrument_id in enumerate(instrument_ids)
+                ],
+            }
+            for session in sessions
+        ],
+    }
+    row_data = AlignedResearchData(
+        sessions=sessions,
+        instruments=instruments,
+        fields={},
+        universe_members={session: instrument_ids for session in sessions},
+        industries={},
+        execution_prices=prices,
+        trading_states={},
+        price_limits={},
+    )
+    signal_sessions = sessions[:2]
+    labels = build_forward_labels(
+        row_data,
+        alpha_matrix,
+        signal_sessions=signal_sessions,
+    )
+    expected = {
+        horizon: [
+            {
+                "session": item["session"],
+                "sample_count": len(item["samples"]),
+                **factor_day(item["samples"]),
+            }
+            for item in labels["horizons"][horizon]["sessions"]
+        ]
+        for horizon in ("1", "5", "20")
+    }
+    fixture = _ColumnarFactorFixture(
+        sessions=sessions,
+        instruments=instruments,
+        universe_members={session: instrument_ids for session in sessions},
+        execution_prices=prices,
+        trading_states={},
+    )
+
+    actual = columnar_forward_factor_days_by_horizon(
+        fixture,
+        alpha_matrix,
+        signal_sessions_by_horizon={
+            1: signal_sessions,
+            5: signal_sessions,
+            20: signal_sessions,
+        },
+        cancellation_check=lambda: None,
+    )
+
+    assert equivalence_bytes(actual) == equivalence_bytes(expected)
+
+
+def test_vectorized_pearson_is_binary64_equal_to_ordered_fsum_reference() -> None:
+    left = [
+        ((index % 17) - 8) * (1e-8 if index % 2 else 1e8) + index / 37
+        for index in range(3000)
+    ]
+    right = [
+        ((index % 23) - 11) * (1e-7 if index % 3 else 1e7) - index / 41
+        for index in range(3000)
+    ]
+    left_mean = math.fsum(left) / len(left)
+    right_mean = math.fsum(right) / len(right)
+    left_centered = [value - left_mean for value in left]
+    right_centered = [value - right_mean for value in right]
+    left_sum = math.fsum(value * value for value in left_centered)
+    right_sum = math.fsum(value * value for value in right_centered)
+    expected = math.fsum(
+        left_value * right_value
+        for left_value, right_value in zip(left_centered, right_centered, strict=True)
+    ) / math.sqrt(left_sum * right_sum)
+
+    assert equivalence_bytes(pearson(left, right)) == equivalence_bytes(expected)
 
 
 def test_forward_labels_use_next_open_timing_and_explicit_period_limits() -> None:

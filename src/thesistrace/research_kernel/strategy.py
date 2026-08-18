@@ -7,6 +7,8 @@ from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
 from statistics import stdev
 
+import numpy as np
+
 from thesistrace.research_kernel.numeric import (
     ACCOUNTING_CONTEXT,
     canonical_decimal,
@@ -262,6 +264,23 @@ def run_strategy(
         else {str(item["session"]): item["values"] for item in alpha_matrix["sessions"]}
     )
     universes = research_data.universe_members
+    columnar_benchmark: tuple[
+        dict[str, int],
+        dict[str, int],
+        np.ndarray,
+        np.ndarray,
+    ] | None = None
+    if isinstance(research_data, ColumnarResearchSeries):
+        benchmark_instruments = tuple(sorted(instruments))
+        columnar_benchmark = (
+            {
+                instrument_id: index
+                for index, instrument_id in enumerate(benchmark_instruments)
+            },
+            {session: index for index, session in enumerate(calendar)},
+            research_data.adjusted_open_decimal_matrix(benchmark_instruments),
+            research_data.adjusted_open_matrix(benchmark_instruments),
+        )
 
     if continuation is None:
         positions: dict[str, Position] = {}
@@ -611,14 +630,26 @@ def run_strategy(
         if report_index >= 2:
             signal_session = calendar[global_index - 2]
             entry_session = calendar[global_index - 1]
-            benchmark_return = equal_weight_benchmark_return(
-                signal_session,
-                entry_session,
-                session,
-                universes,
-                prices,
-                states,
-                instruments,
+            benchmark_return = (
+                columnar_equal_weight_benchmark_return(
+                    signal_session,
+                    entry_session,
+                    session,
+                    universes,
+                    states,
+                    instruments,
+                    *columnar_benchmark,
+                )
+                if columnar_benchmark is not None
+                else equal_weight_benchmark_return(
+                    signal_session,
+                    entry_session,
+                    session,
+                    universes,
+                    prices,
+                    states,
+                    instruments,
+                )
             )
             benchmark_nav = money(benchmark_nav * (Decimal(1) + benchmark_return))
 
@@ -1008,6 +1039,82 @@ def equal_weight_benchmark_return(
             f"unexplained Benchmark Open for {instrument_id} on {exit_session}"
         )
     return money(sum(returns, Decimal(0)) / len(returns)) if returns else Decimal(0)
+
+
+def columnar_equal_weight_benchmark_return(
+    signal_session: str,
+    entry_session: str,
+    exit_session: str,
+    universes: Mapping[str, tuple[str, ...]],
+    states: Mapping[tuple[str, str], str],
+    instruments: Mapping[str, InstrumentProfile],
+    instrument_positions: Mapping[str, int],
+    session_positions: Mapping[str, int],
+    adjusted_opens: np.ndarray,
+    numeric_adjusted_opens: np.ndarray,
+) -> Decimal:
+    entry_index = session_positions[entry_session]
+    exit_index = session_positions[exit_session]
+    universe = universes.get(signal_session, ())
+    positions = np.fromiter(
+        (instrument_positions[instrument_id] for instrument_id in universe),
+        dtype=np.intp,
+        count=len(universe),
+    )
+    entry_values = adjusted_opens[positions, entry_index]
+    exit_values = adjusted_opens[positions, exit_index]
+    entry_present = np.isfinite(numeric_adjusted_opens[positions, entry_index])
+    exit_present = np.isfinite(numeric_adjusted_opens[positions, exit_index])
+    if np.all(entry_present) and np.all(exit_present):
+        returns = np.subtract(np.divide(exit_values, entry_values), Decimal(1))
+        total_return = np.sum(returns, initial=Decimal(0))
+        return money(total_return / len(returns)) if len(returns) else Decimal(0)
+    total_return = Decimal(0)
+    return_count = 0
+    for instrument_id in universe:
+        position = instrument_positions[instrument_id]
+        entry_open = adjusted_opens[position, entry_index]
+        exit_open = adjusted_opens[position, exit_index]
+        if isinstance(entry_open, Decimal):
+            pass
+        elif states.get((entry_session, instrument_id)) == "full_session_suspension":
+            prior_values = adjusted_opens[position, :entry_index]
+            entry_open = next(
+                (value for value in reversed(prior_values) if isinstance(value, Decimal)),
+                None,
+            )
+            if entry_open is None:
+                raise StrategyCalculationError(
+                    f"missing prior Benchmark mark for {instrument_id} on {entry_session}"
+                )
+        elif states.get((entry_session, instrument_id)) == "data_unavailable":
+            continue
+        else:
+            listed_to = instruments[instrument_id].listed_to
+            if listed_to and listed_to <= entry_session:
+                return_count += 1
+                continue
+            raise StrategyCalculationError(
+                f"unexplained Benchmark Open for {instrument_id} on {entry_session}"
+            )
+        if isinstance(exit_open, Decimal):
+            total_return += require_finite_decimal(exit_open / entry_open - 1)
+            return_count += 1
+            continue
+        if states.get((exit_session, instrument_id)) == "full_session_suspension":
+            return_count += 1
+            continue
+        if states.get((exit_session, instrument_id)) == "data_unavailable":
+            continue
+        listed_to = instruments[instrument_id].listed_to
+        if listed_to and listed_to <= exit_session:
+            total_return += Decimal(-1)
+            return_count += 1
+            continue
+        raise StrategyCalculationError(
+            f"unexplained Benchmark Open for {instrument_id} on {exit_session}"
+        )
+    return money(total_return / return_count) if return_count else Decimal(0)
 
 
 def latest_adjusted_open_before(

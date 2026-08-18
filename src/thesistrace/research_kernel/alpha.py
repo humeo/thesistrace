@@ -3,6 +3,8 @@ import math
 from collections import Counter
 from collections.abc import Callable, Mapping
 
+import numpy as np
+
 from thesistrace.research_kernel.alpha_expression import (
     AlphaExpression,
     AlphaValidationIssue,
@@ -74,11 +76,7 @@ def evaluate_alpha_matrix(
             field_id: [
                 (
                     finite_or_missing(float(value))
-                    if (
-                        value := research_data.fields[field_id].get(
-                            (session, instrument_id)
-                        )
-                    )
+                    if (value := research_data.fields[field_id].get((session, instrument_id)))
                     is not None
                     else None
                 )
@@ -106,6 +104,39 @@ def evaluate_columnar_alpha_matrix(
     neutralization: str,
     cancellation_check: Callable[[], None],
 ) -> dict[str, object]:
+    return _evaluate_columnar_alpha(
+        research_data,
+        compiled_alpha=compiled_alpha,
+        neutralization=neutralization,
+        cancellation_check=cancellation_check,
+        include_checksum=True,
+    )
+
+
+def evaluate_columnar_alpha_sessions(
+    research_data: ColumnarResearchSeries,
+    *,
+    compiled_alpha: CompiledAlphaLike,
+    neutralization: str,
+    cancellation_check: Callable[[], None],
+) -> dict[str, object]:
+    return _evaluate_columnar_alpha(
+        research_data,
+        compiled_alpha=compiled_alpha,
+        neutralization=neutralization,
+        cancellation_check=cancellation_check,
+        include_checksum=False,
+    )
+
+
+def _evaluate_columnar_alpha(
+    research_data: ColumnarResearchSeries,
+    *,
+    compiled_alpha: CompiledAlphaLike,
+    neutralization: str,
+    cancellation_check: Callable[[], None],
+    include_checksum: bool,
+) -> dict[str, object]:
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization must be none or industry")
     calendar = tuple(research_data.sessions)
@@ -120,6 +151,15 @@ def evaluate_columnar_alpha_matrix(
         cancellation_check=cancellation_check,
     )
     positions = {instrument_id: index for index, instrument_id in enumerate(instruments)}
+    if neutralization == "none":
+        return _compose_unneutralized_columnar_alpha_matrix(
+            research_data,
+            compiled_alpha=compiled_alpha,
+            evaluated=evaluated,
+            positions=positions,
+            cancellation_check=cancellation_check,
+            include_checksum=include_checksum,
+        )
     return _compose_alpha_matrix(
         research_data,
         compiled_alpha=compiled_alpha,
@@ -128,7 +168,56 @@ def evaluate_columnar_alpha_matrix(
             positions[instrument_id], session_index
         ],
         cancellation_check=cancellation_check,
+        include_checksum=include_checksum,
     )
+
+
+def _compose_unneutralized_columnar_alpha_matrix(
+    research_data: ColumnarResearchSeries,
+    *,
+    compiled_alpha: CompiledAlphaLike,
+    evaluated: np.ndarray,
+    positions: Mapping[str, int],
+    cancellation_check: Callable[[], None],
+    include_checksum: bool,
+) -> dict[str, object]:
+    session_results: list[dict[str, object]] = []
+    for session_index, session in enumerate(research_data.sessions):
+        cancellation_check()
+        instrument_ids = tuple(sorted(research_data.universe_members.get(session, ())))
+        indices = np.fromiter(
+            (positions[instrument_id] for instrument_id in instrument_ids),
+            dtype=np.intp,
+            count=len(instrument_ids),
+        )
+        values = evaluated[indices, session_index]
+        finite = np.isfinite(values)
+        rows = [
+            {"instrument_id": instrument_id, "value": float(value)}
+            for instrument_id, value in zip(
+                np.asarray(instrument_ids, dtype=np.str_)[finite],
+                values[finite],
+                strict=True,
+            )
+        ]
+        missing_count = int(len(values) - np.count_nonzero(finite))
+        session_results.append(
+            {
+                "session": session,
+                "values": rows,
+                "coverage_loss": (
+                    {"missing_expression": missing_count} if missing_count else {}
+                ),
+            }
+        )
+        cancellation_check()
+    return {
+        "expression": dict(compiled_alpha.expression),
+        "effective_lookback": compiled_alpha.effective_lookback,
+        "neutralization": "none",
+        "sessions": session_results,
+        "checksum": alpha_matrix_checksum(session_results) if include_checksum else None,
+    }
 
 
 def _compose_alpha_matrix(
@@ -138,6 +227,7 @@ def _compose_alpha_matrix(
     neutralization: str,
     value_at: Callable[[str, int], float | None],
     cancellation_check: Callable[[], None] | None,
+    include_checksum: bool = True,
 ) -> dict[str, object]:
     calendar = list(research_data.sessions)
     session_results: list[dict[str, object]] = []
@@ -183,24 +273,42 @@ def _compose_alpha_matrix(
         "effective_lookback": compiled_alpha.effective_lookback,
         "neutralization": neutralization,
         "sessions": session_results,
-        "checksum": alpha_matrix_checksum(session_results),
+        "checksum": alpha_matrix_checksum(session_results) if include_checksum else None,
     }
 
 
 def alpha_matrix_checksum(sessions: list[dict[str, object]]) -> str:
-    checksum = hashlib.sha256()
+    checksum: str | None = None
     for session in sessions:
-        checksum.update(str(session["session"]).encode())
-        checksum.update(b"\0")
-        rows = session.get("values")
-        if not isinstance(rows, list):
-            raise ValueError("Alpha Matrix session values are invalid")
-        for row in rows:
-            if not isinstance(row, Mapping):
-                raise ValueError("Alpha Matrix value is invalid")
-            checksum.update(str(row["instrument_id"]).encode())
-            checksum.update(b"\0")
-            checksum.update(canonical_binary64_bytes(float(row["value"])))
+        checksum = advance_alpha_checksum(checksum, session)
+    return checksum or hashlib.sha256(b"thesistrace-alpha-checksum-v2\0").hexdigest()
+
+
+def advance_alpha_checksum(
+    prior: str | None,
+    session: Mapping[str, object],
+) -> str:
+    checksum = hashlib.sha256(b"thesistrace-alpha-checksum-v2\0")
+    if prior is not None:
+        if len(prior) != 64:
+            raise ValueError("Alpha checksum continuation is invalid")
+        checksum.update(bytes.fromhex(prior))
+    checksum.update(str(session["session"]).encode())
+    checksum.update(b"\0")
+    rows = session.get("values")
+    if not isinstance(rows, list):
+        raise ValueError("Alpha Matrix session values are invalid")
+    for row in rows:
+        if not isinstance(row, Mapping):
+            raise ValueError("Alpha Matrix value is invalid")
+    checksum.update(
+        b"".join(
+            str(row["instrument_id"]).encode()
+            + b"\0"
+            + canonical_binary64_bytes(float(row["value"]))
+            for row in rows
+        )
+    )
     return checksum.hexdigest()
 
 

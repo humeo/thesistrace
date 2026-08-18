@@ -124,9 +124,30 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         assert [event["event"] for event in execution_events] == [
             "research_execution_child_started",
             "research_execution_chunk_received",
+            "research_execution_chunk_committed",
             "research_execution_child_acknowledged",
             "research_execution_child_exited",
         ]
+        received = execution_events[1]
+        assert float(received["child_data_read_seconds"]) >= 0
+        assert float(received["child_calculation_seconds"]) >= 0
+        assert (
+            float(received["child_data_read_seconds"])
+            + float(received["child_calculation_seconds"])
+            <= float(received["child_chunk_seconds"])
+        )
+        phase_seconds = received["child_calculation_phase_seconds"]
+        assert set(phase_seconds) == {
+            "input",
+            "alpha_and_pending",
+            "factor",
+            "strategy",
+            "finalize",
+        }
+        assert all(float(value) >= 0 for value in phase_seconds.values())
+        assert sum(float(value) for value in phase_seconds.values()) <= float(
+            received["child_calculation_seconds"]
+        )
         assert attempt_status_at_child_exit == ["running"]
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
@@ -2166,6 +2187,8 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         )
         stopping_prepared = Event()
         release_stopping = Event()
+        stopping_child_live = Event()
+        release_stopping_child = Event()
 
         def hold_stopping_track(stage: str, track_id: str, _target: str) -> None:
             if stage == "prepared":
@@ -2181,8 +2204,17 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             read_result_bundle=read_result_bundle,
             progress=hold_stopping_track,
         )
+
+        def hold_stopping_child(event: dict[str, object]) -> None:
+            if event.get("event") == "tracking_execution_child_stop_requested":
+                stopping_child_live.set()
+                assert release_stopping_child.wait(timeout=10)
+
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(stopping_processor.process_next)
+            future = executor.submit(
+                stopping_processor.process_next,
+                on_execution_event=hold_stopping_child,
+            )
             assert stopping_prepared.wait(timeout=10)
             stopped = client.post(
                 f"/api/daily-tracks/{tracks[0]['id']}/stop",
@@ -2190,11 +2222,16 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             )
             assert stopped.status_code == 202
             assert stopped.json()["status"] == "stopping"
+            assert stopping_child_live.wait(timeout=5)
+            assert client.get(f"/api/daily-tracks/{tracks[0]['id']}").json()[
+                "status"
+            ] == "stopping"
             still_full = client.post(
                 f"/api/research-runs/{rejected_run_id}/daily-tracks",
                 json={"request_id": "current-track-capacity-while-stopping"},
             )
             assert still_full.status_code == 409
+            release_stopping_child.set()
             release_stopping.set()
             assert future.result(timeout=5) is True
         assert client.get(f"/api/daily-tracks/{tracks[0]['id']}").json()[

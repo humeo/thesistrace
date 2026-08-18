@@ -266,9 +266,7 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
         checkpoint_ordinals = _checkpoint_ordinals(settings, run_id)
         plan = _stored_run(settings, run_id)["immutable_input"]["execution_plan"]
         assert checkpoint_ordinals == list(range(1, len(plan["chunks"]) + 1))
-        assert _attempts(settings, run_id)[0]["failure_reason"] == (
-            "InfrastructureUnavailable"
-        )
+        assert _attempts(settings, run_id)[0]["failure_reason"] == ("InfrastructureUnavailable")
 
         events: list[dict[str, object]] = []
         assert runtime.research_runs.process_next(on_execution_event=events.append) is True
@@ -358,7 +356,7 @@ def test_retry_rejects_checkpoint_after_runtime_semantics_change(
         monkeypatch.setattr(
             research_run_service,
             "SEMANTIC_VERSIONS",
-            {"factor": "factor-v2", "strategy": "strategy-v1", "kernel": "kernel-v1"},
+            {"factor": "factor-v2", "strategy": "strategy-v1", "kernel": "kernel-v2"},
         )
 
         assert runtime.research_runs.process_next() is True
@@ -437,13 +435,9 @@ def test_real_pool_timeout_retries_without_replacing_the_run(tmp_path: Path) -> 
 
         retry_wait = client.get(f"/api/research-runs/{run_id}").json()
         assert retry_wait["status"] == "running"
-        assert _attempts(settings, run_id)[0]["failure_reason"] == (
-            "InfrastructureUnavailable"
-        )
+        assert _attempts(settings, run_id)[0]["failure_reason"] == ("InfrastructureUnavailable")
         assert runtime.research_runs.process_next() is True
-        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == (
-            "succeeded"
-        )
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == ("succeeded")
         attempts = _attempts(settings, run_id)
         assert [row["status"] for row in attempts] == ["failed", "succeeded"]
         assert {row["data_generation_id"] for row in attempts} == {head}
@@ -491,13 +485,9 @@ def test_real_publication_unavailability_retries_without_replacing_the_run(
 
         retry_wait = client.get(f"/api/research-runs/{run_id}").json()
         assert retry_wait["status"] == "running"
-        assert _attempts(settings, run_id)[0]["failure_reason"] == (
-            "InfrastructureUnavailable"
-        )
+        assert _attempts(settings, run_id)[0]["failure_reason"] == ("InfrastructureUnavailable")
         assert runtime.research_runs.process_next() is True
-        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == (
-            "succeeded"
-        )
+        assert client.get(f"/api/research-runs/{run_id}").json()["status"] == ("succeeded")
         attempts = _attempts(settings, run_id)
         assert [row["status"] for row in attempts] == ["failed", "succeeded"]
         assert {row["data_generation_id"] for row in attempts} == {head}
@@ -533,9 +523,7 @@ def test_real_child_execution_memory_breach_is_terminal_capacity_failure(
 
         failed = client.get(f"/api/research-runs/{run_id}").json()
         assert failed["status"] == "failed"
-        assert failed["failure_reason"] == (
-            "Research execution exceeded its resource limit."
-        )
+        assert failed["failure_reason"] == ("Research execution exceeded its resource limit.")
         assert [row["failure_reason"] for row in _attempts(settings, run_id)] == [
             "ResourceExhausted"
         ]

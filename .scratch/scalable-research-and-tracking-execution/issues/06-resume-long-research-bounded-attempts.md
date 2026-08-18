@@ -7,7 +7,7 @@ bounded retry, fencing, permanent failure, and private-object cleanup remain exp
 
 **Blocked by:** 05 — Admit and complete long Research through committed Chunks
 
-**Status:** completed
+**Status:** complete
 
 - [x] Every Research Execution Checkpoint is immutable, fenced, checksummed, chained, and bound to immutable Run input, frozen Data Generation, compiler and calculation contracts, and the highest contiguous completed boundary.
 - [x] The Checkpoint references bounded continuation and ordered staged payload checksums rather than unbounded historical datasets.

@@ -162,6 +162,7 @@ class Publication:
         self._database = database
         self._s3 = s3
         self._bucket = bucket
+        self._bucket_ready = False
 
     def storage_is_available(self) -> bool:
         try:
@@ -559,9 +560,12 @@ class Publication:
             raise PublicationVerificationError("Publication manifest-object records conflict")
 
     def _ensure_bucket(self, *, staging_authority: StagingAuthority | None) -> None:
+        if self._bucket_ready:
+            return
         try:
             with _staging_authority(staging_authority):
                 self._s3.head_bucket(Bucket=self._bucket)
+            self._bucket_ready = True
             return
         except ClientError as error:
             if _error_code(error) not in {"404", "NoSuchBucket", "NotFound"}:
@@ -588,6 +592,7 @@ class Publication:
                 ) from error
         except TRANSIENT_S3_ERRORS as error:
             raise PublicationUnavailableError("Publication bucket could not be reached") from error
+        self._bucket_ready = True
 
     def _delete_immutable(self, digest: str) -> None:
         try:
@@ -611,13 +616,6 @@ class Publication:
         media_type: str,
         staging_authority: StagingAuthority | None,
     ) -> None:
-        if self._object_exists(digest, staging_authority=staging_authority):
-            self._verify_existing(
-                digest,
-                content,
-                staging_authority=staging_authority,
-            )
-            return
         try:
             with _staging_authority(staging_authority):
                 self._s3.put_object(
@@ -650,29 +648,6 @@ class Publication:
             content,
             staging_authority=staging_authority,
         )
-
-    def _object_exists(
-        self,
-        digest: str,
-        *,
-        staging_authority: StagingAuthority | None,
-    ) -> bool:
-        try:
-            with _staging_authority(staging_authority):
-                self._s3.head_object(Bucket=self._bucket, Key=_object_key(digest))
-            return True
-        except ClientError as error:
-            if _error_code(error) in {"404", "NoSuchKey", "NotFound"}:
-                return False
-            if _client_error_is_transient(error):
-                raise PublicationUnavailableError(
-                    "Publication object lookup is temporarily unavailable"
-                ) from error
-            raise PublicationPreparationError("Publication object lookup failed") from error
-        except TRANSIENT_S3_ERRORS as error:
-            raise PublicationUnavailableError(
-                "Publication object lookup is temporarily unavailable"
-            ) from error
 
     def _verify_existing(
         self,

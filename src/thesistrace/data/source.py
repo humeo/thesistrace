@@ -6,6 +6,8 @@ from datetime import date, datetime, time, timedelta
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
+import pyarrow as pa
+
 DATA_SOURCE_ERROR_CATEGORIES = (
     "authorization",
     "invalid_source_data",
@@ -110,12 +112,20 @@ class CanonicalSessionPartition:
 
 
 @dataclass(frozen=True)
+class CanonicalColumnarSessionPartition:
+    sessions: tuple[str, ...]
+    tables: Mapping[str, pa.Table]
+
+
+@dataclass(frozen=True)
 class CanonicalBootstrapStream:
     source_name: str
     source_lineage: Mapping[str, object]
     static: Mapping[str, object]
     covered_session_range: tuple[str, str]
-    partitions: Callable[[], Iterator[CanonicalSessionPartition]]
+    partitions: Callable[
+        [], Iterator[CanonicalSessionPartition | CanonicalColumnarSessionPartition]
+    ]
 
 
 @dataclass(frozen=True)

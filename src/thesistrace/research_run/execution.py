@@ -121,6 +121,15 @@ class SupervisedResearchExecution:
                 "boundary_session": self.chunk["boundary_session"],
                 "reused_checkpoint": self.chunk["reused_checkpoint"],
                 "child_peak_rss_bytes": _peak_rss_bytes(response),
+                "child_chunk_seconds": _chunk_seconds(response),
+                "child_data_read_seconds": _chunk_phase_seconds(
+                    response, "child_data_read_seconds"
+                ),
+                "child_calculation_seconds": _chunk_phase_seconds(
+                    response, "child_calculation_seconds"
+                ),
+                "child_calculation_phase_seconds": _calculation_phase_seconds(response),
+                "data_io": _data_io(response),
             }
         )
 
@@ -326,9 +335,7 @@ class SupervisedResearchExecutor:
                 raise
             except ResearchExecutionError as error:
                 process.wait(timeout=5)
-                raise ResearchExecutionError(
-                    f"{error}{_child_stderr_detail(process)}"
-                ) from error
+                raise ResearchExecutionError(f"{error}{_child_stderr_detail(process)}") from error
             chunk = _chunk_from_response(
                 response,
                 execution_memory_bytes=self._execution_memory_bytes,
@@ -344,6 +351,15 @@ class SupervisedResearchExecutor:
                     "boundary_session": chunk["boundary_session"],
                     "reused_checkpoint": chunk["reused_checkpoint"],
                     "child_peak_rss_bytes": _peak_rss_bytes(response),
+                    "child_chunk_seconds": _chunk_seconds(response),
+                    "child_data_read_seconds": _chunk_phase_seconds(
+                        response, "child_data_read_seconds"
+                    ),
+                    "child_calculation_seconds": _chunk_phase_seconds(
+                        response, "child_calculation_seconds"
+                    ),
+                    "child_calculation_phase_seconds": _calculation_phase_seconds(response),
+                    "data_io": _data_io(response),
                 }
             )
             return SupervisedResearchExecution(
@@ -444,16 +460,15 @@ def _calculate_chunks(
     planned_sessions = tuple(session.isoformat() for session in plan.calculation_sessions)
     start_index = calendar.index(start_session)
     warmup_start = start_index - plan.research_session_offset
-    if warmup_start < 0 or tuple(
-        calendar[warmup_start : calendar.index(end_session) + 1]
-    ) != planned_sessions:
+    if (
+        warmup_start < 0
+        or tuple(calendar[warmup_start : calendar.index(end_session) + 1]) != planned_sessions
+    ):
         raise ResearchExecutionInsufficientWarmup(
             "frozen Research Chunk plan does not match selected Data Generation"
         )
     continuation = (
-        empty_research_continuation()
-        if resume_from is None
-        else dict(resume_from.continuation)
+        empty_research_continuation() if resume_from is None else dict(resume_from.continuation)
     )
     completed_ordinal = 0 if resume_from is None else resume_from.completed_chunk_ordinal
     if completed_ordinal == len(plan.chunks):
@@ -461,6 +476,16 @@ def _calculate_chunks(
         yield {
             "status": "chunk_succeeded",
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+            "child_chunk_seconds": 0.0,
+            "child_data_read_seconds": 0.0,
+            "child_calculation_seconds": 0.0,
+            "child_calculation_phase_seconds": {
+                "input": 0.0,
+                "alpha_and_pending": 0.0,
+                "factor": 0.0,
+                "strategy": 0.0,
+                "finalize": 0.0,
+            },
             "chunk": {
                 "ordinal": completed_ordinal,
                 "boundary_session": resume_from.boundary_session,
@@ -475,7 +500,18 @@ def _calculate_chunks(
             },
         }
         return
+    rolling_context = None
     for chunk in plan.chunks[completed_ordinal:]:
+        chunk_started = monotonic()
+        data_read_seconds = 0.0
+        calculation_seconds = 0.0
+        calculation_phase_seconds = {
+            "input": 0.0,
+            "alpha_and_pending": 0.0,
+            "factor": 0.0,
+            "strategy": 0.0,
+            "finalize": 0.0,
+        }
         _require_not_cancelled(cancel_requested)
         chunk_sessions = tuple(
             session
@@ -489,38 +525,75 @@ def _calculate_chunks(
         observations: tuple[dict[str, object], ...] = ()
         final_values: dict[str, object] | None = None
         if research_sessions:
+            fact_instrument_ids = _continuation_instrument_ids(continuation)
+            if rolling_context is not None:
+                fact_instrument_ids |= frozenset(rolling_context.instruments)
             first_research_index = calendar.index(research_sessions[0])
+            context_session_count = max(
+                immutable_input.alpha_admission.effective_lookback,
+                21,
+                2,
+            )
             context_start = max(
                 0,
-                first_research_index
-                - max(immutable_input.alpha_admission.effective_lookback, 21, 2),
+                first_research_index - context_session_count,
             )
-            context_sessions = calendar[
-                context_start : calendar.index(research_sessions[-1]) + 1
-            ]
-            research_data = store.read_columnar_slice(
-                generation_id,
-                sessions=context_sessions,
-                universe_name=immutable_input.universe,
-                neutralization=immutable_input.neutralization,
-                field_bindings=immutable_input.field_bindings,
+            context_sessions = calendar[context_start : calendar.index(research_sessions[-1]) + 1]
+            retained_count = 0 if rolling_context is None else len(rolling_context.sessions)
+            if (
+                rolling_context is not None
+                and tuple(context_sessions[:retained_count]) == rolling_context.sessions
+            ):
+                data_read_started = monotonic()
+                fresh_data = store.read_columnar_slice(
+                    generation_id,
+                    sessions=context_sessions[retained_count:],
+                    universe_name=immutable_input.universe,
+                    neutralization=immutable_input.neutralization,
+                    field_bindings=immutable_input.field_bindings,
+                    fact_instrument_ids=fact_instrument_ids,
+                )
+                data_read_seconds = monotonic() - data_read_started
+                research_data = rolling_context.append_sessions(fresh_data)
+            else:
+                data_read_started = monotonic()
+                research_data = store.read_columnar_slice(
+                    generation_id,
+                    sessions=context_sessions,
+                    universe_name=immutable_input.universe,
+                    neutralization=immutable_input.neutralization,
+                    field_bindings=immutable_input.field_bindings,
+                    fact_instrument_ids=fact_instrument_ids,
+                )
+                data_read_seconds = monotonic() - data_read_started
+            calculation_started = monotonic()
+            input_started = monotonic()
+            run_input = _kernel_input(
+                immutable_input,
+                research_data,
+                research_start_session=start_session,
+                research_end_session=end_session,
             )
+            input_seconds = monotonic() - input_started
             calculation = execute_research_chunk(
-                run_input=_kernel_input(
-                    immutable_input,
-                    research_data,
-                    research_start_session=start_session,
-                    research_end_session=end_session,
-                ),
+                run_input=run_input,
                 research_data=research_data,
                 research_sessions=research_sessions,
                 final_chunk=final_chunk,
                 continuation=continuation,
                 cancellation_check=lambda: _require_not_cancelled(cancel_requested),
             )
+            calculation_seconds = monotonic() - calculation_started
+            calculation_phase_seconds = {
+                "input": input_seconds,
+                **calculation.phase_seconds,
+            }
             continuation = calculation.continuation
             observations = calculation.strategy_daily_observations
             final_values = calculation.final_values
+            rolling_context = research_data.slice_sessions(
+                tuple(context_sessions[-context_session_count:])
+            )
         else:
             lookback = immutable_input.alpha_admission.effective_lookback
             continuation["rolling_tail_sessions"] = (
@@ -529,6 +602,10 @@ def _calculate_chunks(
         yield {
             "status": "chunk_succeeded",
             "child_peak_rss_bytes": _current_process_peak_rss_bytes(),
+            "child_chunk_seconds": monotonic() - chunk_started,
+            "child_data_read_seconds": data_read_seconds,
+            "child_calculation_seconds": calculation_seconds,
+            "child_calculation_phase_seconds": calculation_phase_seconds,
             "chunk": {
                 "ordinal": chunk.ordinal,
                 "boundary_session": chunk.last_session.isoformat(),
@@ -547,6 +624,22 @@ def _calculate_chunks(
                 "reused_checkpoint": False,
             },
         }
+
+
+def _continuation_instrument_ids(
+    continuation: Mapping[str, object],
+) -> frozenset[str]:
+    strategy = continuation.get("strategy_state")
+    if not isinstance(strategy, Mapping):
+        return frozenset()
+    positions = strategy.get("positions")
+    if not isinstance(positions, list):
+        raise ResearchExecutionInputInvalid("Research Strategy continuation is invalid")
+    return frozenset(
+        str(position["instrument_id"])
+        for position in positions
+        if isinstance(position, Mapping) and "instrument_id" in position
+    )
 
 
 def _resume_from_request(
@@ -576,8 +669,7 @@ def _resume_from_request(
         or boundary != chunk.last_session.isoformat()
         or completed_warmup < 0
         or completed_research < 0
-        or (ordinal == len(immutable_input.execution_plan.chunks))
-        != (final_values is not None)
+        or (ordinal == len(immutable_input.execution_plan.chunks)) != (final_values is not None)
     ):
         raise ResearchExecutionInputInvalid("Research resume boundary is incompatible")
     return ResearchExecutionResume(
@@ -597,25 +689,17 @@ def _selected_research_period(
     available_field_ids: frozenset[str],
 ) -> tuple[str, str]:
     if not research_sessions:
-        raise ResearchExecutionInputInvalid(
-            "selected Data Generation has no Research Sessions"
-        )
+        raise ResearchExecutionInputInvalid("selected Data Generation has no Research Sessions")
     sessions = [str(session) for session in research_sessions]
     requested_start = immutable_input.requested_start_date.isoformat()
     requested_end = immutable_input.requested_end_date.isoformat()
     if requested_start < sessions[0] or requested_end > sessions[-1]:
-        raise ResearchExecutionInputInvalid(
-            "requested Research Period is outside Dataset Coverage"
-        )
-    selected = [
-        session for session in sessions if requested_start <= session <= requested_end
-    ]
+        raise ResearchExecutionInputInvalid("requested Research Period is outside Dataset Coverage")
+    selected = [session for session in sessions if requested_start <= session <= requested_end]
     if not selected:
         raise ResearchExecutionInputInvalid("requested dates contain no Research Session")
     if set(immutable_input.field_bindings) - available_field_ids:
-        raise ResearchExecutionInputInvalid(
-            "selected Data Generation lacks a frozen field"
-        )
+        raise ResearchExecutionInputInvalid("selected Data Generation lacks a frozen field")
     return selected[0], selected[-1]
 
 
@@ -656,6 +740,8 @@ def _child_environment() -> dict[str, str]:
         value = os.environ.get(name)
         if value is not None:
             environment[name] = value
+    if os.environ.get("THESISTRACE_QUALIFICATION_COLD_DATA_READS") == "1":
+        environment["THESISTRACE_QUALIFICATION_COLD_DATA_READS"] = "1"
     return environment
 
 
@@ -780,8 +866,7 @@ def _cgroup_oom_kill_count() -> int | None:
     ):
         try:
             values = dict(
-                line.split(maxsplit=1)
-                for line in path.read_text(encoding="utf-8").splitlines()
+                line.split(maxsplit=1) for line in path.read_text(encoding="utf-8").splitlines()
             )
         except (FileNotFoundError, OSError, ValueError):
             continue
@@ -813,6 +898,60 @@ def _peak_rss_bytes(response: Mapping[str, object]) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ResearchExecutionError("Research execution child memory evidence is invalid")
     return value
+
+
+def _chunk_seconds(response: Mapping[str, object]) -> float:
+    value = response.get("child_chunk_seconds")
+    if not isinstance(value, (float, int)) or isinstance(value, bool) or value < 0:
+        raise ResearchExecutionError("Research execution child timing evidence is invalid")
+    return float(value)
+
+
+def _chunk_phase_seconds(response: Mapping[str, object], field: str) -> float:
+    value = response.get(field)
+    if not isinstance(value, (float, int)) or isinstance(value, bool) or value < 0:
+        raise ResearchExecutionError("Research execution child timing evidence is invalid")
+    return float(value)
+
+
+def _calculation_phase_seconds(response: Mapping[str, object]) -> dict[str, float]:
+    value = response.get("child_calculation_phase_seconds")
+    required = {"input", "alpha_and_pending", "factor", "strategy", "finalize"}
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ResearchExecutionError("Research execution child timing evidence is invalid")
+    result = {name: _nonnegative_seconds(value[name]) for name in required}
+    if sum(result.values()) > _chunk_phase_seconds(response, "child_calculation_seconds"):
+        raise ResearchExecutionError("Research execution child timing evidence is invalid")
+    return result
+
+
+def _nonnegative_seconds(value: object) -> float:
+    if not isinstance(value, (float, int)) or isinstance(value, bool) or value < 0:
+        raise ResearchExecutionError("Research execution child timing evidence is invalid")
+    return float(value)
+
+
+def _data_io(response: Mapping[str, object]) -> dict[str, int]:
+    value = response.get("data_io")
+    required = {
+        "manifest_opens",
+        "parquet_object_opens",
+        "raw_financial_batch_opens",
+        "market_parquet_scans",
+        "financial_parquet_scans",
+        "bytes_read",
+        "rows_scanned",
+        "columns_scanned",
+    }
+    if not isinstance(value, Mapping) or set(value) != required:
+        raise ResearchExecutionError("Research execution child I/O evidence is invalid")
+    result: dict[str, int] = {}
+    for key in required:
+        item = value[key]
+        if not isinstance(item, int) or isinstance(item, bool) or item < 0:
+            raise ResearchExecutionError("Research execution child I/O evidence is invalid")
+        result[key] = item
+    return result
 
 
 def _current_process_peak_rss_bytes() -> int:

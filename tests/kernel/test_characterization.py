@@ -6,18 +6,18 @@ from thesistrace.research_kernel.strategy import equal_weight_benchmark_return
 from thesistrace.research_series import ExecutionPrice, InstrumentProfile
 
 EXPECTED_CHECKSUMS = {
-    "alpha": "f01531eccc3d83f1965aaabf807515fc4905288b678be90e16e96c571533bcd9",
+    "alpha": "2408e4eb856b85d9fa26261ec25b49cdeb4900c3f99ce863701a5fa9926f72a7",
     "labels": {
         "1": "ecdafbd877477678e9f8109f2ebedc02d652e83b31fe67a183b2cd71fbe23703",
         "5": "779e6534d8c197eeb19e3accd1e4013f357f71e577a3faabdc8f46f642ed0ea2",
         "20": "0a26cfe3b21ccaaf3562f36278ab2e0538dcf1fe3f3a5ecfed22196b863f3df7",
     },
     "factor": {
-        "1": "4d4fdb43398436b3ac1b2d9be92f8ef7f65b0e4a4da21b995898da8f9d9a74c6",
-        "5": "3a8858ed6144f82cc9317910ec4c8133b9dd441bec4c5d1ceacae2b5197da505",
-        "20": "74809f05078de529c6b65d5337572000a70f006f02462916aeaf007f507ec457",
+        "1": "fa7a104727c4684d78d58b815eb93513e48ce2bb24b2f1000b49555a66a24ec3",
+        "5": "f3a1105c1b77af3999b0da993348e6707fadd1b4863941e03ca478b372e555b5",
+        "20": "c4f4a77935c35417c95d66edbcff6b761afb212eef9698e9704f563892ad3a73",
     },
-    "strategy": "086d662a6db387761ee55a361a164edfc6e13321c8ac806d2c2b63dc80e6cc0d",
+    "strategy": "b252ba64058af52252ed6d2fdc3efbd09ebd6ea43e466dd39635d8f14709e3d9",
 }
 
 

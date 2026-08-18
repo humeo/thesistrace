@@ -209,9 +209,7 @@ def evaluate_series_execution_matrix(
                         float(value),
                     )
                     for instrument_id in universe_members.get(session, ())
-                    if (
-                        value := _series_item(_matrix_value(child, instrument_id), index, length)
-                    )
+                    if (value := _series_item(_matrix_value(child, instrument_id), index, length))
                     is not None
                     and math.isfinite(float(value))
                 )
@@ -285,23 +283,19 @@ def evaluate_columnar_execution_matrix(
                 operation(left, right, out=value, where=valid)
         elif node.identifier == "cs_rank":
             child = _columnar_array(values[node.inputs[0]], shape)
-            ranked = np.full(shape, np.nan, dtype=np.float64)
-            for session_index, session in enumerate(sessions):
-                cancellation_check()
-                finite = sorted(
-                    (
-                        instrument_id,
-                        float(child[instrument_positions[instrument_id], session_index]),
-                    )
-                    for instrument_id in universe_members.get(session, ())
-                    if instrument_id in instrument_positions
-                    and math.isfinite(
-                        float(child[instrument_positions[instrument_id], session_index])
-                    )
-                )
-                for instrument_id, rank in _cross_section_ranks(finite).items():
-                    ranked[instrument_positions[instrument_id], session_index] = rank
-            value = ranked
+            value = _columnar_cross_section_rank(
+                child,
+                instrument_positions,
+                sessions,
+                universe_members,
+                cancellation_check,
+            )
+        elif node.identifier == "pct_change":
+            series = _columnar_array(values[node.inputs[0]], shape)
+            window = values[node.inputs[1]]
+            if not isinstance(window, int):
+                raise ValueError("pct_change window is invalid")
+            value = _columnar_pct_change(series, window)
         else:
             arguments = tuple(values[input_index] for input_index in node.inputs)
             rows = [
@@ -323,6 +317,61 @@ def evaluate_columnar_execution_matrix(
             if remaining[input_index] == 0 and input_index != plan.root:
                 values[input_index] = None
     return _columnar_array(values[plan.root], shape)
+
+
+def _columnar_pct_change(values: np.ndarray, window: int) -> np.ndarray:
+    if window <= 0:
+        raise ValueError("pct_change window is invalid")
+    result = np.full(values.shape, np.nan, dtype=np.float64)
+    if window >= values.shape[1]:
+        return result
+    current = values[:, window:]
+    prior = values[:, :-window]
+    valid = np.isfinite(current) & np.isfinite(prior) & (prior != 0.0)
+    with np.errstate(all="ignore"):
+        np.divide(current, prior, out=result[:, window:], where=valid)
+        np.subtract(result[:, window:], 1.0, out=result[:, window:], where=valid)
+    result[:, window:][~valid] = np.nan
+    return result
+
+
+def _columnar_cross_section_rank(
+    values: np.ndarray,
+    instrument_positions: Mapping[str, int],
+    sessions: tuple[str, ...],
+    universe_members: Mapping[str, tuple[str, ...]],
+    cancellation_check: Callable[[], None],
+) -> np.ndarray:
+    ranked = np.full(values.shape, np.nan, dtype=np.float64)
+    for session_index, session in enumerate(sessions):
+        cancellation_check()
+        positions = np.fromiter(
+            (
+                instrument_positions[instrument_id]
+                for instrument_id in universe_members.get(session, ())
+                if instrument_id in instrument_positions
+            ),
+            dtype=np.intp,
+        )
+        if positions.size == 0:
+            continue
+        finite_mask = np.isfinite(values[positions, session_index])
+        finite_positions = positions[finite_mask]
+        finite_values = values[finite_positions, session_index]
+        if finite_positions.size == 0:
+            continue
+        if finite_positions.size == 1:
+            ranked[finite_positions[0], session_index] = 0.5
+            continue
+        _unique, inverse, counts = np.unique(
+            finite_values,
+            return_inverse=True,
+            return_counts=True,
+        )
+        starts = np.cumsum(counts) - counts
+        group_ranks = ((starts + starts + counts - 1) / 2) / (finite_positions.size - 1)
+        ranked[finite_positions, session_index] = group_ranks[inverse]
+    return ranked
 
 
 def _evaluate_columnar_builtin_row(

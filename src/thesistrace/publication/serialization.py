@@ -5,6 +5,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 PINNED_PYARROW_VERSION = "25.0.0"
@@ -113,6 +114,13 @@ def parquet_bytes(
     require_pinned_writer_runtime()
     canonical_rows = canonicalize_parquet_rows(rows, contract)
     table = pa.Table.from_pylist(canonical_rows, schema=contract.schema)
+    return parquet_table_bytes(table, contract)
+
+
+def parquet_table_bytes(table: pa.Table, contract: ParquetWriterContract) -> bytes:
+    require_pinned_writer_runtime()
+    _validate_canonical_table(table, contract)
+    table = table.combine_chunks()
     sorting_columns = pq.SortingColumn.from_ordering(
         contract.schema,
         [(key, "ascending") for key in contract.sort_keys],
@@ -144,6 +152,37 @@ def parquet_bytes(
         write_time_adjusted_to_utc=False,
     )
     return output.getvalue().to_pybytes()
+
+
+def _validate_canonical_table(table: pa.Table, contract: ParquetWriterContract) -> None:
+    if table.schema != contract.schema:
+        raise ParquetContractError("Parquet Table schema does not match the declared schema")
+    if any(
+        not field.nullable and table[field.name].null_count
+        for field in contract.schema
+    ):
+        raise ParquetContractError("Parquet Table has null in a required field")
+    for field in contract.schema:
+        if pa.types.is_floating(field.type):
+            finite = pc.all(pc.is_finite(table[field.name])).as_py()
+            if finite is not True:
+                raise ParquetContractError("Parquet Table has a non-finite value")
+    if table.num_rows < 2:
+        return
+    indices = pc.sort_indices(
+        table,
+        sort_keys=[(key, "ascending") for key in contract.sort_keys],
+    )
+    expected = pa.array(range(table.num_rows), type=indices.type)
+    if not indices.equals(expected):
+        raise ParquetContractError("Parquet Table rows are not in canonical sort order")
+    duplicate = None
+    for key in contract.sort_keys:
+        equal = pc.equal(table[key].slice(1), table[key].slice(0, table.num_rows - 1))
+        duplicate = equal if duplicate is None else pc.and_(duplicate, equal)
+    assert duplicate is not None
+    if pc.any(duplicate).as_py() is True:
+        raise ParquetContractError("Parquet sort keys must form a unique row identity")
 
 
 def canonicalize_parquet_rows(

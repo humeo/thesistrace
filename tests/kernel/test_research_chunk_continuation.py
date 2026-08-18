@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 
 import numpy as np
 
@@ -19,11 +19,6 @@ from thesistrace.research_kernel.research_chunks import (
     execute_research_chunk,
     finalize_factor_state,
 )
-from thesistrace.research_kernel.sha256_state import (
-    empty_sha256_state,
-    sha256_state_hexdigest,
-    update_sha256_state,
-)
 from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_PREFIX,
     RESULT_DAILY_PARTITION_SESSION_COUNT,
@@ -32,15 +27,6 @@ from thesistrace.research_run.result import (
     read_result_bundle,
 )
 from thesistrace.research_series import ExecutionPrice, InstrumentProfile, PriceLimit
-
-
-def test_checkpointable_sha256_matches_standard_incremental_digest() -> None:
-    pieces = (b"bounded", b"-checkpoint", bytes(range(255)))
-    state = empty_sha256_state()
-    for piece in pieces:
-        state = update_sha256_state(state, piece)
-
-    assert sha256_state_hexdigest(state) == hashlib.sha256(b"".join(pieces)).hexdigest()
 
 
 def _label_session(session: str, offset: float) -> dict[str, object]:
@@ -91,9 +77,9 @@ def test_factor_observations_fold_into_chunk_invariant_bounded_aggregate_state()
     chunked = finalize_factor_state(state, alpha_checksum="a" * 64)
 
     for horizon in ("1", "5", "20"):
-        assert chunked["horizons"][horizon]["summary"] == uninterrupted["horizons"][
-            horizon
-        ]["summary"]
+        assert (
+            chunked["horizons"][horizon]["summary"] == uninterrupted["horizons"][horizon]["summary"]
+        )
         assert chunked["horizons"][horizon]["coverage"] == {
             "signal_session_count": 3,
             "ic_valid_session_count": 3,
@@ -124,13 +110,9 @@ class _ColumnarFixture:
             sessions=sessions,
             instruments=self.instruments,
             universe_members={session: self.universe_members[session] for session in sessions},
-            industries={
-                key: value for key, value in self.industries.items() if key[0] in selected
-            },
+            industries={key: value for key, value in self.industries.items() if key[0] in selected},
             execution_prices={
-                key: value
-                for key, value in self.execution_prices.items()
-                if key[0] in selected
+                key: value for key, value in self.execution_prices.items() if key[0] in selected
             },
             trading_states={
                 key: value for key, value in self.trading_states.items() if key[0] in selected
@@ -141,6 +123,23 @@ class _ColumnarFixture:
             matrices={name: value[:, positions] for name, value in self.matrices.items()},
         )
 
+    def append_sessions(self, later: _ColumnarFixture) -> _ColumnarFixture:
+        if self.sessions[-1] >= later.sessions[0]:
+            raise ValueError("fixture append boundary is invalid")
+        return _ColumnarFixture(
+            sessions=(*self.sessions, *later.sessions),
+            instruments={**self.instruments, **later.instruments},
+            universe_members={**self.universe_members, **later.universe_members},
+            industries={**self.industries, **later.industries},
+            execution_prices={**self.execution_prices, **later.execution_prices},
+            trading_states={**self.trading_states, **later.trading_states},
+            price_limits={**self.price_limits, **later.price_limits},
+            matrices={
+                name: np.concatenate([self.matrices[name], later.matrices[name]], axis=1)
+                for name in self.matrices
+            },
+        )
+
     def numeric_field_matrices(
         self,
         field_ids: tuple[str, ...],
@@ -149,13 +148,38 @@ class _ColumnarFixture:
         positions = [tuple(self.instruments).index(instrument) for instrument in instruments]
         return {field_id: self.matrices[field_id][positions] for field_id in field_ids}
 
+    def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
+        return np.asarray(
+            [
+                [
+                    float(self.execution_prices[(session, instrument_id)].adjusted_open)
+                    for session in self.sessions
+                ]
+                for instrument_id in instruments
+            ],
+            dtype=np.float64,
+        )
+
+    def adjusted_open_decimal_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
+        return np.asarray(
+            [
+                [
+                    Decimal(
+                        self.execution_prices[(session, instrument_id)].adjusted_open
+                    )
+                    for session in self.sessions
+                ]
+                for instrument_id in instruments
+            ],
+            dtype=object,
+        )
+
 
 def test_chunked_composite_research_is_canonically_equal_across_real_boundaries() -> None:
     sessions = tuple(f"s{index:02d}" for index in range(80))
     instruments = tuple(f"equity:{index:03d}.SH" for index in range(40))
     profiles = {
-        instrument: InstrumentProfile(board="main", listed_to="")
-        for instrument in instruments
+        instrument: InstrumentProfile(board="main", listed_to="") for instrument in instruments
     }
     prices = {
         (session, instrument): ExecutionPrice(
@@ -265,18 +289,13 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         for calculation in chunk_results
         for observation in calculation.strategy_daily_observations
     ]
-    assert equivalence_bytes(final.final_values) == equivalence_bytes(
-        uninterrupted.final_values
-    )
+    assert equivalence_bytes(final.final_values) == equivalence_bytes(uninterrupted.final_values)
     assert equivalence_bytes(assembled_observations) == equivalence_bytes(
         list(uninterrupted.strategy_daily_observations)
     )
-    assert final.continuation["alpha_checksum"] == uninterrupted.continuation[
-        "alpha_checksum"
-    ]
-    assert equivalence_bytes(final.continuation["alpha_checksum_state"]) == (
-        equivalence_bytes(uninterrupted.continuation["alpha_checksum_state"])
-    )
+    assert final.continuation["alpha_checksum"] == uninterrupted.continuation["alpha_checksum"]
+    assert "alpha_checksum_state" not in final.continuation
+    assert final.continuation["schema_version"] == "research-chunk-continuation-v2"
     legacy = build_result_payload(
         run_columnar_chunk(run_input, cancellation_check=lambda: None),
         rebalance_interval=run_input.rebalance_interval,

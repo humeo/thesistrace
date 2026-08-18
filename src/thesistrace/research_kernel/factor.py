@@ -4,8 +4,14 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from statistics import stdev
 
+import numpy as np
+
 from thesistrace.research_kernel.serialization import canonical_json_bytes
-from thesistrace.research_series import AlignedResearchData, InstrumentProfile
+from thesistrace.research_series import (
+    AlignedResearchData,
+    ColumnarResearchSeries,
+    InstrumentProfile,
+)
 
 HORIZONS = (1, 5, 20)
 
@@ -183,6 +189,116 @@ def unavailable_reason(
     return "unexplained_missing_or_invalid_data"
 
 
+def columnar_forward_factor_days_by_horizon(
+    research_data: ColumnarResearchSeries,
+    alpha_matrix: dict[str, object],
+    *,
+    signal_sessions_by_horizon: dict[int, Sequence[str]],
+    cancellation_check: Callable[[], None],
+) -> dict[str, list[dict[str, object]]]:
+    calendar = tuple(research_data.sessions)
+    session_positions = {session: index for index, session in enumerate(calendar)}
+    instruments = tuple(sorted(research_data.instruments))
+    instrument_positions = {
+        instrument_id: index for index, instrument_id in enumerate(instruments)
+    }
+    adjusted_opens = research_data.adjusted_open_matrix(instruments)
+    alpha_by_session = {
+        str(item["session"]): item for item in alpha_matrix["sessions"]
+    }
+    alpha_coordinates: dict[str, tuple[tuple[str, ...], np.ndarray, np.ndarray]] = {}
+    days_by_horizon: dict[str, list[dict[str, object]]] = {}
+    for horizon, signal_sessions in signal_sessions_by_horizon.items():
+        days: list[dict[str, object]] = []
+        for signal_session in signal_sessions:
+            cancellation_check()
+            signal_session = str(signal_session)
+            signal_index = session_positions[signal_session]
+            alpha_values = list(alpha_by_session[signal_session]["values"])
+            coordinates = alpha_coordinates.get(signal_session)
+            if coordinates is None:
+                instrument_ids = tuple(str(value["instrument_id"]) for value in alpha_values)
+                positions = np.fromiter(
+                    (instrument_positions[instrument_id] for instrument_id in instrument_ids),
+                    dtype=np.intp,
+                    count=len(instrument_ids),
+                )
+                alpha_array = np.fromiter(
+                    (float(value["value"]) for value in alpha_values),
+                    dtype=np.float64,
+                    count=len(alpha_values),
+                )
+                coordinates = (instrument_ids, positions, alpha_array)
+                alpha_coordinates[signal_session] = coordinates
+            instrument_ids, positions, alpha_array = coordinates
+            entry_index = signal_index + 1
+            exit_index = signal_index + 1 + horizon
+            included_alpha = np.asarray([], dtype=np.float64)
+            selected_labels = np.asarray([], dtype=np.float64)
+            if exit_index < len(calendar) and alpha_values:
+                entry_session = calendar[entry_index]
+                exit_session = calendar[exit_index]
+                entry_opens = adjusted_opens[positions, entry_index]
+                exit_opens = adjusted_opens[positions, exit_index]
+                valid_entry = np.isfinite(entry_opens)
+                valid_exit = np.isfinite(exit_opens)
+                zero_entry = valid_entry & (entry_opens == 0.0)
+                if np.any(zero_entry):
+                    instrument_id = instrument_ids[int(np.flatnonzero(zero_entry)[0])]
+                    raise FactorDataError(
+                        f"invalid Label entry Open for {instrument_id} on {entry_session}"
+                    )
+                included = valid_entry & valid_exit
+                label_array = np.empty(len(alpha_values), dtype=np.float64)
+                label_array[included] = (
+                    exit_opens[included] / entry_opens[included] - 1.0
+                )
+                for index in np.flatnonzero(~valid_entry):
+                    instrument_id = instrument_ids[int(index)]
+                    reason = unavailable_reason(
+                        research_data.trading_states.get((entry_session, instrument_id)),
+                        research_data.instruments[instrument_id],
+                        entry_session,
+                        valid_entry=False,
+                    )
+                    if reason == "unexplained_missing_or_invalid_data":
+                        raise FactorDataError(
+                            f"unexplained Label entry Open for {instrument_id} on {entry_session}"
+                        )
+                for index in np.flatnonzero(valid_entry & ~valid_exit):
+                    instrument_id = instrument_ids[int(index)]
+                    reason = unavailable_reason(
+                        research_data.trading_states.get((exit_session, instrument_id)),
+                        research_data.instruments[instrument_id],
+                        exit_session,
+                        valid_entry=True,
+                    )
+                    if reason == "terminal_delisting":
+                        label_array[index] = -1.0
+                        included[index] = True
+                    elif reason == "unexplained_missing_or_invalid_data":
+                        raise FactorDataError(
+                            f"unexplained Label exit Open for {instrument_id} on {exit_session}"
+                        )
+                selected_labels = label_array[included]
+                if not np.all(np.isfinite(selected_labels)):
+                    index = int(np.flatnonzero(included & ~np.isfinite(label_array))[0])
+                    raise FactorDataError(
+                        f"non-finite Label for {instrument_ids[index]} on {signal_session}"
+                    )
+                included_alpha = alpha_array[included]
+            days.append(
+                {
+                    "session": signal_session,
+                    "sample_count": len(included_alpha),
+                    **_factor_array_values(included_alpha, selected_labels),
+                }
+            )
+            cancellation_check()
+        days_by_horizon[str(horizon)] = days
+    return days_by_horizon
+
+
 def evaluate_factor(labels: dict[str, object]) -> dict[str, object]:
     horizons: dict[str, object] = {}
     for horizon, label_artifact in labels["horizons"].items():
@@ -247,7 +363,28 @@ def factor_horizon_from_daily(
 
 
 def factor_day(samples: list[dict[str, object]]) -> dict[str, object]:
-    if len(samples) < 30:
+    return factor_values(
+        [float(item["alpha"]) for item in samples],
+        [float(item["label"]) for item in samples],
+    )
+
+
+def factor_values(alpha: list[float], label: list[float]) -> dict[str, object]:
+    if len(alpha) != len(label):
+        raise FactorDataError("Factor sample coordinates are misaligned")
+    return _factor_array_values(
+        np.asarray(alpha, dtype=np.float64),
+        np.asarray(label, dtype=np.float64),
+    )
+
+
+def _factor_array_values(
+    alpha: np.ndarray,
+    label: np.ndarray,
+) -> dict[str, object]:
+    if len(alpha) != len(label):
+        raise FactorDataError("Factor sample coordinates are misaligned")
+    if len(alpha) < 30:
         return {
             "ic": None,
             "rank_ic": None,
@@ -256,19 +393,17 @@ def factor_day(samples: list[dict[str, object]]) -> dict[str, object]:
             "top_bottom_return": None,
             "quantile_reason": "sample_insufficient",
         }
-    alpha = [float(item["alpha"]) for item in samples]
-    label = [float(item["label"]) for item in samples]
-    ic = pearson(alpha, label)
-    rank_ic = pearson(average_ranks(alpha), average_ranks(label))
+    ic = _pearson_arrays(alpha, label)
+    alpha_ranks = _average_ranks_array(alpha)
+    rank_ic = _pearson_arrays(alpha_ranks, _average_ranks_array(label))
     reason = "constant_array" if ic is None or rank_ic is None else None
 
-    alpha_ranks = average_ranks(alpha)
-    grouped: dict[int, list[float]] = {index: [] for index in range(1, 6)}
-    count = len(samples)
-    for rank, label_value in zip(alpha_ranks, label, strict=True):
-        group = min(5, int((rank - 1) * 5 / count) + 1)
-        grouped[group].append(label_value)
-    quantiles = {f"q{group}": mean_or_none(grouped[group]) for group in range(1, 6)}
+    count = len(alpha)
+    groups = np.minimum(5, ((alpha_ranks - 1) * 5 / count).astype(np.int8) + 1)
+    quantiles = {
+        f"q{group}": mean_or_none(label[groups == group].tolist())
+        for group in range(1, 6)
+    }
     top_bottom = (
         None
         if quantiles["q1"] is None or quantiles["q5"] is None
@@ -287,33 +422,46 @@ def factor_day(samples: list[dict[str, object]]) -> dict[str, object]:
 def pearson(left: list[float], right: list[float]) -> float | None:
     if len(left) != len(right) or not left:
         return None
-    left_mean = math.fsum(left) / len(left)
-    right_mean = math.fsum(right) / len(right)
-    left_centered = [value - left_mean for value in left]
-    right_centered = [value - right_mean for value in right]
-    left_sum = math.fsum(value * value for value in left_centered)
-    right_sum = math.fsum(value * value for value in right_centered)
+    return _pearson_arrays(
+        np.asarray(left, dtype=np.float64),
+        np.asarray(right, dtype=np.float64),
+    )
+
+
+def _pearson_arrays(left: np.ndarray, right: np.ndarray) -> float | None:
+    if len(left) != len(right) or len(left) == 0:
+        return None
+    left_mean = math.fsum(left.tolist()) / len(left)
+    right_mean = math.fsum(right.tolist()) / len(right)
+    left_centered = left - left_mean
+    right_centered = right - right_mean
+    left_sum = math.fsum(np.square(left_centered).tolist())
+    right_sum = math.fsum(np.square(right_centered).tolist())
     if left_sum == 0.0 or right_sum == 0.0:
         return None
-    result = math.fsum(
-        left_value * right_value
-        for left_value, right_value in zip(left_centered, right_centered, strict=True)
-    ) / math.sqrt(left_sum * right_sum)
+    result = math.fsum(np.multiply(left_centered, right_centered).tolist()) / math.sqrt(
+        left_sum * right_sum
+    )
     return result if math.isfinite(result) else None
 
 
 def average_ranks(values: list[float]) -> list[float]:
-    ordered = sorted(enumerate(values), key=lambda item: (item[1], item[0]))
-    ranks = [0.0] * len(values)
-    cursor = 0
-    while cursor < len(ordered):
-        end = cursor + 1
-        while end < len(ordered) and ordered[end][1] == ordered[cursor][1]:
-            end += 1
-        average = ((cursor + 1) + end) / 2
-        for position in range(cursor, end):
-            ranks[ordered[position][0]] = average
-        cursor = end
+    return _average_ranks_array(np.asarray(values, dtype=np.float64)).tolist()
+
+
+def _average_ranks_array(array: np.ndarray) -> np.ndarray:
+    if not np.all(np.isfinite(array)):
+        raise FactorDataError("Factor rank values must be finite")
+    order = np.argsort(array, kind="stable")
+    ordered = array[order]
+    starts = np.flatnonzero(
+        np.concatenate((np.asarray([True]), ordered[1:] != ordered[:-1]))
+    )
+    ends = np.concatenate((starts[1:], np.asarray([len(array)])))
+    group_ranks = (starts + 1 + ends) / 2
+    sorted_ranks = np.repeat(group_ranks, ends - starts)
+    ranks = np.empty(len(array), dtype=np.float64)
+    ranks[order] = sorted_ranks
     return ranks
 
 

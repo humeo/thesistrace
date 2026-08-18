@@ -8,6 +8,7 @@ import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import pyarrow as pa
@@ -15,6 +16,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
+from thesistrace.data.generation_schema import MARKET_CANDIDATE_TABLE_SPECS
 from thesistrace.data.generation_store import (
     GENERATION_MANIFEST_MAX_BYTES,
     GENERATION_SESSION_PARTITION_COUNT,
@@ -23,7 +25,11 @@ from thesistrace.data.generation_store import (
     MountedFamilyGenerationDescriptor,
     MountedGenerationStore,
 )
-from thesistrace.data.source import CanonicalBootstrapStream, CanonicalSessionPartition
+from thesistrace.data.source import (
+    CanonicalBootstrapStream,
+    CanonicalColumnarSessionPartition,
+    CanonicalSessionPartition,
+)
 from thesistrace.publication.serialization import canonical_json_bytes
 
 
@@ -82,6 +88,109 @@ def test_streaming_bootstrap_materializes_the_same_generation(tmp_path: Path) ->
     assert streamed == in_memory
 
 
+def test_columnar_streaming_bootstrap_materializes_the_same_generation(
+    tmp_path: Path,
+) -> None:
+    canonical = _canonical()
+    prepared_at = datetime(2026, 8, 9, 0, 0, tzinfo=UTC)
+    lineage = {"snapshot": "fixed"}
+    static = {
+        key: canonical[key]
+        for key in (
+            "schema_version",
+            "research_calendar",
+            "instruments",
+            "industry_membership",
+            "field_catalog",
+        )
+    }
+    calendar = [str(value) for value in canonical["research_calendar"]]
+    expected = MountedGenerationStore(tmp_path / "rows").materialize(
+        canonical,
+        prepared_at=prepared_at,
+        source_name="deterministic-test",
+        source_lineage=lineage,
+    )
+
+    def partitions() -> Iterator[CanonicalColumnarSessionPartition]:
+        for start in range(0, len(calendar), GENERATION_SESSION_PARTITION_COUNT):
+            sessions = tuple(calendar[start : start + GENERATION_SESSION_PARTITION_COUNT])
+            selected = set(sessions)
+            yield CanonicalColumnarSessionPartition(
+                sessions=sessions,
+                tables={
+                    spec.name: pa.Table.from_pylist(
+                        _columnar_candidate_rows(canonical, spec.name, selected),
+                        schema=spec.contract.schema,
+                    )
+                    for spec in MARKET_CANDIDATE_TABLE_SPECS
+                    if spec.session_field is not None and spec.name != "research_calendar"
+                },
+            )
+
+    actual = MountedGenerationStore(tmp_path / "columnar").materialize_bootstrap_stream(
+        CanonicalBootstrapStream(
+            source_name="deterministic-test",
+            source_lineage=lineage,
+            static=static,
+            covered_session_range=(calendar[0], calendar[-1]),
+            partitions=partitions,
+        ),
+        prepared_at=prepared_at,
+    )
+
+    assert actual == expected
+
+
+def _columnar_candidate_rows(
+    canonical: dict[str, object],
+    table: str,
+    selected: set[str],
+) -> list[dict[str, object]]:
+    if table == "eod_prices":
+        return [
+            {
+                "session_date": date.fromisoformat(str(row["session"])),
+                "instrument_id": str(row["instrument_id"]),
+                "open_raw": Decimal(str(row["open_raw"])),
+                "high_raw": Decimal(str(row["high_raw"])),
+                "low_raw": Decimal(str(row["low_raw"])),
+                "close_raw": Decimal(str(row["close_raw"])),
+                "pre_close_reference_raw": Decimal(str(row["pre_close_raw"])),
+                "price_change_raw": Decimal(str(row["change_raw"])),
+                "pct_change_ratio": Decimal(str(row["pct_change_raw"])) / Decimal(100),
+                "volume_shares": int(str(row["volume_shares"])),
+                "turnover_amount_cny": Decimal(str(row["turnover_cny"])),
+                "adjustment_scale": Decimal(str(row["adjustment_factor"])),
+                "open_adj": Decimal(str(row["open_adj"])),
+                "high_adj": Decimal(str(row["high_adj"])),
+                "low_adj": Decimal(str(row["low_adj"])),
+                "close_adj": Decimal(str(row["close_adj"])),
+            }
+            for row in canonical["prices"]
+            if str(row["session"]) in selected
+        ]
+    if table == "adjustment_factors":
+        return [
+            {
+                "session_date": date.fromisoformat(str(row["session"])),
+                "instrument_id": str(row["instrument_id"]),
+                "source_adjustment_factor": Decimal(str(row["adjustment_factor"])),
+            }
+            for row in canonical["prices"]
+            if str(row["session"]) in selected
+        ]
+    if table == "liquidity_universes":
+        rows = [
+            {"universe": name, **row}
+            for name, values in canonical[table].items()
+            for row in values
+            if str(row["session"]) in selected
+        ]
+        return sorted(rows, key=lambda row: (str(row["session"]), str(row["universe"])))
+    return [row for row in canonical[table] if str(row["session"]) in selected]
+
+
 def test_generation_validation_does_not_accumulate_session_tables(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -100,9 +209,10 @@ def test_generation_validation_does_not_accumulate_session_tables(
         reference: object,
         calendar: object,
     ) -> list[dict[str, object]]:
-        if getattr(spec, "session_field", None) is not None and getattr(
-            spec, "name", None
-        ) != "research_calendar":
+        if (
+            getattr(spec, "session_field", None) is not None
+            and getattr(spec, "name", None) != "research_calendar"
+        ):
             raise AssertionError("validation accumulated a session table")
         return original_open_table(spec, reference, calendar)
 
@@ -152,8 +262,7 @@ def test_generation_preserves_data_unavailable_without_price_or_limit(
         (row["session"], row["instrument_id"]) for row in reopened["prices"]
     }
     assert missing_position not in {
-        (row["session"], row["instrument_id"])
-        for row in reopened["price_limits"]
+        (row["session"], row["instrument_id"]) for row in reopened["price_limits"]
     }
     assert missing_instrument in reopened["base_pool"][0]["instrument_ids"]
     assert all(
@@ -1001,7 +1110,7 @@ def test_admission_projection_opens_only_research_calendar(
         MountedGenerationStore(tmp_path).validate_generation(generation.manifest_sha256)
 
 
-def test_universe_count_opens_only_overlapping_session_partitions(
+def test_universe_count_uses_manifest_statistics_without_parquet_scans(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1039,7 +1148,7 @@ def test_universe_count_opens_only_overlapping_session_partitions(
         )
         == 2
     )
-    assert opened == [2]
+    assert opened == []
 
 
 def test_maximum_universe_cardinality_does_not_count_membership_churn(
@@ -1048,9 +1157,7 @@ def test_maximum_universe_cardinality_does_not_count_membership_churn(
     canonical = _canonical(session_count=4)
     for rows in canonical["liquidity_universes"].values():
         for ordinal, row in enumerate(rows):
-            row["instrument_ids"] = [
-                "equity:A.SH" if ordinal % 2 == 0 else "equity:B.SZ"
-            ]
+            row["instrument_ids"] = ["equity:A.SH" if ordinal % 2 == 0 else "equity:B.SZ"]
     store = MountedGenerationStore(tmp_path)
     generation = store.materialize(
         canonical,
@@ -1059,12 +1166,15 @@ def test_maximum_universe_cardinality_does_not_count_membership_churn(
         source_lineage={"snapshot": "membership-churn"},
     )
 
-    assert store.maximum_universe_cardinality(
-        generation.manifest_sha256,
-        universe="top3000",
-        start_session=str(canonical["research_calendar"][0]),
-        end_session=str(canonical["research_calendar"][-1]),
-    ) == 1
+    assert (
+        store.maximum_universe_cardinality(
+            generation.manifest_sha256,
+            universe="top3000",
+            start_session=str(canonical["research_calendar"][0]),
+            end_session=str(canonical["research_calendar"][-1]),
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])

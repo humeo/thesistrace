@@ -4,8 +4,10 @@ import json
 import os
 import queue
 import sys
+from contextlib import nullcontext
 from threading import Event, Thread
 
+from thesistrace.data.io_metrics import cold_file_reads, measure_data_io
 from thesistrace.research_run.execution import execute_request_chunks
 
 
@@ -34,19 +36,23 @@ def main() -> None:
                 return
 
     Thread(target=watch_supervisor, name="research-supervisor-watch", daemon=True).start()
-    for response in execute_request_chunks(request, cancel_requested=cancellation.is_set):
-        print(json.dumps(response, sort_keys=True, separators=(",", ":")), flush=True)
-        if response.get("status") == "cancelled":
-            raise SystemExit(0)
-        if response.get("status") != "chunk_succeeded":
-            raise SystemExit(1)
-        chunk = response.get("chunk")
-        if not isinstance(chunk, dict):
-            raise SystemExit(65)
-        command = json.loads(commands.get())
-        expected = "acknowledge" if chunk.get("final") is True else "acknowledge_chunk"
-        if command != {"command": expected}:
-            raise SystemExit(65)
+    cold_reads = os.environ.get("THESISTRACE_QUALIFICATION_COLD_DATA_READS") == "1"
+    read_context = cold_file_reads() if cold_reads else nullcontext()
+    with measure_data_io() as measurement, read_context:
+        for response in execute_request_chunks(request, cancel_requested=cancellation.is_set):
+            response["data_io"] = measurement.snapshot()
+            print(json.dumps(response, sort_keys=True, separators=(",", ":")), flush=True)
+            if response.get("status") == "cancelled":
+                raise SystemExit(0)
+            if response.get("status") != "chunk_succeeded":
+                raise SystemExit(1)
+            chunk = response.get("chunk")
+            if not isinstance(chunk, dict):
+                raise SystemExit(65)
+            command = json.loads(commands.get())
+            expected = "acknowledge" if chunk.get("final") is True else "acknowledge_chunk"
+            if command != {"command": expected}:
+                raise SystemExit(65)
 
 
 if __name__ == "__main__":

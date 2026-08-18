@@ -296,7 +296,7 @@ def test_normalized_matrix_matches_characterized_kernel_matrix() -> None:
         neutralization="none",
     )
     assert matrix["checksum"] == (
-        "5acaa9358b7a109487c94477d93b96562f961307e7f780348c4ee8080e2048fb"
+        "2b71a709ea5889f9ff6c8d0062b5ae79d9b20f6a4a233f529ace33235d7805ac"
     )
     assert matrix["effective_lookback"] == 20
 

@@ -44,7 +44,8 @@ validate_cleanup_target() {
 
 compose() {
   validate_test_project
-  if [ "${command:-}" = image-smoke ]; then
+  if [ "${command:-}" = image-smoke ] \
+    || { [ "${command:-}" = benchmark ] && [ "${use_image_overlay:-false}" = true ]; }; then
     COMPOSE_ANSI=never COMPOSE_PROGRESS=plain \
       THESISTRACE_TEST_BUCKET="$bucket_name" \
       THESISTRACE_TEST_DATA_MOUNT="$data_mount" \
@@ -249,6 +250,15 @@ print(json.dumps({
   grep -F '"child_returncode":-9' "$output" >/dev/null
 }
 
+reset_product_state() {
+  compose stop api research-worker tracking-worker postgres rustfs >/dev/null 2>&1 || true
+  compose rm --force api research-worker tracking-worker initialize postgres rustfs \
+    >/dev/null 2>&1 || true
+  "$repo_root/scripts/product-state-volumes" reset "$project_name"
+  compose up --detach --no-build --wait --wait-timeout 300 postgres rustfs initialize
+  compose wait initialize
+}
+
 cleanup_project() {
   validate_cleanup_target
   compose_status=0
@@ -402,15 +412,6 @@ data_mount="$run_root/canonical-data"
 evidence_dir="$run_root/evidence"
 pytest_report="$evidence_dir/pytest.xml"
 database_restart_report="$evidence_dir/pytest-database-restart.xml"
-if [ "${THESISTRACE_UPDATE_BENCHMARK_BASELINE:-0}" = 1 ] && [ -n "${THESISTRACE_BENCHMARK_OUTPUT:-}" ]; then
-  echo "THESISTRACE_BENCHMARK_OUTPUT is incompatible with baseline update mode" >&2
-  exit 2
-fi
-if [ "${THESISTRACE_UPDATE_BENCHMARK_BASELINE:-0}" = 1 ]; then
-  benchmark_output="$repo_root/benchmarks/financial-io-2010-baseline.json"
-else
-  benchmark_output=${THESISTRACE_BENCHMARK_OUTPUT:-"$evidence_dir/financial-io-2010.json"}
-fi
 run_metadata="$run_root/run.txt"
 validate_test_project
 mkdir -p "$evidence_dir" "$data_mount"
@@ -434,25 +435,60 @@ trap 'handle_signal 143' TERM
 compose config --quiet
 case "$command" in
   benchmark)
-    run_phase benchmark-infrastructure compose up --detach \
-      --wait --wait-timeout 300 postgres rustfs
-    postgres_port=$(mapped_port postgres 5432)
-    s3_port=$(mapped_port rustfs 9000)
-    printf 'postgres_port=%s\ns3_port=%s\n' "$postgres_port" "$s3_port" >>"$run_metadata"
-    run_phase benchmark-initialization run_with_environment uv run thesistrace-initialize
-    if [ "${THESISTRACE_UPDATE_BENCHMARK_BASELINE:-0}" = 1 ]; then
-      run_phase benchmark-execution run_with_environment uv run python \
-        scripts/benchmark_financial_io.py \
-        --mount-root "$data_mount" \
-        --output "$benchmark_output" \
-        --skip-budgets \
-        --update-budgets
-    else
-      run_phase benchmark-execution run_with_environment uv run python \
-        scripts/benchmark_financial_io.py \
-        --mount-root "$data_mount" \
-        --output "$benchmark_output"
-    fi
+    use_image_overlay=true
+    run_phase benchmark-images build_runtime_images
+    run_phase benchmark-infrastructure compose up --detach --no-build \
+      --wait --wait-timeout 300 postgres rustfs initialize
+    run_phase benchmark-initialization compose wait initialize
+    qualification_dir="$evidence_dir/long-research"
+    mkdir -p "$qualification_dir"
+    run_phase benchmark-prepare compose run --rm --no-deps -T initialize \
+      python /qualification/long_research_qualification.py prepare \
+      --output /smoke-evidence/long-research/preparation.json
+    run_phase benchmark-api compose up --detach --no-build \
+      --wait --wait-timeout 120 api
+    sample_index=0
+    while [ "$sample_index" -lt 5 ]; do
+      run_phase "benchmark-cold-$sample_index" compose run --rm --no-deps -T \
+        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+        research-worker python /qualification/long_research_qualification.py sample \
+        --phase cold --index "$sample_index" \
+        --log "/qualification-evidence/long-research/cold-$sample_index.log" \
+        --output "/qualification-evidence/long-research/cold-$sample_index.json"
+      sample_index=$((sample_index + 1))
+    done
+    run_phase benchmark-warm-preload compose run --rm --no-deps -T \
+      research-worker python /qualification/long_research_qualification.py preload \
+      --output /qualification-evidence/long-research/preload.json
+    sample_index=0
+    while [ "$sample_index" -lt 5 ]; do
+      run_phase "benchmark-warm-$sample_index-product-state-reset" reset_product_state
+      run_phase "benchmark-warm-$sample_index-api" compose up --detach --no-build \
+        --wait --wait-timeout 120 api
+      run_phase "benchmark-warm-$sample_index" compose run --rm --no-deps -T \
+        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+        research-worker python /qualification/long_research_qualification.py sample \
+        --phase warm --index "$sample_index" \
+        --require-fresh-product-state \
+        --log "/qualification-evidence/long-research/warm-$sample_index.log" \
+        --output "/qualification-evidence/long-research/warm-$sample_index.json"
+      sample_index=$((sample_index + 1))
+    done
+    run_phase benchmark-cancellation compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      research-worker python /qualification/long_research_qualification.py cancel \
+      --log /qualification-evidence/long-research/cancellation.log \
+      --output /qualification-evidence/long-research/cancellation.json
+    backend_image=$(runtime_image_name initialize)
+    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
+    run_phase benchmark-qualification compose run --rm --no-deps -T initialize \
+      python /qualification/long_research_qualification.py assemble \
+      --samples /smoke-evidence/long-research \
+      --image-revision "$image_revision" \
+      --output /smoke-evidence/long-research-qualification.json
+    compose logs --no-color api >"$evidence_dir/long-research/api.log"
+    compose ps --all >"$evidence_dir/long-research/compose-ps.txt"
+    compose images --format json >"$evidence_dir/long-research/images.jsonl"
     ;;
   integration)
     run_phase integration-infrastructure compose up --detach \
@@ -513,7 +549,7 @@ case "$command" in
       --start-date 2010-01-04 \
       --replay /smoke/fixtures/tushare-financial-product-replay.json
     run_phase image-smoke-prepare-data compose run --rm --no-deps -T initialize \
-      python /smoke/browser/prepare_current_data.py
+      python /smoke/browser/prepare_image_smoke_data.py
     run_phase image-smoke-application compose up --detach --no-build \
       --wait --wait-timeout 300 \
       api research-worker tracking-worker web
@@ -530,9 +566,51 @@ case "$command" in
       initialize python /smoke/production_image_smoke.py before \
       >"$evidence_dir/smoke-before.json" \
       2>"$evidence_dir/smoke-before.stderr.log"
-    run_phase image-smoke-restart compose restart api research-worker tracking-worker
+    run_phase image-smoke-worker-loss compose kill research-worker
+    run_phase image-smoke-expire-worker-loss compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py expire-worker-loss \
+      >"$evidence_dir/smoke-expire-worker-loss.json" \
+      2>"$evidence_dir/smoke-expire-worker-loss.stderr.log"
+    run_phase image-smoke-worker-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 research-worker
+    run_phase image-smoke-recovered compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py recovered \
+      >"$evidence_dir/smoke-recovered.json" \
+      2>"$evidence_dir/smoke-recovered.stderr.log"
+    run_phase image-smoke-application-restart \
+      compose restart api research-worker tracking-worker
+    run_phase image-smoke-database-restart compose restart postgres
+    run_phase image-smoke-post-database-restart \
+      compose restart api research-worker tracking-worker
     run_phase image-smoke-reopen compose up --detach --no-build \
       --wait --wait-timeout 120 api research-worker tracking-worker
+    run_phase image-smoke-persisted compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py persisted \
+      >"$evidence_dir/smoke-persisted.json" \
+      2>"$evidence_dir/smoke-persisted.stderr.log"
+    run_phase image-smoke-rustfs-outage compose stop rustfs
+    run_phase image-smoke-publish-transient-target compose run --rm --no-deps -T \
+      initialize python /smoke/browser/prepare_image_smoke_data.py lagged \
+      >"$evidence_dir/transient-target.json" \
+      2>"$evidence_dir/transient-target.stderr.log"
+    run_phase image-smoke-transient-failed compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py transient-failed \
+      >"$evidence_dir/smoke-transient-failed.json" \
+      2>"$evidence_dir/smoke-transient-failed.stderr.log"
+    run_phase image-smoke-rustfs-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 rustfs
     run_phase image-smoke-after compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
@@ -541,6 +619,16 @@ case "$command" in
       >"$evidence_dir/smoke-after.json" \
       2>"$evidence_dir/smoke-after.stderr.log"
     run_phase image-smoke-worker-logs capture_worker_log_evidence
+    run_phase image-smoke-product-state-reset reset_product_state
+    run_phase image-smoke-reset-api compose up --detach --no-build \
+      --wait --wait-timeout 120 api
+    run_phase image-smoke-reset-verified compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py reset \
+      >"$evidence_dir/smoke-reset.json" \
+      2>"$evidence_dir/smoke-reset.stderr.log"
     compose ps --all >"$evidence_dir/compose-ps-after-restart.txt"
     ;;
 esac

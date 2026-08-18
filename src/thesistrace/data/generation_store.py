@@ -56,6 +56,7 @@ from thesistrace.data.market_series import (
 )
 from thesistrace.data.source import (
     CanonicalBootstrapStream,
+    CanonicalColumnarSessionPartition,
     CanonicalSessionPartition,
     CanonicalSourceBatch,
 )
@@ -65,6 +66,7 @@ from thesistrace.publication.serialization import (
     canonical_json_bytes,
     canonicalize_parquet_rows,
     parquet_bytes,
+    parquet_table_bytes,
 )
 from thesistrace.research_series import AlignedResearchData
 
@@ -207,9 +209,9 @@ class MountedGenerationStore:
         if not isinstance(calendar_value, list) or not calendar_value:
             raise GenerationStoreError("Streaming Bootstrap Research Calendar is invalid")
         calendar = [str(value) for value in calendar_value]
-        if (
-            calendar != sorted(set(calendar))
-            or stream.covered_session_range != (calendar[0], calendar[-1])
+        if calendar != sorted(set(calendar)) or stream.covered_session_range != (
+            calendar[0],
+            calendar[-1],
         ):
             raise GenerationStoreError("Streaming Bootstrap Research Calendar is invalid")
 
@@ -234,39 +236,71 @@ class MountedGenerationStore:
         row_counts = {spec.name: 0 for spec in session_specs}
         consumed_sessions: list[str] = []
         for ordinal, partition in enumerate(stream.partitions()):
-            if not isinstance(partition, CanonicalSessionPartition):
+            if not isinstance(
+                partition,
+                CanonicalSessionPartition | CanonicalColumnarSessionPartition,
+            ):
                 raise GenerationStoreError("Streaming Bootstrap partition is incompatible")
             expected_sessions = calendar[
-                ordinal
-                * GENERATION_SESSION_PARTITION_COUNT : (ordinal + 1)
+                ordinal * GENERATION_SESSION_PARTITION_COUNT : (ordinal + 1)
                 * GENERATION_SESSION_PARTITION_COUNT
             ]
             if list(partition.sessions) != expected_sessions:
                 raise GenerationStoreError("Streaming Bootstrap partition ordering is invalid")
-            block = {
-                **static,
-                **dict(partition.canonical),
-                "research_calendar": list(partition.sessions),
-            }
-            try:
-                validate_bootstrap_batch(
-                    CanonicalSourceBatch(
-                        source_name=stream.source_name,
-                        collection_kind="bootstrap",
-                        source_lineage=dict(stream.source_lineage),
-                        canonical=block,
-                        covered_session_range=(partition.sessions[0], partition.sessions[-1]),
+            if isinstance(partition, CanonicalSessionPartition):
+                block = {
+                    **static,
+                    **dict(partition.canonical),
+                    "research_calendar": list(partition.sessions),
+                }
+                try:
+                    validate_bootstrap_batch(
+                        CanonicalSourceBatch(
+                            source_name=stream.source_name,
+                            collection_kind="bootstrap",
+                            source_lineage=dict(stream.source_lineage),
+                            canonical=block,
+                            covered_session_range=(
+                                partition.sessions[0],
+                                partition.sessions[-1],
+                            ),
+                        )
                     )
+                except (KeyError, TypeError, ValueError) as error:
+                    raise GenerationStoreError(
+                        "Streaming Bootstrap partition is invalid"
+                    ) from error
+                for spec in session_specs:
+                    rows = _table_rows(block, spec.name)
+                    canonical_rows = canonicalize_parquet_rows(rows, spec.contract)
+                    objects_by_table[spec.name].append(
+                        self._materialize_partition(spec, canonical_rows, ordinal)
+                    )
+                    row_counts[spec.name] += len(canonical_rows)
+            else:
+                expected_tables = {spec.name for spec in session_specs}
+                if set(partition.tables) != expected_tables:
+                    raise GenerationStoreError(
+                        "Columnar Bootstrap partition table set is incompatible"
+                    )
+                for spec in session_specs:
+                    table = partition.tables[spec.name]
+                    self._validate_columnar_session_extent(
+                        spec,
+                        table,
+                        partition.sessions,
+                    )
+                _validate_columnar_candidate_semantics(
+                    partition.tables,
+                    partition.sessions,
+                    static,
                 )
-            except (KeyError, TypeError, ValueError) as error:
-                raise GenerationStoreError("Streaming Bootstrap partition is invalid") from error
-            for spec in session_specs:
-                rows = _table_rows(block, spec.name)
-                canonical_rows = canonicalize_parquet_rows(rows, spec.contract)
-                objects_by_table[spec.name].append(
-                    self._materialize_partition(spec, canonical_rows, ordinal)
-                )
-                row_counts[spec.name] += len(canonical_rows)
+                for spec in session_specs:
+                    table = partition.tables[spec.name]
+                    objects_by_table[spec.name].append(
+                        self._materialize_columnar_partition(spec, table, ordinal)
+                    )
+                    row_counts[spec.name] += table.num_rows
             consumed_sessions.extend(partition.sessions)
         if consumed_sessions != calendar:
             raise GenerationStoreError("Streaming Bootstrap partition coverage is incomplete")
@@ -288,9 +322,7 @@ class MountedGenerationStore:
         ]
         field_catalog_value = static["field_catalog"]
         assert isinstance(field_catalog_value, list)
-        field_availability = tuple(
-            sorted(str(row["field_id"]) for row in field_catalog_value)
-        )
+        field_availability = tuple(sorted(str(row["field_id"]) for row in field_catalog_value))
         identity = {
             "schema_contract": "canonical-research",
             "data_through_session": calendar[-1],
@@ -417,27 +449,26 @@ class MountedGenerationStore:
         for ordinal in range(partition_count):
             start = ordinal * GENERATION_SESSION_PARTITION_COUNT
             block_calendar = calendar[start : start + GENERATION_SESSION_PARTITION_COUNT]
-            block_tables = {
-                **static_tables,
-                "research_calendar": [
-                    {"session": session} for session in block_calendar
-                ],
-            }
+            block_tables: dict[str, pa.Table] = {}
             for name, manifest in session_manifests.items():
                 spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name]
                 objects = manifest["objects"]
                 assert isinstance(objects, list)
-                rows = self._open_partition(spec, objects[ordinal], ordinal)
-                opened_row_counts[name] += len(rows)
-                if rows != canonicalize_parquet_rows(rows, spec.contract):
-                    raise GenerationStoreError("Generation table ordering is invalid")
-                if any(
-                    str(row[spec.session_field]) not in block_calendar
-                    for row in rows
-                ):
-                    raise GenerationStoreError("Generation table partitioning is invalid")
-                block_tables[name] = rows
-            _validate_candidate_semantics(block_tables)
+                table = self._open_canonical_partition_table(spec, objects[ordinal], ordinal)
+                opened_row_counts[name] += table.num_rows
+                self._validate_columnar_session_extent(spec, table, tuple(block_calendar))
+                block_tables[name] = table
+            _validate_columnar_candidate_semantics(
+                block_tables,
+                tuple(block_calendar),
+                {
+                    "schema_version": "canonical-eod",
+                    "research_calendar": calendar,
+                    "instruments": static_tables["instruments"],
+                    "industry_membership": static_tables["industry_membership"],
+                    "field_catalog": static_tables["field_catalog"],
+                },
+            )
 
         if any(
             opened_row_counts[name] != manifest["row_count"]
@@ -757,6 +788,7 @@ class MountedGenerationStore:
         universe_name: str,
         neutralization: str,
         field_bindings: Mapping[str, str],
+        fact_instrument_ids: frozenset[str],
     ):
         from thesistrace.data.columnar_series import ColumnarResearchData
         from thesistrace.data.fields import FINANCIAL_FIELDS, MARKET_FIELDS
@@ -809,7 +841,7 @@ class MountedGenerationStore:
             str(instrument_id)
             for index in range(universes.num_rows)
             for instrument_id in universes["instrument_ids"][index].as_py()
-        )
+        ) | fact_instrument_ids
         tables: dict[str, pa.Table] = {}
         required_families = {
             "market.instrument_identity",
@@ -823,9 +855,7 @@ class MountedGenerationStore:
             if family.family_id not in required_families:
                 continue
             for table_name in family.table_names:
-                spec, reference = self._family_table_reference(
-                    root, family.family_id, table_name
-                )
+                spec, reference = self._family_table_reference(root, family.family_id, table_name)
                 if spec.session_field is not None:
                     columns = None
                     if table_name == "eod_prices":
@@ -938,21 +968,31 @@ class MountedGenerationStore:
             "equity.liquidity_universe",
             "liquidity_universes",
         )
-        rows = self._open_table_sessions(
-            spec,
-            reference,
-            selected_sessions={
-                session
-                for session in root["research_sessions"]
-                if start_session <= str(session) <= end_session
-            },
-            columns={"session", "universe", "instrument_ids"},
-        )
-        cardinalities = [
-            len({str(instrument_id) for instrument_id in row["instrument_ids"]})
-            for row in rows
-            if row["universe"] == universe
-        ]
+        manifest = self._read_table_manifest(spec, reference)
+        objects = manifest["objects"]
+        assert isinstance(objects, list)
+        cardinalities: list[int] = []
+        for ordinal, object_ref in enumerate(objects):
+            _validate_object_reference(object_ref, ordinal)
+            assert isinstance(object_ref, Mapping)
+            statistics = object_ref["statistics"]
+            assert isinstance(statistics, Mapping)
+            values = statistics.get("universe_cardinalities")
+            if not isinstance(values, list):
+                raise GenerationStoreError("Liquidity Universe statistics are invalid")
+            for value in values:
+                if (
+                    not isinstance(value, list)
+                    or len(value) != 5
+                    or not all(
+                        isinstance(item, int) and not isinstance(item, bool) and item >= 0
+                        for item in value[1:]
+                    )
+                ):
+                    raise GenerationStoreError("Liquidity Universe statistics are invalid")
+                session = str(value[0])
+                if start_session <= session <= end_session:
+                    cardinalities.append(int(value[_UNIVERSE_NAMES.index(universe) + 1]))
         return max(cardinalities, default=0)
 
     def open_refresh_base(
@@ -1118,9 +1158,7 @@ class MountedGenerationStore:
             market_generation.manifest_sha256,
             financial.manifest_sha256,
             prepared_at=prepared_at,
-            publication_coordinate=str(
-                predecessor_root["financial_publication_coordinate"]
-            ),
+            publication_coordinate=str(predecessor_root["financial_publication_coordinate"]),
         )
 
     def _family_table_reference(
@@ -1679,9 +1717,7 @@ class MountedGenerationStore:
             schema = (
                 parquet.schema_arrow
                 if projected_columns is None
-                else pa.schema(
-                    [parquet.schema_arrow.field(column) for column in projected_columns]
-                )
+                else pa.schema([parquet.schema_arrow.field(column) for column in projected_columns])
             )
             table = pa.Table.from_batches(batches, schema=schema)
             record_parquet_scan(
@@ -1831,7 +1867,53 @@ class MountedGenerationStore:
             "row_count": len(partition),
             "first_sort_key": first_key,
             "last_sort_key": last_key,
+            "statistics": _partition_statistics(spec, partition),
         }
+
+    def _materialize_columnar_partition(
+        self,
+        spec: _TableSpec,
+        table: pa.Table,
+        ordinal: int,
+    ) -> dict[str, object]:
+        content = parquet_table_bytes(table, spec.contract)
+        if len(content) > GENERATION_OBJECT_MAX_BYTES:
+            raise GenerationStoreError("Generation object exceeds its byte bound")
+        sha256 = hashlib.sha256(content).hexdigest()
+        self._store_addressed(self._object_path(sha256), sha256, content)
+        first_key = [_manifest_scalar(table[key][0].as_py()) for key in spec.contract.sort_keys]
+        last_key = [
+            _manifest_scalar(table[key][table.num_rows - 1].as_py())
+            for key in spec.contract.sort_keys
+        ]
+        return {
+            "ordinal": ordinal,
+            "sha256": sha256,
+            "byte_count": len(content),
+            "row_count": table.num_rows,
+            "first_sort_key": first_key,
+            "last_sort_key": last_key,
+            "statistics": _columnar_partition_statistics(spec, table),
+        }
+
+    def _validate_columnar_session_extent(
+        self,
+        spec: _TableSpec,
+        table: pa.Table,
+        sessions: tuple[str, ...],
+    ) -> None:
+        if table.num_rows == 0:
+            raise GenerationStoreError(f"Columnar Bootstrap {spec.name} partition is empty")
+        if table.schema != spec.contract.schema or spec.session_field is None:
+            raise GenerationStoreError(f"Columnar Bootstrap {spec.name} schema is incompatible")
+        minimum = pc.min(table[spec.session_field]).as_py()
+        maximum = pc.max(table[spec.session_field]).as_py()
+        minimum_text = minimum.isoformat() if isinstance(minimum, date) else str(minimum)
+        maximum_text = maximum.isoformat() if isinstance(maximum, date) else str(maximum)
+        if minimum_text != sessions[0] or maximum_text != sessions[-1]:
+            raise GenerationStoreError(
+                f"Columnar Bootstrap {spec.name} session extent is incompatible"
+            )
 
     def _materialize_table_manifest(
         self,
@@ -1896,6 +1978,18 @@ class MountedGenerationStore:
         object_ref: object,
         ordinal: int,
     ) -> list[dict[str, object]]:
+        table = self._open_canonical_partition_table(spec, object_ref, ordinal)
+        try:
+            return canonicalize_parquet_rows(table.to_pylist(), spec.contract)
+        except (ParquetContractError, TypeError, ValueError) as error:
+            raise GenerationStoreError("Generation object is incompatible") from error
+
+    def _open_canonical_partition_table(
+        self,
+        spec: _TableSpec,
+        object_ref: object,
+        ordinal: int,
+    ) -> pa.Table:
         _validate_object_reference(object_ref, ordinal)
         assert isinstance(object_ref, Mapping)
         sha256 = str(object_ref["sha256"])
@@ -1914,19 +2008,35 @@ class MountedGenerationStore:
             )
             if table.schema != spec.contract.schema:
                 raise GenerationStoreError("Generation object schema is incompatible")
-            rows = canonicalize_parquet_rows(table.to_pylist(), spec.contract)
-            if parquet_bytes(rows, spec.contract) != content:
+            canonical_content = (
+                parquet_bytes(table.to_pylist(), spec.contract)
+                if any(pa.types.is_list(field.type) for field in table.schema)
+                else parquet_table_bytes(table, spec.contract)
+            )
+            if canonical_content != content:
                 raise GenerationStoreError("Generation object encoding is non-canonical")
         except (ArrowException, ParquetContractError, TypeError, ValueError) as error:
             raise GenerationStoreError("Generation object is incompatible") from error
-        first_key, last_key = _partition_boundaries(rows, spec.contract.sort_keys)
+        first_key = (
+            [_manifest_scalar(table[key][0].as_py()) for key in spec.contract.sort_keys]
+            if table.num_rows
+            else None
+        )
+        last_key = (
+            [
+                _manifest_scalar(table[key][table.num_rows - 1].as_py())
+                for key in spec.contract.sort_keys
+            ]
+            if table.num_rows
+            else None
+        )
         if (
-            object_ref["row_count"] != len(rows)
+            object_ref["row_count"] != table.num_rows
             or object_ref["first_sort_key"] != first_key
             or object_ref["last_sort_key"] != last_key
         ):
             raise GenerationStoreError("Generation object boundaries are invalid")
-        return rows
+        return table
 
     def _read_manifest(self, sha256: str) -> dict[str, object]:
         return _parse_manifest(
@@ -2111,12 +2221,8 @@ def _family_generation_descriptor_from_root(
         financial_candidate_manifest_sha256=(
             None if financial_candidate is None else str(financial_candidate)
         ),
-        financial_research_readiness=(
-            None if readiness is None else dict(readiness)
-        ),
-        financial_publication_coordinate=(
-            None if coordinate is None else str(coordinate)
-        ),
+        financial_research_readiness=(None if readiness is None else dict(readiness)),
+        financial_publication_coordinate=(None if coordinate is None else str(coordinate)),
     )
 
 
@@ -2257,6 +2363,7 @@ def _validate_object_reference(object_ref: object, ordinal: int) -> None:
             "row_count",
             "first_sort_key",
             "last_sort_key",
+            "statistics",
         }
         or object_ref["ordinal"] != ordinal
     ):
@@ -2266,6 +2373,8 @@ def _validate_object_reference(object_ref: object, ordinal: int) -> None:
     row_count = object_ref["row_count"]
     if not isinstance(row_count, int) or isinstance(row_count, bool) or row_count < 0:
         raise GenerationStoreError("Generation object row count is invalid")
+    if not isinstance(object_ref["statistics"], Mapping):
+        raise GenerationStoreError("Generation object statistics are invalid")
 
 
 def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
@@ -2293,6 +2402,143 @@ def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
         except ParquetContractError as error:
             raise GenerationStoreError(f"Canonical table is incompatible: {spec.name}") from error
     return _canonical_from_rows(normalized_rows)
+
+
+def _validate_columnar_candidate_semantics(
+    tables: Mapping[str, pa.Table],
+    sessions: tuple[str, ...],
+    static: Mapping[str, object],
+) -> None:
+    required = {
+        spec.name
+        for spec in MARKET_CANDIDATE_TABLE_SPECS
+        if spec.session_field is not None and spec.name != "research_calendar"
+    }
+    if set(tables) != required:
+        raise GenerationStoreError("Dataset Family table set is incomplete")
+    instruments = static.get("instruments")
+    if not isinstance(instruments, list) or any(
+        not isinstance(row, Mapping) for row in instruments
+    ):
+        raise GenerationStoreError("Canonical instrument identities are invalid")
+    instrument_ids = {str(row["instrument_id"]) for row in instruments}
+    if not instrument_ids or len(instrument_ids) != len(instruments):
+        raise GenerationStoreError("Canonical instrument identities are invalid")
+
+    base = tables["base_pool"]
+    if base["session"].to_pylist() != list(sessions):
+        raise GenerationStoreError("Canonical Base Pool coverage is invalid")
+    base_members = base["instrument_ids"].to_pylist()
+    if any(
+        members != sorted(set(members)) or not set(members) <= instrument_ids
+        for members in base_members
+    ):
+        raise GenerationStoreError("Canonical Base Pool membership is invalid")
+    parent_indices = pc.list_parent_indices(base["instrument_ids"])
+    base_position_table = pa.table(
+        {
+            "session": pc.take(base["session"], parent_indices),
+            "instrument_id": pc.list_flatten(base["instrument_ids"]),
+        }
+    )
+    states = tables["trading_states"]
+    if not states["session"].equals(base_position_table["session"]) or not states[
+        "instrument_id"
+    ].equals(base_position_table["instrument_id"]):
+        raise GenerationStoreError("Canonical Trading State coverage is invalid")
+    allowed_states = pa.array(
+        (
+            "normal",
+            "full_session_suspension",
+            "partial_opening_suspension",
+            "after_open_suspension",
+            "data_unavailable",
+        )
+    )
+    if pc.all(pc.is_in(states["state"], value_set=allowed_states)).as_py() is not True:
+        raise GenerationStoreError("Canonical Trading State coverage is invalid")
+
+    state_keys = _columnar_position_keys(states, "session")
+    required_mask = pc.invert(
+        pc.is_in(
+            states["state"],
+            value_set=pa.array(("full_session_suspension", "data_unavailable")),
+        )
+    )
+    allowed_mask = pc.not_equal(states["state"], "full_session_suspension")
+    required_keys = pc.filter(state_keys, required_mask)
+    allowed_keys = pc.filter(state_keys, allowed_mask)
+    prices = tables["eod_prices"]
+    price_keys = _columnar_position_keys(prices, "session_date")
+    if not _columnar_keys_cover(price_keys, required_keys, allowed_keys):
+        raise GenerationStoreError("Canonical Price coverage is invalid")
+
+    factors = tables["adjustment_factors"]
+    factor_keys = _columnar_position_keys(factors, "session_date")
+    if not factor_keys.equals(price_keys) or not factors["source_adjustment_factor"].equals(
+        prices["adjustment_scale"]
+    ):
+        raise GenerationStoreError("Market Dataset Families are not synchronized")
+    positive_factors = pc.greater(factors["source_adjustment_factor"], Decimal(0))
+    if pc.all(positive_factors).as_py() is not True:
+        raise GenerationStoreError("Canonical Price adjustment factor is invalid")
+    for field in ("open", "high", "low", "close"):
+        raw = pc.cast(prices[f"{field}_raw"], pa.float64())
+        factor = pc.cast(prices["adjustment_scale"], pa.float64())
+        adjusted = pc.cast(prices[f"{field}_adj"], pa.float64())
+        difference = pc.abs(pc.subtract(pc.multiply(raw, factor), adjusted))
+        if pc.all(pc.less_equal(difference, 0.00000001)).as_py() is not True:
+            raise GenerationStoreError("Canonical adjusted Price derivation is inconsistent")
+
+    limits = tables["price_limits"]
+    limit_keys = _columnar_position_keys(limits, "session")
+    if not _columnar_keys_cover(limit_keys, required_keys, price_keys):
+        raise GenerationStoreError("Canonical Price Limit coverage is invalid")
+
+    liquidity = tables["liquidity_universes"]
+    expected_names = ("top1000", "top2000", "top300", "top3000")
+    expected_sessions = [session for session in sessions for _name in expected_names]
+    expected_universes = [name for _session in sessions for name in expected_names]
+    if (
+        liquidity["session"].to_pylist() != expected_sessions
+        or liquidity["universe"].to_pylist() != expected_universes
+        or pc.all(pc.equal(liquidity["status"], "available")).as_py() is not True
+    ):
+        raise GenerationStoreError("Canonical Liquidity Universe coverage is invalid")
+    liquidity_members = liquidity["instrument_ids"].to_pylist()
+    maximum_by_name = {"top300": 300, "top1000": 1000, "top2000": 2000, "top3000": 3000}
+    for session_index, base_ids in enumerate(base_members):
+        by_name = {
+            name: liquidity_members[session_index * len(expected_names) + offset]
+            for offset, name in enumerate(expected_names)
+        }
+        prior: list[str] = []
+        for name in ("top300", "top1000", "top2000", "top3000"):
+            members = by_name[name]
+            if (
+                len(members) > maximum_by_name[name]
+                or len(members) != len(set(members))
+                or not set(members) <= set(base_ids)
+                or prior != members[: len(prior)]
+            ):
+                raise GenerationStoreError("Canonical Liquidity Universe membership is invalid")
+            prior = members
+
+
+def _columnar_position_keys(table: pa.Table, session_field: str) -> pa.Array:
+    sessions = pc.cast(table[session_field], pa.string())
+    return pc.binary_join_element_wise(sessions, table["instrument_id"], "|")
+
+
+def _columnar_keys_cover(
+    actual: pa.Array | pa.ChunkedArray,
+    required: pa.Array | pa.ChunkedArray,
+    allowed: pa.Array | pa.ChunkedArray,
+) -> bool:
+    return (
+        pc.all(pc.is_in(required, value_set=actual)).as_py() is True
+        and pc.all(pc.is_in(actual, value_set=allowed)).as_py() is True
+    )
 
 
 def _validate_candidate_semantics(
@@ -2511,6 +2757,39 @@ def _partition_boundaries(
         [_manifest_scalar(rows[0][key]) for key in sort_keys],
         [_manifest_scalar(rows[-1][key]) for key in sort_keys],
     )
+
+
+def _partition_statistics(
+    spec: _TableSpec,
+    rows: list[dict[str, object]],
+) -> dict[str, object]:
+    if spec.name != "liquidity_universes":
+        return {}
+    by_session: dict[str, dict[str, int]] = {}
+    for row in rows:
+        members = row["instrument_ids"]
+        if not isinstance(members, list):
+            raise GenerationStoreError("Liquidity Universe statistics are invalid")
+        by_session.setdefault(str(row["session"]), {})[str(row["universe"])] = len(
+            set(map(str, members))
+        )
+    try:
+        values = [
+            [session, *(by_session[session][name] for name in _UNIVERSE_NAMES)]
+            for session in sorted(by_session)
+        ]
+    except KeyError as error:
+        raise GenerationStoreError("Liquidity Universe statistics are invalid") from error
+    return {"universe_cardinalities": values}
+
+
+def _columnar_partition_statistics(
+    spec: _TableSpec,
+    table: pa.Table,
+) -> dict[str, object]:
+    if spec.name != "liquidity_universes":
+        return {}
+    return _partition_statistics(spec, table.to_pylist())
 
 
 def _manifest_scalar(value: object) -> object:

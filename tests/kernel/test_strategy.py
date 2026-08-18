@@ -1,6 +1,7 @@
 import copy
 from decimal import Decimal
 
+import numpy as np
 import pytest
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
@@ -10,6 +11,7 @@ from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_al
 from thesistrace.research_kernel.strategy import (
     StrategyCalculationError,
     advance_strategy_metric_state,
+    columnar_equal_weight_benchmark_return,
     equal_weight_benchmark_return,
     legal_order_quantity,
     market_rejection_reason,
@@ -453,6 +455,131 @@ def test_benchmark_rejects_unexplained_missing_exit() -> None:
             {},
             {"equity:1.SH": InstrumentProfile("main", "")},
         )
+
+
+def test_columnar_benchmark_return_is_decimal_equal_to_row_reference() -> None:
+    sessions = ("2026-01-01", "2026-01-02", "2026-01-03")
+    instrument_ids = tuple(f"equity:{index}.SH" for index in range(6))
+    instruments = {
+        instrument_id: InstrumentProfile(
+            "main",
+            sessions[2] if index == 3 else "",
+        )
+        for index, instrument_id in enumerate(instrument_ids)
+    }
+    prices = {
+        (session, instrument_id): ExecutionPrice(
+            str(10 + index + session_index / 7),
+            str(10 + index + session_index / 7),
+        )
+        for session_index, session in enumerate(sessions)
+        for index, instrument_id in enumerate(instrument_ids)
+        if not (
+            (session == sessions[1] and index in {4, 5})
+            or (session == sessions[2] and index in {1, 2, 3})
+        )
+    }
+    states = {
+        (sessions[2], instrument_ids[1]): "data_unavailable",
+        (sessions[2], instrument_ids[2]): "full_session_suspension",
+        (sessions[1], instrument_ids[4]): "full_session_suspension",
+        (sessions[1], instrument_ids[5]): "data_unavailable",
+    }
+    matrix = np.asarray(
+        [
+            [
+                (
+                    Decimal(prices[(session, instrument_id)].adjusted_open)
+                    if (session, instrument_id) in prices
+                    else None
+                )
+                for session in sessions
+            ]
+            for instrument_id in instrument_ids
+        ],
+        dtype=object,
+    )
+    numeric_matrix = np.asarray(
+        [
+            [
+                (
+                    float(prices[(session, instrument_id)].adjusted_open)
+                    if (session, instrument_id) in prices
+                    else np.nan
+                )
+                for session in sessions
+            ]
+            for instrument_id in instrument_ids
+        ],
+        dtype=np.float64,
+    )
+    universes = {sessions[0]: instrument_ids}
+
+    expected = equal_weight_benchmark_return(
+        sessions[0],
+        sessions[1],
+        sessions[2],
+        universes,
+        prices,
+        states,
+        instruments,
+    )
+    actual = columnar_equal_weight_benchmark_return(
+        sessions[0],
+        sessions[1],
+        sessions[2],
+        universes,
+        states,
+        instruments,
+        {instrument_id: index for index, instrument_id in enumerate(instrument_ids)},
+        {session: index for index, session in enumerate(sessions)},
+        matrix,
+        numeric_matrix,
+    )
+
+    assert actual == expected
+
+    complete_prices = {
+        (session, instrument_id): ExecutionPrice(
+            str(10 + index + session_index / 7),
+            str(10 + index + session_index / 7),
+        )
+        for session_index, session in enumerate(sessions)
+        for index, instrument_id in enumerate(instrument_ids)
+    }
+    complete_matrix = np.asarray(
+        [
+            [
+                Decimal(complete_prices[(session, instrument_id)].adjusted_open)
+                for session in sessions
+            ]
+            for instrument_id in instrument_ids
+        ],
+        dtype=object,
+    )
+    complete_expected = equal_weight_benchmark_return(
+        sessions[0],
+        sessions[1],
+        sessions[2],
+        universes,
+        complete_prices,
+        {},
+        instruments,
+    )
+    complete_actual = columnar_equal_weight_benchmark_return(
+        sessions[0],
+        sessions[1],
+        sessions[2],
+        universes,
+        {},
+        instruments,
+        {instrument_id: index for index, instrument_id in enumerate(instrument_ids)},
+        {session: index for index, session in enumerate(sessions)},
+        complete_matrix,
+        np.asarray(complete_matrix, dtype=np.float64),
+    )
+
+    assert complete_actual == complete_expected
 
 
 def test_drawdown_is_a_non_negative_loss_with_recovery() -> None:
