@@ -34,7 +34,7 @@ class SessionProgressionRecord:
     predecessor_checkpoint_session: date
     target_sessions: tuple[date, ...]
     planning_data_generation_id: str
-    status: Literal["running", "succeeded", "blocked", "cancelled"]
+    status: Literal["running", "stopping", "succeeded", "blocked", "cancelled"]
     checkpoint_manifest_sha256: str | None
     provenance: dict[str, object]
 
@@ -48,7 +48,7 @@ class SessionAttemptRecord:
     generation_pin_id: str
     data_generation_id: str
     data_through_session: date
-    status: Literal["running", "succeeded", "failed", "cancelled"]
+    status: Literal["running", "stopping", "succeeded", "failed", "cancelled"]
     failure_reason: str | None
 
 

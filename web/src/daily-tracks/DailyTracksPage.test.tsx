@@ -62,6 +62,31 @@ describe("TrackingProgressView", () => {
     expect(markup).not.toContain("Current session");
     expect(markup).not.toContain("completed");
   });
+
+  it("shows stopping as non-terminal child confirmation", () => {
+    const markup = renderToStaticMarkup(
+      <TrackingProgressView
+        progress={{
+          head_session: "2026-08-05",
+          lag_sessions: 1,
+          phase: "stopping",
+          target_start_session: "2026-08-06",
+          target_end_session: "2026-08-06",
+          target_session_count: 1,
+          completed_target_sessions: 0,
+          current_session: "2026-08-06",
+          cycle_attempt: 1,
+          cycle_attempt_limit: 3,
+          retry_wait: false,
+          next_attempt_eligible_at: null,
+        }}
+      />,
+    );
+
+    expect(markup).toContain("stopping");
+    expect(markup).toContain("Current session");
+    expect(markup).not.toContain("completed");
+  });
 });
 
 describe("TrackingOriginView", () => {

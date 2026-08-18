@@ -158,9 +158,6 @@ def process_one_poll(
                 "Tracking Worker execution memory cannot fit planning capacity"
             )
         product_worked = _process_tracking(runtime, claim, emit)
-    if product_worked:
-        return
-    _collect_one_publication(runtime)
     if configuration.role is WorkerRole.TRACKING:
         removed_caches = runtime.daily_tracks.reconcile_working_cache()
         if removed_caches:
@@ -172,6 +169,9 @@ def process_one_poll(
                     "removed_cache_count": removed_caches,
                 }
             )
+    if product_worked:
+        return
+    _collect_one_publication(runtime)
 
 
 def main(arguments: Sequence[str] | None = None) -> None:

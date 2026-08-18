@@ -8,7 +8,8 @@ import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from threading import Event, Lock, Thread
+from threading import Event, Lock, RLock, Thread
+from time import monotonic
 
 from thesistrace.research_kernel.numeric import NumericContractError
 
@@ -28,6 +29,14 @@ class TrackingExecutionError(RuntimeError):
 
 class TrackingExecutionOwnershipLost(TrackingExecutionError):
     pass
+
+
+class TrackingExecutionCancelled(TrackingExecutionError):
+    pass
+
+
+_STOP_COOPERATIVE_GRACE_SECONDS = 1.0
+_STOP_CHILD_EXIT_BUDGET_SECONDS = 3.0
 
 
 @dataclass(frozen=True)
@@ -67,28 +76,83 @@ class SupervisedTrackingExecution:
         self.result = result
         self._emit = emit
         self._heartbeat = heartbeat
+        self._terminal_lock = RLock()
         self._acknowledged = False
         self._exit_emitted = False
 
-    def acknowledge(self) -> None:
+    def acknowledge(self, *, stop_requested: Callable[[], bool]) -> None:
+        with self._terminal_lock:
+            self._acknowledge(stop_requested=stop_requested)
+
+    def _acknowledge(self, *, stop_requested: Callable[[], bool]) -> None:
         if self._acknowledged:
             raise TrackingExecutionError("Tracking execution was already acknowledged")
+        if stop_requested():
+            self.cancel()
+            raise TrackingExecutionCancelled("Tracking execution was stopped")
         self._heartbeat.acknowledge()
-        try:
-            self._process.wait(timeout=5)
-        except subprocess.TimeoutExpired as error:
-            self._process.kill()
-            self._process.wait(timeout=2)
+        started = monotonic()
+        cancellation_started: float | None = None
+        termination_sent = False
+        timed_out = False
+        while self._process.poll() is None:
+            now = monotonic()
+            if cancellation_started is None and stop_requested():
+                cancellation_started = now
+                self._emit(self._event("tracking_execution_child_stop_requested"))
+            if cancellation_started is not None:
+                termination_sent = _enforce_stop_deadline(
+                    self._process,
+                    elapsed=now - cancellation_started,
+                    termination_sent=termination_sent,
+                    emit_termination=lambda: self._emit(
+                        self._event("tracking_execution_child_termination_requested")
+                    ),
+                )
+            elif now - started >= 5:
+                timed_out = True
+                self._process.kill()
+            try:
+                self._process.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                continue
+        if cancellation_started is not None:
+            self._emit_exit()
+            raise TrackingExecutionCancelled("Tracking execution was stopped")
+        if timed_out:
+            self._emit_exit()
             raise TrackingExecutionError(
                 "Tracking execution child did not exit after acknowledgement"
-            ) from error
+            )
         if self._process.returncode != 0:
             raise TrackingExecutionError(self._child_failure("after acknowledgement"))
         self._acknowledged = True
         self._emit(self._event("tracking_execution_child_acknowledged"))
         self._emit_exit()
 
+    def cancel(self) -> None:
+        with self._terminal_lock:
+            self._cancel()
+
+    def _cancel(self) -> None:
+        if self._process.poll() is not None:
+            self._emit_exit()
+            return
+        self._heartbeat.cancel()
+        self._emit(self._event("tracking_execution_child_stop_requested"))
+        _wait_for_stopped_child(
+            self._process,
+            emit_termination=lambda: self._emit(
+                self._event("tracking_execution_child_termination_requested")
+            ),
+        )
+        self._emit_exit()
+
     def close(self) -> None:
+        with self._terminal_lock:
+            self._close()
+
+    def _close(self) -> None:
         self._heartbeat.close()
         if self._process.poll() is None:
             try:
@@ -164,6 +228,15 @@ class _ChildHeartbeat:
             if self._process.stdin is not None and not self._process.stdin.closed:
                 self._process.stdin.close()
 
+    def cancel(self) -> None:
+        self._stopped.set()
+        self._thread.join(timeout=1)
+        with self._stdin_lock:
+            try:
+                self._write('{"command":"cancel"}\n', close=True)
+            except (BrokenPipeError, OSError, TrackingExecutionError):
+                return
+
     def _run(self) -> None:
         while not self._stopped.is_set():
             if self._authority_lost.is_set():
@@ -201,6 +274,7 @@ class SupervisedTrackingExecutor:
         *,
         emit: ExecutionEvent,
         authority_lost: Event,
+        stop_requested: Callable[[], bool],
     ) -> SupervisedTrackingExecution:
         process = subprocess.Popen(
             [sys.executable, "-m", "thesistrace.entrypoints.tracking_child"],
@@ -254,6 +328,7 @@ class SupervisedTrackingExecutor:
                 request=request,
                 emit=emit,
                 authority_lost=authority_lost,
+                stop_requested=stop_requested,
             )
             result = _result_from_response(response)
             if result.child_peak_rss_bytes > self._execution_memory_bytes:
@@ -278,6 +353,35 @@ class SupervisedTrackingExecutor:
                 emit,
                 heartbeat,
             )
+        except TrackingExecutionCancelled:
+            if heartbeat is not None:
+                heartbeat.cancel()
+            elif process.stdin is not None and not process.stdin.closed:
+                process.stdin.close()
+            _wait_for_stopped_child(
+                process,
+                emit_termination=lambda: emit(
+                    {
+                        "event": "tracking_execution_child_termination_requested",
+                        "resource_type": "TrackingAdvance",
+                        "resource_id": request.track_id,
+                        "attempt_id": request.attempt_id,
+                        "child_pid": process.pid,
+                    }
+                ),
+            )
+            emit(
+                {
+                    "event": "tracking_execution_child_exited",
+                    "resource_type": "TrackingAdvance",
+                    "resource_id": request.track_id,
+                    "attempt_id": request.attempt_id,
+                    "child_pid": process.pid,
+                    "exit_code": process.returncode,
+                    "acknowledged": False,
+                }
+            )
+            raise
         except Exception:
             if heartbeat is not None:
                 heartbeat.close()
@@ -310,6 +414,7 @@ def _read_message(
     request: TrackingExecutionRequest,
     emit: ExecutionEvent,
     authority_lost: Event,
+    stop_requested: Callable[[], bool],
 ) -> dict[str, object]:
     if process.stdout is None:
         raise TrackingExecutionError("Tracking execution child has no output pipe")
@@ -317,6 +422,8 @@ def _read_message(
     selector.register(process.stdout, selectors.EVENT_READ)
     try:
         while True:
+            if stop_requested():
+                raise TrackingExecutionCancelled("Tracking execution was stopped")
             if authority_lost.is_set():
                 raise TrackingExecutionOwnershipLost(
                     "Tracking execution ownership was lost"
@@ -371,6 +478,45 @@ def _read_message(
         stderr = process.stderr.read().strip()
     detail = f": {stderr}" if stderr else ""
     raise TrackingExecutionError(f"Tracking execution child exited without a result{detail}")
+
+
+def _wait_for_stopped_child(
+    process: subprocess.Popen[str],
+    *,
+    emit_termination: Callable[[], None],
+) -> None:
+    started = monotonic()
+    termination_sent = False
+    while process.poll() is None:
+        termination_sent = _enforce_stop_deadline(
+            process,
+            elapsed=monotonic() - started,
+            termination_sent=termination_sent,
+            emit_termination=emit_termination,
+        )
+        try:
+            process.wait(timeout=0.05)
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def _enforce_stop_deadline(
+    process: subprocess.Popen[str],
+    *,
+    elapsed: float,
+    termination_sent: bool,
+    emit_termination: Callable[[], None],
+) -> bool:
+    if process.poll() is not None:
+        return termination_sent
+    if elapsed >= _STOP_CHILD_EXIT_BUDGET_SECONDS:
+        process.kill()
+        return termination_sent
+    if elapsed >= _STOP_COOPERATIVE_GRACE_SECONDS and not termination_sent:
+        process.terminate()
+        emit_termination()
+        return True
+    return termination_sent
 
 
 def _result_from_response(value: Mapping[str, object]) -> TrackingExecutionResult:

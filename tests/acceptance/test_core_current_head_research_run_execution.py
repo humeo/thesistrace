@@ -746,6 +746,110 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        track_ids: list[str] = []
+        for index in range(2):
+            run_id = client.post(
+                "/api/research-runs",
+                json=_run_command(f"stop-non-running-track-{index}"),
+            ).json()["id"]
+            assert runtime.research_runs.process_next() is True
+            track_ids.append(
+                str(
+                    client.post(
+                        f"/api/research-runs/{run_id}/daily-tracks",
+                        json={"request_id": f"stop-non-running-track-{index}"},
+                    ).json()["id"]
+                )
+            )
+        _publish_head(
+            settings,
+            sessions=(*seed_sessions, "2026-08-06"),
+            price_offset=1,
+            expected_manifest=head,
+        )
+
+        capacity_blocker = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            execution_memory_bytes=1,
+        )
+        assert capacity_blocker.process_next() is True
+        blocked_track, retry_wait_track = track_ids
+        assert client.get(f"/api/daily-tracks/{blocked_track}").json()["status"] == "blocked"
+        blocked_stop = client.post(
+            f"/api/daily-tracks/{blocked_track}/stop",
+            json={"request_id": "stop-capacity-blocked-track"},
+        )
+        assert blocked_stop.status_code == 202
+        assert blocked_stop.json()["status"] == "stopped"
+        blocked_state = _tracking_retry_state(settings, blocked_track)
+        assert blocked_state["progression_status"] == "cancelled"
+        assert blocked_state["attempt_ordinals"] == []
+
+        unavailable_s3 = boto3.client(
+            "s3",
+            endpoint_url="http://127.0.0.1:1",
+            aws_access_key_id=settings.s3_access_key_id,
+            aws_secret_access_key=settings.s3_secret_access_key,
+            region_name=settings.s3_region,
+            config=Config(
+                connect_timeout=0.1,
+                read_timeout=0.1,
+                retries={"max_attempts": 0},
+            ),
+        )
+        try:
+            failing = DailyTrackService(
+                runtime.database,
+                publication=Publication(
+                    runtime.database,
+                    unavailable_s3,
+                    bucket=settings.s3_bucket,
+                ),
+                dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+                generation_store=MountedGenerationStore(settings.data_mount),
+                read_result_bundle=read_result_bundle,
+            )
+            with pytest.raises(DailyTrackProgressionFailed):
+                failing.process_next()
+        finally:
+            unavailable_s3.close()
+        retry_wait = client.get(f"/api/daily-tracks/{retry_wait_track}").json()
+        assert retry_wait["progress"]["phase"] == "retry_wait"
+        retry_wait_stop = client.post(
+            f"/api/daily-tracks/{retry_wait_track}/stop",
+            json={"request_id": "stop-retry-wait-track"},
+        )
+        assert retry_wait_stop.status_code == 202
+        assert retry_wait_stop.json()["status"] == "stopped"
+        stopped_state = _tracking_retry_state(settings, retry_wait_track)
+        assert stopped_state["progression_status"] == "cancelled"
+        assert stopped_state["attempt_ordinals"] == [1]
+        assert stopped_state["next_attempt_eligible_at"] is None
+
+    with TestClient(create_app(settings)) as restarted:
+        assert restarted.app.state.core_runtime.daily_tracks.process_next() is False
+        assert _tracking_retry_state(settings, retry_wait_track)["attempt_ordinals"] == [1]
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_tracking_heartbeat_pool_timeout_enters_the_transient_cycle(
     tmp_path: Path,
 ) -> None:
@@ -1487,6 +1591,9 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         )
         stop_claimed = Event()
         finish_stopped_advance = Event()
+        stop_events: list[dict[str, object]] = []
+        cooperative_stop_requested = Event()
+        allow_cooperative_stop = Event()
         publication_count_before_stop = _publication_manifest_count(settings)
 
         def stop_barrier(stage: str, _track_id: str, _target: str) -> None:
@@ -1502,23 +1609,57 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             read_result_bundle=read_result_bundle,
             progress=stop_barrier,
         )
+
+        def capture_stop_event(event: dict[str, object]) -> None:
+            stop_events.append(event)
+            if event.get("event") == "tracking_execution_child_stop_requested":
+                cooperative_stop_requested.set()
+                assert allow_cooperative_stop.wait(timeout=10)
+
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(stopped_processor.process_next)
+            future = executor.submit(
+                stopped_processor.process_next,
+                on_execution_event=capture_stop_event,
+            )
             assert stop_claimed.wait(timeout=10)
             stopped = client.post(
                 f"/api/daily-tracks/{track['id']}/stop",
                 json={"request_id": "attempt-start-head-track-stop"},
             )
             assert stopped.status_code == 202
-            assert stopped.json()["status"] == "stopped"
+            assert stopped.json()["status"] == "stopping"
+            assert cooperative_stop_requested.wait(timeout=5)
             stopped_while_child_live = _stored_tracking_activation(
                 settings,
                 track["id"],
             )
             assert stopped_while_child_live["active_pin_count"] == 1
+            stopping_detail = client.get(f"/api/daily-tracks/{track['id']}").json()
+            assert stopping_detail["status"] == "stopping"
+            assert stopping_detail["progress"]["phase"] == "stopping"
             assert _publication_manifest_count(settings) == publication_count_before_stop
+            allow_cooperative_stop.set()
+            poll = Event()
+            deadline = monotonic() + 5
+            while monotonic() < deadline:
+                if client.get(f"/api/daily-tracks/{track['id']}").json()["status"] == "stopped":
+                    break
+                poll.wait(0.01)
+            else:
+                raise AssertionError("cooperative Stop was not confirmed in five seconds")
             finish_stopped_advance.set()
             assert future.result(timeout=20) is True
+        assert any(
+            event.get("event") == "tracking_execution_child_exited"
+            for event in stop_events
+        )
+        assert not any(
+            event.get("event") == "tracking_execution_child_termination_requested"
+            for event in stop_events
+        )
+        terminal_detail = client.get(f"/api/daily-tracks/{track['id']}").json()
+        assert terminal_detail["status"] == "stopped"
+        assert terminal_detail["progress"]["phase"] == "stopped"
         stopped_replay = client.post(
             f"/api/daily-tracks/{track['id']}/stop",
             json={"request_id": "attempt-start-head-track-stop"},
@@ -1533,6 +1674,78 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert stopped_state["cancelled_attempt_count"] == 1
         assert stopped_state["active_pin_count"] == 0
         assert _publication_manifest_count(settings) == publication_count_before_stop
+
+        forced_run = client.post(
+            "/api/research-runs",
+            json=_run_command("forced-tracking-stop"),
+        )
+        assert forced_run.status_code == 202
+        assert runtime.research_runs.process_next() is True
+        forced_track = client.post(
+            f"/api/research-runs/{forced_run.json()['id']}/daily-tracks",
+            json={"request_id": "forced-tracking-stop-activation"},
+        )
+        assert forced_track.status_code == 201
+        forced_track_id = str(forced_track.json()["id"])
+        forced_prepared = Event()
+        release_forced = Event()
+        forced_events: list[dict[str, object]] = []
+
+        def forced_stop_barrier(stage: str, _track_id: str, _target: str) -> None:
+            if stage == "prepared":
+                forced_prepared.set()
+                assert release_forced.wait(timeout=10)
+
+        def force_child_to_ignore_cooperative_stop(event: dict[str, object]) -> None:
+            forced_events.append(event)
+            if event.get("event") == "tracking_execution_result_received":
+                os.kill(int(event["child_pid"]), signal.SIGSTOP)
+
+        forced_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            progress=forced_stop_barrier,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                forced_processor.process_next,
+                on_execution_event=force_child_to_ignore_cooperative_stop,
+            )
+            assert forced_prepared.wait(timeout=10)
+            stop_started = monotonic()
+            forced_stop = client.post(
+                f"/api/daily-tracks/{forced_track_id}/stop",
+                json={"request_id": "forced-tracking-stop-command"},
+            )
+            assert forced_stop.status_code == 202
+            assert forced_stop.json()["status"] == "stopping"
+            poll = Event()
+            deadline = stop_started + 5
+            while monotonic() < deadline:
+                if client.get(f"/api/daily-tracks/{forced_track_id}").json()[
+                    "status"
+                ] == "stopped":
+                    break
+                poll.wait(0.01)
+            else:
+                raise AssertionError("healthy supervisor did not confirm Stop in five seconds")
+            assert _stored_tracking_activation(settings, forced_track_id)[
+                "active_pin_count"
+            ] == 0
+            assert monotonic() - stop_started < 5
+            release_forced.set()
+            assert future.result(timeout=5) is True
+        assert any(
+            event.get("event") == "tracking_execution_child_termination_requested"
+            for event in forced_events
+        )
+        assert client.get(f"/api/daily-tracks/{forced_track_id}").json()[
+            "status"
+        ] == "stopped"
+        assert _stored_tracking_activation(settings, forced_track_id)["active_pin_count"] == 0
 
     with TestClient(create_app(settings)) as restarted:
         reopened = restarted.get(f"/api/research-runs/{run_id}")
@@ -1669,17 +1882,16 @@ def test_research_delete_preserves_track_until_explicit_stop_and_delete(
         )
         assert stopped.status_code == 202
         assert stopped.json()["status"] == "stopped"
-        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 204
         assert worker_cache_paths[0].is_file()
-        cache_mode = worker_cache_root.stat().st_mode
-        worker_cache_root.chmod(0o500)
-        try:
-            assert worker_tracks.reconcile_working_cache() == 0
-            assert worker_cache_paths[0].is_file()
-        finally:
-            worker_cache_root.chmod(cache_mode)
         assert worker_tracks.reconcile_working_cache() == 1
         assert not worker_cache_paths[0].exists()
+        stopped_state = _stored_tracking_activation(settings, track_id)
+        assert stopped_state["current_checkpoint_session"].isoformat() == advanced_sessions[-1]
+        assert {
+            str(row["manifest_sha256"])
+            for row in _tracking_checkpoint_history(settings, track_id)
+        } == checkpoint_manifests
+        assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 204
         assert client.delete(f"/api/daily-tracks/{track_id}").status_code == 404
         assert client.get(f"/api/daily-tracks/{track_id}").status_code == 404
 
@@ -1860,7 +2072,7 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
-    _publish_head(
+    seed_head = _publish_head(
         settings,
         sessions=("2026-08-03", "2026-08-04", "2026-08-05"),
         price_offset=0,
@@ -1946,11 +2158,48 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
             == 10
         )
 
-        stopped = client.post(
-            f"/api/daily-tracks/{tracks[0]['id']}/stop",
-            json={"request_id": "current-track-capacity-stop"},
+        _publish_head(
+            settings,
+            sessions=("2026-08-03", "2026-08-04", "2026-08-05", "2026-08-06"),
+            price_offset=1,
+            expected_manifest=seed_head,
         )
-        assert stopped.status_code == 202
+        stopping_prepared = Event()
+        release_stopping = Event()
+
+        def hold_stopping_track(stage: str, track_id: str, _target: str) -> None:
+            if stage == "prepared":
+                assert track_id == tracks[0]["id"]
+                stopping_prepared.set()
+                assert release_stopping.wait(timeout=10)
+
+        stopping_processor = DailyTrackService(
+            runtime.database,
+            publication=runtime.publication,
+            dataset_lifecycle=DatasetLifecycle(runtime.database, settings.data_mount),
+            generation_store=MountedGenerationStore(settings.data_mount),
+            read_result_bundle=read_result_bundle,
+            progress=hold_stopping_track,
+        )
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(stopping_processor.process_next)
+            assert stopping_prepared.wait(timeout=10)
+            stopped = client.post(
+                f"/api/daily-tracks/{tracks[0]['id']}/stop",
+                json={"request_id": "current-track-capacity-stop"},
+            )
+            assert stopped.status_code == 202
+            assert stopped.json()["status"] == "stopping"
+            still_full = client.post(
+                f"/api/research-runs/{rejected_run_id}/daily-tracks",
+                json={"request_id": "current-track-capacity-while-stopping"},
+            )
+            assert still_full.status_code == 409
+            release_stopping.set()
+            assert future.result(timeout=5) is True
+        assert client.get(f"/api/daily-tracks/{tracks[0]['id']}").json()[
+            "status"
+        ] == "stopped"
         admitted = client.post(
             f"/api/research-runs/{rejected_run_id}/daily-tracks",
             json={"request_id": "current-track-capacity-after-stop"},
@@ -1958,7 +2207,16 @@ def test_current_data_track_limit_releases_capacity_after_stop(tmp_path: Path) -
         assert admitted.status_code == 201
         final_tracks = client.get("/api/daily-tracks").json()["items"]
         assert len(final_tracks) == 11
-        assert len([item for item in final_tracks if item["status"] in {"active", "blocked"}]) == 10
+        assert (
+            len(
+                [
+                    item
+                    for item in final_tracks
+                    if item["status"] in {"active", "blocked", "stopping"}
+                ]
+            )
+            == 10
+        )
 
 
 @pytest.mark.skipif(
@@ -2861,6 +3119,99 @@ def test_orphaned_tracking_child_exits_before_recovery_releases_its_pin(
             assert completed["track_status"] == "active"
             assert completed["current_checkpoint_session"].isoformat() == "2026-08-06"
             assert completed["active_pin_count"] == 0
+        finally:
+            if owner.poll() is None:
+                owner.kill()
+                owner.communicate(timeout=10)
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_tracking_stop_survives_owner_loss_until_child_and_lease_are_dead(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = ("2026-08-03", "2026-08-04", "2026-08-05")
+    seed_head = _publish_head(settings, sessions=seed_sessions, price_offset=0)
+
+    with TestClient(create_app(settings)) as client:
+        run_id = client.post(
+            "/api/research-runs",
+            json=_run_command("lost-owner-tracking-stop"),
+        ).json()["id"]
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "lost-owner-tracking-stop-activation"},
+        ).json()["id"]
+        _publish_head(
+            settings,
+            sessions=(*seed_sessions, "2026-08-06"),
+            price_offset=1,
+            expected_manifest=seed_head,
+        )
+        publication_count = _publication_manifest_count(settings)
+        owner = _start_claim_barrier_worker(
+            settings,
+            "tracking",
+            "tracking_execution_result_received",
+        )
+        try:
+            result_event = _wait_for_worker_event(
+                owner,
+                "tracking_execution_result_received",
+            )
+            child_pid = int(result_event["child_pid"])
+            os.kill(owner.pid, signal.SIGSTOP)
+
+            stopping = client.post(
+                f"/api/daily-tracks/{track_id}/stop",
+                json={"request_id": "lost-owner-tracking-stop-command"},
+            )
+            assert stopping.status_code == 202
+            assert stopping.json()["status"] == "stopping"
+            pending = _stored_tracking_activation(settings, str(track_id))
+            assert pending["track_status"] == "stopping"
+            assert pending["active_pin_count"] == 1
+            assert client.app.state.core_runtime.daily_tracks.process_next() is False
+            assert _stored_tracking_activation(settings, str(track_id))[
+                "active_pin_count"
+            ] == 1
+
+            deadline = monotonic() + 10
+            while monotonic() < deadline:
+                if _process_state(child_pid).startswith("Z"):
+                    break
+            else:
+                raise AssertionError("Tracking child watchdog did not stop the child")
+
+            owner.kill()
+            owner.communicate(timeout=10)
+            deadline = monotonic() + 10
+            while monotonic() < deadline:
+                if not _process_state(child_pid):
+                    break
+            else:
+                raise AssertionError("stopped Tracking child was not reaped")
+
+            before_lease_expiry = _stored_tracking_activation(settings, str(track_id))
+            assert before_lease_expiry["track_status"] == "stopping"
+            assert before_lease_expiry["active_pin_count"] == 1
+            _expire_current_tracking_attempt(settings, str(track_id))
+            assert client.app.state.core_runtime.daily_tracks.process_next() is True
+
+            recovered = _stored_tracking_activation(settings, str(track_id))
+            assert recovered["track_status"] == "stopped"
+            assert recovered["cancelled_progression_count"] == 1
+            assert recovered["cancelled_attempt_count"] == 1
+            assert recovered["active_pin_count"] == 0
+            assert recovered["current_checkpoint_session"].isoformat() == seed_sessions[-1]
+            assert _publication_manifest_count(settings) == publication_count
+            assert client.app.state.core_runtime.daily_tracks.process_next() is False
         finally:
             if owner.poll() is None:
                 owner.kill()
@@ -4087,7 +4438,7 @@ def _expire_current_tracking_attempt(settings: CoreSettings, track_id: str) -> N
                 """
                 UPDATE daily_tracks.session_progression_attempts
                 SET lease_expires_at = now() - interval '1 second'
-                WHERE track_id = %s AND status = 'running'
+                WHERE track_id = %s AND status IN ('running', 'stopping')
                 """,
                 (track_id,),
             )

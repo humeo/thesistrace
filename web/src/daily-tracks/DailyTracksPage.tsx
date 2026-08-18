@@ -8,7 +8,7 @@ import type { TerminalStrategyState } from "../research-runs/ResearchRunsPage";
 
 type DailyTrackSummary = {
   id: string;
-  status: "active" | "blocked" | "stopped";
+  status: "active" | "blocked" | "stopping" | "stopped";
   seed_run_id: string;
   result_checksum_sha256: string;
   origin_session: string;
@@ -17,7 +17,7 @@ type DailyTrackSummary = {
 
 export type DailyTrackDetail = {
   id: string;
-  status: "active" | "blocked" | "stopped";
+  status: "active" | "blocked" | "stopping" | "stopped";
   origin: {
     seed_run_id: string;
     seed_research_available: boolean;
@@ -31,7 +31,7 @@ export type DailyTrackDetail = {
   progress: {
     head_session: string;
     lag_sessions: number;
-    phase: "waiting" | "queued" | "retry_wait" | "starting" | "calculating" | "result_ready" | "staging" | "blocked" | "up_to_date" | "stopped";
+    phase: "waiting" | "queued" | "retry_wait" | "starting" | "calculating" | "result_ready" | "staging" | "stopping" | "blocked" | "up_to_date" | "stopped";
     target_start_session: string | null;
     target_end_session: string | null;
     target_session_count: number;
@@ -224,7 +224,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
               Retry blocked target
             </button>
           ) : null}
-          {track.status !== "stopped" ? (
+          {track.status === "active" || track.status === "blocked" ? (
             <button
               disabled={stopState === "submitting"}
               onClick={() => void stopTrack()}
@@ -238,7 +238,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             </button>
           ) : null}
         </header>
-        {track.status !== "stopped" ? (
+        {track.status === "active" || track.status === "blocked" ? (
           <p>Stopping this DailyTrack is irreversible.</p>
         ) : null}
         {loadState === "refreshing" ? (
@@ -254,6 +254,12 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
           <p role="status">Stopping DailyTrack…</p>
         ) : null}
         {stopState === "accepted" ? (
+          <p role="status">DailyTrack Stop accepted.</p>
+        ) : null}
+        {track.status === "stopping" ? (
+          <p role="status">DailyTrack is stopping; its execution child is still being confirmed.</p>
+        ) : null}
+        {track.status === "stopped" ? (
           <p role="status">DailyTrack stopped permanently.</p>
         ) : null}
         {deleteError !== null ? <p role="alert">{deleteError}</p> : null}

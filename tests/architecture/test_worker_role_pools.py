@@ -120,7 +120,7 @@ def test_research_worker_refuses_a_plan_from_another_memory_envelope() -> None:
     assert research.calls == 0
 
 
-def test_tracking_worker_claims_only_one_advance_and_skips_maintenance() -> None:
+def test_tracking_worker_claims_one_advance_and_reconciles_terminal_caches() -> None:
     research = _ProductQueue("run-1", True)
     tracking = _TrackingQueue("track-1", True)
     publication = _PublicationMaintenance()
@@ -136,9 +136,15 @@ def test_tracking_worker_claims_only_one_advance_and_skips_maintenance() -> None
     assert research.calls == 0
     assert tracking.calls == 1
     assert publication.calls == 0
-    assert tracking.cache_calls == 0
+    assert tracking.cache_calls == 1
     assert events[0]["resource_type"] == "TrackingAdvance"
     assert events[0]["resource_id"] == "track-1"
+    assert events[1] == {
+        "event": "worker_cache_reconciliation",
+        "role": "tracking",
+        "slot": 1,
+        "removed_cache_count": 1,
+    }
 
 
 @pytest.mark.parametrize(

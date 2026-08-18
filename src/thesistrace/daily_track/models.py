@@ -64,7 +64,7 @@ class DailyTrackSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal["active", "blocked", "stopped"]
+    status: Literal["active", "blocked", "stopping", "stopped"]
     seed_run_id: str
     result_checksum_sha256: str
     origin_session: str
@@ -197,6 +197,7 @@ class DailyTrackProgress(BaseModel):
         "calculating",
         "result_ready",
         "staging",
+        "stopping",
         "blocked",
         "up_to_date",
         "stopped",
@@ -216,7 +217,7 @@ class DailyTrackDetail(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: str
-    status: Literal["active", "blocked", "stopped"]
+    status: Literal["active", "blocked", "stopping", "stopped"]
     origin: DailyTrackOriginView
     strategy_session: str
     data_through_session: str

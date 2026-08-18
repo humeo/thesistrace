@@ -27,6 +27,7 @@ from thesistrace.daily_track.execution import (
     ExecutionEvent,
     SupervisedTrackingExecution,
     SupervisedTrackingExecutor,
+    TrackingExecutionCancelled,
     TrackingExecutionOwnershipLost,
     TrackingExecutionRequest,
     TrackingExecutionResult,
@@ -270,7 +271,7 @@ class DailyTrackService:
                 """
                 SELECT count(*) AS count
                 FROM daily_tracks.tracks
-                WHERE status IN ('active', 'blocked')
+                WHERE status IN ('active', 'blocked', 'stopping')
                 """
             ).fetchone()
             assert capacity is not None
@@ -342,7 +343,7 @@ class DailyTrackService:
         on_claim: Callable[[str, str], None] | None = None,
         on_execution_event: ExecutionEvent | None = None,
     ) -> bool:
-        if self._release_cancelled_pin_after_owner_death():
+        if self._recover_stopping_attempt():
             return True
         if self._recover_expired_current():
             return True
@@ -375,13 +376,24 @@ class DailyTrackService:
 
                 execution: SupervisedTrackingExecution | None = None
                 failure: Exception | None = None
+                stopping_pending = False
+                stop_monitor: Thread | None = None
+                stop_monitor_finished = Event()
                 with self._maintain_current_claim(current_claim) as authority_lost:
                     try:
                         execution = self._execute_current(
                             current_claim,
                             emit=execution_event,
                             authority_lost=authority_lost,
+                            stop_requested=lambda: self._stop_is_pending(current_claim),
                         )
+                        stop_monitor = Thread(
+                            target=self._monitor_current_stop,
+                            args=(current_claim, execution, stop_monitor_finished),
+                            name=f"daily-track-stop-monitor-{current_claim.track_id}",
+                            daemon=True,
+                        )
+                        stop_monitor.start()
                         self._record_current_progress(
                             current_claim,
                             phase="staging",
@@ -396,7 +408,9 @@ class DailyTrackService:
                             current_claim.track_id,
                             current_claim.data_generation_id,
                         )
-                        execution.acknowledge()
+                        execution.acknowledge(
+                            stop_requested=lambda: self._stop_is_pending(current_claim)
+                        )
                         published = self._publish_current(
                             current_claim,
                             prepared,
@@ -413,12 +427,26 @@ class DailyTrackService:
                             current_claim.track_id,
                             current_claim.data_generation_id,
                         )
+                    except TrackingExecutionCancelled:
+                        stopping_pending = True
                     except Exception as error:
                         failure = error
                     finally:
                         if execution is not None:
-                            execution.close()
-                if isinstance(failure, DailyTrackFenced):
+                            stopping_pending = (
+                                stopping_pending or self._stop_is_pending(current_claim)
+                            )
+                            if stopping_pending:
+                                execution.cancel()
+                            else:
+                                execution.close()
+                        stop_monitor_finished.set()
+                        if stop_monitor is not None:
+                            stop_monitor.join(timeout=5)
+                stopping_pending = stopping_pending or self._stop_is_pending(current_claim)
+                if stopping_pending:
+                    self._confirm_stopped(current_claim)
+                elif isinstance(failure, DailyTrackFenced):
                     logger.info(
                         "DailyTrack session progression rejected by execution fence",
                         extra={"track_id": current_claim.track_id},
@@ -442,7 +470,8 @@ class DailyTrackService:
                         "DailyTrack session failure rejected by execution fence",
                         extra={"track_id": current_claim.track_id},
                     )
-                self._release_cancelled_pin(current_claim)
+                if not stopping_pending:
+                    self._release_cancelled_pin(current_claim)
             return True
         return False
 
@@ -642,40 +671,74 @@ class DailyTrackService:
                     raise DailyTrackStopUnavailable(
                         "DailyTrack Stop requires active or blocked status"
                     )
-                transaction.execute(
+                running_attempt = transaction.execute(
                     """
-                    UPDATE daily_tracks.session_progression_attempts
-                    SET status = 'cancelled', heartbeat_at = now(),
-                        finished_at = now(),
-                        failure_reason = 'UserStopped'
+                    SELECT id, progression_id
+                    FROM daily_tracks.session_progression_attempts
                     WHERE track_id = %s AND status = 'running'
+                    FOR UPDATE
                     """,
                     (track_id,),
-                )
-                transaction.execute(
-                    """
-                    UPDATE daily_tracks.session_progressions
-                    SET status = 'cancelled', finished_at = now(),
-                        queue_position = NULL
-                    WHERE track_id = %s AND status IN ('running', 'blocked')
-                    """,
-                    (track_id,),
-                )
-                stopped = transaction.execute(
-                    """
-                    UPDATE daily_tracks.tracks
-                    SET status = 'stopped', execution_fence = execution_fence + 1,
-                        blocked_progression_id = NULL, blocked_reason = NULL
-                    WHERE id = %s AND status IN ('active', 'blocked')
-                    """,
-                    (track_id,),
-                )
-                if stopped.rowcount != 1:
+                ).fetchone()
+                if running_attempt is None:
+                    transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progressions
+                        SET status = 'cancelled', finished_at = now(),
+                            next_attempt_eligible_at = NULL,
+                            queue_position = NULL
+                        WHERE track_id = %s AND status IN ('running', 'blocked')
+                        """,
+                        (track_id,),
+                    )
+                    updated = transaction.execute(
+                        """
+                        UPDATE daily_tracks.tracks
+                        SET status = 'stopped', execution_fence = execution_fence + 1,
+                            blocked_progression_id = NULL, blocked_reason = NULL
+                        WHERE id = %s AND status IN ('active', 'blocked')
+                        """,
+                        (track_id,),
+                    )
+                    outcome_status = "stopped"
+                else:
+                    attempt = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progression_attempts
+                        SET status = 'stopping', heartbeat_at = now(),
+                            failure_reason = 'UserStopped'
+                        WHERE id = %s AND progression_id = %s
+                          AND status = 'running'
+                        """,
+                        (running_attempt["id"], running_attempt["progression_id"]),
+                    )
+                    progression = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progressions
+                        SET status = 'stopping', next_attempt_eligible_at = NULL,
+                            queue_position = NULL
+                        WHERE id = %s AND track_id = %s AND status = 'running'
+                        """,
+                        (running_attempt["progression_id"], track_id),
+                    )
+                    updated = transaction.execute(
+                        """
+                        UPDATE daily_tracks.tracks
+                        SET status = 'stopping', execution_fence = execution_fence + 1,
+                            blocked_progression_id = NULL, blocked_reason = NULL
+                        WHERE id = %s AND status = 'active'
+                        """,
+                        (track_id,),
+                    )
+                    if attempt.rowcount != 1 or progression.rowcount != 1:
+                        raise DailyTrackFenced
+                    outcome_status = "stopping"
+                if updated.rowcount != 1:
                     raise DailyTrackFenced
                 outcome = DailyTrackSummary(
                     **{
                         **_summary(track).model_dump(mode="python"),
-                        "status": "stopped",
+                        "status": outcome_status,
                     }
                 )
                 transaction.execute(
@@ -691,7 +754,7 @@ class DailyTrackService:
                         Jsonb(outcome.model_dump(mode="json")),
                     ),
                 )
-        if self._working_cache is not None:
+        if outcome.status == "stopped" and self._working_cache is not None:
             self._working_cache.delete(track_id)
         return outcome
 
@@ -777,7 +840,7 @@ class DailyTrackService:
                 """
                 SELECT id
                 FROM daily_tracks.tracks
-                WHERE status IN ('active', 'blocked')
+                WHERE status IN ('active', 'blocked', 'stopping')
                 """
             ).fetchall()
         removed, pending = self._working_cache.reconcile(str(row["id"]) for row in rows)
@@ -834,7 +897,7 @@ class DailyTrackService:
                         LIMIT 1
                     ) AS attempt ON true
                     WHERE progression.track_id = %s
-                      AND progression.status IN ('running', 'blocked')
+                      AND progression.status IN ('running', 'stopping', 'blocked')
                     """,
                     (track_id,),
                 ).fetchone()
@@ -860,7 +923,9 @@ class DailyTrackService:
             current_index = calendar.index(current_session)
             lag_sessions = len(calendar) - current_index - 1
             unresolved = row["unresolved_progression"]
-            if row["status"] == "stopped":
+            if row["status"] == "stopping":
+                progress_phase = "stopping"
+            elif row["status"] == "stopped":
                 progress_phase = "stopped"
             elif unresolved is None:
                 progress_phase = "up_to_date" if lag_sessions == 0 else "waiting"
@@ -1574,7 +1639,7 @@ class DailyTrackService:
                 owner_id=str(row["id"]),
             )
 
-    def _release_cancelled_pin_after_owner_death(self) -> bool:
+    def _recover_stopping_attempt(self) -> bool:
         if self._dataset_lifecycle is None:
             return False
         for pin in self._dataset_lifecycle.active_pins():
@@ -1589,24 +1654,158 @@ class DailyTrackService:
                 with self._database.transaction() as transaction:
                     current = transaction.execute(
                         """
-                        SELECT attempt.id, attempt.generation_pin_id
+                        SELECT attempt.id, attempt.track_id, attempt.progression_id,
+                               attempt.generation_pin_id
                         FROM daily_tracks.session_progression_attempts AS attempt
-                        WHERE attempt.id = %s AND attempt.status = 'cancelled'
+                        JOIN daily_tracks.session_progressions AS progression
+                          ON progression.id = attempt.progression_id
+                        JOIN daily_tracks.tracks AS track ON track.id = attempt.track_id
+                        WHERE attempt.id = %s AND attempt.status = 'stopping'
+                          AND progression.status = 'stopping'
+                          AND track.status = 'stopping'
                           AND attempt.lease_expires_at <= now()
-                        FOR UPDATE OF attempt
+                        FOR UPDATE OF track, progression, attempt
                         """,
                         (attempt_id,),
                     ).fetchone()
                     if current is None:
                         continue
+                    attempt = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progression_attempts
+                        SET status = 'cancelled', heartbeat_at = now(),
+                            lease_expires_at = now(), finished_at = now()
+                        WHERE id = %s AND status = 'stopping'
+                        """,
+                        (current["id"],),
+                    )
+                    progression = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progressions
+                        SET status = 'cancelled', finished_at = now(),
+                            next_attempt_eligible_at = NULL, queue_position = NULL
+                        WHERE id = %s AND status = 'stopping'
+                        """,
+                        (current["progression_id"],),
+                    )
+                    track = transaction.execute(
+                        """
+                        UPDATE daily_tracks.tracks
+                        SET status = 'stopped', blocked_progression_id = NULL,
+                            blocked_reason = NULL
+                        WHERE id = %s AND status = 'stopping'
+                        """,
+                        (current["track_id"],),
+                    )
+                    if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
+                        raise DailyTrackFenced
                     released = self._dataset_lifecycle.release_pin_if_active_in_transaction(
                         transaction,
                         str(current["generation_pin_id"]),
                         owner_id=str(current["id"]),
                     )
                 if released:
+                    if self._working_cache is not None:
+                        self._working_cache.delete(str(current["track_id"]))
                     return True
         return False
+
+    def _stop_is_pending(self, claim: _SessionProgressionClaim) -> bool:
+        with self._database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT track.status AS track_status,
+                       progression.status AS progression_status,
+                       attempt.status AS attempt_status
+                FROM daily_tracks.session_progression_attempts AS attempt
+                JOIN daily_tracks.session_progressions AS progression
+                  ON progression.id = attempt.progression_id
+                JOIN daily_tracks.tracks AS track ON track.id = attempt.track_id
+                WHERE attempt.id = %s AND progression.id = %s AND track.id = %s
+                """,
+                (claim.attempt_id, claim.progression_id, claim.track_id),
+            ).fetchone()
+        return row == {
+            "track_status": "stopping",
+            "progression_status": "stopping",
+            "attempt_status": "stopping",
+        }
+
+    def _monitor_current_stop(
+        self,
+        claim: _SessionProgressionClaim,
+        execution: SupervisedTrackingExecution,
+        finished: Event,
+    ) -> None:
+        while not finished.wait(0.05):
+            if not self._stop_is_pending(claim):
+                continue
+            try:
+                execution.cancel()
+                self._confirm_stopped(claim)
+            except Exception:
+                logger.exception(
+                    "DailyTrack Stop monitor failed",
+                    extra={"track_id": claim.track_id, "attempt_id": claim.attempt_id},
+                )
+            return
+
+    def _confirm_stopped(self, claim: _SessionProgressionClaim) -> None:
+        assert self._dataset_lifecycle is not None
+        with self._database.transaction() as transaction:
+            current = transaction.execute(
+                """
+                SELECT attempt.generation_pin_id
+                FROM daily_tracks.session_progression_attempts AS attempt
+                JOIN daily_tracks.session_progressions AS progression
+                  ON progression.id = attempt.progression_id
+                JOIN daily_tracks.tracks AS track ON track.id = attempt.track_id
+                WHERE attempt.id = %s AND attempt.progression_id = %s
+                  AND attempt.status = 'stopping'
+                  AND progression.status = 'stopping'
+                  AND track.id = %s AND track.status = 'stopping'
+                FOR UPDATE OF track, progression, attempt
+                """,
+                (claim.attempt_id, claim.progression_id, claim.track_id),
+            ).fetchone()
+            if current is None:
+                return
+            attempt = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progression_attempts
+                SET status = 'cancelled', heartbeat_at = now(),
+                    lease_expires_at = now(), finished_at = now()
+                WHERE id = %s AND status = 'stopping'
+                """,
+                (claim.attempt_id,),
+            )
+            progression = transaction.execute(
+                """
+                UPDATE daily_tracks.session_progressions
+                SET status = 'cancelled', finished_at = now(),
+                    next_attempt_eligible_at = NULL, queue_position = NULL
+                WHERE id = %s AND status = 'stopping'
+                """,
+                (claim.progression_id,),
+            )
+            track = transaction.execute(
+                """
+                UPDATE daily_tracks.tracks
+                SET status = 'stopped', blocked_progression_id = NULL,
+                    blocked_reason = NULL
+                WHERE id = %s AND status = 'stopping'
+                """,
+                (claim.track_id,),
+            )
+            if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
+                raise DailyTrackFenced
+            self._dataset_lifecycle.release_pin_in_transaction(
+                transaction,
+                str(current["generation_pin_id"]),
+                owner_id=claim.attempt_id,
+            )
+        if self._working_cache is not None:
+            self._working_cache.delete(claim.track_id)
 
     @contextmanager
     def _maintain_current_claim(
@@ -1732,6 +1931,7 @@ class DailyTrackService:
         *,
         emit: ExecutionEvent,
         authority_lost: Event,
+        stop_requested: Callable[[], bool],
     ) -> SupervisedTrackingExecution:
         assert self._publication is not None
         assert self._executor is not None
@@ -1763,6 +1963,7 @@ class DailyTrackService:
             ),
             emit=emit,
             authority_lost=authority_lost,
+            stop_requested=stop_requested,
         )
 
     def _prepare_current_result(

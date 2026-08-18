@@ -47,6 +47,8 @@ def main() -> None:
                     last_heartbeat = monotonic()
                     watchdog.notify_all()
                 continue
+            if command == {"command": "cancel"}:
+                os._exit(76)
             with watchdog:
                 terminal_command_received = True
                 watchdog.notify_all()
