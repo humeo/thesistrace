@@ -9,6 +9,8 @@ SET default_tablespace = '';
 
 SET default_table_access_method = heap;
 
+CREATE SEQUENCE daily_tracks.work_queue_sequence;
+
 --
 -- Name: retry_receipts; Type: TABLE; Schema: daily_tracks; Owner: -
 --
@@ -53,6 +55,8 @@ CREATE TABLE daily_tracks.session_progression_attempts (
     progression_id text NOT NULL,
     track_id text NOT NULL,
     ordinal integer NOT NULL,
+    cycle_ordinal integer NOT NULL,
+    cycle_attempt_ordinal integer NOT NULL,
     fence bigint NOT NULL,
     generation_pin_id text NOT NULL,
     data_generation_id text NOT NULL,
@@ -67,6 +71,8 @@ CREATE TABLE daily_tracks.session_progression_attempts (
     failure_reason text,
     CONSTRAINT session_progression_attempts_fence_check CHECK ((fence > 0)),
     CONSTRAINT session_progression_attempts_ordinal_check CHECK ((ordinal > 0)),
+    CONSTRAINT session_progression_attempts_cycle_ordinal_check CHECK ((cycle_ordinal > 0)),
+    CONSTRAINT session_progression_attempts_cycle_attempt_ordinal_check CHECK ((cycle_attempt_ordinal BETWEEN 1 AND 3)),
     CONSTRAINT session_progression_attempts_execution_phase_check CHECK ((execution_phase = ANY (ARRAY['starting'::text, 'calculating'::text, 'result_ready'::text, 'staging'::text]))),
     CONSTRAINT session_progression_attempts_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
@@ -84,6 +90,9 @@ CREATE TABLE daily_tracks.session_progressions (
     target_start_session date NOT NULL,
     target_end_session date NOT NULL,
     planning_data_generation_id text NOT NULL,
+    current_cycle_ordinal integer,
+    next_attempt_eligible_at timestamp with time zone,
+    queue_position bigint,
     status text NOT NULL,
     checkpoint_manifest_sha256 text,
     provenance jsonb NOT NULL,
@@ -92,6 +101,7 @@ CREATE TABLE daily_tracks.session_progressions (
     CONSTRAINT session_progressions_check CHECK ((target_start_session = target_sessions[1])),
     CONSTRAINT session_progressions_check1 CHECK ((target_end_session = target_sessions[cardinality(target_sessions)])),
     CONSTRAINT session_progressions_check2 CHECK ((((status = 'succeeded'::text) AND (checkpoint_manifest_sha256 IS NOT NULL) AND (finished_at IS NOT NULL)) OR ((status <> 'succeeded'::text) AND (checkpoint_manifest_sha256 IS NULL)))),
+    CONSTRAINT session_progressions_current_cycle_ordinal_check CHECK (((current_cycle_ordinal IS NULL) OR (current_cycle_ordinal > 0))),
     CONSTRAINT session_progressions_provenance_check CHECK ((jsonb_typeof(provenance) = 'object'::text)),
     CONSTRAINT session_progressions_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'blocked'::text, 'cancelled'::text]))),
     CONSTRAINT session_progressions_target_sessions_check CHECK ((cardinality(target_sessions) > 0))
@@ -136,6 +146,7 @@ CREATE TABLE daily_tracks.tracks (
     origin jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     execution_fence bigint DEFAULT 0 NOT NULL,
+    queue_position bigint DEFAULT nextval('daily_tracks.work_queue_sequence') NOT NULL,
     blocked_reason text,
     blocked_progression_id text,
     CONSTRAINT tracks_lifecycle_state_check CHECK ((((status = ANY (ARRAY['active'::text, 'stopped'::text])) AND (blocked_progression_id IS NULL) AND (blocked_reason IS NULL)) OR ((status = 'blocked'::text) AND (blocked_progression_id IS NOT NULL) AND (blocked_reason IS NOT NULL)))),
@@ -214,6 +225,14 @@ ALTER TABLE ONLY daily_tracks.session_progression_attempts
 
 ALTER TABLE ONLY daily_tracks.session_progression_attempts
     ADD CONSTRAINT session_progression_attempts_progression_id_ordinal_key UNIQUE (progression_id, ordinal);
+
+
+--
+-- Name: session_progression_attempts session_progression_attempts_cycle_position_key; Type: CONSTRAINT; Schema: daily_tracks; Owner: -
+--
+
+ALTER TABLE ONLY daily_tracks.session_progression_attempts
+    ADD CONSTRAINT session_progression_attempts_cycle_position_key UNIQUE (progression_id, cycle_ordinal, cycle_attempt_ordinal);
 
 
 --

@@ -11,7 +11,9 @@ from pathlib import Path
 from threading import Event, Thread
 from uuid import uuid4
 
+from psycopg import OperationalError
 from psycopg.types.json import Jsonb
+from psycopg_pool import PoolTimeout
 
 from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.daily_track.cache import _DailyTrackWorkingCache
@@ -25,6 +27,7 @@ from thesistrace.daily_track.execution import (
     ExecutionEvent,
     SupervisedTrackingExecution,
     SupervisedTrackingExecutor,
+    TrackingExecutionOwnershipLost,
     TrackingExecutionRequest,
     TrackingExecutionResult,
 )
@@ -80,6 +83,9 @@ ACTIVE_DAILY_TRACK_LIMIT = 10
 PUBLIC_BLOCKED_REASON = "DailyTrack could not process the current dataset."
 CAPACITY_BLOCKED_REASON = "DailyTrack target exceeds Tracking Worker capacity."
 FINANCIAL_COVERAGE_BLOCKED_REASON = "Financial Coverage ends before the next Research Session."
+INFRASTRUCTURE_EXHAUSTED_BLOCKED_REASON = (
+    "DailyTrack exhausted its automatic infrastructure retries."
+)
 _FINANCIAL_FIELD_IDS = frozenset(field.field_id for field in FINANCIAL_FIELDS)
 
 
@@ -147,6 +153,8 @@ class _SessionProgressionClaim:
     track_id: str
     progression_id: str
     attempt_id: str
+    cycle_ordinal: int
+    cycle_attempt_ordinal: int
     fence: int
     generation_pin_id: str
     data_generation_id: str
@@ -182,11 +190,7 @@ class DailyTrackService:
         research_references_result: ResearchReferencesResult | None = None,
         execution_memory_bytes: int = DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
     ) -> None:
-        if (
-            lease_seconds <= 0
-            or heartbeat_seconds <= 0
-            or execution_memory_bytes <= 0
-        ):
+        if lease_seconds <= 0 or heartbeat_seconds <= 0 or execution_memory_bytes <= 0:
             raise ValueError("DailyTrack lease and heartbeat intervals must be positive")
         self._database = database
         self._publication = publication
@@ -227,15 +231,18 @@ class DailyTrackService:
         transaction: PostgresTransaction,
         manifest_sha256: str,
     ) -> bool:
-        return transaction.execute(
-            """
+        return (
+            transaction.execute(
+                """
             SELECT 1
             FROM daily_tracks.tracks
             WHERE origin #>> '{verified_result,result_manifest_sha256}' = %s
             LIMIT 1
             """,
-            (manifest_sha256,),
-        ).fetchone() is not None
+                (manifest_sha256,),
+            ).fetchone()
+            is not None
+        )
 
     def activate(
         self,
@@ -490,7 +497,7 @@ class DailyTrackService:
                 raise DailyTrackRetryUnavailable("DailyTrack Retry requires blocked status")
             session_progression = transaction.execute(
                 """
-                SELECT id
+                SELECT id, target_sessions, current_cycle_ordinal
                 FROM daily_tracks.session_progressions
                 WHERE track_id = %s AND status = 'blocked'
                 FOR UPDATE
@@ -511,30 +518,40 @@ class DailyTrackService:
             assert blocked is not None
             if str(blocked["blocked_progression_id"]) != progression_id:
                 raise DailyTrackFenced
-            progression = transaction.execute(
-                """
-                UPDATE daily_tracks.session_progressions
-                SET status = 'running', finished_at = NULL
-                WHERE id = %s AND track_id = %s AND status = 'blocked'
-                """,
-                (progression_id, track_id),
+            target_fits = self._retry_target_fits(
+                track,
+                tuple(value.isoformat() for value in session_progression["target_sessions"]),
             )
-            activated = transaction.execute(
-                """
-                UPDATE daily_tracks.tracks
-                SET status = 'active', blocked_progression_id = NULL,
-                    blocked_reason = NULL
-                WHERE id = %s AND status = 'blocked'
-                  AND blocked_progression_id = %s
-                """,
-                (track_id, progression_id),
-            )
-            if progression.rowcount != 1 or activated.rowcount != 1:
-                raise DailyTrackFenced
+            if target_fits:
+                progression = transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET status = 'running', finished_at = NULL,
+                        current_cycle_ordinal =
+                            COALESCE(current_cycle_ordinal, 0) + 1,
+                        next_attempt_eligible_at = now(),
+                        queue_position = nextval('daily_tracks.work_queue_sequence')
+                    WHERE id = %s AND track_id = %s AND status = 'blocked'
+                    """,
+                    (progression_id, track_id),
+                )
+                activated = transaction.execute(
+                    """
+                    UPDATE daily_tracks.tracks
+                    SET status = 'active', blocked_progression_id = NULL,
+                        blocked_reason = NULL,
+                        queue_position = nextval('daily_tracks.work_queue_sequence')
+                    WHERE id = %s AND status = 'blocked'
+                      AND blocked_progression_id = %s
+                    """,
+                    (track_id, progression_id),
+                )
+                if progression.rowcount != 1 or activated.rowcount != 1:
+                    raise DailyTrackFenced
             outcome = DailyTrackSummary(
                 **{
                     **_summary(track).model_dump(mode="python"),
-                    "status": "active",
+                    "status": "active" if target_fits else "blocked",
                 }
             )
             transaction.execute(
@@ -553,6 +570,36 @@ class DailyTrackService:
                 ),
             )
         return outcome
+
+    def _retry_target_fits(
+        self,
+        track: Mapping[str, object],
+        target_sessions: tuple[str, ...],
+    ) -> bool:
+        if self._dataset_lifecycle is None or self._generation_store is None:
+            raise RuntimeError("current-data DailyTrack Retry is not configured")
+        current = self._dataset_lifecycle.current_pointer()
+        if current is None:
+            return False
+        admission = self._generation_store.open_admission(current.generation_manifest_sha256)
+        origin = TrackingOrigin.model_validate(track["origin"])
+        planning = _origin_planning_facts(origin)
+        maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(
+            admission.generation.manifest_sha256,
+            universe=origin_universe(origin),
+            start_session=target_sessions[0],
+            end_session=target_sessions[-1],
+        )
+        plan = plan_tracking_advance(
+            unpublished_sessions=tuple(_session_date(value) for value in target_sessions),
+            formula_work=planning["formula_work"],
+            node_count=planning["node_count"],
+            field_count=planning["field_count"],
+            maximum_universe_cardinality=maximum_universe_cardinality,
+            effective_lookback=planning["effective_lookback"],
+            execution_memory_bytes=self._execution_memory_bytes,
+        )
+        return not plan.capacity_blocked and len(plan.target_sessions) >= len(target_sessions)
 
     def stop(
         self,
@@ -608,7 +655,8 @@ class DailyTrackService:
                 transaction.execute(
                     """
                     UPDATE daily_tracks.session_progressions
-                    SET status = 'cancelled', finished_at = now()
+                    SET status = 'cancelled', finished_at = now(),
+                        queue_position = NULL
                     WHERE track_id = %s AND status IN ('running', 'blocked')
                     """,
                     (track_id,),
@@ -664,9 +712,7 @@ class DailyTrackService:
             if row is None:
                 return False
             if row["status"] != "stopped":
-                raise DailyTrackDeleteConflict(
-                    "DailyTrack deletion requires stopped status"
-                )
+                raise DailyTrackDeleteConflict("DailyTrack deletion requires stopped status")
             origin = TrackingOrigin.model_validate(row["origin"])
             checkpoint_rows = transaction.execute(
                 """
@@ -685,15 +731,18 @@ class DailyTrackService:
             for manifest_sha256 in {
                 str(checkpoint["manifest_sha256"]) for checkpoint in checkpoint_rows
             }:
-                still_referenced = transaction.execute(
-                    """
+                still_referenced = (
+                    transaction.execute(
+                        """
                     SELECT 1
                     FROM daily_tracks.session_checkpoints
                     WHERE manifest_sha256 = %s
                     LIMIT 1
                     """,
-                    (manifest_sha256,),
-                ).fetchone() is not None
+                        (manifest_sha256,),
+                    ).fetchone()
+                    is not None
+                )
                 self._publication.release_manifest_in_transaction(
                     transaction,
                     manifest_sha256,
@@ -731,9 +780,7 @@ class DailyTrackService:
                 WHERE status IN ('active', 'blocked')
                 """
             ).fetchall()
-        removed, pending = self._working_cache.reconcile(
-            str(row["id"]) for row in rows
-        )
+        removed, pending = self._working_cache.reconcile(str(row["id"]) for row in rows)
         if pending:
             logger.warning(
                 "DailyTrack Working Cache cleanup remains pending",
@@ -770,12 +817,17 @@ class DailyTrackService:
                            progression.target_start_session::text,
                            progression.target_end_session::text,
                            cardinality(progression.target_sessions) AS target_session_count,
+                           progression.current_cycle_ordinal,
+                           progression.next_attempt_eligible_at::text,
+                           progression.next_attempt_eligible_at > now() AS retry_wait,
                            attempt.status AS attempt_status,
+                           attempt.cycle_attempt_ordinal,
                            attempt.execution_phase,
                            attempt.current_session::text AS current_session
                     FROM daily_tracks.session_progressions AS progression
                     LEFT JOIN LATERAL (
-                        SELECT status, execution_phase, current_session
+                        SELECT status, execution_phase, current_session,
+                               cycle_attempt_ordinal
                         FROM daily_tracks.session_progression_attempts
                         WHERE progression_id = progression.id
                         ORDER BY ordinal DESC
@@ -816,6 +868,8 @@ class DailyTrackService:
                 progress_phase = "blocked"
             elif unresolved["attempt_status"] == "running":
                 progress_phase = unresolved["execution_phase"]
+            elif unresolved["retry_wait"]:
+                progress_phase = "retry_wait"
             else:
                 progress_phase = "queued"
             factor_value = _mapping_value(
@@ -877,9 +931,7 @@ class DailyTrackService:
                     "origin": {
                         "seed_run_id": origin.seed_run_id,
                         "seed_research_available": row["seed_research_available"],
-                        "result_checksum_sha256": (
-                            origin.verified_result.result_checksum_sha256
-                        ),
+                        "result_checksum_sha256": (origin.verified_result.result_checksum_sha256),
                         "strategy_session": origin.initial_strategy_state.session,
                         "terminal_account": {
                             name: getattr(origin.initial_strategy_state, name)
@@ -905,14 +957,10 @@ class DailyTrackService:
                         "lag_sessions": lag_sessions,
                         "phase": progress_phase,
                         "target_start_session": (
-                            None
-                            if unresolved is None
-                            else unresolved["target_start_session"]
+                            None if unresolved is None else unresolved["target_start_session"]
                         ),
                         "target_end_session": (
-                            None
-                            if unresolved is None
-                            else unresolved["target_end_session"]
+                            None if unresolved is None else unresolved["target_end_session"]
                         ),
                         "target_session_count": (
                             0 if unresolved is None else unresolved["target_session_count"]
@@ -920,8 +968,19 @@ class DailyTrackService:
                         "completed_target_sessions": 0,
                         "current_session": (
                             unresolved["current_session"]
-                            if unresolved is not None
-                            and unresolved["attempt_status"] == "running"
+                            if unresolved is not None and unresolved["attempt_status"] == "running"
+                            else None
+                        ),
+                        "cycle_attempt": (
+                            None if unresolved is None else unresolved["cycle_attempt_ordinal"]
+                        ),
+                        "cycle_attempt_limit": 3,
+                        "retry_wait": (
+                            False if unresolved is None else bool(unresolved["retry_wait"])
+                        ),
+                        "next_attempt_eligible_at": (
+                            unresolved["next_attempt_eligible_at"]
+                            if unresolved is not None and unresolved["retry_wait"]
                             else None
                         ),
                     },
@@ -1103,6 +1162,23 @@ class DailyTrackService:
         if current_head is None:
             return None
         with self._database.transaction() as transaction:
+            transaction.execute(
+                """
+                WITH eligible AS (
+                    SELECT id
+                    FROM daily_tracks.session_progressions
+                    WHERE status = 'running'
+                      AND queue_position IS NULL
+                      AND next_attempt_eligible_at <= now()
+                    ORDER BY next_attempt_eligible_at, created_at, id
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE daily_tracks.session_progressions AS progression
+                SET queue_position = nextval('daily_tracks.work_queue_sequence')
+                FROM eligible
+                WHERE progression.id = eligible.id
+                """
+            )
             rows = transaction.execute(
                 """
                 SELECT track.id, track.origin, track.execution_fence,
@@ -1116,6 +1192,8 @@ class DailyTrackService:
                   ON checkpoint.track_id = state.track_id
                  AND checkpoint.manifest_sha256 =
                         state.current_checkpoint_manifest_sha256
+                LEFT JOIN daily_tracks.session_progressions AS pending
+                  ON pending.track_id = track.id AND pending.status = 'running'
                 WHERE track.status = 'active'
                   AND checkpoint.boundary_session < %s
                   AND NOT EXISTS (
@@ -1130,7 +1208,14 @@ class DailyTrackService:
                       WHERE attempt.track_id = track.id
                         AND attempt.status = 'running'
                   )
-                ORDER BY track.created_at, track.id
+                  AND (
+                      pending.id IS NULL
+                      OR (
+                          pending.next_attempt_eligible_at <= now()
+                          AND pending.queue_position IS NOT NULL
+                      )
+                  )
+                ORDER BY COALESCE(pending.queue_position, track.queue_position), track.id
                 FOR UPDATE OF track, state SKIP LOCKED
                 LIMIT 1
                 """,
@@ -1169,6 +1254,8 @@ class DailyTrackService:
                     SELECT id,
                            predecessor_checkpoint_manifest_sha256,
                            target_sessions,
+                           current_cycle_ordinal,
+                           next_attempt_eligible_at,
                            COALESCE((
                                SELECT max(ordinal)
                                FROM daily_tracks.session_progression_attempts
@@ -1186,23 +1273,17 @@ class DailyTrackService:
                     target_sessions = tuple(
                         value.isoformat() for value in existing["target_sessions"]
                     )
-                    financial_coverage_unavailable = (
-                        _uses_financial_fields(origin)
-                        and (
-                            admission.financial_observation_through_session is None
-                            or target_sessions[-1]
-                            > admission.financial_observation_through_session
-                        )
+                    financial_coverage_unavailable = _uses_financial_fields(origin) and (
+                        admission.financial_observation_through_session is None
+                        or target_sessions[-1] > admission.financial_observation_through_session
                     )
                 planning_candidates = target_sessions[:63]
                 planning = _origin_planning_facts(origin)
-                maximum_universe_cardinality = (
-                    self._generation_store.maximum_universe_cardinality(
-                        generation.manifest_sha256,
-                        universe=origin_universe(origin),
-                        start_session=planning_candidates[0],
-                        end_session=planning_candidates[-1],
-                    )
+                maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(
+                    generation.manifest_sha256,
+                    universe=origin_universe(origin),
+                    start_session=planning_candidates[0],
+                    end_session=planning_candidates[-1],
                 )
                 plan = plan_tracking_advance(
                     unpublished_sessions=tuple(
@@ -1215,14 +1296,11 @@ class DailyTrackService:
                     effective_lookback=planning["effective_lookback"],
                     execution_memory_bytes=execution_memory_bytes,
                 )
-                planned_target_sessions = tuple(
-                    value.isoformat() for value in plan.target_sessions
-                )
+                planned_target_sessions = tuple(value.isoformat() for value in plan.target_sessions)
                 if existing is None:
                     target_sessions = planned_target_sessions
-                target_fits = (
-                    not plan.capacity_blocked
-                    and len(planned_target_sessions) >= len(target_sessions)
+                target_fits = not plan.capacity_blocked and len(planned_target_sessions) >= len(
+                    target_sessions
                 )
                 progression_provenance: dict[str, object] = {
                     "schema_version": "daily-track-progression-v1",
@@ -1237,6 +1315,8 @@ class DailyTrackService:
                 if existing is None:
                     progression_id = f"track_progression_{uuid4().hex[:20]}"
                     ordinal = 1
+                    cycle_ordinal = 1
+                    cycle_attempt_ordinal = 1
                     self._session_coordinates.start_progression(
                         transaction,
                         progression_id=progression_id,
@@ -1245,16 +1325,29 @@ class DailyTrackService:
                         generation_sessions=tuple(_session_date(value) for value in calendar),
                         target_sessions=tuple(_session_date(value) for value in target_sessions),
                         planning_data_generation_id=generation.manifest_sha256,
+                        initial_cycle_ordinal=1 if target_fits else None,
                         provenance=progression_provenance,
                     )
                 else:
                     progression_id = str(existing["id"])
                     ordinal = int(existing["latest_ordinal"]) + 1
+                    if existing["current_cycle_ordinal"] is None:
+                        raise DailyTrackFenced
+                    cycle_ordinal = int(existing["current_cycle_ordinal"])
+                    cycle_attempt_ordinal = transaction.execute(
+                        """
+                        SELECT count(*) + 1 AS ordinal
+                        FROM daily_tracks.session_progression_attempts
+                        WHERE progression_id = %s AND cycle_ordinal = %s
+                        """,
+                        (progression_id, cycle_ordinal),
+                    ).fetchone()["ordinal"]
                 if not target_fits:
                     progression = transaction.execute(
                         """
                         UPDATE daily_tracks.session_progressions
-                        SET status = 'blocked', finished_at = now()
+                        SET status = 'blocked', finished_at = now(),
+                            queue_position = NULL
                         WHERE id = %s AND track_id = %s AND status = 'running'
                         """,
                         (progression_id, row["id"]),
@@ -1295,6 +1388,8 @@ class DailyTrackService:
                     attempt_id=attempt_id,
                     progression_id=progression_id,
                     ordinal=ordinal,
+                    cycle_ordinal=cycle_ordinal,
+                    cycle_attempt_ordinal=int(cycle_attempt_ordinal),
                     fence=fence,
                     generation_pin_id=pin.id,
                     data_generation_id=generation.manifest_sha256,
@@ -1304,7 +1399,8 @@ class DailyTrackService:
                 updated = transaction.execute(
                     """
                     UPDATE daily_tracks.tracks
-                    SET execution_fence = %s
+                    SET execution_fence = %s,
+                        queue_position = nextval('daily_tracks.work_queue_sequence')
                     WHERE id = %s AND execution_fence = %s
                     """,
                     (fence, row["id"], fence - 1),
@@ -1315,6 +1411,8 @@ class DailyTrackService:
                     track_id=str(row["id"]),
                     progression_id=progression_id,
                     attempt_id=attempt_id,
+                    cycle_ordinal=cycle_ordinal,
+                    cycle_attempt_ordinal=int(cycle_attempt_ordinal),
                     fence=fence,
                     generation_pin_id=pin.id,
                     data_generation_id=generation.manifest_sha256,
@@ -1337,7 +1435,8 @@ class DailyTrackService:
                 SELECT track.id AS track_id, track.execution_fence,
                        progression.id AS progression_id,
                        attempt.id AS attempt_id, attempt.fence,
-                       attempt.generation_pin_id
+                       attempt.generation_pin_id,
+                       attempt.cycle_ordinal, attempt.cycle_attempt_ordinal
                 FROM daily_tracks.session_progression_attempts AS attempt
                 JOIN daily_tracks.session_progressions AS progression
                   ON progression.id = attempt.progression_id
@@ -1364,7 +1463,8 @@ class DailyTrackService:
                     SELECT track.id AS track_id, track.execution_fence,
                            progression.id AS progression_id,
                            attempt.id AS attempt_id, attempt.fence,
-                           attempt.generation_pin_id
+                           attempt.generation_pin_id,
+                           attempt.cycle_ordinal, attempt.cycle_attempt_ordinal
                     FROM daily_tracks.session_progression_attempts AS attempt
                     JOIN daily_tracks.session_progressions AS progression
                       ON progression.id = attempt.progression_id
@@ -1398,34 +1498,54 @@ class DailyTrackService:
                         current["fence"],
                     ),
                 )
-                progression = transaction.execute(
-                    """
-                    UPDATE daily_tracks.session_progressions
-                    SET status = 'blocked', finished_at = now()
-                    WHERE id = %s AND track_id = %s AND status = 'running'
-                    """,
-                    (current["progression_id"], current["track_id"]),
-                )
-                track = transaction.execute(
-                    """
-                    UPDATE daily_tracks.tracks
-                    SET status = 'blocked', blocked_progression_id = %s,
-                        blocked_reason = %s
-                    WHERE id = %s AND status = 'active' AND execution_fence = %s
-                    """,
-                    (
-                        current["progression_id"],
-                        PUBLIC_BLOCKED_REASON,
-                        current["track_id"],
-                        current["fence"],
-                    ),
-                )
-                if (
-                    attempt.rowcount != 1
-                    or progression.rowcount != 1
-                    or track.rowcount != 1
-                ):
-                    raise DailyTrackFenced
+                if int(current["cycle_attempt_ordinal"]) < 3:
+                    retry_delay = 5 if int(current["cycle_attempt_ordinal"]) == 1 else 30
+                    progression = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progressions
+                        SET next_attempt_eligible_at =
+                                now() + make_interval(secs => %s),
+                            queue_position = NULL
+                        WHERE id = %s AND track_id = %s AND status = 'running'
+                          AND current_cycle_ordinal = %s
+                        """,
+                        (
+                            retry_delay,
+                            current["progression_id"],
+                            current["track_id"],
+                            current["cycle_ordinal"],
+                        ),
+                    )
+                    if attempt.rowcount != 1 or progression.rowcount != 1:
+                        raise DailyTrackFenced
+                else:
+                    progression = transaction.execute(
+                        """
+                        UPDATE daily_tracks.session_progressions
+                        SET status = 'blocked', finished_at = now(),
+                            next_attempt_eligible_at = NULL,
+                            queue_position = NULL
+                        WHERE id = %s AND track_id = %s AND status = 'running'
+                        """,
+                        (current["progression_id"], current["track_id"]),
+                    )
+                    track = transaction.execute(
+                        """
+                        UPDATE daily_tracks.tracks
+                        SET status = 'blocked', blocked_progression_id = %s,
+                            blocked_reason = %s
+                        WHERE id = %s AND status = 'active'
+                          AND execution_fence = %s
+                        """,
+                        (
+                            current["progression_id"],
+                            INFRASTRUCTURE_EXHAUSTED_BLOCKED_REASON,
+                            current["track_id"],
+                            current["fence"],
+                        ),
+                    )
+                    if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
+                        raise DailyTrackFenced
                 self._dataset_lifecycle.release_pin_in_transaction(
                     transaction,
                     str(current["generation_pin_id"]),
@@ -1479,12 +1599,10 @@ class DailyTrackService:
                     ).fetchone()
                     if current is None:
                         continue
-                    released = (
-                        self._dataset_lifecycle.release_pin_if_active_in_transaction(
-                            transaction,
-                            str(current["generation_pin_id"]),
-                            owner_id=str(current["id"]),
-                        )
+                    released = self._dataset_lifecycle.release_pin_if_active_in_transaction(
+                        transaction,
+                        str(current["generation_pin_id"]),
+                        owner_id=str(current["id"]),
                     )
                 if released:
                     return True
@@ -1667,9 +1785,7 @@ class DailyTrackService:
         }
         prepared = self._publication.prepare(
             kind="daily-track.checkpoint",
-            payloads={
-                "checkpoint": JsonPayload(checkpoint.model_dump(mode="json"))
-            },
+            payloads={"checkpoint": JsonPayload(checkpoint.model_dump(mode="json"))},
             provenance=provenance,
         )
         return prepared, provenance
@@ -1776,7 +1892,9 @@ class DailyTrackService:
         blocked_reason: str = PUBLIC_BLOCKED_REASON,
     ) -> bool:
         assert self._dataset_lifecycle is not None
-        failure_reason = type(error).__name__
+        retryable = _tracking_failure_is_retryable(error)
+        failure_reason = "InfrastructureFailure" if retryable else type(error).__name__
+        retry_wait = retryable and claim.cycle_attempt_ordinal < 3
         with self._database.transaction() as transaction:
             row = transaction.execute(
                 """
@@ -1817,36 +1935,74 @@ class DailyTrackService:
                     claim.fence,
                 ),
             )
-            progression = transaction.execute(
-                """
-                UPDATE daily_tracks.session_progressions
-                SET status = 'blocked', finished_at = now()
-                WHERE id = %s AND track_id = %s AND status = 'running'
-                """,
-                (claim.progression_id, claim.track_id),
-            )
-            track = transaction.execute(
-                """
-                UPDATE daily_tracks.tracks
-                SET status = 'blocked', blocked_progression_id = %s,
-                    blocked_reason = %s
-                WHERE id = %s AND status = 'active' AND execution_fence = %s
-                """,
-                (
-                    claim.progression_id,
-                    blocked_reason,
-                    claim.track_id,
-                    claim.fence,
-                ),
-            )
-            if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
-                raise DailyTrackFenced
+            if retry_wait:
+                retry_delay = 5 if claim.cycle_attempt_ordinal == 1 else 30
+                progression = transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET next_attempt_eligible_at =
+                            now() + make_interval(secs => %s),
+                        queue_position = NULL
+                    WHERE id = %s AND track_id = %s AND status = 'running'
+                      AND current_cycle_ordinal = %s
+                    """,
+                    (
+                        retry_delay,
+                        claim.progression_id,
+                        claim.track_id,
+                        claim.cycle_ordinal,
+                    ),
+                )
+                if attempt.rowcount != 1 or progression.rowcount != 1:
+                    raise DailyTrackFenced
+            else:
+                if retryable:
+                    blocked_reason = INFRASTRUCTURE_EXHAUSTED_BLOCKED_REASON
+                progression = transaction.execute(
+                    """
+                    UPDATE daily_tracks.session_progressions
+                    SET status = 'blocked', finished_at = now(),
+                        next_attempt_eligible_at = NULL,
+                        queue_position = NULL
+                    WHERE id = %s AND track_id = %s AND status = 'running'
+                    """,
+                    (claim.progression_id, claim.track_id),
+                )
+                track = transaction.execute(
+                    """
+                    UPDATE daily_tracks.tracks
+                    SET status = 'blocked', blocked_progression_id = %s,
+                        blocked_reason = %s
+                    WHERE id = %s AND status = 'active' AND execution_fence = %s
+                    """,
+                    (
+                        claim.progression_id,
+                        blocked_reason,
+                        claim.track_id,
+                        claim.fence,
+                    ),
+                )
+                if attempt.rowcount != 1 or progression.rowcount != 1 or track.rowcount != 1:
+                    raise DailyTrackFenced
             self._dataset_lifecycle.release_pin_in_transaction(
                 transaction,
                 claim.generation_pin_id,
                 owner_id=claim.attempt_id,
             )
         return True
+
+
+def _tracking_failure_is_retryable(error: Exception) -> bool:
+    return isinstance(
+        error,
+        (
+            PublicationUnavailableError,
+            TrackingExecutionOwnershipLost,
+            OperationalError,
+            PoolTimeout,
+            TimeoutError,
+        ),
+    )
 
 
 def _uses_financial_fields(origin: TrackingOrigin) -> bool:

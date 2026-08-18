@@ -20,6 +20,10 @@ describe("TrackingProgressView", () => {
           target_session_count: 63,
           completed_target_sessions: 0,
           current_session: "2026-08-06",
+          cycle_attempt: 1,
+          cycle_attempt_limit: 3,
+          retry_wait: false,
+          next_attempt_eligible_at: null,
         }}
       />,
     );
@@ -28,6 +32,34 @@ describe("TrackingProgressView", () => {
     expect(markup).toContain("calculating");
     expect(markup).toContain("2026-08-06 – 2026-11-03");
     expect(markup).toContain("63 sessions");
+    expect(markup).not.toContain("completed");
+  });
+
+  it("shows persisted retry eligibility without showing transient completion", () => {
+    const markup = renderToStaticMarkup(
+      <TrackingProgressView
+        progress={{
+          head_session: "2026-08-05",
+          lag_sessions: 3,
+          phase: "retry_wait",
+          target_start_session: "2026-08-06",
+          target_end_session: "2026-08-10",
+          target_session_count: 3,
+          completed_target_sessions: 0,
+          current_session: null,
+          cycle_attempt: 2,
+          cycle_attempt_limit: 3,
+          retry_wait: true,
+          next_attempt_eligible_at: "2026-08-18T00:00:30+00:00",
+        }}
+      />,
+    );
+
+    expect(markup).toContain("retry_wait");
+    expect(markup).toContain("2/3");
+    expect(markup).toContain("Retry eligible");
+    expect(markup).toContain("2026-08-18T00:00:30+00:00");
+    expect(markup).not.toContain("Current session");
     expect(markup).not.toContain("completed");
   });
 });

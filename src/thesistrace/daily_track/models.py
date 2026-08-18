@@ -192,6 +192,7 @@ class DailyTrackProgress(BaseModel):
     phase: Literal[
         "waiting",
         "queued",
+        "retry_wait",
         "starting",
         "calculating",
         "result_ready",
@@ -205,6 +206,10 @@ class DailyTrackProgress(BaseModel):
     target_session_count: int
     completed_target_sessions: int
     current_session: str | None
+    cycle_attempt: int | None
+    cycle_attempt_limit: int
+    retry_wait: bool
+    next_attempt_eligible_at: str | None
 
 
 class DailyTrackDetail(BaseModel):

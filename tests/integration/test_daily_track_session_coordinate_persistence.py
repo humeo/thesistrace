@@ -66,6 +66,7 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
                 ),
                 target_sessions=(date(2026, 8, 4), date(2026, 8, 5)),
                 planning_data_generation_id="generation_advance",
+                initial_cycle_ordinal=1,
                 provenance={"kind": "advance", "private": True},
             )
             repository.start_attempt(
@@ -73,6 +74,8 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
                 attempt_id="attempt_session_roundtrip",
                 progression_id="progression_session_roundtrip",
                 ordinal=1,
+                cycle_ordinal=1,
+                cycle_attempt_ordinal=1,
                 fence=1,
                 generation_pin_id="pin_session_roundtrip",
                 data_generation_id="generation_advance",
@@ -92,16 +95,12 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
         database.close()
 
     with open_core_runtime(settings) as runtime:
-        snapshot = runtime.daily_track_sessions.load(
-            "track_session_roundtrip"
-        )
+        snapshot = runtime.daily_track_sessions.load("track_session_roundtrip")
 
     assert snapshot.track.origin_session == date(2026, 8, 3)
     assert snapshot.track.current_checkpoint_session == date(2026, 8, 5)
     assert snapshot.track.current_checkpoint_manifest_sha256 == "b" * 64
-    assert snapshot.track.terminal_strategy_state == _strategy_state(
-        "2026-08-05", "10001000"
-    )
+    assert snapshot.track.terminal_strategy_state == _strategy_state("2026-08-05", "10001000")
     metric_state = snapshot.track.terminal_strategy_state["metric_state"]
     assert isinstance(metric_state, dict)
     assert OPTIONAL_METRIC_ACCUMULATORS.isdisjoint(metric_state)
@@ -111,10 +110,7 @@ def test_session_coordinate_history_round_trips_after_commit_and_runtime_reopen(
         date(2026, 8, 4),
         date(2026, 8, 5),
     )
-    assert (
-        snapshot.progressions[0].planning_data_generation_id
-        == "generation_advance"
-    )
+    assert snapshot.progressions[0].planning_data_generation_id == "generation_advance"
     assert snapshot.progressions[0].status == "succeeded"
     assert len(snapshot.attempts) == 1
     assert snapshot.attempts[0].status == "succeeded"
@@ -181,6 +177,7 @@ def test_invalid_session_coordinates_leave_no_partial_progression(
                     ),
                     target_sessions=target_sessions,
                     planning_data_generation_id="generation_invalid",
+                    initial_cycle_ordinal=1,
                     provenance={"kind": "invalid"},
                 )
 
@@ -231,6 +228,7 @@ def test_track_rejects_a_second_unresolved_progression(
                 ),
                 target_sessions=(date(2026, 8, 4),),
                 planning_data_generation_id="generation_first",
+                initial_cycle_ordinal=1,
                 provenance={"kind": "first"},
             )
             if unresolved_status == "blocked":
@@ -259,13 +257,12 @@ def test_track_rejects_a_second_unresolved_progression(
                     ),
                     target_sessions=(date(2026, 8, 4), date(2026, 8, 5)),
                     planning_data_generation_id="generation_competing",
+                    initial_cycle_ordinal=1,
                     provenance={"kind": "competing"},
                 )
 
         snapshot = repository.load("track_one_unresolved_progression")
-        assert [progression.id for progression in snapshot.progressions] == [
-            "progression_first"
-        ]
+        assert [progression.id for progression in snapshot.progressions] == ["progression_first"]
         assert snapshot.progressions[0].status == unresolved_status
     finally:
         database.close()
@@ -320,6 +317,7 @@ def test_terminal_state_validation_rolls_back_activation_and_publication() -> No
                 generation_sessions=(date(2026, 8, 3), date(2026, 8, 4)),
                 target_sessions=(date(2026, 8, 4),),
                 planning_data_generation_id="generation_advance",
+                initial_cycle_ordinal=1,
                 provenance={"kind": "advance"},
             )
             repository.start_attempt(
@@ -327,6 +325,8 @@ def test_terminal_state_validation_rolls_back_activation_and_publication() -> No
                 attempt_id="attempt_state_validation",
                 progression_id="progression_state_validation",
                 ordinal=1,
+                cycle_ordinal=1,
+                cycle_attempt_ordinal=1,
                 fence=1,
                 generation_pin_id="pin_state_validation",
                 data_generation_id="generation_advance",
@@ -400,6 +400,7 @@ def test_reader_observes_one_snapshot_while_checkpoint_commit_is_pending() -> No
                 generation_sessions=(date(2026, 8, 3), date(2026, 8, 4)),
                 target_sessions=(date(2026, 8, 4),),
                 planning_data_generation_id="generation_advance",
+                initial_cycle_ordinal=1,
                 provenance={"kind": "advance"},
             )
             repository.start_attempt(
@@ -407,6 +408,8 @@ def test_reader_observes_one_snapshot_while_checkpoint_commit_is_pending() -> No
                 attempt_id="attempt_snapshot",
                 progression_id="progression_snapshot",
                 ordinal=1,
+                cycle_ordinal=1,
+                cycle_attempt_ordinal=1,
                 fence=1,
                 generation_pin_id="pin_snapshot",
                 data_generation_id="generation_advance",
@@ -423,9 +426,7 @@ def test_reader_observes_one_snapshot_while_checkpoint_commit_is_pending() -> No
                     attempt_id="attempt_snapshot",
                     fence=1,
                     checkpoint_manifest_sha256="b" * 64,
-                    terminal_strategy_state=_strategy_state(
-                        "2026-08-04", "10001000"
-                    ),
+                    terminal_strategy_state=_strategy_state("2026-08-04", "10001000"),
                     provenance={"kind": "checkpoint"},
                 )
                 publish_ready.set()
@@ -488,6 +489,7 @@ def test_relational_coordinates_cannot_disagree_with_checkpoint_ancestry() -> No
                 ),
                 target_sessions=(date(2026, 8, 4), date(2026, 8, 5)),
                 planning_data_generation_id="generation_advance",
+                initial_cycle_ordinal=1,
                 provenance={"kind": "advance"},
             )
 
@@ -545,7 +547,6 @@ def test_relational_coordinates_cannot_disagree_with_checkpoint_ancestry() -> No
         database.close()
 
 
-
 def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
     origin = {
         "seed_run_id": f"run_{track_id}",
@@ -571,7 +572,6 @@ def _insert_parent_track(database: PostgresDatabase, *, track_id: str) -> None:
             """,
             (track_id, f"run_{track_id}", Jsonb(origin)),
         )
-
 
 
 def _strategy_state(session: str, net_nav: str) -> dict[str, object]:
@@ -631,9 +631,7 @@ def _state_with_mismatched_coordinate(coordinate: str) -> dict[str, object]:
         return state
     nested = state[coordinate]
     assert isinstance(nested, dict)
-    nested["session" if coordinate == "last_daily_observation" else "last_session"] = (
-        "2026-08-03"
-    )
+    nested["session" if coordinate == "last_daily_observation" else "last_session"] = "2026-08-03"
     return state
 
 
@@ -675,8 +673,6 @@ def _session_counts(database: PostgresDatabase, track_id: str) -> dict[str, int]
         "attempts": int(attempt["count"]),
         "checkpoints": int(checkpoint["count"]),
     }
-
-
 
 
 def _drop_product_schemas(database_url: str) -> None:

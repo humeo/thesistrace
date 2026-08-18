@@ -31,12 +31,16 @@ export type DailyTrackDetail = {
   progress: {
     head_session: string;
     lag_sessions: number;
-    phase: "waiting" | "queued" | "starting" | "calculating" | "result_ready" | "staging" | "blocked" | "up_to_date" | "stopped";
+    phase: "waiting" | "queued" | "retry_wait" | "starting" | "calculating" | "result_ready" | "staging" | "blocked" | "up_to_date" | "stopped";
     target_start_session: string | null;
     target_end_session: string | null;
     target_session_count: number;
     completed_target_sessions: number;
     current_session: string | null;
+    cycle_attempt: number | null;
+    cycle_attempt_limit: number;
+    retry_wait: boolean;
+    next_attempt_eligible_at: string | null;
   };
   blocked_reason: string | null;
   factor: DailyTrackAnalysis["factor"];
@@ -308,6 +312,12 @@ export function TrackingProgressView({
       ) : null}
       {progress.current_session ? (
         <p><strong>Current session</strong> {progress.current_session}</p>
+      ) : null}
+      {progress.cycle_attempt ? (
+        <p><strong>Attempt cycle</strong> {progress.cycle_attempt}/{progress.cycle_attempt_limit}</p>
+      ) : null}
+      {progress.retry_wait && progress.next_attempt_eligible_at ? (
+        <p><strong>Retry eligible</strong> {progress.next_attempt_eligible_at}</p>
       ) : null}
     </>
   );

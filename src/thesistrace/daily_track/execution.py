@@ -26,6 +26,10 @@ class TrackingExecutionError(RuntimeError):
     pass
 
 
+class TrackingExecutionOwnershipLost(TrackingExecutionError):
+    pass
+
+
 @dataclass(frozen=True)
 class TrackingExecutionRequest:
     track_id: str
@@ -314,7 +318,9 @@ def _read_message(
     try:
         while True:
             if authority_lost.is_set():
-                raise TrackingExecutionError("Tracking execution ownership was lost")
+                raise TrackingExecutionOwnershipLost(
+                    "Tracking execution ownership was lost"
+                )
             if selector.select(timeout=0.05):
                 line = process.stdout.readline(_MAX_PROTOCOL_LINE_BYTES + 1)
                 if len(line.encode()) > _MAX_PROTOCOL_LINE_BYTES:

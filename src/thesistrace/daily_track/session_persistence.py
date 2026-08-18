@@ -131,6 +131,7 @@ class SessionCoordinateRepository:
         generation_sessions: tuple[date, ...],
         target_sessions: tuple[date, ...],
         planning_data_generation_id: str,
+        initial_cycle_ordinal: int | None,
         provenance: dict[str, object],
     ) -> None:
         state = transaction.execute(
@@ -150,9 +151,7 @@ class SessionCoordinateRepository:
         if state is None:
             raise SessionCoordinateConflict("Session Tracking State does not exist")
         current_session = state["current_checkpoint_session"]
-        if state["current_checkpoint_manifest_sha256"] != (
-            expected_checkpoint_manifest_sha256
-        ):
+        if state["current_checkpoint_manifest_sha256"] != (expected_checkpoint_manifest_sha256):
             raise SessionCoordinateConflict("Current Checkpoint changed")
         _require_exact_target(
             current_session=current_session,
@@ -165,8 +164,15 @@ class SessionCoordinateRepository:
                 INSERT INTO daily_tracks.session_progressions (
                     id, track_id, predecessor_checkpoint_manifest_sha256,
                     target_sessions, target_start_session, target_end_session,
-                    planning_data_generation_id, status, provenance
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, 'running', %s)
+                    planning_data_generation_id, current_cycle_ordinal,
+                    next_attempt_eligible_at, queue_position, status, provenance
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s, %s, %s,
+                    CASE WHEN %s::integer IS NULL THEN NULL ELSE now() END,
+                    CASE WHEN %s::integer IS NULL THEN NULL
+                         ELSE nextval('daily_tracks.work_queue_sequence') END,
+                    'running', %s
+                )
                 """,
                 (
                     progression_id,
@@ -176,6 +182,9 @@ class SessionCoordinateRepository:
                     target_sessions[0],
                     target_sessions[-1],
                     planning_data_generation_id,
+                    initial_cycle_ordinal,
+                    initial_cycle_ordinal,
+                    initial_cycle_ordinal,
                     Jsonb(provenance),
                 ),
             )
@@ -191,6 +200,8 @@ class SessionCoordinateRepository:
         attempt_id: str,
         progression_id: str,
         ordinal: int,
+        cycle_ordinal: int,
+        cycle_attempt_ordinal: int,
         fence: int,
         generation_pin_id: str,
         data_generation_id: str,
@@ -214,10 +225,11 @@ class SessionCoordinateRepository:
             """
             INSERT INTO daily_tracks.session_progression_attempts (
                 id, progression_id, track_id, ordinal, fence,
+                cycle_ordinal, cycle_attempt_ordinal,
                 generation_pin_id, data_generation_id, data_through_session,
                 status, execution_phase, lease_expires_at
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, 'running', 'starting',
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'running', 'starting',
                 now() + make_interval(secs => %s)
             )
             """,
@@ -227,6 +239,8 @@ class SessionCoordinateRepository:
                 progression["track_id"],
                 ordinal,
                 fence,
+                cycle_ordinal,
+                cycle_attempt_ordinal,
                 generation_pin_id,
                 data_generation_id,
                 data_through_session,
@@ -309,7 +323,7 @@ class SessionCoordinateRepository:
             """
             UPDATE daily_tracks.session_progressions
             SET status = 'succeeded', checkpoint_manifest_sha256 = %s,
-                finished_at = now()
+                finished_at = now(), queue_position = NULL
             WHERE id = %s AND status = 'running'
             """,
             (checkpoint_manifest_sha256, progression_id),
@@ -442,9 +456,7 @@ class SessionCoordinateRepository:
                 SessionAttemptRecord(
                     **{
                         **row,
-                        "data_through_session": date.fromisoformat(
-                            row["data_through_session"]
-                        ),
+                        "data_through_session": date.fromisoformat(row["data_through_session"]),
                     }
                 )
                 for row in attempts
@@ -453,9 +465,7 @@ class SessionCoordinateRepository:
                 SessionCheckpointRecord(
                     **{
                         **row,
-                        "boundary_session": date.fromisoformat(
-                            row["boundary_session"]
-                        ),
+                        "boundary_session": date.fromisoformat(row["boundary_session"]),
                         "terminal_strategy_state": _validated_state(
                             row["terminal_strategy_state"],
                             date.fromisoformat(row["boundary_session"]),
@@ -481,9 +491,7 @@ def _require_exact_target(
         current_index = generation_sessions.index(current_session)
     except ValueError as error:
         raise SessionCoordinateConflict("Current Checkpoint is outside Generation") from error
-    expected = generation_sessions[
-        current_index + 1 : current_index + 1 + len(target_sessions)
-    ]
+    expected = generation_sessions[current_index + 1 : current_index + 1 + len(target_sessions)]
     if target_sessions != expected:
         raise SessionCoordinateConflict("Target sessions do not form the next range")
 
