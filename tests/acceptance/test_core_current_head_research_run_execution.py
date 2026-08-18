@@ -1265,7 +1265,12 @@ def test_fixed_role_worker_replicas_claim_distinct_runs_and_tracks(
             for index, run_id in enumerate(run_ids)
         ]
         tracking_workers = _run_worker_replicas(settings, "tracking", 2)
-        assert all(worker.returncode == 0 for worker in tracking_workers)
+        assert all(worker.returncode == 0 for worker in tracking_workers), "\n\n".join(
+            f"tracking worker {index} exited {worker.returncode}\n"
+            f"stdout:\n{worker.stdout}\n"
+            f"stderr:\n{worker.stderr}"
+            for index, worker in enumerate(tracking_workers)
+        )
         assert {
             client.get(f"/api/daily-tracks/{track_id}").json()["strategy_session"]
             for track_id in track_ids

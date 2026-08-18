@@ -88,6 +88,41 @@ INFRASTRUCTURE_EXHAUSTED_BLOCKED_REASON = (
     "DailyTrack exhausted its automatic infrastructure retries."
 )
 _FINANCIAL_FIELD_IDS = frozenset(field.field_id for field in FINANCIAL_FIELDS)
+_TRACKING_ELIGIBILITY_SELECT = """
+    SELECT track.id, track.origin, track.execution_fence,
+           checkpoint.boundary_session,
+           checkpoint.manifest_sha256,
+           checkpoint.provenance
+    FROM daily_tracks.tracks AS track
+    JOIN daily_tracks.session_tracking_states AS state
+      ON state.track_id = track.id
+    JOIN daily_tracks.session_checkpoints AS checkpoint
+      ON checkpoint.track_id = state.track_id
+     AND checkpoint.manifest_sha256 = state.current_checkpoint_manifest_sha256
+    LEFT JOIN daily_tracks.session_progressions AS pending
+      ON pending.track_id = track.id AND pending.status = 'running'
+    WHERE track.status = 'active'
+      AND checkpoint.boundary_session < %s
+      AND NOT EXISTS (
+          SELECT 1
+          FROM daily_tracks.session_progressions AS progression
+          WHERE progression.track_id = track.id
+            AND progression.status = 'blocked'
+      )
+      AND NOT EXISTS (
+          SELECT 1
+          FROM daily_tracks.session_progression_attempts AS attempt
+          WHERE attempt.track_id = track.id
+            AND attempt.status = 'running'
+      )
+      AND (
+          pending.id IS NULL
+          OR (
+              pending.next_attempt_eligible_at <= now()
+              AND pending.queue_position IS NOT NULL
+          )
+      )
+"""
 
 
 def _attempt_owner_lock(attempt_id: str) -> str:
@@ -1244,49 +1279,27 @@ class DailyTrackService:
                 WHERE progression.id = eligible.id
                 """
             )
-            rows = transaction.execute(
-                """
-                SELECT track.id, track.origin, track.execution_fence,
-                       checkpoint.boundary_session,
-                       checkpoint.manifest_sha256,
-                       checkpoint.provenance
-                FROM daily_tracks.tracks AS track
-                JOIN daily_tracks.session_tracking_states AS state
-                  ON state.track_id = track.id
-                JOIN daily_tracks.session_checkpoints AS checkpoint
-                  ON checkpoint.track_id = state.track_id
-                 AND checkpoint.manifest_sha256 =
-                        state.current_checkpoint_manifest_sha256
-                LEFT JOIN daily_tracks.session_progressions AS pending
-                  ON pending.track_id = track.id AND pending.status = 'running'
-                WHERE track.status = 'active'
-                  AND checkpoint.boundary_session < %s
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM daily_tracks.session_progressions AS progression
-                      WHERE progression.track_id = track.id
-                        AND progression.status = 'blocked'
-                  )
-                  AND NOT EXISTS (
-                      SELECT 1
-                      FROM daily_tracks.session_progression_attempts AS attempt
-                      WHERE attempt.track_id = track.id
-                        AND attempt.status = 'running'
-                  )
-                  AND (
-                      pending.id IS NULL
-                      OR (
-                          pending.next_attempt_eligible_at <= now()
-                          AND pending.queue_position IS NOT NULL
-                      )
-                  )
-                ORDER BY COALESCE(pending.queue_position, track.queue_position), track.id
-                FOR UPDATE OF track, state SKIP LOCKED
-                LIMIT 1
-                """,
-                (current_head.data_through_session,),
-            ).fetchall()
-            for row in rows:
+            while True:
+                row = transaction.execute(
+                    _TRACKING_ELIGIBILITY_SELECT
+                    + """
+                        ORDER BY COALESCE(
+                            pending.queue_position,
+                            track.queue_position
+                        ), track.id
+                        FOR UPDATE OF track, state SKIP LOCKED
+                        LIMIT 1
+                    """,
+                    (current_head.data_through_session,),
+                ).fetchone()
+                if row is None:
+                    break
+                row = transaction.execute(
+                    _TRACKING_ELIGIBILITY_SELECT + " AND track.id = %s",
+                    (current_head.data_through_session, row["id"]),
+                ).fetchone()
+                if row is None:
+                    continue
                 admission = self._generation_store.open_admission(
                     current_head.generation_manifest_sha256
                 )
