@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
+import { alphaSyntaxTokens } from "./AlphaFormulaEditor";
 import { createDiagnosticsScheduler, type DiagnosticState } from "./diagnostics";
 import {
   emptyResearchDraft,
@@ -77,6 +78,21 @@ const data = {
 };
 
 describe("browser Research Draft", () => {
+  it("classifies fields, functions, numbers, and operators for formula highlighting", () => {
+    const formula = "ts_mean(close_adj, 20)";
+    expect(alphaSyntaxTokens(formula, catalog).map((token) => [
+      formula.slice(token.from, token.to),
+      token.kind,
+    ])).toEqual([
+      ["ts_mean", "function"],
+      ["(", "operator"],
+      ["close_adj", "field"],
+      [",", "operator"],
+      ["20", "number"],
+      [")", "operator"],
+    ]);
+  });
+
   it("copies frozen authorable values into only the chosen Folder Draft", () => {
     const storage = new MemoryStorage();
     persistResearchDraft(storage, "folder_target", {
@@ -260,7 +276,11 @@ describe("browser Research Draft", () => {
     const markup = renderToStaticMarkup(<ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={new MemoryStorage()} />);
     expect(markup).toContain("Alpha formula editor");
     expect(markup).toContain("New Research");
-    expect(markup).toContain('disabled="" type="button">Run</button>');
+    expect(markup).toContain('disabled="" type="button"><svg');
+    expect(markup).toContain("Run research");
+    expect(markup).toContain("Research parameters");
+    expect(markup).not.toContain("Close run settings");
+    expect(markup).not.toContain(">Cancel<");
     expect(markup).toContain("Default Folder");
     expect(markup).toContain("Financial fields");
     expect(markup).toContain("total_revenue_latest_fy");
@@ -269,7 +289,7 @@ describe("browser Research Draft", () => {
     expect(markup).toContain("Company types 1, 2, 3, 4");
     expect(markup).toContain("cs_rank(total_revenue_latest_fy)");
     expect(markup).toContain("Missing when no visible eligible fact");
-    for (const removed of ["Save", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
+    for (const removed of ["Save Research", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
   });
 
   it("enables Run for one complete retained Draft", () => {
@@ -288,8 +308,8 @@ describe("browser Research Draft", () => {
     const markup = renderToStaticMarkup(
       <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={storage} />,
     );
-    expect(markup).toContain('type="button">Run</button>');
-    expect(markup).not.toContain('disabled="" type="button">Run</button>');
+    expect(markup).toContain("Run research");
+    expect(markup).not.toContain('disabled="" type="button"><svg');
   });
 
   it("renders one-level Folder navigation and protects Default management actions", () => {

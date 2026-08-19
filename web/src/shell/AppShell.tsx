@@ -13,16 +13,16 @@ type AppShellProps = {
 };
 
 export function AppShell({ currentPath, children }: AppShellProps) {
+  const isResearch = currentPath === "/research";
+
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand" aria-label="ThesisTrace home">
-          <span className="brand-mark" aria-hidden="true"><i /><i /><i /></span>
-          <span><strong>Thesis</strong><em>Trace</em></span>
-        </div>
-        <p className="sidebar-kicker">Research workspace</p>
+    <div className={`app-shell${isResearch ? " app-shell-research" : ""}`}>
+      <header className="global-header">
+        <a className="brand" aria-label="ThesisTrace home" href="/data">
+          ThesisTrace
+        </a>
         <nav aria-label="Product resources" className="resource-nav">
-          {resourceRoutes.map((resource, index) => (
+          {resourceRoutes.map((resource) => (
             <a
               aria-current={
                 currentPath === resource.path || currentPath.startsWith(`${resource.path}/`)
@@ -32,35 +32,12 @@ export function AppShell({ currentPath, children }: AppShellProps) {
               href={resource.path}
               key={resource.path}
             >
-              <span className="nav-index">0{index + 1}</span>
-              <span>{resource.label}</span>
-              <span className="nav-arrow" aria-hidden="true">↗</span>
+              {resource.label}
             </a>
           ))}
         </nav>
-        <div className="sidebar-footer">
-          <span className="health-dot" />
-          <span>Local core online</span>
-          <span className="sidebar-version">v0.1</span>
-        </div>
-      </aside>
-      <div className="workspace">
-        <header className="topbar">
-          <div className="breadcrumb"><span>THESIS /</span> {labelForPath(currentPath)}</div>
-          <div className="topbar-actions">
-            <div className="topbar-meta"><span className="live-pulse" /> Canonical data · local</div>
-            <a className="global-new-research" href="/research?new">New Research</a>
-          </div>
-        </header>
-        <main className="main-content">{children}</main>
-      </div>
+      </header>
+      <main className="main-content">{children}</main>
     </div>
   );
-}
-
-function labelForPath(path: string) {
-  if (path.startsWith("/research") && !path.startsWith("/research-runs")) return "RESEARCH";
-  if (path.startsWith("/research-runs")) return "RESEARCH RUNS";
-  if (path.startsWith("/daily-tracks")) return "DAILY TRACKS";
-  return "DATA ROOM";
 }

@@ -289,11 +289,16 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     <section aria-label="Daily Tracks">
       <h1>Daily Tracks</h1>
       {items?.length === 0 ? <p>No DailyTracks yet.</p> : null}
-      <ol aria-label="Daily Tracks">
+      <ol aria-label="Daily Tracks" className="track-history">
         {items?.map((item) => (
           <li key={item.id}>
-            <a href={`/daily-tracks/${item.id}`}>{item.id}</a>
-            <span> · {item.status}</span>
+            <a href={`/daily-tracks/${item.id}`}><strong>{item.id}</strong></a>
+            <dl>
+              <div><dt>Status</dt><dd>{item.status}</dd></div>
+              <div><dt>Origin session</dt><dd>{item.origin_session}</dd></div>
+              <div><dt>Strategy session</dt><dd>{item.strategy_session}</dd></div>
+              <div><dt>Seed ResearchRun</dt><dd><code>{item.seed_run_id}</code></dd></div>
+            </dl>
           </li>
         ))}
       </ol>

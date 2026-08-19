@@ -48,6 +48,12 @@ breakpoints: [768px]
 
 > Pinned from [DesignMD's OpenAI design](https://www.designmd.co/d/openai). This is a third-party extracted design reference, not an official OpenAI specification.
 
+## Design Direction
+
+**Quiet Utility Minimalism（安静、工具化的极简主义）**
+
+中性单色、内容优先、大量留白、低对比层级、圆润控件、极弱阴影。
+
 ## Rationale
 
 OpenAI's design system reflects a product positioned at the intersection of advanced technology and human-centered interaction. The measured tokens reveal a deliberately restrained palette—a muted purple-gray primary (#8e8ea0) paired with stark black and white—that avoids the visual aggression typical of tech company branding. This choice suggests confidence: the interface doesn't need to shout. The typography stack defaults to system fonts (system-ui, sans-serif) rather than custom typefaces, prioritizing performance and immediate legibility over distinctive brand presence. Spacing and motion are minimal and consistent (8px base unit, uniform 400ms timing), creating a calm, predictable rhythm that supports focus during complex cognitive tasks like coding assistance. The absence of shadows and a single, modest border radius (5px) reinforces this minimalism—surfaces layer cleanly without depth effects that might add visual noise.

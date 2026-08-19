@@ -26,7 +26,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByRole("link", { name: "New Research", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByRole("heading", { name: "Research", exact: true })).toBeVisible();
-    await expect(page.getByText("Default Folder")).toBeVisible();
+    await expect(page.getByText("Default folder", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Research name")).toHaveValue("");
     await expect(page.locator(".cm-content")).toHaveText("");
     await expectRemovedAuthoringControlsToBeAbsent(page);
@@ -46,7 +46,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.locator(".cm-lintRange-error")).toHaveCount(1);
     await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
     await page.keyboard.type("ts_mean(close_adj, 2)");
-    await expect(page.getByText("Valid formula", { exact: true })).toBeVisible();
+    await expect(page.getByText("Formula valid", { exact: true })).toBeVisible();
     await page.getByLabel("Hypothesis").fill("Short rolling mean retains signal.");
     await page.getByLabel("Research start date").fill("2026-08-03");
     await page.getByLabel("Research end date").fill("2026-08-05");
@@ -86,6 +86,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.locator(".cm-content")).toHaveText("");
     expect(await page.evaluate(() => localStorage.getItem("thesistrace.research-draft.folder_default"))).toBeNull();
 
+    await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page).toHaveURL(/\/research\?folder=folder_[a-f0-9]+$/);
@@ -105,6 +106,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByLabel("Research name")).toHaveValue("");
     expect(await page.evaluate((folderId) => localStorage.getItem(`thesistrace.research-draft.${folderId}`), customFolderId)).not.toBeNull();
+    await openResearchFolderMenu(page);
     await page.getByRole("link", { name: "Signals", exact: true }).click();
     await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
     await expect(page.locator(".cm-content")).toHaveText("volume_shares");
@@ -112,6 +114,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
       `thesistrace.research-draft.${customFolderId}`,
     ]);
 
+    await openResearchFolderMenu(page);
     await page.getByLabel("Folder name").fill("Momentum");
     await page.getByRole("button", { name: "Rename Folder" }).click();
     await expect(page.getByRole("link", { name: "Momentum", exact: true })).toBeVisible();
@@ -180,7 +183,7 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
       captureRun?.({ id: body.id, status: response.status() });
       await route.fulfill({ response });
     });
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
     const acceptedRun = await runCapture;
     await page.unroute("**/api/research-runs");
     expect(acceptedRun.status).toBe(202);
@@ -318,7 +321,7 @@ test("running Research cancellation stays visible until the child exits", async 
       name: "Confirmed browser cancellation",
       formula: "ts_mean(close_adj, 2)",
     });
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const runId = page.url().split("/").at(-1);
     if (runId === undefined) throw new Error("ResearchRun route has no identity");
@@ -385,9 +388,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       releaseSecond?.(route);
     });
 
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page.getByRole("list", { name: "Run issues" })).toContainText("RUN_UNAVAILABLE");
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
     const heldRoute = await secondRequest;
     expect(commands).toHaveLength(2);
     expect(commands[1].request_id).toBe(commands[0].request_id);
@@ -428,7 +431,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.goto("/research");
     await expect(page.locator(".cm-content")).toHaveText("ts_mean(close_adj, 3)");
     await replaceFormula(page, "unknown_field");
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page.getByRole("list", { name: "Run issues" })).toContainText("UNKNOWN_IDENTIFIER");
     await expect(page.locator(".cm-lintRange-error")).toHaveCount(1);
     const rejectedHistory = await page.request.get("/api/research-runs");
@@ -436,6 +439,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await page.reload();
     await expect(page.locator(".cm-content")).toHaveText("unknown_field");
 
+    await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
     await page.getByRole("button", { name: "Create" }).click();
     await expect(page).toHaveURL(/\/research\?folder=folder_[a-f0-9]+$/);
@@ -443,7 +447,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
     if (customFolderId === null) throw new Error("Custom Folder route is missing folder id");
     await fillCompleteDraft(page, { name: "Duplicate Name", formula: "close_adj" });
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const customRunId = page.url().split("/").at(-1);
     if (customRunId === undefined) throw new Error("Custom Research route is missing run id");
@@ -541,7 +545,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(((await historyAfterCopy.json()).items as unknown[])).toHaveLength(historyCountBeforeReuse);
 
     await replaceFormula(page, "ts_mean(close_adj, 2) + 1");
-    await page.getByRole("button", { name: "Run", exact: true }).click();
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const reusedRunId = page.url().split("/").at(-1);
     expect(reusedRunId).not.toBe(defaultRunId);
@@ -632,7 +636,7 @@ async function fillCompleteDraft(
   await page.getByLabel("Neutralization").selectOption("none");
   await page.getByLabel("Holdings count").fill("10");
   await page.getByLabel("Rebalance sessions").fill("2");
-  await expect(page.getByRole("button", { name: "Run", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeEnabled();
 }
 
 async function replaceFormula(page: Page, formula: string): Promise<void> {
@@ -640,6 +644,13 @@ async function replaceFormula(page: Page, formula: string): Promise<void> {
   await editor.click();
   await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
   await page.keyboard.type(formula);
+}
+
+async function openResearchFolderMenu(page: Page): Promise<void> {
+  const menu = page.locator(".research-folder-navigation");
+  if ((await menu.getAttribute("open")) === null) {
+    await menu.locator("summary").click();
+  }
 }
 
 async function expectRemovedAuthoringControlsToBeAbsent(page: Page): Promise<void> {

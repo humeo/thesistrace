@@ -1,3 +1,4 @@
+import { ArrowClockwise } from "@phosphor-icons/react";
 import { useCallback, useEffect, useState } from "react";
 
 export type DataOverview = {
@@ -52,7 +53,10 @@ export function DataOverviewView({
           <p className="hero-copy">The current market and financial data available to research.</p>
         </div>
         <div className="hero-actions">
-          <button className="button button-quiet" onClick={onRefresh}>Reload ↻</button>
+          <button className="button button-quiet" onClick={onRefresh}>
+            <ArrowClockwise aria-hidden="true" size={17} weight="regular" />
+            Reload
+          </button>
         </div>
       </header>
       <div className="signal-strip" aria-label="Data readiness">

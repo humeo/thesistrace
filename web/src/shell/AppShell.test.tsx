@@ -16,7 +16,21 @@ test("renders four resources and composes only the active resource content", () 
   expect(markup).not.toContain("Definitions");
   expect(markup).toContain('aria-current="page" href="/research-runs"');
   expect(markup).toContain('href="/daily-tracks"');
-  expect(markup).toContain('href="/research?new"');
-  expect(markup).toContain("New Research");
+  expect(markup).not.toContain("Canonical data");
+  expect(markup).not.toContain("Through ");
+  expect(markup).not.toContain("New research");
   expect(markup).toContain("Selected resource");
+});
+
+test("keeps the Research header focused on navigation and folder context", () => {
+  const markup = renderToStaticMarkup(
+    <AppShell currentPath="/research">
+      <section aria-label="Research">Research workspace</section>
+    </AppShell>,
+  );
+
+  expect(markup).not.toContain("Canonical data");
+  expect(markup).not.toContain("Through ");
+  expect(markup).not.toContain("New research");
+  expect(markup).toContain("Research workspace");
 });

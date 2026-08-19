@@ -1,3 +1,12 @@
+import {
+  CaretDown,
+  CheckCircle,
+  Desktop,
+  FolderSimple,
+  PencilSimple,
+  Play,
+  Plus,
+} from "@phosphor-icons/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { DataOverview } from "../data/DataPage";
@@ -175,44 +184,54 @@ export function ResearchFolderNavigation({
   const [renameName, setRenameName] = useState(activeFolder.name);
   useEffect(() => setRenameName(activeFolder.name), [activeFolder.id, activeFolder.name]);
   return (
-    <aside aria-label="Research Folders" className="research-folder-navigation">
-      <div className="folder-navigation-heading">
-        <span>Folders</span>
-        <small>One level</small>
-      </div>
-      <nav aria-label="Research Folder navigation">
-        {folders.map((folder) => (
-          <a
-            aria-current={folder.id === activeFolder.id ? "page" : undefined}
-            href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
-            key={folder.id}
-          >
-            <span>{folder.name}</span>
-            {folder.is_default ? <small>Default</small> : null}
-          </a>
-        ))}
-      </nav>
-      <form onSubmit={(event) => {
-        event.preventDefault();
-        if (newName.trim() === "") return;
-        void onCreate(newName).then(() => setNewName(""));
-      }}>
-        <label htmlFor="new-folder-name">New Folder</label>
-        <div className="folder-inline-action">
-          <input id="new-folder-name" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
-          <button disabled={newName.trim() === ""} type="submit">Create</button>
+    <details aria-label="Research Folders" className="research-folder-navigation">
+      <summary>
+        <FolderSimple aria-hidden="true" size={18} weight="regular" />
+        <span>{activeFolder.name} folder</span>
+        <CaretDown aria-hidden="true" className="folder-menu-caret" size={16} weight="regular" />
+      </summary>
+      <div className="folder-menu-panel">
+        <div className="folder-navigation-heading">
+          <span>Folders</span>
+          <small>One level</small>
         </div>
-      </form>
-      {!activeFolder.is_default ? (
-        <section aria-label="Selected Folder actions" className="folder-actions">
-          <label htmlFor="rename-folder-name">Folder name</label>
-          <input id="rename-folder-name" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
-          <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>Rename Folder</button>
-          <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>Delete Folder</button>
-        </section>
-      ) : null}
-      {error !== null ? <p className="inline-status inline-status-error" role="alert">{error}</p> : null}
-    </aside>
+        <nav aria-label="Research Folder navigation">
+          {folders.map((folder) => (
+            <a
+              aria-current={folder.id === activeFolder.id ? "page" : undefined}
+              href={folder.is_default ? "/research" : `/research?folder=${folder.id}`}
+              key={folder.id}
+            >
+              <span>{folder.name}</span>
+              {folder.is_default ? <small>Default</small> : null}
+            </a>
+          ))}
+        </nav>
+        <form onSubmit={(event) => {
+          event.preventDefault();
+          if (newName.trim() === "") return;
+          void onCreate(newName).then(() => setNewName(""));
+        }}>
+          <label htmlFor="new-folder-name">New Folder</label>
+          <div className="folder-inline-action">
+            <input id="new-folder-name" maxLength={120} onChange={(event) => setNewName(event.target.value)} value={newName} />
+            <button aria-label="Create Folder" disabled={newName.trim() === ""} type="submit">
+              <Plus aria-hidden="true" size={16} weight="regular" />
+              Create
+            </button>
+          </div>
+        </form>
+        {!activeFolder.is_default ? (
+          <section aria-label="Selected Folder actions" className="folder-actions">
+            <label htmlFor="rename-folder-name">Folder name</label>
+            <input id="rename-folder-name" maxLength={120} onChange={(event) => setRenameName(event.target.value)} value={renameName} />
+            <button disabled={renameName.trim() === "" || renameName.trim() === activeFolder.name} onClick={() => void onRename(activeFolder.id, renameName)}>Rename Folder</button>
+            <button className="folder-delete" onClick={() => void onDelete(activeFolder)}>Delete Folder</button>
+          </section>
+        ) : null}
+        {error !== null ? <p className="inline-status inline-status-error" role="alert">{error}</p> : null}
+      </div>
+    </details>
   );
 }
 
@@ -374,28 +393,43 @@ export function ResearchDraftWorkspace({
   return (
     <section aria-label="Research" className="page-section research-workspace">
       <header className="research-workspace-header">
-        <div>
-          <p className="eyebrow">{folder.name} Folder</p>
-          <h1>Research</h1>
-          <p className="hero-copy">Write an Alpha formula. This Draft stays in this browser until you choose to Run it.</p>
-        </div>
-        <button className="button" disabled={submitting} onClick={startNewResearch}>New Research</button>
-      </header>
-
-      <div className="research-authoring-grid">
-        <section className="research-editor-panel" aria-label="Alpha authoring">
-          <label htmlFor="research-name">Research name</label>
+        <label className="research-name-field" htmlFor="research-name">
+          <span className="visually-hidden">Research name</span>
           <input
+            aria-label="Research name"
             id="research-name"
             maxLength={200}
             onChange={(event) => updateDraft((current) => ({ ...current, name: event.target.value }))}
             placeholder="Untitled research"
             value={draft.name}
           />
-          <div className="formula-heading">
-            <label>Alpha formula</label>
-            <DiagnosticsStatus state={diagnosticState} />
-          </div>
+          <PencilSimple aria-hidden="true" size={19} weight="regular" />
+        </label>
+        <button className="button button-quiet research-new" disabled={submitting} onClick={startNewResearch}>
+          <Plus aria-hidden="true" size={17} weight="regular" />
+          <span className="visually-hidden">New Research</span>
+        </button>
+        <button className="context-disclosure" onClick={() => document.getElementById("research-parameters")?.scrollIntoView({ block: "start" })} type="button">
+          Hypothesis
+          <CaretDown aria-hidden="true" size={15} weight="regular" />
+        </button>
+        <span className="formula-validity">
+          <CheckCircle aria-hidden="true" size={22} weight="regular" />
+          <DiagnosticsStatus state={diagnosticState} />
+        </span>
+        <span className="browser-save-status">
+          <Desktop aria-hidden="true" size={19} weight="regular" />
+          <span className="visually-hidden">{folder.name} Folder. </span>
+          Saved in this browser
+        </span>
+        <button className="button button-primary run-settings-link" onClick={() => document.getElementById("research-parameters")?.scrollIntoView({ block: "start" })} type="button">
+          <Play aria-hidden="true" size={17} weight="fill" />
+          Run…
+        </button>
+      </header>
+
+      <section className="research-editor-panel" aria-label="Alpha authoring">
+          <div className="formula-heading"><label>Alpha formula</label></div>
           <AlphaFormulaEditor
             catalog={catalog}
             diagnostics={serverDiagnostics}
@@ -421,25 +455,19 @@ export function ResearchDraftWorkspace({
               ))}
             </ul>
           ) : null}
-        </section>
+      </section>
 
-        <aside className="research-parameters" aria-label="Research parameters">
-          <label htmlFor="research-hypothesis">Hypothesis</label>
-          <textarea
-            id="research-hypothesis"
-            onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
-            placeholder="What should this signal explain?"
-            value={draft.hypothesis}
-          />
-          <ResearchDateFields
-            coverageEnd={coverage?.end ?? null}
-            coverageStart={coverage?.start ?? null}
-            endDate={draft.endDate}
-            onEndDateChange={(endDate) => updateDraft((current) => ({ ...current, endDate }))}
-            onStartDateChange={(startDate) => updateDraft((current) => ({ ...current, startDate }))}
-            startDate={draft.startDate}
-          />
-          <div className="form-grid">
+      <section className="research-run-settings" id="research-parameters" aria-label="Research parameters">
+          <header><h2>Research parameters</h2></header>
+          <div className="run-configuration-grid">
+            <ResearchDateFields
+              coverageEnd={coverage?.end ?? null}
+              coverageStart={coverage?.start ?? null}
+              endDate={draft.endDate}
+              onEndDateChange={(endDate) => updateDraft((current) => ({ ...current, endDate }))}
+              onStartDateChange={(startDate) => updateDraft((current) => ({ ...current, startDate }))}
+              startDate={draft.startDate}
+            />
             <label>Universe
               <select onChange={(event) => updateDraft((current) => ({ ...current, universe: event.target.value }))} value={draft.universe}>
                 <option value="">Not selected</option>
@@ -462,19 +490,28 @@ export function ResearchDraftWorkspace({
             <label>Rebalance sessions
               <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, rebalanceEverySessions: event.target.value }))} value={draft.rebalanceEverySessions} />
             </label>
+            <div className="research-hypothesis">
+              <label htmlFor="research-hypothesis">Hypothesis</label>
+              <textarea
+                id="research-hypothesis"
+                onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
+                placeholder="What should this signal explain?"
+                value={draft.hypothesis}
+              />
+            </div>
+            <footer>
+              <button
+                className="button button-primary"
+                disabled={!isCompleteResearchInputs(researchInputs(draft)) || submitting}
+                onClick={() => void runResearch()}
+                type="button"
+              >
+                <Play aria-hidden="true" size={17} weight="fill" />
+                {submitting ? "Running…" : "Run research"}
+              </button>
+            </footer>
           </div>
-        </aside>
-      </div>
-      <footer className="research-run-action">
-        <button
-          className="button"
-          disabled={!isCompleteResearchInputs(researchInputs(draft)) || submitting}
-          onClick={() => void runResearch()}
-          type="button"
-        >
-          {submitting ? "Running…" : "Run"}
-        </button>
-      </footer>
+      </section>
     </section>
   );
 }
@@ -549,7 +586,7 @@ function DiagnosticsStatus({ state }: { state: DiagnosticState }) {
   if (state.kind === "idle") return <span className="diagnostic-status">Not checked</span>;
   if (state.kind === "checking") return <span className="diagnostic-status">Checking…</span>;
   if (state.kind === "unavailable") return <span className="diagnostic-status diagnostic-error">Unavailable · not validated</span>;
-  if (state.result.valid) return <span className="diagnostic-status diagnostic-valid">Valid formula</span>;
+  if (state.result.valid) return <span className="diagnostic-status diagnostic-valid">Formula valid</span>;
   return <span className="diagnostic-status diagnostic-error">{state.result.diagnostics.length} issue{state.result.diagnostics.length === 1 ? "" : "s"}</span>;
 }
 
