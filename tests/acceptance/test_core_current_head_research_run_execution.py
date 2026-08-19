@@ -129,6 +129,14 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "research_execution_child_acknowledged",
             "research_execution_child_exited",
         ]
+        for event in execution_events:
+            assert event["resource_type"] == "ResearchRun"
+            assert event["resource_id"] == run_id
+            assert event["attempt_id"].startswith("attempt_")
+            assert event["research_kind"] == "strategy_backtest"
+        started = execution_events[0]
+        assert started["resumed_from_checkpoint"] is False
+        assert started["resumed_from_chunk_ordinal"] is None
         received = execution_events[1]
         assert float(received["child_data_read_seconds"]) >= 0
         assert float(received["child_calculation_seconds"]) >= 0

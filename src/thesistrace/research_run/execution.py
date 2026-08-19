@@ -237,6 +237,7 @@ class SupervisedResearchExecution:
             "resource_type": "ResearchRun",
             "resource_id": self._request.run_id,
             "attempt_id": self._request.attempt_id,
+            "research_kind": self._request.immutable_input.research_kind,
             "child_pid": self._process.pid,
         }
 
@@ -283,7 +284,14 @@ class SupervisedResearchExecutor:
                     "resource_type": "ResearchRun",
                     "resource_id": request.run_id,
                     "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
                     "child_pid": process.pid,
+                    "resumed_from_checkpoint": request.resume_from is not None,
+                    "resumed_from_chunk_ordinal": (
+                        None
+                        if request.resume_from is None
+                        else request.resume_from.completed_chunk_ordinal
+                    ),
                 }
             )
             assert process.stdin is not None
@@ -350,6 +358,7 @@ class SupervisedResearchExecutor:
                     "resource_type": "ResearchRun",
                     "resource_id": request.run_id,
                     "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
                     "child_pid": process.pid,
                     "chunk_ordinal": chunk["ordinal"],
                     "boundary_session": chunk["boundary_session"],
@@ -390,6 +399,7 @@ class SupervisedResearchExecutor:
                     "resource_type": "ResearchRun",
                     "resource_id": request.run_id,
                     "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
                     "child_pid": process.pid,
                     "exit_code": process.returncode,
                     "acknowledged": False,
@@ -765,6 +775,7 @@ def _read_message(
                         "resource_type": "ResearchRun",
                         "resource_id": request.run_id,
                         "attempt_id": request.attempt_id,
+                        "research_kind": request.immutable_input.research_kind,
                         "child_pid": process.pid,
                     }
                 )
@@ -779,6 +790,7 @@ def _read_message(
                             "resource_type": "ResearchRun",
                             "resource_id": request.run_id,
                             "attempt_id": request.attempt_id,
+                            "research_kind": request.immutable_input.research_kind,
                             "child_pid": process.pid,
                         }
                     ),

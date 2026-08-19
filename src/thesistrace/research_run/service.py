@@ -416,6 +416,7 @@ class ResearchRunService:
                                 "resource_type": "ResearchRun",
                                 "resource_id": claim.run_id,
                                 "attempt_id": claim.attempt_id,
+                                "research_kind": claim.immutable_input.research_kind,
                                 "chunk_ordinal": int(chunk["ordinal"]),
                                 "boundary_session": str(chunk["boundary_session"]),
                                 "supervisor_commit_seconds": monotonic() - commit_started,

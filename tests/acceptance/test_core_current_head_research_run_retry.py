@@ -311,6 +311,17 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
 
         events: list[dict[str, object]] = []
         assert runtime.research_runs.process_next(on_execution_event=events.append) is True
+        started = next(
+            event
+            for event in events
+            if event["event"] == "research_execution_child_started"
+        )
+        assert started["resource_type"] == "ResearchRun"
+        assert started["resource_id"] == run_id
+        assert started["attempt_id"].startswith("attempt_")
+        assert started["research_kind"] == research_kind
+        assert started["resumed_from_checkpoint"] is True
+        assert started["resumed_from_chunk_ordinal"] == len(plan["chunks"])
         assert [
             event["reused_checkpoint"]
             for event in events

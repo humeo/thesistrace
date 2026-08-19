@@ -92,6 +92,9 @@ if arguments[:2] == ["network", "inspect"]:
     raise SystemExit(0)
 if arguments[:2] == ["image", "tag"]:
     raise SystemExit(0)
+if arguments[:2] == ["image", "inspect"]:
+    print("sha256:test-image")
+    raise SystemExit(0)
 if arguments[0] == "run" and "--project-name" not in arguments:
     print('{"classified":true,"child_returncode":-9}')
     raise SystemExit(0)
