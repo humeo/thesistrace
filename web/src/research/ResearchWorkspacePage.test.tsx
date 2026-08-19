@@ -1,7 +1,8 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { highlightTree } from "@lezer/highlight";
 import { describe, expect, it, vi } from "vitest";
 
-import { alphaSyntaxTokens } from "./AlphaFormulaEditor";
+import { alphaHighlightStyle, alphaLanguage } from "./alpha-language";
 import { createDiagnosticsScheduler, type DiagnosticState } from "./diagnostics";
 import {
   emptyResearchDraft,
@@ -78,18 +79,26 @@ const data = {
 };
 
 describe("browser Research Draft", () => {
-  it("classifies fields, functions, numbers, and operators for formula highlighting", () => {
-    const formula = "ts_mean(close_adj, 20)";
-    expect(alphaSyntaxTokens(formula, catalog).map((token) => [
-      formula.slice(token.from, token.to),
-      token.kind,
-    ])).toEqual([
-      ["ts_mean", "function"],
-      ["(", "operator"],
-      ["close_adj", "field"],
-      [",", "operator"],
-      ["20", "number"],
-      [")", "operator"],
+  it("parses formula structure for language-driven syntax highlighting", () => {
+    const formula = "cs_rank(pct_change(close_adj, 20)) + 1 * 2";
+    const tree = alphaLanguage.parser.parse(formula);
+
+    expect(tree.toString()).toBe(
+      "Formula(Expression(BinaryExpression(Expression(CallExpression(FunctionName(Identifier),ArgumentList(Expression(CallExpression(FunctionName(Identifier),ArgumentList(Expression(FieldName(Identifier)),Expression(Number))))))),AddOperator,Expression(BinaryExpression(Expression(Number),MultiplyOperator,Expression(Number))))))",
+    );
+    const highlights: Array<[string, string]> = [];
+    highlightTree(tree, alphaHighlightStyle, (from, to, classes) => {
+      highlights.push([formula.slice(from, to), classes]);
+    });
+    expect(highlights).toEqual([
+      ["cs_rank", "cm-alpha-function"],
+      ["pct_change", "cm-alpha-function"],
+      ["close_adj", "cm-alpha-field"],
+      ["20", "cm-alpha-number"],
+      ["+", "cm-alpha-operator"],
+      ["1", "cm-alpha-number"],
+      ["*", "cm-alpha-operator"],
+      ["2", "cm-alpha-number"],
     ]);
   });
 
@@ -279,6 +288,12 @@ describe("browser Research Draft", () => {
     expect(markup).toContain('disabled="" type="button"><svg');
     expect(markup).toContain("Run research");
     expect(markup).toContain("Research parameters");
+    expect(markup).toContain('aria-label="Open start date calendar"');
+    expect(markup).toContain('aria-label="Open end date calendar"');
+    expect(markup).toContain('for="research-notes">Notes</label>');
+    expect(markup).not.toContain("context-disclosure");
+    expect(markup).not.toContain("formula-validity");
+    expect(markup).not.toContain("run-settings-link");
     expect(markup).not.toContain("Close run settings");
     expect(markup).not.toContain(">Cancel<");
     expect(markup).toContain("Default Folder");

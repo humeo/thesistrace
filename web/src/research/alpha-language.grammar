@@ -1,0 +1,46 @@
+@top Formula { Expression? }
+
+@precedence {
+  call
+  unary
+  multiply @left
+  add @left
+}
+
+Expression {
+  Number |
+  FieldName |
+  CallExpression |
+  ParenthesizedExpression |
+  UnaryExpression |
+  BinaryExpression
+}
+
+CallExpression { FunctionName !call "(" ArgumentList? ")" }
+
+FunctionName { Identifier }
+
+FieldName { Identifier }
+
+ArgumentList { Expression ("," Expression)* }
+
+ParenthesizedExpression { "(" Expression ")" }
+
+UnaryExpression { !unary UnaryOperator Expression }
+
+BinaryExpression {
+  Expression !multiply MultiplyOperator Expression |
+  Expression !add AddOperator Expression
+}
+
+UnaryOperator { "+" | "-" }
+MultiplyOperator { "*" | "/" }
+AddOperator { "+" | "-" }
+
+@tokens {
+  Number { @digit+ ("." @digit+)? }
+  Identifier { @asciiLetter (@asciiLetter | @digit | "_")* }
+  whitespace { std.whitespace+ }
+}
+
+@skip { whitespace }

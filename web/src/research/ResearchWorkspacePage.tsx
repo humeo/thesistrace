@@ -1,6 +1,6 @@
 import {
+  CalendarBlank,
   CaretDown,
-  CheckCircle,
   Desktop,
   FolderSimple,
   PencilSimple,
@@ -409,23 +409,11 @@ export function ResearchDraftWorkspace({
           <Plus aria-hidden="true" size={17} weight="regular" />
           <span className="visually-hidden">New Research</span>
         </button>
-        <button className="context-disclosure" onClick={() => document.getElementById("research-parameters")?.scrollIntoView({ block: "start" })} type="button">
-          Hypothesis
-          <CaretDown aria-hidden="true" size={15} weight="regular" />
-        </button>
-        <span className="formula-validity">
-          <CheckCircle aria-hidden="true" size={22} weight="regular" />
-          <DiagnosticsStatus state={diagnosticState} />
-        </span>
         <span className="browser-save-status">
           <Desktop aria-hidden="true" size={19} weight="regular" />
           <span className="visually-hidden">{folder.name} Folder. </span>
           Saved in this browser
         </span>
-        <button className="button button-primary run-settings-link" onClick={() => document.getElementById("research-parameters")?.scrollIntoView({ block: "start" })} type="button">
-          <Play aria-hidden="true" size={17} weight="fill" />
-          Run…
-        </button>
       </header>
 
       <section className="research-editor-panel" aria-label="Alpha authoring">
@@ -446,6 +434,9 @@ export function ResearchDraftWorkspace({
                 </li>
               ))}
             </ul>
+          ) : null}
+          {diagnosticState.kind === "unavailable" ? (
+            <p className="inline-status inline-status-error" role="status">Formula validation is unavailable.</p>
           ) : null}
           {storageError !== null ? <p className="inline-status inline-status-error" role="alert">{storageError}</p> : null}
           {visibleIssues.length > 0 ? (
@@ -490,12 +481,12 @@ export function ResearchDraftWorkspace({
             <label>Rebalance sessions
               <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, rebalanceEverySessions: event.target.value }))} value={draft.rebalanceEverySessions} />
             </label>
-            <div className="research-hypothesis">
-              <label htmlFor="research-hypothesis">Hypothesis</label>
+            <div className="research-notes">
+              <label htmlFor="research-notes">Notes</label>
               <textarea
-                id="research-hypothesis"
+                id="research-notes"
                 onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
-                placeholder="What should this signal explain?"
+                placeholder="Optional context for this research"
                 value={draft.hypothesis}
               />
             </div>
@@ -582,14 +573,6 @@ function issueAsFormulaDiagnostic(issue: ResearchRunAdmissionIssue): FormulaDiag
   return [{ code: issue.code, message: issue.message, severity: issue.severity, range: issue.range }];
 }
 
-function DiagnosticsStatus({ state }: { state: DiagnosticState }) {
-  if (state.kind === "idle") return <span className="diagnostic-status">Not checked</span>;
-  if (state.kind === "checking") return <span className="diagnostic-status">Checking…</span>;
-  if (state.kind === "unavailable") return <span className="diagnostic-status diagnostic-error">Unavailable · not validated</span>;
-  if (state.result.valid) return <span className="diagnostic-status diagnostic-valid">Formula valid</span>;
-  return <span className="diagnostic-status diagnostic-error">{state.result.diagnostics.length} issue{state.result.diagnostics.length === 1 ? "" : "s"}</span>;
-}
-
 export function ResearchDateFields({
   coverageStart,
   coverageEnd,
@@ -605,16 +588,30 @@ export function ResearchDateFields({
   onStartDateChange: (value: string) => void;
   onEndDateChange: (value: string) => void;
 }) {
+  const startDateInput = useRef<HTMLInputElement>(null);
+  const endDateInput = useRef<HTMLInputElement>(null);
   return (
     <fieldset>
       <legend>Research period</legend>
       <p>{coverageStart && coverageEnd ? `Available data: ${coverageStart} to ${coverageEnd}` : "Current Data is not ready."}</p>
-      <label>Start date
-        <input aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onChange={(event) => onStartDateChange(event.target.value)} type="date" value={startDate} />
-      </label>
-      <label>End date
-        <input aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onChange={(event) => onEndDateChange(event.target.value)} type="date" value={endDate} />
-      </label>
+      <div className="research-date-field">
+        <label htmlFor="research-start-date">Start date</label>
+        <div className="research-date-control">
+          <input id="research-start-date" ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onChange={(event) => onStartDateChange(event.target.value)} type="date" value={startDate} />
+          <button aria-label="Open start date calendar" onClick={() => startDateInput.current?.showPicker()} type="button">
+            <CalendarBlank aria-hidden="true" size={18} weight="regular" />
+          </button>
+        </div>
+      </div>
+      <div className="research-date-field">
+        <label htmlFor="research-end-date">End date</label>
+        <div className="research-date-control">
+          <input id="research-end-date" ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onChange={(event) => onEndDateChange(event.target.value)} type="date" value={endDate} />
+          <button aria-label="Open end date calendar" onClick={() => endDateInput.current?.showPicker()} type="button">
+            <CalendarBlank aria-hidden="true" size={18} weight="regular" />
+          </button>
+        </div>
+      </div>
     </fieldset>
   );
 }

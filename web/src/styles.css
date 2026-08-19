@@ -261,7 +261,7 @@ textarea { resize: vertical; }
 .app-shell-research .main-content { padding: 16px 36px 48px; }
 .research-workspace-header {
   display: grid;
-  grid-template-columns: minmax(250px, 1.2fr) auto auto auto minmax(170px, .7fr) auto;
+  grid-template-columns: minmax(250px, 1fr) auto auto;
   align-items: center;
   gap: 14px;
   margin-bottom: 16px;
@@ -270,19 +270,7 @@ textarea { resize: vertical; }
 .research-name-field input { height: 42px; min-height: 42px; padding-right: 44px; font-size: 16px; }
 .research-name-field svg { position: absolute; top: 50%; right: 16px; color: var(--ink-soft); transform: translateY(-50%); pointer-events: none; }
 .research-new { min-width: 40px; padding: 0; }
-.context-disclosure {
-  min-height: 40px;
-  padding-inline: 8px;
-  color: var(--ink-soft);
-  background: transparent;
-  border-color: transparent;
-}
-.formula-validity, .browser-save-status { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 13px; white-space: nowrap; }
-.formula-validity { color: var(--primary-strong); }
-.diagnostic-status { color: var(--ink-faint); font-size: 13px; }
-.diagnostic-valid { color: var(--primary-strong); }
-.diagnostic-error { color: var(--danger); }
-.run-settings-link { min-width: 104px; }
+.browser-save-status { display: inline-flex; align-items: center; gap: 8px; color: var(--ink-soft); font-size: 13px; white-space: nowrap; }
 .research-editor-panel { padding: 0; background: #fff; border: 0; }
 .formula-heading { display: flex; align-items: center; justify-content: space-between; margin: 0 0 8px 4px; }
 .formula-heading label { font-size: 13px; }
@@ -294,10 +282,10 @@ textarea { resize: vertical; }
 .alpha-formula-editor .cm-gutters { min-width: 64px; color: #777785; background: #fff; border-right-color: var(--line); }
 .alpha-formula-editor .cm-lineNumbers .cm-gutterElement { padding: 0 18px 0 12px; }
 .alpha-formula-editor .cm-activeLine, .alpha-formula-editor .cm-activeLineGutter { background: var(--surface); }
-.alpha-formula-editor .cm-alpha-function { color: var(--primary-strong); font-weight: 620; }
-.alpha-formula-editor .cm-alpha-field { color: var(--ink); font-weight: 540; }
-.alpha-formula-editor .cm-alpha-number { color: var(--primary); }
-.alpha-formula-editor .cm-alpha-operator { color: var(--ink-faint); }
+.alpha-formula-editor .cm-alpha-function { color: #8250df; font-weight: 600; }
+.alpha-formula-editor .cm-alpha-field { color: #1f2328; font-weight: 500; }
+.alpha-formula-editor .cm-alpha-number { color: #0550ae; }
+.alpha-formula-editor .cm-alpha-operator { color: #57606a; }
 .alpha-field-reference { margin-top: 12px; border-top: 1px solid var(--line); }
 .alpha-field-reference summary { cursor: pointer; padding: 12px 4px; color: var(--ink-soft); font-size: 12px; }
 .alpha-field-reference-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--line); }
@@ -326,10 +314,24 @@ textarea { resize: vertical; }
 .run-configuration-grid fieldset { display: grid; grid-column: span 4; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .run-configuration-grid fieldset legend { grid-column: 1 / -1; margin-bottom: 8px; color: #27272f; font-size: 13px; font-weight: 520; }
 .run-configuration-grid fieldset > p { display: none; }
-.run-configuration-grid fieldset label { display: grid; gap: 8px; min-width: 0; color: transparent; font-size: 0; }
+.research-date-field { display: grid; gap: 8px; min-width: 0; }
+.research-date-control { position: relative; }
+.research-date-control input::-webkit-calendar-picker-indicator { display: none; }
+.research-date-control button {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  color: var(--ink-soft);
+  background: transparent;
+  border-color: transparent;
+}
 .run-configuration-grid input, .run-configuration-grid select, .run-configuration-grid textarea { min-height: 44px; height: 44px; padding: 8px 12px; line-height: 1.4; }
-.research-hypothesis { display: grid; grid-column: span 10; gap: 8px; min-width: 0; }
-.research-hypothesis textarea { overflow-y: hidden; resize: none; }
+.research-date-control input { padding-right: 52px; }
+.research-notes { display: grid; grid-column: span 10; gap: 8px; min-width: 0; }
+.research-notes textarea { overflow-y: hidden; resize: none; }
 .research-run-settings footer { display: flex; grid-column: span 2; align-self: end; }
 .research-run-settings footer .button-primary { width: 100%; min-width: 0; min-height: 44px; }
 
@@ -414,13 +416,13 @@ textarea { resize: vertical; }
   .resource-nav { margin-left: 28px; }
   .resource-nav a { padding-inline: 11px; }
   .research-folder-navigation { right: 24px; }
-  .research-workspace-header { grid-template-columns: minmax(240px, 1fr) auto auto auto; }
+  .research-workspace-header { grid-template-columns: minmax(240px, 1fr) auto; }
   .research-new, .browser-save-status { display: none; }
   .run-configuration-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
   .run-configuration-grid fieldset { grid-column: span 3; }
   .run-configuration-grid > label { grid-column: span 2; }
   .run-configuration-grid > label:first-of-type { grid-column: span 3; }
-  .research-hypothesis { grid-column: span 4; }
+  .research-notes { grid-column: span 4; }
   .research-run-settings footer { grid-column: span 2; }
   .research-run-history > li { grid-template-columns: 1fr; }
   .track-history > li { grid-template-columns: 1fr; }
@@ -437,13 +439,12 @@ textarea { resize: vertical; }
   .data-overview-stats { grid-template-columns: repeat(2, 1fr); }
   .research-folder-navigation { position: relative; top: auto; right: auto; z-index: 5; width: min(100%, 260px); margin-bottom: 20px; }
   .folder-menu-panel { right: auto; left: 0; }
-  .research-workspace-header { grid-template-columns: minmax(220px, 1fr) auto auto; gap: 10px; }
-  .formula-validity { display: none; }
+  .research-workspace-header { grid-template-columns: minmax(220px, 1fr) auto; gap: 10px; }
   .research-run-settings { padding-top: 16px; }
   .run-configuration-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .run-configuration-grid fieldset { grid-column: 1 / -1; }
   .run-configuration-grid > label, .run-configuration-grid > label:first-of-type { grid-column: auto; }
-  .research-hypothesis, .research-run-settings footer { grid-column: 1 / -1; }
+  .research-notes, .research-run-settings footer { grid-column: 1 / -1; }
   .research-run-settings footer { justify-content: flex-end; }
   .research-run-settings footer .button-primary { width: min(200px, 100%); }
   .factor-horizons { grid-template-columns: 1fr; }
@@ -459,11 +460,9 @@ textarea { resize: vertical; }
   .data-overview-stats > div { padding-block: 18px; border-bottom: 1px solid var(--line); }
   .data-overview-stats > div:last-child { border-bottom: 0; }
   .research-workspace-header { grid-template-columns: 1fr auto; }
-  .context-disclosure { display: none; }
-  .run-settings-link { min-width: 48px; padding-inline: 12px; font-size: 0; }
   .run-configuration-grid { grid-template-columns: 1fr; }
   .run-configuration-grid fieldset { grid-column: auto; grid-template-columns: 1fr; }
-  .run-configuration-grid > label, .run-configuration-grid > label:first-of-type, .research-hypothesis, .research-run-settings footer { grid-column: auto; }
+  .run-configuration-grid > label, .run-configuration-grid > label:first-of-type, .research-notes, .research-run-settings footer { grid-column: auto; }
   .research-run-settings footer .button-primary { width: 100%; }
   .alpha-field-reference-list, .research-provenance dl { grid-template-columns: 1fr; }
   .alpha-field-reference article:nth-child(odd) { border-right: 0; }
