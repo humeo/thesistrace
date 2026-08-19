@@ -354,29 +354,54 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         research_start_session=sessions[20],
         research_end_session=sessions[-1],
     )
-    factor_continuation = empty_research_continuation("factor_evaluation")
-    factor_results = []
-    for ordinal, (start, end) in enumerate(((20, 64), (64, 80)), start=1):
-        calculation = execute_research_chunk(
-            run_input=factor_run_input,
-            research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
-            research_sessions=sessions[start:end],
-            final_chunk=ordinal == 2,
-            continuation=factor_continuation,
-            cancellation_check=lambda: None,
-        )
-        factor_results.append(calculation)
-        factor_continuation = calculation.continuation
+    factor_uninterrupted = execute_research_chunk(
+        run_input=factor_run_input,
+        research_data=fixture,
+        research_sessions=research_sessions,
+        final_chunk=True,
+        continuation=empty_research_continuation("factor_evaluation"),
+        cancellation_check=lambda: None,
+    )
+    for boundaries in (
+        ((20, 40), (40, 60), (60, 80)),
+        ((20, 63), (63, 80)),
+        ((20, 64), (64, 80)),
+    ):
+        factor_continuation = empty_research_continuation("factor_evaluation")
+        factor_results = []
+        for ordinal, (start, end) in enumerate(boundaries, start=1):
+            calculation = execute_research_chunk(
+                run_input=factor_run_input,
+                research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
+                research_sessions=sessions[start:end],
+                final_chunk=ordinal == len(boundaries),
+                continuation=factor_continuation,
+                cancellation_check=lambda: None,
+            )
+            factor_results.append(calculation)
+            factor_continuation = json.loads(canonical_json_bytes(calculation.continuation))
 
-    factor_final = factor_results[-1]
-    assert all(result.phase_seconds["strategy"] == 0.0 for result in factor_results)
-    assert all(not result.strategy_daily_observations for result in factor_results)
-    assert "strategy_state" not in factor_final.continuation
-    assert "strategy_checksum" not in factor_final.continuation
-    assert set(factor_final.final_values or {}) == {"factor_summary"}
-    assert equivalence_bytes(
-        (factor_final.final_values or {})["factor_summary"]
-    ) == equivalence_bytes(uninterrupted.final_values["factor_summary"])
+        factor_final = factor_results[-1]
+        assert all(result.phase_seconds["strategy"] == 0.0 for result in factor_results)
+        assert all(not result.strategy_daily_observations for result in factor_results)
+        assert "strategy_state" not in factor_final.continuation
+        assert "strategy_checksum" not in factor_final.continuation
+        assert set(factor_final.final_values or {}) == {"factor_summary"}
+        assert equivalence_bytes(
+            (factor_final.final_values or {})["factor_summary"]
+        ) == equivalence_bytes(factor_uninterrupted.final_values["factor_summary"])
+        assert equivalence_bytes(
+            (factor_final.final_values or {})["factor_summary"]
+        ) == equivalence_bytes(uninterrupted.final_values["factor_summary"])
+        for horizon in ("1", "5", "20"):
+            chunked_horizon = (factor_final.final_values or {})["factor_summary"][
+                "horizons"
+            ][horizon]
+            reference_horizon = legacy["factor_summary"]["horizons"][horizon]
+            assert chunked_horizon["coverage"] == reference_horizon["coverage"]
+            assert chunked_horizon["alpha_checksum"] == reference_horizon["alpha_checksum"]
+            assert chunked_horizon["label_checksum"] == reference_horizon["label_checksum"]
+            assert chunked_horizon["source_checksum"] == reference_horizon["source_checksum"]
 
 
 def _read_staged_chunk_result(

@@ -190,6 +190,7 @@ describe("ResearchResultView", () => {
     expect(markup.match(/<span>ICIR<\/span>/g)).toHaveLength(3);
     expect(markup.match(/Rank IC coverage 9\//g)).toHaveLength(3);
     expect(markup.match(/IC coverage 8\//g)).toHaveLength(3);
+    expect(markup).not.toMatch(/Quantile|Top-Bottom|Positive fraction|Sample deviation/i);
     expect(markup).not.toContain("Strategy Summary");
     expect(markup).not.toContain("Daily Observations");
     expect(markup).not.toContain("Terminal Strategy State");
