@@ -11,6 +11,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pyarrow import ArrowException
 
@@ -84,6 +85,21 @@ _REQUIRED_SOURCE_FIELDS = {
     "end_type",
     "update_flag",
 }
+_FINANCIAL_HISTORY_IDENTITY_FIELDS = (
+    "instrument_id",
+    "source_report_period",
+    "source_report_type",
+    "source_company_type",
+    "source_end_type",
+    "availability_status",
+)
+_FINANCIAL_HISTORY_VERSION_FIELDS = (
+    "effective_available_session",
+    "update_flag",
+    "source_published_date",
+    "first_observed_at",
+    "source_row_sha256",
+)
 
 
 class FinancialCandidateError(RuntimeError):
@@ -787,6 +803,16 @@ class FinancialCandidateStore:
         ):
             raise FinancialCandidateError("FINANCIAL_TABLE_MANIFEST_INVALID")
         expected_schema = pa.schema([contract.schema.field(name) for name in source_columns])
+        query_columns = tuple(
+            dict.fromkeys(
+                (
+                    *source_columns,
+                    *_FINANCIAL_HISTORY_IDENTITY_FIELDS,
+                    *_FINANCIAL_HISTORY_VERSION_FIELDS,
+                )
+            )
+        )
+        query_schema = pa.schema([contract.schema.field(name) for name in query_columns])
         tables: list[pa.Table] = []
         for ordinal, object_ref in enumerate(objects):
             if not isinstance(object_ref, Mapping) or object_ref.get("ordinal") != ordinal:
@@ -808,7 +834,7 @@ class FinancialCandidateStore:
             try:
                 table = pq.read_table(
                     pa.BufferReader(content),
-                    columns=list(source_columns),
+                    columns=list(query_columns),
                     filters=[
                         ("instrument_id", "in", sorted(instrument_ids)),
                         ("effective_available_session", "<=", through_session),
@@ -821,12 +847,16 @@ class FinancialCandidateStore:
                 row_count=table.num_rows,
                 column_count=len(table.column_names),
             )
-            if table.schema != expected_schema:
+            if table.schema != query_schema:
                 raise FinancialCandidateError("FINANCIAL_OBJECT_SCHEMA_INVALID")
-            tables.append(table)
+            tables.append(_compact_financial_history(table, sessions[0]))
+            del table, content
+            pa.default_memory_pool().release_unused()
         if not tables:
             return pa.Table.from_batches([], schema=expected_schema)
-        return pa.concat_tables(tables)
+        return _compact_financial_history(pa.concat_tables(tables), sessions[0]).select(
+            source_columns
+        )
 
     def quarantined_row_count(self, manifest_sha256: str) -> int:
         manifest = self._read_family(manifest_sha256)
@@ -1600,6 +1630,47 @@ def _table_contract(table_name: str, source_fields: tuple[str, ...]) -> ParquetW
             "source_row_sha256",
         ),
     )
+
+
+def _compact_financial_history(table: pa.Table, start_session: str) -> pa.Table:
+    """Keep one PIT seed per logical report plus every in-window version."""
+    if table.num_rows == 0:
+        return table
+    before = table.filter(pc.less(table["effective_available_session"], start_session))
+    within = table.filter(
+        pc.greater_equal(table["effective_available_session"], start_session)
+    )
+    if before.num_rows == 0:
+        return within
+    before = before.append_column(
+        "_update_order",
+        pc.cast(
+            pc.fill_null(pc.equal(before["update_flag"], "1"), False),
+            pa.int8(),
+        ),
+    ).sort_by(
+        [
+            *((name, "ascending") for name in _FINANCIAL_HISTORY_IDENTITY_FIELDS),
+            ("effective_available_session", "ascending"),
+            ("_update_order", "ascending"),
+            ("source_published_date", "ascending"),
+            ("first_observed_at", "ascending"),
+            ("source_row_sha256", "ascending"),
+        ]
+    )
+    if before.num_rows > 1:
+        same_identity = pa.array([True] * (before.num_rows - 1))
+        for name in _FINANCIAL_HISTORY_IDENTITY_FIELDS:
+            same_identity = pc.and_kleene(
+                same_identity,
+                pc.equal(before[name].slice(0, before.num_rows - 1), before[name].slice(1)),
+            )
+        keep = pa.concat_arrays(
+            [pc.invert(same_identity).combine_chunks(), pa.array([True])]
+        )
+        before = before.filter(keep)
+    before = before.drop_columns(("_update_order",))
+    return pa.concat_tables((before, within))
 
 
 def _validate_contract(contract: FinancialCollectionContract) -> None:

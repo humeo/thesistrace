@@ -264,13 +264,47 @@ def _align_projection_group(
                 pa.nulls(empty.num_rows, type=pa.string()),
             )
         return empty
-    coordinates = _coordinate_table(sessions, tuple(sorted(instrument_ids)))
-    return coordinates.join_asof(
-        transitions,
-        on="session_date",
-        by="instrument_id",
-        tolerance=-100_000,
-    ).select(("session", "instrument_id", *(item.field_id for item in projections)))
+    sorted_instruments = tuple(sorted(instrument_ids))
+    coordinates = _coordinate_table(sessions, sorted_instruments)
+    ordered = transitions.sort_by(
+        [("instrument_id", "ascending"), ("session_date", "ascending")]
+    )
+    transition_instruments = ordered["instrument_id"].combine_chunks()
+    group_starts = np.empty(ordered.num_rows, dtype=np.bool_)
+    group_starts[0] = True
+    group_starts[1:] = pc.not_equal(
+        transition_instruments.slice(0, ordered.num_rows - 1),
+        transition_instruments.slice(1),
+    ).to_numpy(zero_copy_only=False)
+    start_indices = np.flatnonzero(group_starts)
+    end_indices = np.append(start_indices[1:], ordered.num_rows)
+    requested_dates = np.asarray(sessions, dtype="datetime64[D]")
+    transition_dates = ordered["session_date"].combine_chunks().to_numpy(
+        zero_copy_only=False
+    )
+    instrument_positions = {
+        instrument_id: position for position, instrument_id in enumerate(sorted_instruments)
+    }
+    aligned_indices = np.zeros(len(sessions) * len(sorted_instruments), dtype=np.int64)
+    missing = np.ones(aligned_indices.size, dtype=np.bool_)
+    session_offsets = np.arange(len(sessions), dtype=np.int64) * len(sorted_instruments)
+    for start, end in zip(start_indices, end_indices, strict=True):
+        instrument_id = str(transition_instruments[start].as_py())
+        selected = np.searchsorted(
+            transition_dates[start:end], requested_dates, side="right"
+        ) - 1
+        available = selected >= 0
+        output_positions = session_offsets + instrument_positions[instrument_id]
+        aligned_indices[output_positions[available]] = start + selected[available]
+        missing[output_positions[available]] = False
+    take_indices = pa.array(aligned_indices, mask=missing)
+    result = coordinates.select(("session", "instrument_id"))
+    for projection in projections:
+        result = result.append_column(
+            projection.field_id,
+            pc.take(ordered[projection.field_id], take_indices),
+        )
+    return result
 
 
 def _state_transitions_rows(
@@ -354,64 +388,73 @@ def _state_transitions_table(
             pc.ends_with(table["source_report_period"], "1231"),
         )
     accepted = table.filter(pc.fill_null(accepted_mask, False))
-    transitions: list[pa.Table] = []
-    for instrument_id in sorted(instrument_ids):
-        instrument = accepted.filter(pc.equal(accepted["instrument_id"], instrument_id))
-        if instrument.num_rows == 0:
-            continue
-        instrument = instrument.append_column(
-            "_report_period_order",
-            pc.cast(instrument["source_report_period"], pa.int64()),
-        ).append_column(
-            "_update_order",
-            pc.cast(
-                pc.fill_null(pc.equal(instrument["update_flag"], "1"), False),
-                pa.int8(),
-            ),
-        )
-        instrument = instrument.sort_by(
-            [
-                ("effective_available_session", "ascending"),
-                ("_report_period_order", "ascending"),
-                ("_update_order", "ascending"),
-                ("source_published_date", "ascending"),
-                ("first_observed_at", "ascending"),
-                ("source_row_sha256", "ascending"),
-            ]
-        )
-        candidates = instrument.filter(
-            pc.equal(
-                instrument["_report_period_order"],
-                pc.cumulative_max(instrument["_report_period_order"]),
-            )
-        )
-        available_sessions = candidates["effective_available_session"].combine_chunks()
-        last_at_session = pa.concat_arrays(
-            [
-                pc.not_equal(
-                    available_sessions.slice(0, max(0, len(available_sessions) - 1)),
-                    available_sessions.slice(1),
-                ),
-                pa.array([True]),
-            ]
-        )
-        latest = candidates.filter(last_at_session)
-        transitions.append(
-            pa.table(
-                {
-                    "session_date": pc.cast(latest["effective_available_session"], pa.date32()),
-                    "instrument_id": latest["instrument_id"],
-                    **{
-                        projection.field_id: latest[projection.source_column]
-                        for projection in projections
-                    },
-                },
-                schema=schema,
-            )
-        )
-    if not transitions:
+    accepted = accepted.append_column(
+        "_report_period_order",
+        pc.cast(accepted["source_report_period"], pa.int64()),
+    ).append_column(
+        "_update_order",
+        pc.cast(
+            pc.fill_null(pc.equal(accepted["update_flag"], "1"), False),
+            pa.int8(),
+        ),
+    )
+    accepted = accepted.sort_by(
+        [
+            ("instrument_id", "ascending"),
+            ("effective_available_session", "ascending"),
+            ("_report_period_order", "ascending"),
+            ("_update_order", "ascending"),
+            ("source_published_date", "ascending"),
+            ("first_observed_at", "ascending"),
+            ("source_row_sha256", "ascending"),
+        ]
+    )
+    instrument_column = accepted["instrument_id"].combine_chunks()
+    report_periods = accepted["_report_period_order"].combine_chunks().to_numpy()
+    group_starts = np.empty(accepted.num_rows, dtype=np.bool_)
+    group_starts[0] = True
+    group_starts[1:] = pc.not_equal(
+        instrument_column.slice(0, accepted.num_rows - 1),
+        instrument_column.slice(1),
+    ).to_numpy(zero_copy_only=False)
+    start_indices = np.flatnonzero(group_starts)
+    end_indices = np.append(start_indices[1:], accepted.num_rows)
+    candidate_mask = np.zeros(accepted.num_rows, dtype=np.bool_)
+    for start, end in zip(start_indices, end_indices, strict=True):
+        periods = report_periods[start:end]
+        candidate_mask[start:end] = periods == np.maximum.accumulate(periods)
+    candidates = accepted.filter(pa.array(candidate_mask))
+    if candidates.num_rows == 0:
         return pa.Table.from_batches([], schema=schema)
-    return pa.concat_tables(transitions).sort_by(
+    candidate_instruments = candidates["instrument_id"].combine_chunks()
+    available_sessions = candidates["effective_available_session"].combine_chunks()
+    if candidates.num_rows == 1:
+        last_at_session = pa.array([True])
+    else:
+        same_instrument = pc.equal(
+            candidate_instruments.slice(0, candidates.num_rows - 1),
+            candidate_instruments.slice(1),
+        )
+        same_session = pc.equal(
+            available_sessions.slice(0, candidates.num_rows - 1),
+            available_sessions.slice(1),
+        )
+        last_at_session = pa.concat_arrays(
+            [pc.invert(pc.and_kleene(same_instrument, same_session)), pa.array([True])]
+        )
+    latest = candidates.filter(last_at_session)
+    transitions = pa.table(
+        {
+            "session_date": pc.cast(latest["effective_available_session"], pa.date32()),
+            "instrument_id": latest["instrument_id"],
+            **{
+                projection.field_id: latest[projection.source_column]
+                for projection in projections
+            },
+        },
+        schema=schema,
+    )
+    return transitions.sort_by(
         [("session_date", "ascending"), ("instrument_id", "ascending")]
     )
 

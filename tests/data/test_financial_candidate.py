@@ -496,6 +496,35 @@ def test_financial_series_read_projects_requested_columns_and_instruments(
         )
 
 
+def test_financial_series_read_compacts_superseded_pre_window_versions(tmp_path: Path) -> None:
+    store, candidate, _repeated, _snapshot = _materialized_candidate(tmp_path)
+
+    rows = store.read_financial_rows(
+        candidate.manifest_sha256,
+        "income",
+        (
+            "instrument_id",
+            "source_report_period",
+            "source_report_type",
+            "source_company_type",
+            "effective_available_session",
+            "availability_status",
+            "first_observed_at",
+            "source_published_date",
+            "source_row_sha256",
+            "update_flag",
+            "revenue",
+        ),
+        ("2026-04-27", "2026-08-13"),
+        frozenset({"equity:000001.SZ"}),
+    )
+
+    revenues = [row["revenue"] for row in rows]
+    assert len(revenues) == 5
+    assert None not in revenues
+    assert set(revenues) == {"25", "81", "90", "101", "200"}
+
+
 @pytest.mark.parametrize("target", ["raw", "parquet"])
 @pytest.mark.parametrize("damage", ["missing", "corrupt"])
 def test_missing_or_corrupt_financial_evidence_fails_closed(
