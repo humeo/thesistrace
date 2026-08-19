@@ -43,6 +43,7 @@ from thesistrace.daily_track.models import (
 )
 from thesistrace.daily_track.planning import (
     DEFAULT_TRACKING_EXECUTION_MEMORY_BYTES,
+    MAX_CHUNK_SESSION_COUNT,
     plan_tracking_advance,
 )
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
@@ -1355,7 +1356,7 @@ class DailyTrackService:
                         admission.financial_observation_through_session is None
                         or target_sessions[-1] > admission.financial_observation_through_session
                     )
-                planning_candidates = target_sessions[:63]
+                planning_candidates = target_sessions[:MAX_CHUNK_SESSION_COUNT]
                 planning = _origin_planning_facts(origin)
                 maximum_universe_cardinality = self._generation_store.maximum_universe_cardinality(
                     generation.manifest_sha256,

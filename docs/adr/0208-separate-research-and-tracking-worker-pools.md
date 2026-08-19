@@ -26,7 +26,7 @@ For either role, one Attempt owns exactly one child for its complete lifetime.
 The Research child processes Chunks sequentially and waits for the supervisor's
 durable checkpoint acknowledgement before starting the next Chunk. The Tracking
 child instead computes one all-or-nothing Advance Attempt from the authoritative
-Tracking Head for its frozen, capacity-planned 1-to-63-session Target and
+Tracking Head for its frozen, capacity-planned 1-to-64-session Target and
 produces no cross-Attempt private checkpoint. Either child exits if its
 supervisor connection is lost and is never reused across Attempts.
 ResearchRun or DailyTrack remains the business lifecycle boundary above those

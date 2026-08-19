@@ -406,7 +406,7 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_tracking_advance_freezes_and_publishes_only_the_oldest_63_sessions(
+def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -420,7 +420,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_63_sessions(
         run_id = client.post(
             "/api/research-runs",
             json=_run_command(
-                "tracking-target-63-seed",
+                "tracking-target-64-seed",
                 start_date=seed_sessions[0],
                 end_date=seed_sessions[-1],
             ),
@@ -428,7 +428,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_63_sessions(
         assert runtime.research_runs.process_next() is True
         track_id = client.post(
             f"/api/research-runs/{run_id}/daily-tracks",
-            json={"request_id": "tracking-target-63-activation"},
+            json={"request_id": "tracking-target-64-activation"},
         ).json()["id"]
         backlog = _weekday_sessions_after(date.fromisoformat(seed_sessions[-1]), count=70)
         _publish_head(
@@ -442,8 +442,8 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_63_sessions(
         assert runtime.daily_tracks.process_next(on_execution_event=execution_events.append) is True
 
         detail = client.get(f"/api/daily-tracks/{track_id}").json()
-        assert detail["strategy_session"] == backlog[62]
-        assert detail["lag_sessions"] == 7
+        assert detail["strategy_session"] == backlog[63]
+        assert detail["lag_sessions"] == 6
         with runtime.database.transaction() as transaction:
             progression = transaction.execute(
                 """
@@ -462,7 +462,7 @@ def test_tracking_advance_freezes_and_publishes_only_the_oldest_63_sessions(
                 (track_id,),
             ).fetchone()
         assert progression is not None
-        assert [item.isoformat() for item in progression["target_sessions"]] == list(backlog[:63])
+        assert [item.isoformat() for item in progression["target_sessions"]] == list(backlog[:64])
         assert progression["status"] == "succeeded"
         assert attempt_count == {"count": 1}
         assert [event["event"] for event in execution_events] == [
@@ -693,7 +693,7 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
                 is True
             )
             assert claimed == [control_track]
-            assert client.get(f"/api/daily-tracks/{control_track}").json()["lag_sessions"] == 7
+            assert client.get(f"/api/daily-tracks/{control_track}").json()["lag_sessions"] == 6
 
             _make_tracking_retry_eligible(settings, retry_track)
             claimed.clear()
@@ -759,7 +759,8 @@ def test_tracking_transient_cycle_persists_backoff_rotates_and_requires_retry(
         assert recovered["attempt_generations"][:3] == [backlog_head] * 3
         assert recovered["attempt_generations"][3] != backlog_head
         assert (
-            client.get(f"/api/daily-tracks/{retry_track}").json()["strategy_session"] == backlog[62]
+            client.get(f"/api/daily-tracks/{retry_track}").json()["strategy_session"]
+            == backlog[63]
         )
 
 

@@ -198,7 +198,15 @@ def columnar_forward_factor_days_by_horizon(
 ) -> dict[str, list[dict[str, object]]]:
     calendar = tuple(research_data.sessions)
     session_positions = {session: index for index, session in enumerate(calendar)}
-    instruments = tuple(sorted(research_data.instruments))
+    instruments = tuple(
+        sorted(
+            {
+                str(value["instrument_id"])
+                for item in alpha_matrix["sessions"]
+                for value in item["values"]
+            }
+        )
+    )
     instrument_positions = {
         instrument_id: index for index, instrument_id in enumerate(instruments)
     }

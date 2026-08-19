@@ -140,7 +140,15 @@ def _evaluate_columnar_alpha(
     if neutralization not in {"none", "industry"}:
         raise ValueError("neutralization must be none or industry")
     calendar = tuple(research_data.sessions)
-    instruments = tuple(sorted(research_data.instruments))
+    instruments = tuple(
+        sorted(
+            {
+                instrument_id
+                for session in calendar
+                for instrument_id in research_data.universe_members.get(session, ())
+            }
+        )
+    )
     plan = build_series_execution_plan(compiled_alpha)
     evaluated = evaluate_columnar_execution_matrix(
         plan,

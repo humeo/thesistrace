@@ -577,7 +577,18 @@ def test_market_slice_projects_only_required_auxiliary_and_field_columns(
         in projected_columns
     )
     assert (
-        tuple(sorted(("session_date", "instrument_id", "open_raw", "open_adj", "close_adj")))
+        tuple(
+            sorted(
+                (
+                    "session_date",
+                    "instrument_id",
+                    "open_raw",
+                    "open_adj",
+                    "turnover_amount_cny",
+                    "close_adj",
+                )
+            )
+        )
         in projected_columns
     )
 
@@ -917,7 +928,7 @@ def test_materialized_generation_reopens_every_canonical_table_after_restart(
     assert len(price_manifest["objects"]) == 2
     assert price_manifest["partitioning"] == {
         "kind": "research-session-block",
-        "session_count": GENERATION_SESSION_PARTITION_COUNT,
+        "session_count": 64,
     }
     assert price_manifest["writer_contract"]["compression"]["codec"] == "zstd"
 

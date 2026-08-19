@@ -317,7 +317,7 @@ Attempt success.
 _Avoid_: New ResearchRun, Data Refresh, partial result
 
 **Tracking Advance Target**:
-The exact contiguous list of the oldest 1 through 63 unpublished Research
+The exact contiguous list of the oldest 1 through 64 unpublished Research
 Sessions selected once for a Tracking Advance. Later Attempts and a growing
 Dataset Head never change it.
 _Avoid_: Current backlog, mutable target, ResearchRun Execution Chunk
@@ -1353,10 +1353,14 @@ _Avoid_: Universe definition, permanent member list, effective-date range
 **Research Eligibility**:
 The downstream decision about which Universe Membership instruments may enter
 Factor Evaluation or a Strategy's new-buy candidate set on one signal session.
-V1 excludes instruments carrying their historically effective ST or `*ST`
-designation without removing them from Universe Membership.
+V1 requires one complete same-session Canonical EOD Price observation with
+valid Raw and Adjusted Opens and strictly positive CNY turnover amount, and
+excludes instruments carrying their historically effective ST or `*ST`
+designation. The same Effective Universe drives Alpha cross-sections, Factor
+inputs, Strategy new-buy candidates, and the Strategy Benchmark without
+removing an instrument from Canonical Universe Membership.
 _Avoid_: Liquidity Universe ranking, permanent stock exclusion, current status
-backfill
+backfill, zero-turnover calculation member, per-module eligibility rule
 
 **Industry Classification**:
 The SW2021 L1, L2, and L3 industries assigned to an instrument for a historical

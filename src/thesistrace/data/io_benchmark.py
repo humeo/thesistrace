@@ -203,8 +203,8 @@ def assert_long_research_qualification(
     generation = workload.get("generation_manifest_sha256")
     if not isinstance(generation, str) or len(generation) != 64:
         raise AssertionError("long Research frozen Generation identity is invalid")
-    if _positive_int(workload.get("chunk_session_count"), "Chunk session count") > 63:
-        raise AssertionError("long Research Chunk exceeds 63 sessions")
+    if _positive_int(workload.get("chunk_session_count"), "Chunk session count") > 64:
+        raise AssertionError("long Research Chunk exceeds 64 sessions")
     _positive_int(workload.get("chunk_count"), "Chunk count")
 
     summary = long_research_qualification_summary(evidence)

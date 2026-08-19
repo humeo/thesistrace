@@ -678,6 +678,7 @@ class MountedGenerationStore:
                             "instrument_id",
                             "open_raw",
                             "open_adj",
+                            "turnover_amount_cny",
                             *requested_columns,
                         }
                     rows = self._open_table_sessions(
@@ -837,11 +838,14 @@ class MountedGenerationStore:
         )
         if actual_sessions != tuple(sessions):
             raise GenerationStoreError("Columnar Research Universe is incomplete")
-        instrument_ids = frozenset(
-            str(instrument_id)
-            for index in range(universes.num_rows)
-            for instrument_id in universes["instrument_ids"][index].as_py()
-        ) | fact_instrument_ids
+        instrument_ids = (
+            frozenset(
+                str(instrument_id)
+                for index in range(universes.num_rows)
+                for instrument_id in universes["instrument_ids"][index].as_py()
+            )
+            | fact_instrument_ids
+        )
         tables: dict[str, pa.Table] = {}
         required_families = {
             "market.instrument_identity",
@@ -864,6 +868,7 @@ class MountedGenerationStore:
                             "instrument_id",
                             "open_raw",
                             "open_adj",
+                            "turnover_amount_cny",
                             *requested_columns,
                         }
                     tables[table_name] = self._open_table_sessions_columnar(

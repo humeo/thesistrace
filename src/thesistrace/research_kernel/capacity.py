@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MAX_CHUNK_SESSION_COUNT = 63
+MAX_CHUNK_SESSION_COUNT = 64
 CHUNK_TIME_TARGET_SECONDS = 30
 CHUNK_TIME_TARGET_WORK = 15_000_000
 _FIXED_EXECUTION_OVERHEAD_BYTES = 64 * 1024**2

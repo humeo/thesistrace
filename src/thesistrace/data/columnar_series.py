@@ -13,10 +13,10 @@ import pyarrow as pa
 import pyarrow.compute as pc
 
 from thesistrace.research_series import (
-    ColumnarResearchSeries,
     ExecutionPrice,
     InstrumentProfile,
     PriceLimit,
+    decimal_to_binary64,
 )
 
 T = TypeVar("T")
@@ -35,20 +35,13 @@ def _session_filter(table: pa.Table, column: str, sessions: tuple[str, ...]) -> 
 class _CoordinateValues(Mapping[tuple[str, str], T]):
     def __init__(
         self,
-        table: pa.Table,
+        index: _CoordinateIndex,
         *,
-        session_column: str,
         value_columns: tuple[str, ...],
         convert,
     ) -> None:
-        ordered = table.combine_chunks()
-        sessions = ordered[session_column].combine_chunks().to_pylist()
-        instruments = ordered["instrument_id"].combine_chunks().to_pylist()
-        self._keys = tuple(
-            (str(session), str(instrument))
-            for session, instrument in zip(sessions, instruments, strict=True)
-        )
-        self._columns = tuple(ordered[name].combine_chunks() for name in value_columns)
+        self._index = index
+        self._columns = tuple(index.table[name].combine_chunks() for name in value_columns)
         self._convert = convert
         self._cache: dict[tuple[str, str], T] = {}
 
@@ -56,9 +49,7 @@ class _CoordinateValues(Mapping[tuple[str, str], T]):
         cached = self._cache.get(coordinate)
         if cached is not None:
             return cached
-        position = bisect_left(self._keys, coordinate)
-        if position == len(self._keys) or self._keys[position] != coordinate:
-            raise KeyError(coordinate)
+        position = self._index.position(coordinate)
         values = tuple(column[position].as_py() for column in self._columns)
         if any(value is None for value in values):
             raise KeyError(coordinate)
@@ -67,18 +58,89 @@ class _CoordinateValues(Mapping[tuple[str, str], T]):
         return result
 
     def __iter__(self) -> Iterator[tuple[str, str]]:
-        return iter(self._keys)
+        return self._index.coordinates()
 
     def __len__(self) -> int:
-        return len(self._keys)
+        return len(self._index.row_keys)
+
+
+class _CoordinateIndex:
+    def __init__(
+        self,
+        table: pa.Table,
+        *,
+        session_column: str,
+        sessions: tuple[str, ...],
+        instruments: tuple[str, ...],
+    ) -> None:
+        self.table = table.combine_chunks()
+        self.sessions = sessions
+        self.instruments = instruments
+        self._session_positions = {value: index for index, value in enumerate(sessions)}
+        self._instrument_positions = {
+            value: index for index, value in enumerate(instruments)
+        }
+        row_sessions = np.asarray(
+            self.table[session_column].combine_chunks().to_numpy(zero_copy_only=False),
+            dtype=np.str_,
+        )
+        row_instruments = np.asarray(
+            self.table["instrument_id"].combine_chunks().to_numpy(zero_copy_only=False),
+            dtype=np.str_,
+        )
+        session_axis = np.asarray(sessions, dtype=np.str_)
+        instrument_axis = np.asarray(instruments, dtype=np.str_)
+        self.row_session_indices = np.searchsorted(session_axis, row_sessions).astype(
+            np.int32,
+            copy=False,
+        )
+        self.row_instrument_indices = np.searchsorted(
+            instrument_axis,
+            row_instruments,
+        ).astype(np.int32, copy=False)
+        if (
+            np.any(self.row_session_indices >= len(session_axis))
+            or np.any(self.row_instrument_indices >= len(instrument_axis))
+            or np.any(session_axis[self.row_session_indices] != row_sessions)
+            or np.any(instrument_axis[self.row_instrument_indices] != row_instruments)
+        ):
+            raise ValueError("Columnar Research coordinates are misaligned")
+        self.row_keys = (
+            self.row_session_indices.astype(np.int64) * len(instruments)
+            + self.row_instrument_indices
+        )
+        if len(self.row_keys) > 1 and np.any(self.row_keys[1:] <= self.row_keys[:-1]):
+            raise ValueError("Columnar Research coordinates are not unique and ordered")
+
+    def position(self, coordinate: tuple[str, str]) -> int:
+        session, instrument_id = coordinate
+        try:
+            key = (
+                self._session_positions[session] * len(self.instruments)
+                + self._instrument_positions[instrument_id]
+            )
+        except KeyError as error:
+            raise KeyError(coordinate) from error
+        position = int(np.searchsorted(self.row_keys, key))
+        if position == len(self.row_keys) or self.row_keys[position] != key:
+            raise KeyError(coordinate)
+        return position
+
+    def coordinates(self) -> Iterator[tuple[str, str]]:
+        return (
+            (self.sessions[int(session_index)], self.instruments[int(instrument_index)])
+            for session_index, instrument_index in zip(
+                self.row_session_indices,
+                self.row_instrument_indices,
+                strict=True,
+            )
+        )
 
 
 class _InstrumentProfiles(Mapping[str, InstrumentProfile]):
-    def __init__(self, table: pa.Table) -> None:
+    def __init__(self, table: pa.Table, ids: tuple[str, ...]) -> None:
         self._table = table.combine_chunks()
-        self._ids = tuple(
-            map(str, self._table["instrument_id"].combine_chunks().to_pylist())
-        )
+        self._ids = ids
         self._cache: dict[str, InstrumentProfile] = {}
 
     def __getitem__(self, instrument_id: str) -> InstrumentProfile:
@@ -103,9 +165,30 @@ class _InstrumentProfiles(Mapping[str, InstrumentProfile]):
 
 
 class _UniverseMembers(Mapping[str, tuple[str, ...]]):
-    def __init__(self, table: pa.Table) -> None:
+    def __init__(self, table: pa.Table, eod_index: _CoordinateIndex) -> None:
         self._table = table.combine_chunks()
         self._sessions = tuple(map(str, self._table["session"].combine_chunks().to_pylist()))
+        eod_prices = eod_index.table
+        eligible_mask = pc.and_kleene(
+            pc.and_kleene(
+                pc.is_valid(eod_prices["open_raw"]),
+                pc.is_valid(eod_prices["open_adj"]),
+            ),
+            pc.and_kleene(
+                pc.is_valid(eod_prices["turnover_amount_cny"]),
+                pc.greater(eod_prices["turnover_amount_cny"], 0),
+            ),
+        ).to_numpy(zero_copy_only=False)
+        self._eligible_by_session: dict[str, frozenset[str]] = {}
+        for session_index in np.unique(eod_index.row_session_indices[eligible_mask]):
+            instrument_positions = np.unique(
+                eod_index.row_instrument_indices[
+                    eligible_mask & (eod_index.row_session_indices == session_index)
+                ]
+            )
+            self._eligible_by_session[eod_index.sessions[int(session_index)]] = frozenset(
+                eod_index.instruments[int(position)] for position in instrument_positions
+            )
         self._cache: dict[str, tuple[str, ...]] = {}
 
     def __getitem__(self, session: str) -> tuple[str, ...]:
@@ -116,7 +199,8 @@ class _UniverseMembers(Mapping[str, tuple[str, ...]]):
         if position == len(self._sessions) or self._sessions[position] != session:
             raise KeyError(session)
         values = self._table["instrument_ids"][position].as_py()
-        result = tuple(str(value) for value in values)
+        eligible = self._eligible_by_session.get(session, frozenset())
+        result = tuple(str(value) for value in values if str(value) in eligible)
         self._cache[session] = result
         return result
 
@@ -129,30 +213,38 @@ class _UniverseMembers(Mapping[str, tuple[str, ...]]):
 
 class _IndustryMembership(Mapping[tuple[str, str], str]):
     def __init__(self, table: pa.Table) -> None:
-        self._table = table.combine_chunks()
+        ordered = table.combine_chunks()
+        self._row_count = ordered.num_rows
+        memberships: dict[str, list[tuple[str, str, str]]] = {}
+        for instrument_id, active_from, active_to, industry in zip(
+            ordered["instrument_id"].to_pylist(),
+            ordered["active_from"].to_pylist(),
+            ordered["active_to"].to_pylist(),
+            ordered["sw2021_l1"].to_pylist(),
+            strict=True,
+        ):
+            memberships.setdefault(str(instrument_id), []).append(
+                (str(active_from), str(active_to or ""), str(industry))
+            )
+        self._memberships = {
+            instrument_id: tuple(values) for instrument_id, values in memberships.items()
+        }
 
     def __getitem__(self, coordinate: tuple[str, str]) -> str:
         session, instrument_id = coordinate
-        mask = pc.and_(
-            pc.equal(self._table["instrument_id"], instrument_id),
-            pc.and_(
-                pc.less_equal(self._table["active_from"], session),
-                pc.or_(
-                    pc.equal(self._table["active_to"], ""),
-                    pc.greater(self._table["active_to"], session),
-                ),
-            ),
-        )
-        visible = self._table.filter(mask)
-        if visible.num_rows == 0:
+        visible: str | None = None
+        for active_from, active_to, industry in self._memberships.get(instrument_id, ()):
+            if active_from <= session and (not active_to or session < active_to):
+                visible = industry
+        if visible is None:
             raise KeyError(coordinate)
-        return str(visible["sw2021_l1"][visible.num_rows - 1].as_py())
+        return visible
 
     def __iter__(self) -> Iterator[tuple[str, str]]:
         raise TypeError("Industry membership is a point-in-time lookup")
 
     def __len__(self) -> int:
-        return self._table.num_rows
+        return self._row_count
 
 
 @dataclass(frozen=True)
@@ -168,19 +260,62 @@ class ColumnarResearchData:
     _field_columns: Mapping[str, str]
 
     @cached_property
+    def _instrument_axis(self) -> tuple[str, ...]:
+        return tuple(
+            map(str, self._instruments["instrument_id"].combine_chunks().to_pylist())
+        )
+
+    @cached_property
+    def _eod_index(self) -> _CoordinateIndex:
+        return _CoordinateIndex(
+            self._eod_prices,
+            session_column="session_date",
+            sessions=self.sessions,
+            instruments=self._instrument_axis,
+        )
+
+    @cached_property
+    def _trading_state_index(self) -> _CoordinateIndex:
+        return _CoordinateIndex(
+            self._trading_states,
+            session_column="session",
+            sessions=self.sessions,
+            instruments=self._instrument_axis,
+        )
+
+    @cached_property
+    def _price_limit_index(self) -> _CoordinateIndex:
+        return _CoordinateIndex(
+            self._price_limits,
+            session_column="session",
+            sessions=self.sessions,
+            instruments=self._instrument_axis,
+        )
+
+    @cached_property
+    def _financial_index(self) -> _CoordinateIndex | None:
+        if self._financial_values is None:
+            return None
+        return _CoordinateIndex(
+            self._financial_values,
+            session_column="session",
+            sessions=self.sessions,
+            instruments=self._instrument_axis,
+        )
+
+    @cached_property
     def instruments(self) -> Mapping[str, InstrumentProfile]:
-        return _InstrumentProfiles(self._instruments)
+        return _InstrumentProfiles(self._instruments, self._instrument_axis)
 
     @cached_property
     def universe_members(self) -> Mapping[str, tuple[str, ...]]:
-        return _UniverseMembers(self._universes)
+        return _UniverseMembers(self._universes, self._eod_index)
 
     @cached_property
     def fields(self) -> Mapping[str, Mapping[tuple[str, str], object]]:
         market = {
             field_id: _CoordinateValues(
-                self._eod_prices,
-                session_column="session_date",
+                self._eod_index,
                 value_columns=(column,),
                 convert=lambda value: value,
             )
@@ -191,8 +326,7 @@ class ColumnarResearchData:
             market.update(
                 {
                     field_id: _CoordinateValues(
-                        self._financial_values,
-                        session_column="session",
+                        self._financial_index,
                         value_columns=(field_id,),
                         convert=lambda value: value,
                     )
@@ -205,8 +339,7 @@ class ColumnarResearchData:
     @cached_property
     def execution_prices(self) -> Mapping[tuple[str, str], ExecutionPrice]:
         return _CoordinateValues(
-            self._eod_prices,
-            session_column="session_date",
+            self._eod_index,
             value_columns=("open_raw", "open_adj"),
             convert=lambda raw, adjusted: ExecutionPrice(str(raw), str(adjusted)),
         )
@@ -214,8 +347,7 @@ class ColumnarResearchData:
     @cached_property
     def trading_states(self) -> Mapping[tuple[str, str], str]:
         return _CoordinateValues(
-            self._trading_states,
-            session_column="session",
+            self._trading_state_index,
             value_columns=("state",),
             convert=str,
         )
@@ -223,8 +355,7 @@ class ColumnarResearchData:
     @cached_property
     def price_limits(self) -> Mapping[tuple[str, str], PriceLimit]:
         return _CoordinateValues(
-            self._price_limits,
-            session_column="session",
+            self._price_limit_index,
             value_columns=("upper", "lower"),
             convert=lambda upper, lower: PriceLimit(str(upper), str(lower)),
         )
@@ -249,62 +380,45 @@ class ColumnarResearchData:
                 and field_id in self._financial_values.column_names
             ):
                 matrices[field_id] = _numeric_matrix(
-                    self._financial_values,
-                    session_column="session",
+                    self._financial_index,
                     value_column=field_id,
-                    sessions=self.sessions,
                     instruments=instruments,
                     shape=shape,
                 )
                 continue
             matrices[field_id] = _numeric_matrix(
-                self._eod_prices,
-                session_column="session_date",
+                self._eod_index,
                 value_column=self._field_columns[field_id],
-                sessions=self.sessions,
                 instruments=instruments,
                 shape=shape,
             )
         return matrices
 
     def adjusted_open_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
-        axis, matrix = self._adjusted_open_axis
+        axis, matrix, _decimal_matrix = self._adjusted_open_axes
         if instruments != axis:
             positions = [axis.index(instrument_id) for instrument_id in instruments]
             return matrix[positions]
         return matrix
 
     def adjusted_open_decimal_matrix(self, instruments: tuple[str, ...]) -> np.ndarray:
-        axis, matrix = self._adjusted_open_decimal_axis
+        axis, _numeric_matrix_value, matrix = self._adjusted_open_axes
         if instruments != axis:
             positions = [axis.index(instrument_id) for instrument_id in instruments]
             return matrix[positions]
         return matrix
 
     @cached_property
-    def _adjusted_open_axis(self) -> tuple[tuple[str, ...], np.ndarray]:
+    def _adjusted_open_axes(
+        self,
+    ) -> tuple[tuple[str, ...], np.ndarray, np.ndarray]:
         instruments = tuple(sorted(self.instruments))
-        matrix = _numeric_matrix(
-            self._eod_prices,
-            session_column="session_date",
+        numeric_matrix, decimal_matrix = _decimal_and_numeric_matrices(
+            self._eod_index,
             value_column="open_adj",
-            sessions=self.sessions,
-            instruments=instruments,
-            shape=(len(instruments), len(self.sessions)),
-        )
-        return instruments, matrix
-
-    @cached_property
-    def _adjusted_open_decimal_axis(self) -> tuple[tuple[str, ...], np.ndarray]:
-        instruments = tuple(sorted(self.instruments))
-        matrix = _object_matrix(
-            self._eod_prices,
-            session_column="session_date",
-            value_column="open_adj",
-            sessions=self.sessions,
             instruments=instruments,
         )
-        return instruments, matrix
+        return instruments, numeric_matrix, decimal_matrix
 
     def slice_sessions(self, sessions: tuple[str, ...]) -> ColumnarResearchData:
         if not sessions or any(session not in self.sessions for session in sessions):
@@ -326,130 +440,84 @@ class ColumnarResearchData:
             _field_columns=self._field_columns,
         )
 
-    def append_sessions(self, later: ColumnarResearchSeries) -> ColumnarResearchData:
-        if not isinstance(later, ColumnarResearchData):
-            raise TypeError("Columnar Research append requires one storage backend")
-        if (
-            not self.sessions
-            or not later.sessions
-            or self.sessions[-1] >= later.sessions[0]
-            or self._field_columns != later._field_columns
-            or (self._financial_values is None) != (later._financial_values is None)
-        ):
-            raise ValueError("Columnar Research append boundary is invalid")
-        financial = (
-            None
-            if self._financial_values is None or later._financial_values is None
-            else pa.concat_tables([self._financial_values, later._financial_values])
-        )
-        return ColumnarResearchData(
-            sessions=(*self.sessions, *later.sessions),
-            _instruments=_merge_reference_rows(
-                self._instruments,
-                later._instruments,
-                key_columns=("instrument_id",),
-            ),
-            _eod_prices=pa.concat_tables([self._eod_prices, later._eod_prices]),
-            _universes=pa.concat_tables([self._universes, later._universes]),
-            _trading_states=pa.concat_tables(
-                [self._trading_states, later._trading_states]
-            ),
-            _price_limits=pa.concat_tables([self._price_limits, later._price_limits]),
-            _industries=_merge_reference_rows(
-                self._industries,
-                later._industries,
-                key_columns=("instrument_id", "active_from", "active_to", "sw2021_l1"),
-            ),
-            _financial_values=financial,
-            _field_columns=self._field_columns,
-        )
-
 
 def _numeric_matrix(
-    table: pa.Table,
+    index: _CoordinateIndex,
     *,
-    session_column: str,
     value_column: str,
-    sessions: tuple[str, ...],
     instruments: tuple[str, ...],
     shape: tuple[int, int],
 ) -> np.ndarray:
     matrix = np.full(shape, np.nan, dtype=np.float64)
-    if table.num_rows == 0:
+    if index.table.num_rows == 0:
         return matrix
-    session_axis = np.asarray(sessions, dtype=np.str_)
-    instrument_axis = np.asarray(instruments, dtype=np.str_)
-    row_sessions = np.asarray(
-        table[session_column].combine_chunks().to_numpy(zero_copy_only=False),
-        dtype=np.str_,
-    )
-    row_instruments = np.asarray(
-        table["instrument_id"].combine_chunks().to_numpy(zero_copy_only=False),
-        dtype=np.str_,
-    )
-    session_indices = np.searchsorted(session_axis, row_sessions)
-    instrument_indices = np.searchsorted(instrument_axis, row_instruments)
-    if (
-        np.any(session_indices >= len(session_axis))
-        or np.any(instrument_indices >= len(instrument_axis))
-        or np.any(session_axis[session_indices] != row_sessions)
-        or np.any(instrument_axis[instrument_indices] != row_instruments)
-    ):
-        raise ValueError("Columnar Research coordinates are misaligned")
-    values = pc.cast(table[value_column].combine_chunks(), pa.float64()).to_numpy(
-        zero_copy_only=False
-    )
-    matrix[instrument_indices, session_indices] = values
-    return matrix
-
-
-def _merge_reference_rows(
-    earlier: pa.Table,
-    later: pa.Table,
-    *,
-    key_columns: tuple[str, ...],
-) -> pa.Table:
-    combined = _sorted_table(pa.concat_tables([earlier, later]), key_columns)
-    if combined.num_rows < 2:
-        return combined
-    keys = list(
-        zip(
-            *(combined[column].combine_chunks().to_pylist() for column in key_columns),
-            strict=True,
+    translated_positions, included = _translated_instrument_positions(index, instruments)
+    values_column = index.table[value_column].combine_chunks()
+    if pa.types.is_decimal(values_column.type):
+        values = np.fromiter(
+            (
+                np.nan if value is None else decimal_to_binary64(value)
+                for value in values_column.to_pylist()
+            ),
+            dtype=np.float64,
+            count=len(values_column),
         )
-    )
-    positions = [0, *(index for index in range(1, len(keys)) if keys[index] != keys[index - 1])]
-    return combined.take(pa.array(positions, type=pa.int64()))
-
-
-def _object_matrix(
-    table: pa.Table,
-    *,
-    session_column: str,
-    value_column: str,
-    sessions: tuple[str, ...],
-    instruments: tuple[str, ...],
-) -> np.ndarray:
-    matrix = np.full((len(instruments), len(sessions)), None, dtype=object)
-    session_axis = np.asarray(sessions, dtype=np.str_)
-    instrument_axis = np.asarray(instruments, dtype=np.str_)
-    row_sessions = np.asarray(
-        table[session_column].combine_chunks().to_numpy(zero_copy_only=False),
-        dtype=np.str_,
-    )
-    row_instruments = np.asarray(
-        table["instrument_id"].combine_chunks().to_numpy(zero_copy_only=False),
-        dtype=np.str_,
-    )
-    session_indices = np.searchsorted(session_axis, row_sessions)
-    instrument_indices = np.searchsorted(instrument_axis, row_instruments)
-    if (
-        np.any(session_indices >= len(session_axis))
-        or np.any(instrument_indices >= len(instrument_axis))
-        or np.any(session_axis[session_indices] != row_sessions)
-        or np.any(instrument_axis[instrument_indices] != row_instruments)
-    ):
-        raise ValueError("Columnar Research coordinates are misaligned")
-    values = np.asarray(table[value_column].combine_chunks().to_pylist(), dtype=object)
-    matrix[instrument_indices, session_indices] = values
+    else:
+        values = pc.cast(values_column, pa.float64()).to_numpy(zero_copy_only=False)
+    matrix[
+        translated_positions[included],
+        index.row_session_indices[included],
+    ] = values[included]
     return matrix
+
+
+def _decimal_and_numeric_matrices(
+    index: _CoordinateIndex,
+    *,
+    value_column: str,
+    instruments: tuple[str, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    shape = (len(instruments), len(index.sessions))
+    numeric_matrix = np.full(shape, np.nan, dtype=np.float64)
+    decimal_matrix = np.full(shape, None, dtype=object)
+    translated_positions, included = _translated_instrument_positions(index, instruments)
+    decimal_values = np.asarray(
+        index.table[value_column].combine_chunks().to_pylist(), dtype=object
+    )
+    numeric_values = np.fromiter(
+        (
+            np.nan if value is None else decimal_to_binary64(value)
+            for value in decimal_values
+        ),
+        dtype=np.float64,
+        count=len(decimal_values),
+    )
+    coordinates = (
+        translated_positions[included],
+        index.row_session_indices[included],
+    )
+    numeric_matrix[coordinates] = numeric_values[included]
+    decimal_matrix[coordinates] = decimal_values[included]
+    return numeric_matrix, decimal_matrix
+
+
+def _translated_instrument_positions(
+    index: _CoordinateIndex,
+    instruments: tuple[str, ...],
+) -> tuple[np.ndarray, np.ndarray]:
+    if instruments == index.instruments:
+        return index.row_instrument_indices, np.ones(
+            len(index.row_instrument_indices), dtype=np.bool_
+        )
+    requested_positions = {
+        instrument_id: position for position, instrument_id in enumerate(instruments)
+    }
+    translated = np.fromiter(
+        (
+            requested_positions.get(index.instruments[int(position)], -1)
+            for position in index.row_instrument_indices
+        ),
+        dtype=np.int32,
+        count=len(index.row_instrument_indices),
+    )
+    return translated, translated >= 0

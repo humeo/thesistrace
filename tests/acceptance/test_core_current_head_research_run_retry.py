@@ -356,7 +356,7 @@ def test_retry_rejects_checkpoint_after_runtime_semantics_change(
         monkeypatch.setattr(
             research_run_service,
             "SEMANTIC_VERSIONS",
-            {"factor": "factor-v2", "strategy": "strategy-v1", "kernel": "kernel-v2"},
+            {"factor": "factor-v2", "strategy": "strategy-v1", "kernel": "kernel-v4"},
         )
 
         assert runtime.research_runs.process_next() is True

@@ -24,3 +24,9 @@ ADR-0101 resolves an absent ending Open only on demand. Explicit effective
 terminal delisting after a valid starting mark supplies a synthetic terminal
 value of zero and a `-100%` member return. This is distinct from suspension
 carry and from an unexplained missing observation.
+
+ADR-0212 now applies the signal-session Effective Universe first. A member
+without a complete positive-turnover observation on the signal session never
+enters that interval's Benchmark. The suspension carry in this decision remains
+applicable when a member was eligible on the signal session and becomes
+suspended on the later entry or exit session.

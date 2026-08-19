@@ -31,3 +31,9 @@ Value. Strict propagation then follows ADR-0030.
 Canonical Dataset storage types remain governed by their Dataset Schemas. This
 decision fixes the Alpha runtime boundary; it does not require market data to
 be physically stored as binary floating point.
+
+ADR-0213 makes the boundary operationally exact for Decimal-backed Canonical
+fields: both row and columnar Research convert each finite Decimal with the
+Numeric Execution Contract's correctly rounded Decimal-to-binary64 operation.
+An Arrow decimal cast is not an equivalent implementation because it can differ
+by one ULP.

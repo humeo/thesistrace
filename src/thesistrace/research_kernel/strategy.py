@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException, localcontext
 from fractions import Fraction
+from heapq import nsmallest
 from statistics import stdev
 
 import numpy as np
@@ -29,6 +30,10 @@ INITIAL_CASH = Decimal("10000000")
 
 class StrategyCalculationError(RuntimeError):
     pass
+
+
+def _alpha_rank_key(item: Mapping[str, object]) -> tuple[Decimal, str]:
+    return -Decimal(str(item["value"])), str(item["instrument_id"])
 
 
 @dataclass
@@ -271,7 +276,15 @@ def run_strategy(
         np.ndarray,
     ] | None = None
     if isinstance(research_data, ColumnarResearchSeries):
-        benchmark_instruments = tuple(sorted(instruments))
+        benchmark_instruments = tuple(
+            sorted(
+                {
+                    instrument_id
+                    for session in calendar
+                    for instrument_id in universes.get(session, ())
+                }
+            )
+        )
         columnar_benchmark = (
             {
                 instrument_id: index
@@ -365,16 +378,16 @@ def run_strategy(
         ):
             rebalance = True
             signal_session = calendar[signal_index]
-            ranked = sorted(
-                alpha_by_session[signal_session],
-                key=lambda item: (-Decimal(str(item["value"])), str(item["instrument_id"])),
-            )
-            candidates = [str(item["instrument_id"]) for item in ranked[:holdings_count]]
-            execution_signal = {
-                "session": signal_session,
-                "alpha_values": [dict(item) for item in ranked],
-                "selected_instrument_ids": candidates,
-            }
+            alpha_values = alpha_by_session[signal_session]
+            selected = nsmallest(holdings_count, alpha_values, key=_alpha_rank_key)
+            candidates = [str(item["instrument_id"]) for item in selected]
+            if ledger is not None:
+                ranked = sorted(alpha_values, key=_alpha_rank_key)
+                execution_signal = {
+                    "session": signal_session,
+                    "alpha_values": [dict(item) for item in ranked],
+                    "selected_instrument_ids": candidates,
+                }
             if not candidates:
                 diagnostics.append(
                     {

@@ -7,7 +7,7 @@ status: accepted
 Tracking Head is the sole recovery truth for DailyTrack. Advance creation uses
 the then-current Data Generation and Tracking Worker Capacity to freeze the
 exact contiguous oldest Target. The planner selects the largest count from 1
-through 63 that fits the 75-percent execution-memory budget and is estimated to
+through 64 that fits the 75-percent execution-memory budget and is estimated to
 run within 30 seconds. As with Research Chunk planning, 30 seconds is a sizing
 target rather than a rejection limit: when one complete session fits memory but
 exceeds the time target, the Advance selects one; when one session cannot fit,
@@ -66,5 +66,5 @@ ResearchRun deliberately retains ADR-0195's private Chunk checkpoints because a
 long historical Run is expensive. DailyTrack deliberately recomputes because
 its normal incremental range is cheap; avoiding cross-Attempt Generation
 binding, private-checkpoint compatibility, and blocked-Advance pin retention is
-more valuable than recovering partial unpublished work. The 63-session Advance
+more valuable than recovering partial unpublished work. The 64-session Advance
 cap also bounds catch-up after long downtime so this trade-off remains valid.

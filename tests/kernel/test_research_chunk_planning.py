@@ -27,8 +27,8 @@ def test_planner_selects_the_largest_fixed_chunk_and_only_shortens_the_final_chu
         execution_memory_bytes=1536 * 1024**2,
     )
 
-    assert plan.chunk_session_count == 63
-    assert [chunk.session_count for chunk in plan.chunks] == [63, 63, 24]
+    assert plan.chunk_session_count == 64
+    assert [chunk.session_count for chunk in plan.chunks] == [64, 64, 22]
     assert plan.chunks[0].first_session == date(2024, 1, 1)
     assert plan.chunks[-1].last_session == date(2024, 5, 29)
     assert plan.research_session_offset == 24

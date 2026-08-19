@@ -2,10 +2,10 @@
 status: accepted
 ---
 
-# Bound ResearchRun chunks by memory, time, and 63 sessions
+# Bound ResearchRun chunks by memory, time, and 64 sessions
 
 At Run admission, the deterministic planner selects the largest fixed Chunk
-session count from 1 through 63 that both fits the 1.5 GiB execution-memory
+session count from 1 through 64 that both fits the 1.5 GiB execution-memory
 budget and is estimated to execute within 30 seconds on the 2c2g development
 Research Worker Capacity. The estimate uses the compiled Formula work, required
 fields and live plan nodes, calculation contracts, and the maximum complete
@@ -31,8 +31,12 @@ Chunk. When the single-session time estimate already exceeds 30 seconds,
 ADR-0198's supervised execution child still enforces confirmed cancellation.
 Otherwise, the 30-second target leaves time for checkpoint persistence and
 runtime variance under ADR-0204's 45-second first-Checkpoint gate, while the
-63-session hard maximum bounds lost work and progress silence when estimates
+64-session hard maximum bounds lost work and progress silence when estimates
 are imperfect.
 
 This refines ADR-0196's contiguous full-Universe session chunks without changing
-their order, exact-equivalence requirement, or single-engine execution path.
+their order, exact-equivalence requirement, or single-engine execution path. The
+64-session execution maximum and the Canonical Data Store's 64-session physical
+partition contract deliberately share one count but remain independent
+contracts; changing a checkpoint boundary never rewrites or redefines immutable
+storage partitions.

@@ -7,7 +7,7 @@ def _sessions(count: int) -> tuple[date, ...]:
     return tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(count))
 
 
-def test_tracking_target_freezes_the_largest_safe_range_capped_at_63() -> None:
+def test_tracking_target_freezes_the_largest_safe_range_capped_at_64() -> None:
     plan = plan_tracking_advance(
         unpublished_sessions=_sessions(70),
         formula_work=1,
@@ -18,7 +18,7 @@ def test_tracking_target_freezes_the_largest_safe_range_capped_at_63() -> None:
         execution_memory_bytes=1536 * 1024**2,
     )
 
-    assert plan.target_sessions == _sessions(63)
+    assert plan.target_sessions == _sessions(64)
     assert plan.capacity_blocked is False
     assert plan.time_target_exceeded is False
 

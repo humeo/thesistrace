@@ -196,7 +196,7 @@ FIXED_COSTS = {
 SEMANTIC_VERSIONS = {
     "factor": "factor-v1",
     "strategy": "strategy-v1",
-    "kernel": "kernel-v2",
+    "kernel": "kernel-v4",
 }
 
 

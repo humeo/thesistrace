@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from decimal import Decimal
 
 from thesistrace.research_series import (
     AlignedResearchData,
@@ -45,14 +46,14 @@ def align_market_research_data(
     neutralization: str,
 ) -> AlignedResearchData:
     aligned_sessions = tuple(str(value) for value in sessions)
-    universe_members = {
+    ranked_universe_members = {
         str(row["session"]): tuple(str(value) for value in row["instrument_ids"])
         for row in universe_rows
     }
-    if tuple(universe_members) != aligned_sessions:
+    if tuple(ranked_universe_members) != aligned_sessions:
         raise MarketSeriesError("Market Universe is incomplete")
     instrument_ids = {
-        instrument_id for members in universe_members.values() for instrument_id in members
+        instrument_id for members in ranked_universe_members.values() for instrument_id in members
     }
     instruments = {
         str(row["instrument_id"]): InstrumentProfile(
@@ -70,6 +71,20 @@ def align_market_research_data(
         for row in eod_prices
         if str(row["session_date"]) in aligned_sessions
         and str(row["instrument_id"]) in instrument_ids
+    }
+    universe_members = {
+        session: tuple(
+            instrument_id
+            for instrument_id in members
+            if (
+                (price := prices.get((session, instrument_id))) is not None
+                and price.get("open_raw") is not None
+                and price.get("open_adj") is not None
+                and price.get("turnover_amount_cny") is not None
+                and Decimal(str(price["turnover_amount_cny"])) > 0
+            )
+        )
+        for session, members in ranked_universe_members.items()
     }
     fields: dict[str, dict[tuple[str, str], NumericValue]] = {}
     for field_id, evaluation_name in field_bindings.items():

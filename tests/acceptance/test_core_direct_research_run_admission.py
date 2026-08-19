@@ -164,7 +164,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
     assert frozen["alpha_admission"]["estimated_run_work"] > 15_000_000
     plan = frozen["execution_plan"]
     assert plan["execution_memory_bytes"] == 1536 * 1024**2
-    assert 1 <= plan["chunk_session_count"] <= 63
+    assert 1 <= plan["chunk_session_count"] <= 64
     assert plan["calculation_sessions"] == [session.isoformat() for session in sessions[1:]]
     assert plan["research_session_offset"] == 251
     assert plan["research_session_count"] == 253
@@ -257,7 +257,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "semantic_versions": {
                 "factor": "factor-v1",
                 "strategy": "strategy-v1",
-                "kernel": "kernel-v2",
+                "kernel": "kernel-v4",
             },
             "alpha_admission": {
                 "effective_lookback": 0,
@@ -281,10 +281,10 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "execution_plan": {
                 "execution_memory_bytes": 1536 * 1024**2,
                 "chunk_time_target_seconds": 30,
-                "chunk_session_count": 63,
+                "chunk_session_count": 64,
                 "time_target_exceeded": False,
-                "estimated_peak_bytes": 67_163_152,
-                "estimated_chunk_work": 2_079,
+                "estimated_peak_bytes": 67_163_968,
+                "estimated_chunk_work": 2_112,
                 "maximum_universe_cardinality": 1,
                 "calculation_sessions": ["2026-08-03", "2026-08-04"],
                 "research_session_offset": 0,

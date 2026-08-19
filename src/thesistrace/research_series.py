@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -11,6 +12,15 @@ import numpy as np
 type Coordinate = tuple[str, str]
 type NumericValue = Decimal | int | float | str
 SeriesValue = TypeVar("SeriesValue")
+
+
+def decimal_to_binary64(value: Decimal) -> float:
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError("decimal value must be finite")
+    converted = float(value)
+    if not math.isfinite(converted):
+        raise ValueError("decimal does not fit binary64")
+    return 0.0 if converted == 0.0 else converted
 
 
 @dataclass(frozen=True)
@@ -61,8 +71,6 @@ class ColumnarResearchSeries(Protocol):
     def snapshot(self) -> ColumnarResearchSeries: ...
 
     def slice_sessions(self, sessions: tuple[str, ...]) -> ColumnarResearchSeries: ...
-
-    def append_sessions(self, later: ColumnarResearchSeries) -> ColumnarResearchSeries: ...
 
     def numeric_field_matrices(
         self,

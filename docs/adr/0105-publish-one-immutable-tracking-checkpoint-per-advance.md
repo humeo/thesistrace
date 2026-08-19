@@ -9,6 +9,6 @@ Each idempotent DailyTrack Advance atomically publishes one immutable Tracking C
 ADR-0209 keeps that Tracking Head as the only recovery truth. A failed Attempt
 publishes no private execution checkpoint and its next Attempt recalculates the
 selected unpublished sessions from this authoritative predecessor. One Advance
-publishes its frozen, capacity-planned 1-to-63-session Target; longer catch-up
+publishes its frozen, capacity-planned 1-to-64-session Target; longer catch-up
 uses multiple independently atomic Advances. Later Attempts never expand or
 shrink that Target.

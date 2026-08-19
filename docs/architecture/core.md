@@ -225,7 +225,7 @@ active | blocked | stopping | stopped
 An active Track compares its latest successful session coordinate with the
 current Dataset Head and advances later Research Sessions in order. Each
 Tracking Advance freezes an exact capacity-planned Target containing the oldest
-1 through 63 unpublished sessions. Every Attempt retains that Target and pins
+1 through 64 unpublished sessions. Every Attempt retains that Target and pins
 one current Data Generation for its complete calculation. Only a complete
 immutable Checkpoint moves the Tracking Head to the Target boundary. Longer
 catch-up and Dataset Head growth use later Advances rather than changing work

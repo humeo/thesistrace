@@ -35,6 +35,12 @@ A full-session suspension has these fixed consequences:
 - a Strategy Benchmark member remains in the denominator with zero return; and
 - its Liquidity Observation Window contribution is zero turnover amount.
 
+ADR-0212 qualifies the Benchmark consequence above: a member suspended on the
+signal session is excluded from that session's Effective Universe, while a
+member eligible on the signal session and suspended only on a later entry or
+exit session retains the zero-return carry. Canonical trading-state and
+Liquidity Observation Window semantics are unchanged.
+
 A partial suspension with a valid daily bar keeps that observed bar and its
 actual turnover amount for research and valuation. The bar is not replaced by a
 zero or a Valuation Carry. Its first traded daily `open` is also the valid

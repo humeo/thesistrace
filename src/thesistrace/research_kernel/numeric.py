@@ -111,14 +111,6 @@ def binary64_checksum(values: list[float]) -> str:
     return digest.hexdigest()
 
 
-def decimal_to_binary64(value: Decimal) -> float:
-    finite = require_finite_decimal(value)
-    converted = float(finite)
-    if not math.isfinite(converted):
-        raise NumericContractError("decimal does not fit binary64")
-    return 0.0 if converted == 0.0 else converted
-
-
 def require_finite_decimal(value: Decimal) -> Decimal:
     if not isinstance(value, Decimal) or not value.is_finite():
         raise NumericContractError("decimal value must be finite")

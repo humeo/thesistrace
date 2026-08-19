@@ -123,23 +123,6 @@ class _ColumnarFixture:
             matrices={name: value[:, positions] for name, value in self.matrices.items()},
         )
 
-    def append_sessions(self, later: _ColumnarFixture) -> _ColumnarFixture:
-        if self.sessions[-1] >= later.sessions[0]:
-            raise ValueError("fixture append boundary is invalid")
-        return _ColumnarFixture(
-            sessions=(*self.sessions, *later.sessions),
-            instruments={**self.instruments, **later.instruments},
-            universe_members={**self.universe_members, **later.universe_members},
-            industries={**self.industries, **later.industries},
-            execution_prices={**self.execution_prices, **later.execution_prices},
-            trading_states={**self.trading_states, **later.trading_states},
-            price_limits={**self.price_limits, **later.price_limits},
-            matrices={
-                name: np.concatenate([self.matrices[name], later.matrices[name]], axis=1)
-                for name in self.matrices
-            },
-        )
-
     def numeric_field_matrices(
         self,
         field_ids: tuple[str, ...],
@@ -225,7 +208,11 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
             )
             for session_index, session in enumerate(sessions)
         },
-        industries={},
+        industries={
+            (session, instrument): f"industry:{instrument_index % 5}"
+            for session in sessions
+            for instrument_index, instrument in enumerate(instruments)
+        },
         execution_prices=prices,
         trading_states={},
         price_limits={
@@ -248,7 +235,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         },
         effective_alpha_lookback=compiled.effective_lookback,
         universe="top300",
-        neutralization="none",
+        neutralization="industry",
         holdings_count=5,
         rebalance_interval=5,
         initial_cash_cny="10000000",
@@ -269,46 +256,53 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         continuation=empty_research_continuation(),
         cancellation_check=lambda: None,
     )
-    continuation = empty_research_continuation()
-    chunk_results = []
-    for ordinal, (start, end) in enumerate(((20, 40), (40, 60), (60, 80)), start=1):
-        calculation = execute_research_chunk(
-            run_input=run_input,
-            research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
-            research_sessions=sessions[start:end],
-            final_chunk=ordinal == 3,
-            continuation=continuation,
-            cancellation_check=lambda: None,
-        )
-        chunk_results.append(calculation)
-        continuation = calculation.continuation
-
-    final = chunk_results[-1]
-    assembled_observations = [
-        observation
-        for calculation in chunk_results
-        for observation in calculation.strategy_daily_observations
-    ]
-    assert equivalence_bytes(final.final_values) == equivalence_bytes(uninterrupted.final_values)
-    assert equivalence_bytes(assembled_observations) == equivalence_bytes(
-        list(uninterrupted.strategy_daily_observations)
-    )
-    assert final.continuation["alpha_checksum"] == uninterrupted.continuation["alpha_checksum"]
-    assert "alpha_checksum_state" not in final.continuation
-    assert final.continuation["schema_version"] == "research-chunk-continuation-v2"
     legacy = build_result_payload(
         run_columnar_chunk(run_input, cancellation_check=lambda: None),
         rebalance_interval=run_input.rebalance_interval,
         universe=run_input.universe,
     )
-    chunked_result = _read_staged_chunk_result(
-        final.final_values,
-        [list(calculation.strategy_daily_observations) for calculation in chunk_results],
-    )
-    assert equivalence_bytes(chunked_result) == equivalence_bytes(legacy)
-    strategy_state = final.continuation["strategy_state"]
-    assert len(strategy_state["daily"]) == 1
-    assert "daily" not in repr(final.continuation["factor_state"])
+    for boundaries in (
+        ((20, 40), (40, 60), (60, 80)),
+        ((20, 63), (63, 80)),
+        ((20, 64), (64, 80)),
+    ):
+        continuation = empty_research_continuation()
+        chunk_results = []
+        for ordinal, (start, end) in enumerate(boundaries, start=1):
+            calculation = execute_research_chunk(
+                run_input=run_input,
+                research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
+                research_sessions=sessions[start:end],
+                final_chunk=ordinal == len(boundaries),
+                continuation=continuation,
+                cancellation_check=lambda: None,
+            )
+            chunk_results.append(calculation)
+            continuation = calculation.continuation
+
+        final = chunk_results[-1]
+        assembled_observations = [
+            observation
+            for calculation in chunk_results
+            for observation in calculation.strategy_daily_observations
+        ]
+        assert equivalence_bytes(final.final_values) == equivalence_bytes(
+            uninterrupted.final_values
+        )
+        assert equivalence_bytes(assembled_observations) == equivalence_bytes(
+            list(uninterrupted.strategy_daily_observations)
+        )
+        assert final.continuation["alpha_checksum"] == uninterrupted.continuation["alpha_checksum"]
+        assert "alpha_checksum_state" not in final.continuation
+        assert final.continuation["schema_version"] == "research-chunk-continuation-v2"
+        chunked_result = _read_staged_chunk_result(
+            final.final_values,
+            [list(calculation.strategy_daily_observations) for calculation in chunk_results],
+        )
+        assert equivalence_bytes(chunked_result) == equivalence_bytes(legacy)
+        strategy_state = final.continuation["strategy_state"]
+        assert len(strategy_state["daily"]) == 1
+        assert "daily" not in repr(final.continuation["factor_state"])
 
 
 def _read_staged_chunk_result(

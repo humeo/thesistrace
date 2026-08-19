@@ -564,6 +564,7 @@ def _canonical(
                     "open_raw": raw_open,
                     "open_adj": adjusted_open,
                     "close_adj": adjusted_open,
+                    "turnover_cny": "1000",
                 }
             )
             upper, lower = selected_limits.get(

@@ -500,7 +500,6 @@ def _calculate_chunks(
             },
         }
         return
-    rolling_context = None
     for chunk in plan.chunks[completed_ordinal:]:
         chunk_started = monotonic()
         data_read_seconds = 0.0
@@ -526,8 +525,6 @@ def _calculate_chunks(
         final_values: dict[str, object] | None = None
         if research_sessions:
             fact_instrument_ids = _continuation_instrument_ids(continuation)
-            if rolling_context is not None:
-                fact_instrument_ids |= frozenset(rolling_context.instruments)
             first_research_index = calendar.index(research_sessions[0])
             context_session_count = max(
                 immutable_input.alpha_admission.effective_lookback,
@@ -539,33 +536,16 @@ def _calculate_chunks(
                 first_research_index - context_session_count,
             )
             context_sessions = calendar[context_start : calendar.index(research_sessions[-1]) + 1]
-            retained_count = 0 if rolling_context is None else len(rolling_context.sessions)
-            if (
-                rolling_context is not None
-                and tuple(context_sessions[:retained_count]) == rolling_context.sessions
-            ):
-                data_read_started = monotonic()
-                fresh_data = store.read_columnar_slice(
-                    generation_id,
-                    sessions=context_sessions[retained_count:],
-                    universe_name=immutable_input.universe,
-                    neutralization=immutable_input.neutralization,
-                    field_bindings=immutable_input.field_bindings,
-                    fact_instrument_ids=fact_instrument_ids,
-                )
-                data_read_seconds = monotonic() - data_read_started
-                research_data = rolling_context.append_sessions(fresh_data)
-            else:
-                data_read_started = monotonic()
-                research_data = store.read_columnar_slice(
-                    generation_id,
-                    sessions=context_sessions,
-                    universe_name=immutable_input.universe,
-                    neutralization=immutable_input.neutralization,
-                    field_bindings=immutable_input.field_bindings,
-                    fact_instrument_ids=fact_instrument_ids,
-                )
-                data_read_seconds = monotonic() - data_read_started
+            data_read_started = monotonic()
+            research_data = store.read_columnar_slice(
+                generation_id,
+                sessions=context_sessions,
+                universe_name=immutable_input.universe,
+                neutralization=immutable_input.neutralization,
+                field_bindings=immutable_input.field_bindings,
+                fact_instrument_ids=fact_instrument_ids,
+            )
+            data_read_seconds = monotonic() - data_read_started
             calculation_started = monotonic()
             input_started = monotonic()
             run_input = _kernel_input(
@@ -591,9 +571,6 @@ def _calculate_chunks(
             continuation = calculation.continuation
             observations = calculation.strategy_daily_observations
             final_values = calculation.final_values
-            rolling_context = research_data.slice_sessions(
-                tuple(context_sessions[-context_session_count:])
-            )
         else:
             lookback = immutable_input.alpha_admission.effective_lookback
             continuation["rolling_tail_sessions"] = (
