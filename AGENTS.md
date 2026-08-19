@@ -6,6 +6,10 @@
 
 Prioritize the [`browser:control-in-app-browser`](/Users/koltenluca/.codex/plugins/cache/openai-bundled/browser/26.721.41059/skills/control-in-app-browser/SKILL.md) skill for browser operations.
 
+## Frontend Design
+
+Frontend design and implementation must follow the repository-root [`DESIGN.md`](DESIGN.md).
+
 ## Agent skills
 
 ### Issue tracker
