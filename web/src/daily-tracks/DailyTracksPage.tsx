@@ -355,11 +355,32 @@ export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origi
           )}
         </p>
         <p><strong>Origin strategy session</strong> {origin.strategy_session}</p>
-        <p><strong>Origin net NAV</strong> {origin.terminal_account.net_nav}</p>
-        <p><strong>Origin net cash</strong> {origin.terminal_account.net_cash}</p>
+        <p>
+          <strong>Origin net NAV</strong>{" "}
+          <span title={origin.terminal_account.net_nav}>
+            {formatCnyDecimal(origin.terminal_account.net_nav)}
+          </span>
+        </p>
+        <p>
+          <strong>Origin net cash</strong>{" "}
+          <span title={origin.terminal_account.net_cash}>
+            {formatCnyDecimal(origin.terminal_account.net_cash)}
+          </span>
+        </p>
         <p><strong>Origin holdings</strong> {origin.terminal_account.positions.length}</p>
         <p><strong>Result checksum</strong> {origin.result_checksum_sha256}</p>
       </div>
     </section>
   );
+}
+
+function formatCnyDecimal(value: string): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return value;
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "CNY",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(numeric);
 }

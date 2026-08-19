@@ -170,8 +170,10 @@ describe("TrackingOriginView", () => {
 
     expect(markup).toContain("Tracking Origin");
     expect(markup).toContain("2026-08-05");
-    expect(markup).toContain("10000995");
-    expect(markup).toContain("8999995");
+    expect(markup).toContain('title="10000995"');
+    expect(markup).toContain("CN¥10,000,995.00");
+    expect(markup).toContain('title="8999995"');
+    expect(markup).toContain("CN¥8,999,995.00");
     expect(markup).toContain("Origin holdings");
     expect(markup).not.toMatch(/Generation|manifest|checkpoint|fence|object location/i);
   });
