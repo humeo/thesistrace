@@ -6,6 +6,57 @@ import {
   TrackingProgressView,
   type DailyTrackDetail,
 } from "./DailyTracksPage";
+import { DailyTrackAnalysisView } from "./DailyTrackAnalysisView";
+
+describe("DailyTrackAnalysisView", () => {
+  it("uses the shared concise result language", () => {
+    const horizon = {
+      horizon: 1 as const,
+      summary: {
+        ic: { mean: 0.1, sample_deviation: 0, icir: 1, positive_fraction: 1, valid_session_count: 1 },
+        rank_ic: { mean: 0.2, sample_deviation: 0, icir: 2, positive_fraction: 1, valid_session_count: 1 },
+        quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null },
+        top_bottom_return: null,
+      },
+      coverage: {
+        signal_session_count: 2,
+        ic_valid_session_count: 1,
+        rank_ic_valid_session_count: 1,
+        quantile_valid_session_count: 0,
+      },
+    };
+    const markup = renderToStaticMarkup(
+      <DailyTrackAnalysisView analysis={{
+        factor: {
+          horizons: {
+            "1": horizon,
+            "5": { ...horizon, horizon: 5 },
+            "20": { ...horizon, horizon: 20 },
+          },
+        },
+        strategy: {
+          summary: {
+            metrics: {
+              net_cumulative_return: 0.1,
+              benchmark_cumulative_return: 0.05,
+              annualized_excess_return: 0.03,
+              maximum_drawdown: { value: -0.02 },
+              sharpe: 1.2,
+              transaction_costs: { cumulative_amount: 25 },
+            },
+          },
+          benchmark: { universe: "top300", methodology: "selected_universe_equal_weight" },
+          observations: [],
+        },
+      }} />,
+    );
+
+    expect(markup).toContain("Factor Summary");
+    expect(markup).toContain("Strategy Summary");
+    expect(markup).toContain("Rank IC coverage 1/2");
+    expect(markup).not.toMatch(/Predictive evidence|Fixed origin|signal sessions/i);
+  });
+});
 
 describe("TrackingProgressView", () => {
   it("shows the frozen target without claiming unpublished sessions are complete", () => {

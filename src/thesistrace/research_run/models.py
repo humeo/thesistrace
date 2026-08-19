@@ -384,9 +384,19 @@ class ResearchRunProgress(BaseModel):
     duration_is_estimate: bool = True
 
 
+class ResearchRunExecutionTiming(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    started_at: datetime | None
+    finished_at: datetime | None
+    elapsed_seconds: float | None
+    is_final: bool
+
+
 class ResearchRunDetail(ResearchRunSummary):
     input: ResearchRunAuthorableInput
     progress: ResearchRunProgress
+    execution_timing: ResearchRunExecutionTiming
     result: ResearchRunResult | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

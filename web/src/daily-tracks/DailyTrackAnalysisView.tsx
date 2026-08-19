@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
 
 type CorrelationSummary = {
   mean: number | null;
@@ -69,8 +69,7 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
     <div className="research-result">
       <section className="research-result-section">
         <div className="section-heading">
-          <p className="eyebrow">Predictive evidence</p>
-          <h2>Factor Evaluation</h2>
+          <h2>Factor Summary</h2>
         </div>
         <div className="factor-horizons">
           {FACTOR_HORIZONS.map((name) => (
@@ -81,8 +80,7 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
 
       <section className="research-result-section">
         <div className="section-heading">
-          <p className="eyebrow">Fixed origin · recent chart</p>
-          <h2>Cumulative Strategy</h2>
+          <h2>Strategy Summary</h2>
           <p>Selected universe {analysis.strategy.benchmark.universe}</p>
         </div>
         <div className="strategy-metrics">
@@ -105,7 +103,7 @@ export function DailyTrackAnalysisView({ analysis }: { analysis: DailyTrackAnaly
             value={formatCny(metrics.transaction_costs.cumulative_amount)}
           />
         </div>
-        <StrategyBenchmarkChart observations={analysis.strategy.observations} />
+        <StrategyPerformanceChart observations={analysis.strategy.observations} />
       </section>
     </div>
   );
@@ -115,7 +113,6 @@ function FactorHorizonView({ horizon }: { horizon: DailyTrackFactorHorizon }) {
   return (
     <section aria-label={`${horizon.horizon}-session Factor`}>
       <strong>{horizon.horizon}-session</strong>
-      <p>{horizon.coverage.signal_session_count} signal sessions</p>
       <Metric label="Rank IC" value={formatDecimal(horizon.summary.rank_ic.mean)} />
       <Metric label="Rank ICIR" value={formatDecimal(horizon.summary.rank_ic.icir)} />
       <Metric label="IC" value={formatDecimal(horizon.summary.ic.mean)} />
@@ -135,55 +132,6 @@ function Metric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
-}
-
-function StrategyBenchmarkChart({
-  observations,
-}: {
-  observations: DailyTrackStrategyObservation[];
-}) {
-  const lines = useMemo(() => chartLines(observations), [observations]);
-  if (observations.length === 0) return <p>No recent Strategy observations.</p>;
-  return (
-    <figure className="strategy-chart">
-      <figcaption>
-        <span><i className="strategy-swatch" /> Net strategy</span>
-        <span><i className="benchmark-swatch" /> Selected-universe benchmark</span>
-        <span>{observations.length} Research Sessions</span>
-      </figcaption>
-      <svg
-        aria-label="Strategy and benchmark NAV"
-        preserveAspectRatio="none"
-        role="img"
-        viewBox="0 0 640 180"
-      >
-        <line x1="0" x2="640" y1="90" y2="90" />
-        <polyline className="benchmark-line" points={lines.benchmark} />
-        <polyline className="strategy-line" points={lines.strategy} />
-      </svg>
-      <p>{observations[0].session} — {observations.at(-1)?.session}</p>
-    </figure>
-  );
-}
-
-function chartLines(observations: DailyTrackStrategyObservation[]) {
-  if (observations.length === 0) return { strategy: "", benchmark: "" };
-  const firstStrategy = Number(observations[0].net_nav);
-  const firstBenchmark = Number(observations[0].benchmark_nav);
-  const strategyValues = observations.map((item) => Number(item.net_nav) / firstStrategy);
-  const benchmarkValues = observations.map(
-    (item) => Number(item.benchmark_nav) / firstBenchmark,
-  );
-  const values = [...strategyValues, ...benchmarkValues];
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
-  const span = maximum - minimum || 1;
-  const points = (series: number[]) => series.map((value, index) => {
-    const x = (index / Math.max(series.length - 1, 1)) * 640;
-    const y = 170 - ((value - minimum) / span) * 160;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  }).join(" ");
-  return { strategy: points(strategyValues), benchmark: points(benchmarkValues) };
 }
 
 function formatPercent(value: number | null) {

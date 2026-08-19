@@ -23,9 +23,9 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByText("Coverage describes the dataset")).toBeVisible();
     await expectRemovedAuthoringControlsToBeAbsent(page);
 
-    await page.getByRole("link", { name: "New Research", exact: true }).click();
+    await page.getByRole("link", { name: "Research", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
-    await expect(page.getByRole("heading", { name: "Research", exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Research", exact: true })).toBeVisible();
     await expect(page.getByText("Default folder", { exact: true })).toBeVisible();
     await expect(page.getByLabel("Research name")).toHaveValue("");
     await expect(page.locator(".cm-content")).toHaveText("");
@@ -46,8 +46,9 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.locator(".cm-lintRange-error")).toHaveCount(1);
     await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
     await page.keyboard.type("ts_mean(close_adj, 2)");
-    await expect(page.getByText("Formula valid", { exact: true })).toBeVisible();
-    await page.getByLabel("Hypothesis").fill("Short rolling mean retains signal.");
+    await expect(editor).toHaveText("ts_mean(close_adj, 2)");
+    await expect(page.getByRole("list", { name: "Formula diagnostics" })).toHaveCount(0);
+    await page.getByLabel("Notes").fill("Short rolling mean retains signal.");
     await page.getByLabel("Research start date").fill("2026-08-03");
     await page.getByLabel("Research end date").fill("2026-08-05");
     await page.getByLabel("Universe").selectOption("top300");
@@ -73,7 +74,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.reload();
     await expect(page.getByLabel("Research name")).toHaveValue("Browser Mean Research");
     await expect(page.locator(".cm-content")).toHaveText("ts_mean(close_adj, 2)");
-    await expect(page.getByLabel("Hypothesis")).toHaveValue("Short rolling mean retains signal.");
+    await expect(page.getByLabel("Notes")).toHaveValue("Short rolling mean retains signal.");
     await expect(page.getByLabel("Universe")).toHaveValue("top300");
 
     page.once("dialog", async (dialog) => dialog.dismiss());
@@ -98,11 +99,12 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.locator(".cm-content").click();
     await page.keyboard.type("volume_shares");
 
+    await closeResearchFolderMenu(page);
     page.once("dialog", async (dialog) => dialog.dismiss());
     await workspaceNew.click();
     await expect(page.getByLabel("Research name")).toHaveValue("Signals browser Draft");
 
-    await page.getByRole("link", { name: "New Research", exact: true }).click();
+    await page.getByRole("link", { name: "Research", exact: true }).click();
     await expect(page).toHaveURL(/\/research$/);
     await expect(page.getByLabel("Research name")).toHaveValue("");
     expect(await page.evaluate((folderId) => localStorage.getItem(`thesistrace.research-draft.${folderId}`), customFolderId)).not.toBeNull();
@@ -194,14 +196,54 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     controlledWorker = barrier.process;
     await barrier.claimed;
     await expect(page.locator(".research-run-facts").getByText(/Status\s+running/)).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Committed progress" })).toBeVisible();
-    await expect(page.getByText("Current work is in flight and not yet committed.")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Execution progress" })).toBeVisible();
+    await expect(
+      page.locator("[aria-label='ResearchRun progress']").getByText(/^Running /),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Name and folder" })).toBeVisible();
+    expect(await page.locator("[aria-label='ResearchRun progress']").evaluate(
+      (progress) => progress.compareDocumentPosition(
+        document.querySelector("[aria-label='Name and folder']")!,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    )).toBeTruthy();
     controlledWorker.stdin?.end("1");
     await controlledWorkerExit(controlledWorker);
     controlledWorker = undefined;
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({
       timeout: 90_000,
     });
+    const performanceChart = page.getByLabel("Strategy performance chart");
+    await expect(performanceChart).toBeVisible();
+    await expect(performanceChart.locator("canvas").first()).toBeVisible();
+    await performanceChart.getByRole("button", { name: "1Y" }).click();
+    await expect(performanceChart.getByRole("button", { name: "1Y" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await performanceChart.getByRole("button", { name: "All" }).click();
+    const canvasBounds = await performanceChart.locator(".strategy-chart-canvas").boundingBox();
+    if (canvasBounds === null) throw new Error("Strategy chart has no browser bounds");
+    await page.mouse.move(
+      canvasBounds.x + (canvasBounds.width * 0.6),
+      canvasBounds.y + (canvasBounds.height * 0.5),
+    );
+    await expect(performanceChart.locator(".strategy-chart-readout")).toContainText("Strategy");
+    const terminalProgress = page.locator("[aria-label='ResearchRun progress']");
+    await expect(terminalProgress.getByText("Started", { exact: true })).toBeVisible();
+    await expect(terminalProgress.getByText("Finished", { exact: true })).toBeVisible();
+    await expect(terminalProgress.locator("time")).toHaveCount(2);
+    await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Provenance" })).toHaveCount(0);
+    expect(await page.getByRole("heading", { name: "Strategy Summary" }).evaluate(
+      (summary) => summary.compareDocumentPosition(
+        document.querySelector("[aria-label='ResearchRun progress']")!,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    )).toBeTruthy();
+    expect(await page.locator("[aria-label='ResearchRun progress']").evaluate(
+      (progress) => progress.compareDocumentPosition(
+        document.querySelector("[aria-label='Create a draft']")!,
+      ) & Node.DOCUMENT_POSITION_FOLLOWING,
+    )).toBeTruthy();
     controlWorker("unpause");
     workerPaused = false;
     const startTrackingPath = `**/api/research-runs/${runId}/daily-tracks`;
@@ -296,6 +338,11 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
           data: { request_id: `financial-e2e-cancel-${runId}` },
         });
         expect(cancel.status()).toBe(200);
+        await expect.poll(async () => {
+          const detail = await page.request.get(`/api/research-runs/${runId}`);
+          if (detail.status() === 404) return "deleted";
+          return ((await detail.json()) as { status: string }).status;
+        }, { timeout: 20_000 }).toMatch(/^(cancelled|failed|succeeded|deleted)$/);
       });
       await cleanup(async () => {
         if (runId === undefined) return;
@@ -334,7 +381,7 @@ test("running Research cancellation stays visible until the child exits", async 
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     await expect(page.locator(".research-run-facts").getByText(/Status\s+cancelling/)).toBeVisible();
     await expect(page.getByRole("button", { name: "Cancel", exact: true })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Use as Draft" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
 
     controlledWorker.stdin?.end("1");
     await controlledWorkerExit(controlledWorker);
@@ -342,7 +389,7 @@ test("running Research cancellation stays visible until the child exits", async 
     await expect(page.locator(".research-run-facts").getByText(/Status\s+cancelled/)).toBeVisible({
       timeout: 20_000,
     });
-    await expect(page.getByRole("button", { name: "Use as Draft" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
     page.once("dialog", async (dialog) => dialog.accept());
     await page.getByRole("button", { name: "Delete Research" }).click();
     await expect(page).toHaveURL(/\/research-runs$/);
@@ -407,8 +454,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     const defaultRunId = page.url().split("/").at(-1);
     expect(defaultRunId).toMatch(/^run_[a-f0-9]+$/);
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
-    await expect(page.getByRole("heading", { name: "Committed progress" })).toBeVisible();
-    await expect(page.getByText(/Research\s+2 \/ 2/)).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Execution progress" })).toBeVisible();
+    await expect(page.getByText(/2 \/ 2\s+Research/)).toBeVisible();
     await expect(page.locator("body")).not.toContainText(/checkpoint|staged payload/i);
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
@@ -469,16 +516,16 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
       releaseOrganization?.(route);
     });
     await page.getByLabel("Research name", { exact: true }).fill("Renamed Research");
-    await page.getByRole("button", { name: "Update organization" }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
     const heldOrganizationRoute = await heldOrganization;
     await expect(page.getByLabel("Research name", { exact: true })).toBeDisabled();
-    await expect(page.getByLabel("Research Folder")).toBeDisabled();
+    await expect(page.getByLabel("Folder", { exact: true })).toBeDisabled();
     await heldOrganizationRoute.continue();
     await page.unroute(`**/api/research-runs/${customRunId}`);
     await expect(page.locator(".research-run-facts")).toContainText("Renamed Research");
     await page.getByLabel("Research name", { exact: true }).fill("Duplicate Name");
-    await page.getByLabel("Research Folder").selectOption("folder_default");
-    await page.getByRole("button", { name: "Update organization" }).click();
+    await page.getByLabel("Folder", { exact: true }).selectOption("folder_default");
+    await page.getByRole("button", { name: "Save changes" }).click();
     await expect(page.locator(".research-run-facts")).toContainText("Duplicate Name");
     const organizedDetail = await page.request.get(`/api/research-runs/${customRunId}`);
     expect(await organizedDetail.json()).toMatchObject({
@@ -524,17 +571,17 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.locator(".cm-content")).toHaveText("close_adj");
     await page.getByLabel("Research name").fill("Target Local Name");
     await page.goto(`/research-runs/${defaultRunId}`);
-    await expect(page.getByRole("button", { name: "Use as Draft" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Create draft" })).toBeVisible();
     const sourceBeforeReuseResponse = await page.request.get(`/api/research-runs/${defaultRunId}`);
     const sourceBeforeReuse = await sourceBeforeReuseResponse.json();
     const historyBeforeReuse = await page.request.get("/api/research-runs");
     const historyCountBeforeReuse = ((await historyBeforeReuse.json()).items as unknown[]).length;
     await page.getByLabel("Target Folder").selectOption(customFolderId);
-    await page.getByRole("button", { name: "Use as Draft" }).click();
+    await page.getByRole("button", { name: "Create draft" }).click();
     await expect(page).toHaveURL(new RegExp(`/research\\?folder=${customFolderId}$`));
     await expect(page.getByLabel("Research name")).toHaveValue("Target Local Name");
     await expect(page.locator(".cm-content")).toHaveText("ts_mean(close_adj, 2)");
-    await expect(page.getByLabel("Hypothesis")).toHaveValue("Browser Run acceptance.");
+    await expect(page.getByLabel("Notes")).toHaveValue("Browser Run acceptance.");
     await expect(page.getByLabel("Research start date")).toHaveValue("2026-08-04");
     await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
     await expect(page.getByLabel("Universe")).toHaveValue("top300");
@@ -629,7 +676,7 @@ async function fillCompleteDraft(
 ): Promise<void> {
   await page.getByLabel("Research name").fill(values.name);
   await replaceFormula(page, values.formula);
-  await page.getByLabel("Hypothesis").fill("Browser Run acceptance.");
+  await page.getByLabel("Notes").fill("Browser Run acceptance.");
   await page.getByLabel("Research start date").fill("2026-08-04");
   await page.getByLabel("Research end date").fill("2026-08-05");
   await page.getByLabel("Universe").selectOption("top300");
@@ -649,6 +696,13 @@ async function replaceFormula(page: Page, formula: string): Promise<void> {
 async function openResearchFolderMenu(page: Page): Promise<void> {
   const menu = page.locator(".research-folder-navigation");
   if ((await menu.getAttribute("open")) === null) {
+    await menu.locator("summary").click();
+  }
+}
+
+async function closeResearchFolderMenu(page: Page): Promise<void> {
+  const menu = page.locator(".research-folder-navigation");
+  if ((await menu.getAttribute("open")) !== null) {
     await menu.locator("summary").click();
   }
 }

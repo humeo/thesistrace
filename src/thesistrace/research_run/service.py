@@ -72,6 +72,7 @@ from thesistrace.research_run.models import (
     ResearchRunAuthorableInput,
     ResearchRunCancelCommand,
     ResearchRunDetail,
+    ResearchRunExecutionTiming,
     ResearchRunList,
     ResearchRunProgress,
     ResearchRunResult,
@@ -961,9 +962,18 @@ class ResearchRunService:
                        progress.committed_chunk_count,
                        progress.last_completed_warmup_session,
                        progress.last_completed_research_session,
-                       progress.remaining_duration_estimate_seconds
+                       progress.remaining_duration_estimate_seconds,
+                       timing.execution_started_at,
+                       timing.execution_finished_at,
+                       CURRENT_TIMESTAMP AS execution_observed_at
                 FROM research_runs.runs AS run
                 JOIN research_runs.progress AS progress ON progress.run_id = run.id
+                LEFT JOIN LATERAL (
+                    SELECT min(attempt.started_at) AS execution_started_at,
+                           max(attempt.finished_at) AS execution_finished_at
+                    FROM research_runs.attempts AS attempt
+                    WHERE attempt.run_id = run.id
+                ) AS timing ON true
                 WHERE run.id = %s
                 """,
                 (run_id,),
@@ -977,6 +987,7 @@ class ResearchRunService:
                 **summary.model_dump(),
                 input=authorable_input,
                 progress=_research_progress(row),
+                execution_timing=_research_execution_timing(row, summary.status),
             )
         manifest_sha256 = row.get("result_manifest_sha256")
         provenance = row.get("result_provenance")
@@ -1006,6 +1017,7 @@ class ResearchRunService:
             **summary.model_dump(),
             input=authorable_input,
             progress=_research_progress(row),
+            execution_timing=_research_execution_timing(row, summary.status),
             result=result,
         )
 
@@ -2438,6 +2450,31 @@ def _research_progress(row: Mapping[str, object]) -> ResearchRunProgress:
         last_completed_warmup_session=row.get("last_completed_warmup_session"),
         last_completed_research_session=row.get("last_completed_research_session"),
         remaining_duration_estimate_seconds=row.get("remaining_duration_estimate_seconds"),
+    )
+
+
+def _research_execution_timing(
+    row: Mapping[str, object],
+    status: str,
+) -> ResearchRunExecutionTiming:
+    started_at = row.get("execution_started_at")
+    finished_at = row.get("execution_finished_at")
+    observed_at = row.get("execution_observed_at")
+    is_final = status in {"succeeded", "failed", "cancelled"}
+    elapsed_seconds: float | None = None
+    if isinstance(started_at, datetime):
+        endpoint = finished_at if is_final else observed_at
+        if isinstance(endpoint, datetime):
+            elapsed_seconds = max(0.0, (endpoint - started_at).total_seconds())
+    return ResearchRunExecutionTiming(
+        started_at=started_at if isinstance(started_at, datetime) else None,
+        finished_at=(
+            finished_at
+            if is_final and isinstance(finished_at, datetime)
+            else None
+        ),
+        elapsed_seconds=elapsed_seconds,
+        is_final=is_final,
     )
 
 

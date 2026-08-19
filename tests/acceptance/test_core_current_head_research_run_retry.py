@@ -281,6 +281,14 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
             "failed",
             "succeeded",
         ]
+        _set_attempt_timing(settings, run_id)
+        completed = client.get(f"/api/research-runs/{run_id}").json()
+        assert completed["execution_timing"] == {
+            "started_at": "2026-08-13T10:00:00Z",
+            "finished_at": "2026-08-13T10:08:00Z",
+            "elapsed_seconds": 480.0,
+            "is_final": True,
+        }
         assert _checkpoint_ordinals(settings, run_id) == []
         stored = _stored_run(settings, run_id)
         assert stored["result_provenance"]["data_generation_id"] == head
@@ -809,6 +817,31 @@ def _expire_live_attempt(settings: CoreSettings, run_id: str) -> None:
                 (run_id,),
             )
         assert updated.rowcount == 1
+    finally:
+        database.close()
+
+
+def _set_attempt_timing(settings: CoreSettings, run_id: str) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            updated = transaction.execute(
+                """
+                UPDATE research_runs.attempts
+                SET started_at = CASE ordinal
+                        WHEN 1 THEN '2026-08-13T10:00:00Z'::timestamptz
+                        WHEN 2 THEN '2026-08-13T10:06:00Z'::timestamptz
+                    END,
+                    finished_at = CASE ordinal
+                        WHEN 1 THEN '2026-08-13T10:01:00Z'::timestamptz
+                        WHEN 2 THEN '2026-08-13T10:08:00Z'::timestamptz
+                    END
+                WHERE run_id = %s
+                """,
+                (run_id,),
+            )
+        assert updated.rowcount == 2
     finally:
         database.close()
 

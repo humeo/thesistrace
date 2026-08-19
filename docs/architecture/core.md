@@ -200,7 +200,7 @@ Alpha, Label, and daily Factor histories. An eligible infrastructure retry pins
 the same frozen Generation and resumes only from the latest valid Checkpoint;
 unchecked partial outputs are never combined or published.
 
-`Use as Draft` is the sole reuse action. It copies frozen authorable input into
+`Create draft` is the sole reuse action. It copies frozen authorable input into
 one selected Folder's browser-local Draft and creates no server state. A later
 ordinary Run creates an independent ResearchRun. Mutable Research name and
 Folder membership stay outside immutable execution input.

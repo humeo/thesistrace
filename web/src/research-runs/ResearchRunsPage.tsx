@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
+import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
 import {
   useResearchAsDraft,
   type FrozenResearchAuthorableInput,
@@ -116,6 +117,13 @@ export type ResearchRunProgress = {
   duration_is_estimate: boolean;
 };
 
+export type ResearchRunExecutionTiming = {
+  started_at: string | null;
+  finished_at: string | null;
+  elapsed_seconds: number | null;
+  is_final: boolean;
+};
+
 export type ResearchRun = {
   id: string;
   status: "queued" | "running" | "cancelling" | "succeeded" | "failed" | "cancelled";
@@ -129,6 +137,7 @@ export type ResearchRun = {
   failure_reason?: string;
   result?: ResearchResult;
   progress?: ResearchRunProgress;
+  execution_timing?: ResearchRunExecutionTiming;
 };
 
 type ResearchRunList = { items: ResearchRun[]; next_cursor: string | null };
@@ -411,6 +420,14 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     return <section aria-label="Research Runs"><p>Loading Research Runs…</p></section>;
   }
   if (run) {
+    const terminal = isTerminalResearch(run.status);
+    const progressView = run.progress ? (
+      <ResearchRunProgressView
+        progress={run.progress}
+        status={run.status}
+        timing={run.execution_timing}
+      />
+    ) : null;
     return (
       <section aria-label="Research Runs" className="research-run-page">
         <header className="research-run-header">
@@ -451,12 +468,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
           <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
         </div>
-        {run.progress ? (
-          <ResearchRunProgressView
-            active={run.status === "running" || run.status === "cancelling"}
-            progress={run.progress}
-          />
-        ) : null}
+        {!terminal ? progressView : null}
         {deleteError !== null ? <p role="alert">{deleteError}</p> : null}
         {deleting ? null : folderError !== null ? (
           <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
@@ -472,14 +484,15 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
             run={run}
           />
         )}
-        {!deleting && folders.length > 0 && run.input !== undefined && isTerminalResearch(run.status) ? (
-          <UseAsDraftPanel folders={folders} input={run.input} sourceFolderId={run.folder_id} />
-        ) : null}
         {run.status === "failed" && run.failure_reason ? (
           <p role="alert"><strong>Failure</strong> {run.failure_reason}</p>
         ) : null}
         {run.status === "succeeded" && run.result ? (
           <ResearchResultView result={run.result} />
+        ) : null}
+        {terminal ? progressView : null}
+        {!deleting && folders.length > 0 && run.input !== undefined ? (
+          <UseAsDraftPanel folders={folders} input={run.input} sourceFolderId={run.folder_id} />
         ) : null}
       </section>
     );
@@ -512,28 +525,89 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 }
 
 export function ResearchRunProgressView({
-  active,
   progress,
+  status,
+  timing,
 }: {
-  active: boolean;
   progress: ResearchRunProgress;
+  status: ResearchRun["status"];
+  timing?: ResearchRunExecutionTiming;
 }) {
   const estimate = progress.remaining_duration_estimate_seconds;
+  const completed = progress.completed_warmup_sessions + progress.completed_research_sessions;
+  const total = progress.total_warmup_sessions + progress.total_research_sessions;
+  const active = status === "running" || status === "cancelling";
   return (
-    <section aria-label="ResearchRun progress">
-      <h2>Committed progress</h2>
-      <p>Warm-up {progress.completed_warmup_sessions} / {progress.total_warmup_sessions}</p>
-      <p>Research {progress.completed_research_sessions} / {progress.total_research_sessions}</p>
-      <p>Committed Chunks {progress.committed_chunk_count}</p>
-      {active ? <p>Current work is in flight and not yet committed.</p> : null}
-      {estimate !== null ? (
-        <p>
-          About {Math.max(1, Math.ceil(estimate / 60))} minutes remaining
-          {progress.duration_is_estimate ? " (revisable estimate, not an SLA)" : ""}.
+    <section aria-label="ResearchRun progress" className="research-run-progress">
+      <div className="research-run-progress-heading">
+        <div>
+          <h2>Execution progress</h2>
+          <p>{progressLabel(status, progress.phase)}</p>
+        </div>
+        <dl className="research-run-timing">
+          <div>
+            <dt>{timing?.is_final ? "Execution time" : "Elapsed"}</dt>
+            <dd>{formatDuration(timing?.elapsed_seconds ?? null)}</dd>
+          </div>
+          <div>
+            <dt>Started</dt>
+            <dd><ExecutionTimestamp value={timing?.started_at ?? null} /></dd>
+          </div>
+          <div>
+            <dt>Finished</dt>
+            <dd><ExecutionTimestamp value={timing?.finished_at ?? null} /></dd>
+          </div>
+        </dl>
+      </div>
+      <progress
+        aria-label="Research execution progress"
+        max={Math.max(total, 1)}
+        value={completed}
+      />
+      <div className="research-run-progress-stats">
+        <p><strong>{progress.completed_warmup_sessions} / {progress.total_warmup_sessions}</strong> Warm-up</p>
+        <p><strong>{progress.completed_research_sessions} / {progress.total_research_sessions}</strong> Research</p>
+        <p><strong>{progress.committed_chunk_count}</strong> Committed chunks</p>
+      </div>
+      {active && estimate !== null ? (
+        <p className="research-run-progress-note">
+          About {formatDuration(estimate)} remaining
+          {progress.duration_is_estimate ? " · estimate may change" : ""}
         </p>
       ) : null}
     </section>
   );
+}
+
+function progressLabel(
+  status: ResearchRun["status"],
+  phase: ResearchRunProgress["phase"],
+): string {
+  if (status === "queued") return "Waiting for a Research Worker";
+  if (status === "cancelling") return "Cancelling execution";
+  if (status === "cancelled") return "Execution cancelled";
+  if (status === "failed") return "Execution failed";
+  if (status === "succeeded") return "Execution complete";
+  return phase === "finalizing" ? "Finalizing result" : `Running ${phase}`;
+}
+
+export function formatDuration(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return "Not started";
+  const rounded = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(rounded / 3600);
+  const minutes = Math.floor((rounded % 3600) / 60);
+  const remainder = rounded % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${remainder}s`;
+  if (minutes > 0) return `${minutes}m ${remainder}s`;
+  return `${remainder}s`;
+}
+
+function ExecutionTimestamp({ value }: { value: string | null }) {
+  if (value === null) return <>—</>;
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return <>—</>;
+  const iso = timestamp.toISOString();
+  return <time dateTime={value}>{iso.slice(0, 10)} {iso.slice(11, 19)} UTC</time>;
 }
 
 export function isTerminalResearch(status: ResearchRun["status"]): boolean {
@@ -571,9 +645,9 @@ export function UseAsDraftPanel({
   }
 
   return (
-    <section aria-label="Reuse Research" className="research-use-as-draft">
-      <h2>Reuse</h2>
-      <p>Copy the frozen research inputs into a browser Draft to inspect or edit them.</p>
+    <section aria-label="Create a draft" className="research-use-as-draft">
+      <h2>Create a draft</h2>
+      <p>Copy this Run’s frozen inputs into a browser draft to inspect or edit.</p>
       <label>Target Folder
         <select
           aria-label="Target Folder"
@@ -585,7 +659,7 @@ export function UseAsDraftPanel({
           ))}
         </select>
       </label>
-      <button onClick={useAsDraft}>Use as Draft</button>
+      <button onClick={useAsDraft}>Create draft</button>
       {error !== null ? <p role="alert">{error}</p> : null}
     </section>
   );
@@ -655,8 +729,8 @@ export function ResearchOrganizationPanel({
   }
 
   return (
-    <section aria-label="Research organization" className="research-organization">
-      <h2>Organization</h2>
+    <section aria-label="Name and folder" className="research-organization">
+      <h2>Name and folder</h2>
       <label>Research name
         <input
           aria-label="Research name"
@@ -666,9 +740,9 @@ export function ResearchOrganizationPanel({
           value={name}
         />
       </label>
-      <label>Research Folder
+      <label>Folder
         <select
-          aria-label="Research Folder"
+          aria-label="Folder"
           disabled={submitting}
           onChange={(event) => setFolderId(event.target.value)}
           value={folderId}
@@ -682,7 +756,7 @@ export function ResearchOrganizationPanel({
         disabled={submitting || (!nameChanged && !folderChanged)}
         onClick={() => void organize()}
       >
-        {submitting ? "Updating…" : "Update organization"}
+        {submitting ? "Saving…" : "Save changes"}
       </button>
       {error !== null ? <p role="alert">{error}</p> : null}
     </section>
@@ -713,7 +787,6 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
     <div className="research-result">
       <section className="research-result-section">
         <div className="section-heading">
-          <p className="eyebrow">Predictive evidence</p>
           <h2>Factor Summary</h2>
         </div>
         <div className="factor-horizons">
@@ -725,7 +798,6 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
 
       <section className="research-result-section">
         <div className="section-heading">
-          <p className="eyebrow">One fill path · net is primary</p>
           <h2>Strategy Summary</h2>
           <p>Selected universe {result.strategy.benchmark.universe}</p>
         </div>
@@ -749,65 +821,11 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
             value={formatCny(metrics.transaction_costs.cumulative_amount)}
           />
         </div>
-        <StrategyBenchmarkChart observations={result.strategy.observations} />
+        <StrategyPerformanceChart observations={result.strategy.observations} />
       </section>
 
-      <DailyObservationsTable observations={result.strategy.observations} />
       <TerminalStrategyStateView state={result.terminal_strategy_state} />
-
-      <section className="research-result-section research-provenance">
-        <div className="section-heading">
-          <p className="eyebrow">Run inputs and calculation contracts</p>
-          <h2>Provenance</h2>
-        </div>
-        <dl>
-          <div>
-            <dt>Input digest</dt>
-            <dd><code>{shortDigest(result.provenance.immutable_input_sha256)}</code></dd>
-          </div>
-          <div><dt>Result schema</dt><dd>{result.provenance.schema_version}</dd></div>
-          <div>
-            <dt>Kernel</dt>
-            <dd>{result.provenance.semantic_versions.kernel}</dd>
-          </div>
-        </dl>
-      </section>
     </div>
-  );
-}
-
-function DailyObservationsTable({ observations }: { observations: StrategyObservation[] }) {
-  return (
-    <section className="research-result-section">
-      <div className="section-heading">
-        <p className="eyebrow">Research-period account observations</p>
-        <h2>Daily Observations</h2>
-      </div>
-      <div className="result-table-scroll">
-        <table aria-label="Daily Observations">
-          <thead>
-            <tr>
-              <th>Session</th>
-              <th>Net NAV</th>
-              <th>Net cash</th>
-              <th>Holdings</th>
-              <th>Transaction cost</th>
-            </tr>
-          </thead>
-          <tbody>
-            {observations.map((observation) => (
-              <tr key={observation.session}>
-                <td>{observation.session}</td>
-                <td>{observation.net_nav}</td>
-                <td>{observation.net_cash}</td>
-                <td>{observation.holdings_count}</td>
-                <td>{observation.transaction_cost_cny}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
   );
 }
 
@@ -859,7 +877,6 @@ function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
   return (
     <section aria-label={`${horizon.horizon}-session Factor`}>
       <strong>{horizon.horizon}-session</strong>
-      <p>{horizon.coverage.signal_session_count} signal sessions</p>
       <Metric label="Rank IC" value={formatDecimal(horizon.summary.rank_ic.mean)} />
       <Metric label="Rank ICIR" value={formatDecimal(horizon.summary.rank_ic.icir)} />
       <Metric label="IC" value={formatDecimal(horizon.summary.ic.mean)} />
@@ -881,50 +898,6 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StrategyBenchmarkChart({ observations }: { observations: StrategyObservation[] }) {
-  const lines = useMemo(() => chartLines(observations), [observations]);
-  return (
-    <figure className="strategy-chart">
-      <figcaption>
-        <span><i className="strategy-swatch" /> Net strategy</span>
-        <span><i className="benchmark-swatch" /> Selected-universe benchmark</span>
-        <span>{observations.length} Research Sessions</span>
-      </figcaption>
-      <svg
-        aria-label="Strategy and benchmark NAV"
-        preserveAspectRatio="none"
-        role="img"
-        viewBox="0 0 640 180"
-      >
-        <line x1="0" x2="640" y1="90" y2="90" />
-        <polyline className="benchmark-line" points={lines.benchmark} />
-        <polyline className="strategy-line" points={lines.strategy} />
-      </svg>
-      <p>{observations[0]?.session} — {observations.at(-1)?.session}</p>
-    </figure>
-  );
-}
-
-function chartLines(observations: StrategyObservation[]) {
-  if (observations.length === 0) return { strategy: "", benchmark: "" };
-  const firstStrategy = Number(observations[0].net_nav);
-  const firstBenchmark = Number(observations[0].benchmark_nav);
-  const strategyValues = observations.map((item) => Number(item.net_nav) / firstStrategy);
-  const benchmarkValues = observations.map(
-    (item) => Number(item.benchmark_nav) / firstBenchmark,
-  );
-  const values = [...strategyValues, ...benchmarkValues];
-  const minimum = Math.min(...values);
-  const maximum = Math.max(...values);
-  const span = maximum - minimum || 1;
-  const points = (series: number[]) => series.map((value, index) => {
-    const x = (index / Math.max(series.length - 1, 1)) * 640;
-    const y = 170 - ((value - minimum) / span) * 160;
-    return `${x.toFixed(2)},${y.toFixed(2)}`;
-  }).join(" ");
-  return { strategy: points(strategyValues), benchmark: points(benchmarkValues) };
-}
-
 function formatPercent(value: number | null) {
   return value === null ? "—" : `${(value * 100).toFixed(2)}%`;
 }
@@ -939,8 +912,4 @@ function formatCny(value: number) {
     currency: "CNY",
     maximumFractionDigits: 0,
   }).format(value);
-}
-
-function shortDigest(value: string) {
-  return `${value.slice(0, 12)}…${value.slice(-8)}`;
 }

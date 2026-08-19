@@ -56,6 +56,13 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
         )
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
+        cancelled_detail = client.get(f"/api/research-runs/{run_id}").json()
+        assert cancelled_detail["execution_timing"] == {
+            "started_at": None,
+            "finished_at": None,
+            "elapsed_seconds": None,
+            "is_final": True,
+        }
         assert _run_storage(runtime.database, run_id) == {
             "status": "cancelled",
             "execution_fence": 1,

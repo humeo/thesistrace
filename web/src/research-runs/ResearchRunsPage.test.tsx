@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   ResearchFolderLoadFailure,
   ResearchOrganizationPanel,
+  ResearchResultView,
   ResearchRunProgressView,
   ResearchRunHistory,
   TerminalStrategyStateView,
@@ -16,7 +17,6 @@ describe("ResearchRunProgressView", () => {
   it("separates committed warm-up and Research progress from in-flight work", () => {
     const markup = renderToStaticMarkup(
       <ResearchRunProgressView
-        active
         progress={{
           phase: "research",
           completed_warmup_sessions: 252,
@@ -29,14 +29,57 @@ describe("ResearchRunProgressView", () => {
           remaining_duration_estimate_seconds: 840,
           duration_is_estimate: true,
         }}
+        status="running"
+        timing={{
+          started_at: "2026-08-13T01:00:00Z",
+          finished_at: null,
+          elapsed_seconds: 3723,
+          is_final: false,
+        }}
       />,
     );
-    expect(markup).toContain("Committed progress");
-    expect(markup).toContain("Warm-up 252 / 252");
-    expect(markup).toContain("Research 126 / 4034");
-    expect(markup).toContain("in flight and not yet committed");
-    expect(markup).toContain("revisable estimate, not an SLA");
+    expect(markup).toContain("Execution progress");
+    expect(markup).toContain("value=\"378\"");
+    expect(markup).toContain("max=\"4286\"");
+    expect(markup).toContain("252 / 252");
+    expect(markup).toContain("126 / 4034");
+    expect(markup).toContain("1h 2m 3s");
+    expect(markup).toContain("Started");
+    expect(markup).toContain("2026-08-13 01:00:00 UTC");
+    expect(markup).toContain("Finished");
+    expect(markup).toContain("estimate may change");
     expect(markup).not.toMatch(/checkpoint|staged|payload|alpha value/i);
+  });
+
+  it("shows fixed start and finish timestamps for terminal execution", () => {
+    const markup = renderToStaticMarkup(
+      <ResearchRunProgressView
+        progress={{
+          phase: "succeeded",
+          completed_warmup_sessions: 20,
+          total_warmup_sessions: 20,
+          completed_research_sessions: 875,
+          total_research_sessions: 875,
+          committed_chunk_count: 14,
+          last_completed_warmup_session: "2023-01-31",
+          last_completed_research_session: "2026-08-13",
+          remaining_duration_estimate_seconds: null,
+          duration_is_estimate: false,
+        }}
+        status="succeeded"
+        timing={{
+          started_at: "2026-08-13T01:00:00Z",
+          finished_at: "2026-08-13T01:02:46Z",
+          elapsed_seconds: 166,
+          is_final: true,
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Execution time");
+    expect(markup).toContain("2m 46s");
+    expect(markup).toContain("2026-08-13 01:00:00 UTC");
+    expect(markup).toContain("2026-08-13 01:02:46 UTC");
   });
 });
 
@@ -92,6 +135,86 @@ describe("TerminalStrategyStateView", () => {
     expect(markup).toContain("cn.stock.000001");
     expect(markup).toContain("remains pending");
     expect(markup).not.toMatch(/Generation|manifest|checkpoint|fence|object location/i);
+  });
+});
+
+describe("ResearchResultView", () => {
+  it("keeps result summaries and coverage while removing low-value detail sections", () => {
+    const correlation = {
+      mean: 0.1,
+      sample_deviation: 0,
+      icir: 1,
+      positive_fraction: 1,
+      valid_session_count: 1,
+    };
+    const horizon = {
+      horizon: 1 as const,
+      summary: {
+        ic: correlation,
+        rank_ic: correlation,
+        quantile_returns: { q1: null, q2: null, q3: null, q4: null, q5: null },
+        top_bottom_return: null,
+      },
+      coverage: {
+        signal_session_count: 2,
+        ic_valid_session_count: 1,
+        rank_ic_valid_session_count: 1,
+        quantile_valid_session_count: 0,
+      },
+    };
+    const markup = renderToStaticMarkup(<ResearchResultView result={{
+      factor: {
+        horizons: {
+          "1": horizon,
+          "5": { ...horizon, horizon: 5 },
+          "20": { ...horizon, horizon: 20 },
+        },
+      },
+      strategy: {
+        summary: {
+          alpha_checksum: "a",
+          initial_cash_cny: "10000000",
+          source_checksum: "b",
+          metrics: {
+            net_cumulative_return: 0.1,
+            benchmark_cumulative_return: 0.05,
+            annualized_excess_return: 0.03,
+            maximum_drawdown: { value: -0.02 },
+            sharpe: 1.2,
+            transaction_costs: { cumulative_amount: 25 },
+          },
+        },
+        benchmark: { universe: "top300", methodology: "selected_universe_equal_weight" },
+        observations: [{
+          session: "2026-08-03",
+          gross_nav: "10000000",
+          net_nav: "10000000",
+          benchmark_nav: "1",
+          net_cash: "10000000",
+          transaction_cost_cny: "0",
+          holdings_count: 0,
+          maximum_single_name_weight: 0,
+          upper_limit_buy_rejections: 0,
+          lower_limit_sell_rejections: 0,
+          suspension_rejections: 0,
+        }],
+      },
+      terminal_strategy_state: TERMINAL_STATE,
+      provenance: {
+        schema_version: "research-result-v1",
+        research_run_id: "run_test",
+        immutable_input_sha256: "a".repeat(64),
+        calculation_contracts: {},
+        semantic_versions: { kernel: "kernel-v4" },
+      },
+    }} />);
+
+    expect(markup).toContain("Factor Summary");
+    expect(markup).toContain("Strategy Summary");
+    expect(markup).toContain("Rank IC coverage 1/2");
+    expect(markup).not.toMatch(
+      /Predictive evidence|One fill path|Research-period account observations|signal sessions|Daily Observations|Provenance|Input digest/i,
+    );
   });
 });
 
@@ -152,15 +275,16 @@ describe("ResearchOrganizationPanel", () => {
       />,
     );
     expect(markup).toContain("Research name");
-    expect(markup).toContain("Research Folder");
+    expect(markup).toContain("Name and folder");
+    expect(markup).toContain("Folder");
     expect(markup).toContain("Signals");
-    expect(markup).toContain("Update organization");
+    expect(markup).toContain("Save changes");
     expect(markup).not.toMatch(/Draft|Rerun|Revision/);
   });
 });
 
 describe("UseAsDraftPanel", () => {
-  it("is available for every terminal Research state only", () => {
+  it("classifies terminal Research states for result-page ordering", () => {
     expect(isTerminalResearch("succeeded")).toBe(true);
     expect(isTerminalResearch("failed")).toBe(true);
     expect(isTerminalResearch("cancelled")).toBe(true);
@@ -189,7 +313,8 @@ describe("UseAsDraftPanel", () => {
         storage={{ getItem: () => null, setItem: () => undefined }}
       />,
     );
-    expect(markup).toContain("Use as Draft");
+    expect(markup).toContain("Create a draft");
+    expect(markup).toContain("Create draft");
     expect(markup).toContain("Target Folder");
     expect(markup).not.toMatch(/Rerun|Run now/);
   });

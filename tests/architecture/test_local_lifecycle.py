@@ -1243,7 +1243,7 @@ def test_current_architecture_documents_only_the_active_data_and_schema_contract
         "private `thesistrace-data-operator`",
         "one browser-local Draft per Research Folder",
         "direct Run admission",
-        "`Use as Draft` is the sole reuse action",
+        "`Create draft` is the sole reuse action",
         "Attempt starts",
         "pins the Data Generation frozen at Run",
         "There is no upgrade, downgrade, fallback",

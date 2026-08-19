@@ -1408,8 +1408,13 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "formula_summary",
             "input",
             "progress",
+            "execution_timing",
             "result",
         }
+        assert public_run["execution_timing"]["started_at"] is not None
+        assert public_run["execution_timing"]["finished_at"] is not None
+        assert public_run["execution_timing"]["elapsed_seconds"] >= 0
+        assert public_run["execution_timing"]["is_final"] is True
         assert set(public_run["result"]) == {
             "factor",
             "strategy",

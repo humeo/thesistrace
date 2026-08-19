@@ -211,6 +211,13 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "end_date": "2026-08-04",
             "formula_summary": "close_adj",
         }
+        queued_detail = client.get(f"/api/research-runs/{queued['id']}").json()
+        assert queued_detail["execution_timing"] == {
+            "started_at": None,
+            "finished_at": None,
+            "elapsed_seconds": None,
+            "is_final": False,
+        }
 
         concurrent_command = _valid_command("direct-concurrent")
         with ThreadPoolExecutor(max_workers=8) as executor:
@@ -308,6 +315,10 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
         completed = client.get(f"/api/research-runs/{queued['id']}")
         assert completed.status_code == 200
         assert completed.json()["status"] == "succeeded"
+        assert completed.json()["execution_timing"]["started_at"] is not None
+        assert completed.json()["execution_timing"]["finished_at"] is not None
+        assert completed.json()["execution_timing"]["elapsed_seconds"] >= 0
+        assert completed.json()["execution_timing"]["is_final"] is True
         assert completed.json()["input"] == {
             "formula": "close_adj",
             "hypothesis": None,
