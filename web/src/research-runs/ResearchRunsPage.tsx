@@ -1311,10 +1311,22 @@ export function TerminalStrategyStateView({ state }: { state: TerminalStrategySt
       </div>
       <div className="strategy-metrics">
         <Metric label="As of" value={state.session} />
-        <Metric label="Portfolio value" value={state.net_nav} />
-        <Metric label="Cash" value={state.net_cash} />
+        <Metric
+          label="Portfolio value"
+          value={formatCnyDecimal(state.net_nav)}
+          exactValue={state.net_nav}
+        />
+        <Metric
+          label="Cash"
+          value={formatCnyDecimal(state.net_cash)}
+          exactValue={state.net_cash}
+        />
         <Metric label="Positions" value={String(state.positions.length)} />
-        <Metric label="Transaction costs" value={state.cumulative_transaction_cost} />
+        <Metric
+          label="Transaction costs"
+          value={formatCnyDecimal(state.cumulative_transaction_cost)}
+          exactValue={state.cumulative_transaction_cost}
+        />
       </div>
       {state.positions.length === 0 ? (
         <p>No holdings at the end of the Research Period.</p>
@@ -1329,8 +1341,8 @@ export function TerminalStrategyStateView({ state }: { state: TerminalStrategySt
                 <tr key={position.instrument_id}>
                   <td>{position.instrument_id}</td>
                   <td>{position.execution_shares}</td>
-                  <td>{position.adjusted_units}</td>
-                  <td>{position.last_adjusted_price}</td>
+                  <td title={position.adjusted_units}>{formatNumericString(position.adjusted_units)}</td>
+                  <td title={position.last_adjusted_price}>{formatNumericString(position.last_adjusted_price)}</td>
                 </tr>
               ))}
             </tbody>
@@ -1366,11 +1378,11 @@ function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
   );
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
+function Metric({ label, value, exactValue }: { label: string; value: string; exactValue?: string }) {
   return (
     <div className="result-metric">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <strong title={exactValue}>{value}</strong>
     </div>
   );
 }
@@ -1419,4 +1431,20 @@ function neutralizationLabel(
 
 function rebalanceLabel(sessions: number): string {
   return sessions === 1 ? "Every session" : `Every ${sessions} sessions`;
+}
+
+function formatCnyDecimal(value: string) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "CNY",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value));
+}
+
+function formatNumericString(value: string) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return value;
+  if (numeric !== 0 && Math.abs(numeric) < 0.000001) return numeric.toExponential(6);
+  return new Intl.NumberFormat("en-US", { maximumFractionDigits: 6 }).format(numeric);
 }
