@@ -11,7 +11,9 @@ import urllib.error
 import urllib.request
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
+import boto3
 from benchmark_financial_io import build_market_benchmark_stream
 
 from thesistrace._postgres import PostgresDatabase
@@ -22,13 +24,18 @@ from thesistrace.data.io_benchmark import (
 )
 from thesistrace.data.io_metrics import measure_data_io
 from thesistrace.data.lifecycle import DatasetLifecycle
-from thesistrace.entrypoints.runtime import CoreSettings
+from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.product_state import product_state_counts
+from thesistrace.publication import PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.research_run.result import read_result_bundle
 
 _PROFILE_PATH = Path("/benchmarks/long-research-2010-profile.json")
 _POLL_SECONDS = 0.05
 _RUN_TIMEOUT_SECONDS = 720
 _TERMINAL = {"succeeded", "failed", "cancelled"}
+_RESEARCH_KINDS = ("factor_evaluation", "strategy_backtest")
+_POLL_EVENT = Event()
 
 
 def main() -> None:
@@ -42,11 +49,13 @@ def main() -> None:
     preload.add_argument("--output", type=Path, required=True)
     sample = subparsers.add_parser("sample")
     sample.add_argument("--phase", choices=("cold", "warm"), required=True)
+    sample.add_argument("--research-kind", choices=_RESEARCH_KINDS, required=True)
     sample.add_argument("--index", type=int, required=True)
     sample.add_argument("--log", type=Path, required=True)
     sample.add_argument("--output", type=Path, required=True)
     sample.add_argument("--require-fresh-product-state", action="store_true")
     cancel = subparsers.add_parser("cancel")
+    cancel.add_argument("--research-kind", choices=_RESEARCH_KINDS, required=True)
     cancel.add_argument("--log", type=Path, required=True)
     cancel.add_argument("--output", type=Path, required=True)
     assemble = subparsers.add_parser("assemble")
@@ -65,11 +74,15 @@ def main() -> None:
                 arguments.phase,
                 arguments.index,
                 arguments.log,
+                research_kind=arguments.research_kind,
                 require_fresh_product_state=arguments.require_fresh_product_state,
             ),
         )
     elif arguments.command == "cancel":
-        _write_json(arguments.output, _cancel_sample(arguments.log))
+        _write_json(
+            arguments.output,
+            _cancel_sample(arguments.log, research_kind=arguments.research_kind),
+        )
     else:
         evidence = _assemble(arguments.samples, arguments.image_revision)
         assert_long_research_qualification(evidence)
@@ -126,15 +139,22 @@ def _execute_sample(
     index: int,
     log_path: Path,
     *,
+    research_kind: str,
     require_fresh_product_state: bool,
 ) -> dict[str, object]:
     profile = _read_json(_PROFILE_PATH)
     api_origin = _required_environment("THESISTRACE_TEST_API_ORIGIN").rstrip("/")
-    fresh_product_state_verified = False
+    fresh_product_state: dict[str, int] | None = None
     if require_fresh_product_state:
-        _require_fresh_product_state()
-        fresh_product_state_verified = True
-    accepted = _admit(api_origin, profile, request_id=f"qualification-{phase}-{index}")
+        fresh_product_state = _require_fresh_product_state()
+    admission_started = time.perf_counter()
+    accepted = _admit(
+        api_origin,
+        profile,
+        research_kind=research_kind,
+        request_id=f"qualification-{research_kind}-{phase}-{index}",
+    )
+    admission_duration_ms = round((time.perf_counter() - admission_started) * 1000, 3)
     run_id = str(accepted["id"])
     process = _start_worker(log_path, cold=phase == "cold")
     observation = _observe_run(run_id, process)
@@ -152,11 +172,26 @@ def _execute_sample(
     ]
     if child_exit_codes != [0]:
         raise RuntimeError(f"qualification child exit evidence is invalid: {child_exit_codes}")
+    result = _result_evidence(run_id, research_kind=research_kind)
+    phase_timings = _phase_timings(events)
+    strategy_continuations = [
+        event.get("strategy_continuation_present")
+        for event in events
+        if event.get("event") == "research_execution_chunk_received"
+    ]
+    strategy_observation_count = sum(
+        int(event.get("strategy_observation_count", 0))
+        for event in events
+        if event.get("event") == "research_execution_chunk_received"
+    )
     return {
         "phase": phase,
         "index": index,
+        "research_kind": research_kind,
         "run_id": run_id,
-        "duration_ms": observation["duration_ms"],
+        "admission_duration_ms": admission_duration_ms,
+        "attempt_duration_ms": observation["duration_ms"],
+        "duration_ms": round(admission_duration_ms + float(observation["duration_ms"]), 3),
         "peak_rss_bytes": max(
             int(event["child_peak_rss_bytes"])
             for event in events
@@ -171,39 +206,44 @@ def _execute_sample(
         "chunk_session_count": observation["chunk_session_count"],
         "chunk_count": observation["chunk_count"],
         "attempt_id": observation["attempt_id"],
-        "fresh_product_state_verified": fresh_product_state_verified,
+        "phase_timings_seconds": phase_timings,
+        "strategy_continuation_present": any(
+            value is True for value in strategy_continuations
+        ),
+        "strategy_observation_count": strategy_observation_count,
+        **result,
+        "fresh_product_state_verified": fresh_product_state is not None,
+        "fresh_product_state_counts": fresh_product_state,
     }
 
 
-def _require_fresh_product_state() -> None:
+def _require_fresh_product_state() -> dict[str, int]:
     settings = CoreSettings.from_environment()
     database = PostgresDatabase(settings.database_url)
-    database.open()
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=settings.s3_endpoint_url,
+        aws_access_key_id=settings.s3_access_key_id,
+        aws_secret_access_key=settings.s3_secret_access_key,
+        region_name=settings.s3_region,
+    )
     try:
-        with database.transaction() as transaction:
-            counts = transaction.execute(
-                """
-                SELECT
-                    (SELECT count(*) FROM research_runs.runs) AS runs,
-                    (SELECT count(*) FROM research_runs.attempts) AS attempts,
-                    (SELECT count(*) FROM research_runs.execution_checkpoints) AS checkpoints,
-                    (SELECT count(*) FROM publication.manifests) AS manifests,
-                    (SELECT count(*) FROM publication.objects) AS objects
-                """
-            ).fetchone()
+        database.open()
+        observed = product_state_counts(database, s3, bucket=settings.s3_bucket)
     finally:
+        s3.close()
         database.close()
-    assert counts is not None
-    observed = {key: int(value) for key, value in dict(counts).items()}
     if any(observed.values()):
         raise RuntimeError(
-            f"qualification warm sample would reuse Product State: {observed}"
+            f"qualification sample would reuse Product State: {observed}"
         )
+    return observed
 
 
 def _preload_canonical_objects() -> dict[str, object]:
     profile = _read_json(_PROFILE_PATH)
     settings = CoreSettings.from_environment()
+    product_state_before = _require_fresh_product_state()
     database = PostgresDatabase(settings.database_url)
     database.open()
     try:
@@ -223,9 +263,9 @@ def _preload_canonical_objects() -> dict[str, object]:
         raise RuntimeError("qualification preload has no Research Sessions")
     first = calendar.index(selected[0])
     with measure_data_io() as measurement:
-        for offset in range(0, len(selected), 63):
+        for offset in range(0, len(selected), 64):
             context_start = max(0, first + offset - 20)
-            context_end = first + min(offset + 63, len(selected))
+            context_end = first + min(offset + 64, len(selected))
             store.read_columnar_slice(
                 generation_manifest_sha256,
                 sessions=list(calendar[context_start:context_end]),
@@ -236,16 +276,24 @@ def _preload_canonical_objects() -> dict[str, object]:
             )
     return {
         "generation_manifest_sha256": generation_manifest_sha256,
-        "chunk_count": math.ceil(len(selected) / 63),
+        "chunk_count": math.ceil(len(selected) / 64),
         "research_session_count": len(selected),
+        "product_state_before": product_state_before,
+        "product_state_after": _require_fresh_product_state(),
         **measurement.snapshot(),
     }
 
 
-def _cancel_sample(log_path: Path) -> dict[str, object]:
+def _cancel_sample(log_path: Path, *, research_kind: str) -> dict[str, object]:
     profile = _read_json(_PROFILE_PATH)
     api_origin = _required_environment("THESISTRACE_TEST_API_ORIGIN").rstrip("/")
-    accepted = _admit(api_origin, profile, request_id="qualification-cancel")
+    fresh_product_state = _require_fresh_product_state()
+    accepted = _admit(
+        api_origin,
+        profile,
+        research_kind=research_kind,
+        request_id=f"qualification-{research_kind}-cancel",
+    )
     run_id = str(accepted["id"])
     process = _start_worker(log_path, cold=False)
     _wait_for_child_start(run_id, log_path, process)
@@ -254,7 +302,7 @@ def _cancel_sample(log_path: Path) -> dict[str, object]:
         api_origin,
         "POST",
         f"/api/research-runs/{run_id}/cancel",
-        {"request_id": "qualification-cancel-command"},
+        {"request_id": f"qualification-{research_kind}-cancel-command"},
     )
     if cancelled["status"] not in {"cancelling", "cancelled"}:
         raise RuntimeError(f"qualification cancellation was not accepted: {cancelled}")
@@ -267,28 +315,153 @@ def _cancel_sample(log_path: Path) -> dict[str, object]:
     exits = [event for event in events if event.get("event") == "research_execution_child_exited"]
     if len(exits) != 1:
         raise RuntimeError("qualification cancellation has no unique child exit")
+    cancelled_state = _cancelled_run_state(run_id)
     return {
+        "research_kind": research_kind,
         "run_id": run_id,
         "status": detail["status"],
         "cancellation_latency_ms": latency_ms,
         "worker_exit_code": worker_exit_code,
         "child_exit_code": exits[0].get("exit_code"),
         "child_acknowledged": exits[0].get("acknowledged"),
+        "fresh_product_state_verified": True,
+        "fresh_product_state_counts": fresh_product_state,
+        **cancelled_state,
     }
 
 
+def _cancelled_run_state(run_id: str) -> dict[str, object]:
+    settings = CoreSettings.from_environment()
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.status, run.result_manifest_sha256,
+                       (SELECT count(*)
+                        FROM research_runs.execution_checkpoints AS checkpoint
+                        WHERE checkpoint.run_id = run.id) AS checkpoint_count,
+                       (SELECT count(*)
+                        FROM research_runs.attempts AS attempt
+                        JOIN data.generation_pins AS pin
+                          ON pin.id = attempt.generation_pin_id
+                        WHERE attempt.run_id = run.id AND pin.status = 'active')
+                           AS active_pin_count
+                FROM research_runs.runs AS run
+                WHERE run.id = %s
+                """,
+                (run_id,),
+            ).fetchone()
+    finally:
+        database.close()
+    if row is None or row["status"] != "cancelled":
+        raise RuntimeError(f"qualification cancellation state is invalid: {row}")
+    return {
+        "result_manifest_sha256": row["result_manifest_sha256"],
+        "checkpoint_count": int(row["checkpoint_count"]),
+        "active_pin_count": int(row["active_pin_count"]),
+    }
+
+
+def _result_evidence(run_id: str, *, research_kind: str) -> dict[str, object]:
+    settings = CoreSettings.from_environment()
+    with open_core_runtime(settings) as runtime:
+        with runtime.database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.result_manifest_sha256, run.result_provenance,
+                       (SELECT count(*)
+                        FROM research_runs.execution_checkpoints AS checkpoint
+                        WHERE checkpoint.run_id = run.id) AS checkpoint_count,
+                       (SELECT count(*)
+                        FROM research_runs.attempts AS attempt
+                        JOIN data.generation_pins AS pin
+                          ON pin.id = attempt.generation_pin_id
+                        WHERE attempt.run_id = run.id AND pin.status = 'active')
+                           AS active_pin_count
+                FROM research_runs.runs AS run
+                WHERE run.id = %s
+                """,
+                (run_id,),
+            ).fetchone()
+        if row is None or row["result_manifest_sha256"] is None:
+            raise RuntimeError("qualification Result publication is unavailable")
+        manifest_sha256 = str(row["result_manifest_sha256"])
+        bundle = runtime.publication.read(
+            PublishedRef(
+                manifest_sha256=manifest_sha256,
+                kind="research.result",
+                provenance=row["result_provenance"],
+            )
+        )
+        result = read_result_bundle(bundle, research_kind=research_kind)
+    return {
+        "result_payload_names": sorted(bundle.payloads),
+        "result_object_names": sorted(result),
+        "factor_summary_sha256": hashlib.sha256(
+            canonical_json_bytes(result["factor_summary"])
+        ).hexdigest(),
+        "checkpoint_count_after_success": int(row["checkpoint_count"]),
+        "active_pin_count_after_success": int(row["active_pin_count"]),
+    }
+
+
+def _phase_timings(events: list[dict[str, object]]) -> dict[str, float]:
+    totals = {
+        "data_read": 0.0,
+        "calculation": 0.0,
+        "input": 0.0,
+        "alpha_and_pending": 0.0,
+        "factor": 0.0,
+        "strategy": 0.0,
+        "finalize": 0.0,
+        "checkpoint_commit": 0.0,
+    }
+    for event in events:
+        if event.get("event") == "research_execution_chunk_received":
+            totals["data_read"] += float(event["child_data_read_seconds"])
+            totals["calculation"] += float(event["child_calculation_seconds"])
+            phases = event.get("child_calculation_phase_seconds")
+            if not isinstance(phases, dict):
+                raise RuntimeError("qualification calculation phase evidence is invalid")
+            for name in ("input", "alpha_and_pending", "factor", "strategy", "finalize"):
+                totals[name] += float(phases[name])
+        elif event.get("event") == "research_execution_chunk_committed":
+            totals["checkpoint_commit"] += float(event["supervisor_commit_seconds"])
+    return {name: round(value, 6) for name, value in totals.items()}
+
+
 def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
-    cold = [_read_json(samples_path / f"cold-{index}.json") for index in range(5)]
-    warm = [_read_json(samples_path / f"warm-{index}.json") for index in range(5)]
-    cancellation = _read_json(samples_path / "cancellation.json")
-    all_samples = (*cold, *warm)
+    research_kinds: dict[str, object] = {}
+    all_samples: list[dict[str, object]] = []
+    for research_kind in _RESEARCH_KINDS:
+        cold = [
+            _read_json(samples_path / f"{research_kind}-cold-{index}.json")
+            for index in range(5)
+        ]
+        warm = [
+            _read_json(samples_path / f"{research_kind}-warm-{index}.json")
+            for index in range(5)
+        ]
+        cancellation = _read_json(samples_path / f"{research_kind}-cancellation.json")
+        all_samples.extend((*cold, *warm))
+        research_kinds[research_kind] = {
+            "cold": {"samples": cold},
+            "warm": {"samples": warm},
+            "cancellation": cancellation,
+        }
     generation_ids = {str(item["generation_manifest_sha256"]) for item in all_samples}
     plans = {(int(item["chunk_session_count"]), int(item["chunk_count"])) for item in all_samples}
     if len(generation_ids) != 1 or len(plans) != 1:
         raise RuntimeError("qualification samples did not preserve one frozen input and plan")
-    if not all(item.get("fresh_product_state_verified") is True for item in warm):
-        raise RuntimeError("qualification warm samples did not start from fresh Product State")
+    if not all(item.get("fresh_product_state_verified") is True for item in all_samples):
+        raise RuntimeError("qualification samples did not start from fresh Product State")
+    factor_summary_ids = {str(item["factor_summary_sha256"]) for item in all_samples}
+    if len(factor_summary_ids) != 1:
+        raise RuntimeError("qualification kinds are not Factor Summary equivalent")
     chunk_session_count, chunk_count = next(iter(plans))
+    preload = _read_json(samples_path / "preload.json")
     evidence = {
         "format": "thesistrace-long-research-qualification",
         "version": 1,
@@ -309,34 +482,48 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
             "chunk_session_count": chunk_session_count,
             "chunk_count": chunk_count,
         },
-        "cold": {"samples": cold},
-        "warm": {"samples": warm},
-        "cancellation_latency_ms": cancellation["cancellation_latency_ms"],
-        "cancellation": cancellation,
+        "warm_preload": preload,
+        "research_kinds": research_kinds,
+        "scientific_equivalence": {
+            "factor_summary_sha256": next(iter(factor_summary_ids)),
+            "sample_count": len(all_samples),
+        },
     }
     evidence["summary"] = long_research_qualification_summary(evidence)
     return evidence
 
 
-def _admit(api_origin: str, profile: dict[str, object], *, request_id: str) -> dict[str, object]:
+def _admit(
+    api_origin: str,
+    profile: dict[str, object],
+    *,
+    research_kind: str,
+    request_id: str,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "request_id": request_id,
+        "folder_id": "folder_default",
+        "name": f"Long Research Qualification {request_id}",
+        "hypothesis": "The fixed long-history momentum workload is executable.",
+        "start_date": profile["workload_start_date"],
+        "end_date": profile["workload_end_date"],
+        "formula": profile["formula"],
+        "universe": profile["universe"],
+        "neutralization": "none",
+        "research_kind": research_kind,
+    }
+    if research_kind == "strategy_backtest":
+        payload.update(
+            {
+                "holdings_count": 100,
+                "rebalance_every_sessions": 5,
+            }
+        )
     accepted = _request_json(
         api_origin,
         "POST",
         "/api/research-runs",
-        {
-            "request_id": request_id,
-            "folder_id": "folder_default",
-            "name": f"Long Research Qualification {request_id}",
-            "hypothesis": "The fixed long-history momentum workload is executable.",
-            "start_date": profile["workload_start_date"],
-            "end_date": profile["workload_end_date"],
-            "formula": profile["formula"],
-            "universe": profile["universe"],
-            "neutralization": "none",
-            "research_kind": "strategy_backtest",
-            "holdings_count": 100,
-            "rebalance_every_sessions": 5,
-        },
+        payload,
     )
     if accepted.get("status") != "queued":
         raise RuntimeError(f"qualification ResearchRun was not admitted: {accepted}")
@@ -379,7 +566,9 @@ def _observe_run(run_id: str, process: subprocess.Popen[bytes]) -> dict[str, obj
     database = PostgresDatabase(settings.database_url)
     database.open()
     deadline = time.monotonic() + _RUN_TIMEOUT_SECONDS
-    first_checkpoint_at: datetime | None = None
+    attempt_visible_at: float | None = None
+    first_checkpoint_visible_at: float | None = None
+    terminal_visible_at: float | None = None
     last: dict[str, object] | None = None
     try:
         while time.monotonic() < deadline:
@@ -403,14 +592,22 @@ def _observe_run(run_id: str, process: subprocess.Popen[bytes]) -> dict[str, obj
                 ).fetchone()
             if row is not None:
                 last = dict(row)
-                checkpoint = row.get("first_checkpoint_at")
-                if first_checkpoint_at is None and isinstance(checkpoint, datetime):
-                    first_checkpoint_at = checkpoint
+                if (
+                    attempt_visible_at is None
+                    and isinstance(row.get("started_at"), datetime)
+                ):
+                    attempt_visible_at = time.perf_counter()
+                if (
+                    first_checkpoint_visible_at is None
+                    and isinstance(row.get("first_checkpoint_at"), datetime)
+                ):
+                    first_checkpoint_visible_at = time.perf_counter()
                 if row["status"] in _TERMINAL:
+                    terminal_visible_at = time.perf_counter()
                     break
             if process.poll() is not None and (last is None or last["status"] not in _TERMINAL):
                 raise RuntimeError(f"qualification Worker exited before terminal Run state: {last}")
-            time.sleep(_POLL_SECONDS)
+            _POLL_EVENT.wait(_POLL_SECONDS)
         else:
             process.terminate()
             raise TimeoutError(f"qualification ResearchRun exceeded {_RUN_TIMEOUT_SECONDS}s")
@@ -418,12 +615,13 @@ def _observe_run(run_id: str, process: subprocess.Popen[bytes]) -> dict[str, obj
         database.close()
     assert last is not None
     started_at = last.get("started_at")
-    finished_at = last.get("finished_at")
     immutable_input = last.get("immutable_input")
     if (
         not isinstance(started_at, datetime)
-        or not isinstance(finished_at, datetime)
-        or first_checkpoint_at is None
+        or not isinstance(last.get("finished_at"), datetime)
+        or attempt_visible_at is None
+        or first_checkpoint_visible_at is None
+        or terminal_visible_at is None
         or not isinstance(immutable_input, dict)
     ):
         raise RuntimeError(f"qualification durable timing evidence is incomplete: {last}")
@@ -433,9 +631,9 @@ def _observe_run(run_id: str, process: subprocess.Popen[bytes]) -> dict[str, obj
         "status": last["status"],
         "attempt_id": last["attempt_id"],
         "failure_reason": last["failure_reason"],
-        "duration_ms": round((finished_at - started_at).total_seconds() * 1000, 3),
+        "duration_ms": round((terminal_visible_at - attempt_visible_at) * 1000, 3),
         "first_checkpoint_latency_ms": round(
-            (first_checkpoint_at - started_at).total_seconds() * 1000, 3
+            (first_checkpoint_visible_at - attempt_visible_at) * 1000, 3
         ),
         "result_manifest_sha256": last["result_manifest_sha256"],
         "generation_manifest_sha256": admission["generation_manifest_sha256"],
@@ -459,7 +657,7 @@ def _wait_for_child_start(
             return
         if process.poll() is not None:
             raise RuntimeError("qualification Worker exited before child start")
-        time.sleep(_POLL_SECONDS)
+        _POLL_EVENT.wait(_POLL_SECONDS)
     raise TimeoutError("qualification child did not start within 30 seconds")
 
 
@@ -472,7 +670,7 @@ def _wait_for_public_status(
         last = _request_json(api_origin, "GET", f"/api/research-runs/{run_id}")
         if last.get("status") == expected:
             return last
-        time.sleep(_POLL_SECONDS)
+        _POLL_EVENT.wait(_POLL_SECONDS)
     raise TimeoutError(f"ResearchRun did not reach {expected}: {last}")
 
 

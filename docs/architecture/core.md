@@ -370,8 +370,10 @@ The active local gates are documented in the
 3. `bun run test:e2e` drives the complete browser loop against a fresh
    topology.
 4. `bun run test:image-smoke` qualifies the built application images.
-5. `bun run check` is the ordinary merge gate; `bun run check:release` adds
-   image qualification.
+5. `bun run test:benchmark` qualifies both long Research Kinds in the final
+   image under the declared Worker envelope.
+6. `bun run check` is the ordinary merge gate; `bun run check:release` adds
+   image smoke and long-Research qualification.
 
 Live Tushare credential verification is a separate explicit gate. Local checks
 are not Production readiness.

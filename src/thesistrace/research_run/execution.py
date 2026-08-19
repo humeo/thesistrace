@@ -134,6 +134,7 @@ class SupervisedResearchExecution:
                 ),
                 "child_calculation_phase_seconds": _calculation_phase_seconds(response),
                 "data_io": _data_io(response),
+                **_strategy_chunk_evidence(self.chunk),
             }
         )
 
@@ -373,6 +374,7 @@ class SupervisedResearchExecutor:
                     ),
                     "child_calculation_phase_seconds": _calculation_phase_seconds(response),
                     "data_io": _data_io(response),
+                    **_strategy_chunk_evidence(chunk),
                 }
             )
             return SupervisedResearchExecution(
@@ -633,6 +635,17 @@ def _continuation_instrument_ids(
         for position in positions
         if isinstance(position, Mapping) and "instrument_id" in position
     )
+
+
+def _strategy_chunk_evidence(chunk: Mapping[str, object]) -> dict[str, object]:
+    continuation = chunk.get("continuation")
+    observations = chunk.get("strategy_daily_observations")
+    if not isinstance(continuation, Mapping) or not isinstance(observations, list):
+        raise ResearchExecutionError("Research Chunk strategy evidence is invalid")
+    return {
+        "strategy_continuation_present": "strategy_state" in continuation,
+        "strategy_observation_count": len(observations),
+    }
 
 
 def _resume_from_request(

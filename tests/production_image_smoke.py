@@ -17,6 +17,7 @@ import boto3
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import MountedDatasetHeadStore
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
+from thesistrace.product_state import product_state_counts
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_run.result import (
@@ -1267,55 +1268,6 @@ def _canonical_identity(settings: CoreSettings) -> dict[str, object]:
 
 def _product_state_counts(settings: CoreSettings) -> dict[str, int]:
     database = PostgresDatabase(settings.database_url)
-    database.open()
-    try:
-        with database.transaction() as transaction:
-            row = transaction.execute(
-                """
-                SELECT
-                    (SELECT count(*) FROM research_runs.runs) AS research_runs,
-                    (SELECT count(*) FROM research_runs.attempts) AS research_attempts,
-                    (SELECT count(*) FROM research_runs.progress) AS research_progress,
-                    (SELECT count(*) FROM research_runs.execution_checkpoints)
-                        AS research_checkpoints,
-                    (SELECT count(*) FROM research_runs.admission_requests)
-                        AS research_admission_receipts,
-                    (SELECT count(*) FROM research_runs.cancel_receipts)
-                        AS research_cancel_receipts,
-                    (SELECT count(*) FROM research_runs.start_tracking_receipts)
-                        AS research_tracking_receipts,
-                    (SELECT count(*) FROM daily_tracks.tracks) AS daily_tracks,
-                    (SELECT count(*) FROM daily_tracks.session_checkpoints)
-                        AS tracking_checkpoints,
-                    (SELECT count(*) FROM daily_tracks.session_progressions)
-                        AS tracking_progressions,
-                    (SELECT count(*) FROM daily_tracks.session_progression_attempts)
-                        AS tracking_attempts,
-                    (SELECT count(*) FROM daily_tracks.session_tracking_states)
-                        AS tracking_states,
-                    (SELECT count(*) FROM daily_tracks.retry_receipts)
-                        AS tracking_retry_receipts,
-                    (SELECT count(*) FROM daily_tracks.stop_receipts)
-                        AS tracking_stop_receipts,
-                    (SELECT count(*) FROM publication.manifests)
-                        AS publication_manifests,
-                    (SELECT count(*) FROM publication.manifest_objects)
-                        AS publication_manifest_objects,
-                    (SELECT count(*) FROM publication.objects) AS publication_objects,
-                    (SELECT count(*) FROM publication.object_deletions)
-                        AS publication_object_deletions,
-                    (SELECT count(*) FROM data.generation_pins) AS generation_pins
-                """
-            ).fetchone()
-        assert row is not None
-        counts = {key: int(value) for key, value in row.items()}
-        counts["rustfs_product_objects"] = _rustfs_product_object_count(settings)
-        return counts
-    finally:
-        database.close()
-
-
-def _rustfs_product_object_count(settings: CoreSettings) -> int:
     s3 = boto3.client(
         "s3",
         endpoint_url=settings.s3_endpoint_url,
@@ -1324,22 +1276,11 @@ def _rustfs_product_object_count(settings: CoreSettings) -> int:
         region_name=settings.s3_region,
     )
     try:
-        bucket_names = {bucket["Name"] for bucket in s3.list_buckets().get("Buckets", [])}
-        if settings.s3_bucket not in bucket_names:
-            return 0
-        count = 0
-        continuation_token: str | None = None
-        while True:
-            arguments: dict[str, object] = {"Bucket": settings.s3_bucket}
-            if continuation_token is not None:
-                arguments["ContinuationToken"] = continuation_token
-            page = s3.list_objects_v2(**arguments)
-            count += len(page.get("Contents", []))
-            if not page.get("IsTruncated"):
-                return count
-            continuation_token = str(page["NextContinuationToken"])
+        database.open()
+        return product_state_counts(database, s3, bucket=settings.s3_bucket)
     finally:
         s3.close()
+        database.close()
 
 
 def _request_json(

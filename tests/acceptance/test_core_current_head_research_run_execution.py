@@ -157,6 +157,8 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         assert sum(float(value) for value in phase_seconds.values()) <= float(
             received["child_calculation_seconds"]
         )
+        assert received["strategy_continuation_present"] is True
+        assert int(received["strategy_observation_count"]) == 3
         assert attempt_status_at_child_exit == ["running"]
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
@@ -187,7 +189,21 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         assert factor_accepted.status_code == 202, factor_accepted.text
         factor_run_id = str(factor_accepted.json()["id"])
         assert factor_accepted.json()["research_kind"] == "factor_evaluation"
-        assert runtime.research_runs.process_next() is True
+        factor_execution_events: list[dict[str, object]] = []
+        assert (
+            runtime.research_runs.process_next(
+                on_execution_event=factor_execution_events.append
+            )
+            is True
+        )
+        factor_received = next(
+            event
+            for event in factor_execution_events
+            if event["event"] == "research_execution_chunk_received"
+        )
+        assert factor_received["strategy_continuation_present"] is False
+        assert factor_received["strategy_observation_count"] == 0
+        assert factor_received["child_calculation_phase_seconds"]["strategy"] == 0
         factor_detail = client.get(f"/api/research-runs/{factor_run_id}").json()
         assert factor_detail["status"] == "succeeded"
         assert factor_detail["research_kind"] == "factor_evaluation"

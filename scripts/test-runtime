@@ -445,40 +445,58 @@ case "$command" in
     run_phase benchmark-prepare compose run --rm --no-deps -T initialize \
       python /qualification/long_research_qualification.py prepare \
       --output /smoke-evidence/long-research/preparation.json
-    run_phase benchmark-api compose up --detach --no-build \
-      --wait --wait-timeout 120 api
-    sample_index=0
-    while [ "$sample_index" -lt 5 ]; do
-      run_phase "benchmark-cold-$sample_index" compose run --rm --no-deps -T \
-        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-        research-worker python /qualification/long_research_qualification.py sample \
-        --phase cold --index "$sample_index" \
-        --log "/qualification-evidence/long-research/cold-$sample_index.log" \
-        --output "/qualification-evidence/long-research/cold-$sample_index.json"
-      sample_index=$((sample_index + 1))
+    for research_kind in factor_evaluation strategy_backtest; do
+      sample_index=0
+      while [ "$sample_index" -lt 5 ]; do
+        run_phase "benchmark-$research_kind-cold-$sample_index-product-state-reset" \
+          reset_product_state
+        run_phase "benchmark-$research_kind-cold-$sample_index-api" \
+          compose up --detach --no-build --wait --wait-timeout 120 api
+        run_phase "benchmark-$research_kind-cold-$sample_index" \
+          compose run --rm --no-deps -T \
+          -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+          research-worker python /qualification/long_research_qualification.py sample \
+          --research-kind "$research_kind" \
+          --phase cold --index "$sample_index" --require-fresh-product-state \
+          --log "/qualification-evidence/long-research/$research_kind-cold-$sample_index.log" \
+          --output "/qualification-evidence/long-research/$research_kind-cold-$sample_index.json"
+        sample_index=$((sample_index + 1))
+      done
     done
+    run_phase benchmark-warm-preload-product-state-reset reset_product_state
     run_phase benchmark-warm-preload compose run --rm --no-deps -T \
       research-worker python /qualification/long_research_qualification.py preload \
       --output /qualification-evidence/long-research/preload.json
-    sample_index=0
-    while [ "$sample_index" -lt 5 ]; do
-      run_phase "benchmark-warm-$sample_index-product-state-reset" reset_product_state
-      run_phase "benchmark-warm-$sample_index-api" compose up --detach --no-build \
-        --wait --wait-timeout 120 api
-      run_phase "benchmark-warm-$sample_index" compose run --rm --no-deps -T \
-        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-        research-worker python /qualification/long_research_qualification.py sample \
-        --phase warm --index "$sample_index" \
-        --require-fresh-product-state \
-        --log "/qualification-evidence/long-research/warm-$sample_index.log" \
-        --output "/qualification-evidence/long-research/warm-$sample_index.json"
-      sample_index=$((sample_index + 1))
+    for research_kind in factor_evaluation strategy_backtest; do
+      sample_index=0
+      while [ "$sample_index" -lt 5 ]; do
+        run_phase "benchmark-$research_kind-warm-$sample_index-product-state-reset" \
+          reset_product_state
+        run_phase "benchmark-$research_kind-warm-$sample_index-api" \
+          compose up --detach --no-build --wait --wait-timeout 120 api
+        run_phase "benchmark-$research_kind-warm-$sample_index" \
+          compose run --rm --no-deps -T \
+          -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+          research-worker python /qualification/long_research_qualification.py sample \
+          --research-kind "$research_kind" \
+          --phase warm --index "$sample_index" --require-fresh-product-state \
+          --log "/qualification-evidence/long-research/$research_kind-warm-$sample_index.log" \
+          --output "/qualification-evidence/long-research/$research_kind-warm-$sample_index.json"
+        sample_index=$((sample_index + 1))
+      done
     done
-    run_phase benchmark-cancellation compose run --rm --no-deps -T \
-      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      research-worker python /qualification/long_research_qualification.py cancel \
-      --log /qualification-evidence/long-research/cancellation.log \
-      --output /qualification-evidence/long-research/cancellation.json
+    for research_kind in factor_evaluation strategy_backtest; do
+      run_phase "benchmark-$research_kind-cancellation-product-state-reset" \
+        reset_product_state
+      run_phase "benchmark-$research_kind-cancellation-api" \
+        compose up --detach --no-build --wait --wait-timeout 120 api
+      run_phase "benchmark-$research_kind-cancellation" compose run --rm --no-deps -T \
+        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+        research-worker python /qualification/long_research_qualification.py cancel \
+        --research-kind "$research_kind" \
+        --log "/qualification-evidence/long-research/$research_kind-cancellation.log" \
+        --output "/qualification-evidence/long-research/$research_kind-cancellation.json"
+    done
     backend_image=$(runtime_image_name initialize)
     image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
     run_phase benchmark-qualification compose run --rm --no-deps -T initialize \
