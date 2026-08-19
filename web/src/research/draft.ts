@@ -126,6 +126,21 @@ export function researchInputs(draft: ResearchDraft): ResearchInputs {
   return inputs;
 }
 
+export function selectResearchKind(
+  draft: ResearchDraft,
+  researchKind: ResearchInputs["researchKind"],
+): ResearchDraft {
+  return researchKind === "factor_evaluation" ? {
+    ...draft,
+    researchKind,
+    holdingsCount: "",
+    rebalanceEverySessions: "",
+  } : {
+    ...draft,
+    researchKind,
+  };
+}
+
 export function beginResearchRun(
   draft: ResearchDraft,
   folderId: string,

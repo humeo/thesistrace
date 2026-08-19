@@ -6,6 +6,7 @@ import {
   ResearchOrganizationPanel,
   ResearchRunProgressView,
   ResearchRunHistory,
+  ResearchResultView,
   TerminalStrategyStateView,
   UseAsDraftPanel,
   isTerminalResearch,
@@ -128,7 +129,70 @@ describe("ResearchRunHistory", () => {
     expect(markup).toContain("2026-08-13T01:02:03Z");
     expect(markup).toContain("succeeded");
     expect(markup).toContain("ts_mean(close_adj, 20)");
+    expect(markup).toContain("Factor Evaluation");
+    expect(markup).toContain("Strategy Backtest");
     expect(markup.match(/>Mean</g)).toHaveLength(2);
+  });
+});
+
+const FACTOR_RESULT = {
+  factor: {
+    horizons: Object.fromEntries(([1, 5, 20] as const).map((horizon) => [String(horizon), {
+      horizon,
+      summary: {
+        ic: { mean: 0.015, sample_deviation: 0.2, icir: 0.132, positive_fraction: 0.6, valid_session_count: 8 },
+        rank_ic: { mean: 0.035, sample_deviation: 0.1, icir: 0.283, positive_fraction: 0.7, valid_session_count: 9 },
+        quantile_returns: { q1: -0.1, q2: -0.05, q3: 0, q4: 0.05, q5: 0.1 },
+        top_bottom_return: 0.2,
+      },
+      coverage: {
+        signal_session_count: 10,
+        ic_valid_session_count: 8,
+        rank_ic_valid_session_count: 9,
+        quantile_valid_session_count: 7,
+      },
+    }])) as Record<"1" | "5" | "20", {
+      horizon: 1 | 5 | 20;
+      summary: {
+        ic: { mean: number; sample_deviation: number; icir: number; positive_fraction: number; valid_session_count: number };
+        rank_ic: { mean: number; sample_deviation: number; icir: number; positive_fraction: number; valid_session_count: number };
+        quantile_returns: Record<"q1" | "q2" | "q3" | "q4" | "q5", number>;
+        top_bottom_return: number;
+      };
+      coverage: {
+        signal_session_count: number;
+        ic_valid_session_count: number;
+        rank_ic_valid_session_count: number;
+        quantile_valid_session_count: number;
+      };
+    }>,
+  },
+  provenance: {
+    schema_version: "research-result-v1",
+    research_run_id: "run_factor",
+    immutable_input_sha256: "a".repeat(64),
+    calculation_contracts: {},
+    semantic_versions: {},
+    research_kind: "factor_evaluation" as const,
+  },
+};
+
+describe("ResearchResultView", () => {
+  it("renders exactly the three Factor horizons and their four metrics plus coverage", () => {
+    const markup = renderToStaticMarkup(<ResearchResultView result={FACTOR_RESULT} />);
+
+    for (const horizon of [1, 5, 20]) {
+      expect(markup).toContain(`aria-label="${horizon}-session Factor"`);
+    }
+    expect(markup.match(/<span>Rank IC<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/<span>Rank ICIR<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/<span>IC<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/<span>ICIR<\/span>/g)).toHaveLength(3);
+    expect(markup.match(/Rank IC coverage 9\//g)).toHaveLength(3);
+    expect(markup.match(/IC coverage 8\//g)).toHaveLength(3);
+    expect(markup).not.toContain("Strategy Summary");
+    expect(markup).not.toContain("Daily Observations");
+    expect(markup).not.toContain("Terminal Strategy State");
   });
 });
 

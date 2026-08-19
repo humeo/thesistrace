@@ -888,6 +888,10 @@ function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
         Rank IC coverage {horizon.coverage.rank_ic_valid_session_count}/
         {horizon.coverage.signal_session_count}
       </p>
+      <p className="factor-coverage">
+        IC coverage {horizon.coverage.ic_valid_session_count}/
+        {horizon.coverage.signal_session_count}
+      </p>
     </section>
   );
 }
