@@ -333,6 +333,7 @@ def _admit(api_origin: str, profile: dict[str, object], *, request_id: str) -> d
             "formula": profile["formula"],
             "universe": profile["universe"],
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 100,
             "rebalance_every_sessions": 5,
         },

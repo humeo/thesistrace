@@ -4,6 +4,7 @@ export type EditorState = {
 };
 
 export type ResearchInputs = {
+  researchKind: "factor_evaluation" | "strategy_backtest";
   name: string;
   formula: string;
   hypothesis: string;
@@ -21,7 +22,7 @@ export type PendingResearchRun = {
   inputs: ResearchInputs;
 };
 
-export type ResearchRunAdmissionCommand = {
+type CommonResearchRunAdmissionCommand = {
   request_id: string;
   folder_id: string;
   name: string | null;
@@ -31,20 +32,32 @@ export type ResearchRunAdmissionCommand = {
   end_date: string;
   universe: string;
   neutralization: string;
-  holdings_count: number;
-  rebalance_every_sessions: number;
 };
 
-export type FrozenResearchAuthorableInput = {
+export type ResearchRunAdmissionCommand = CommonResearchRunAdmissionCommand & ({
+  research_kind: "factor_evaluation";
+} | {
+  research_kind: "strategy_backtest";
+  holdings_count: number;
+  rebalance_every_sessions: number;
+});
+
+type CommonFrozenResearchAuthorableInput = {
   formula: string;
   hypothesis: string | null;
   start_date: string;
   end_date: string;
   universe: string;
   neutralization: string;
+};
+
+export type FrozenResearchAuthorableInput = CommonFrozenResearchAuthorableInput & ({
+  research_kind: "factor_evaluation";
+} | {
+  research_kind: "strategy_backtest";
   holdings_count: number;
   rebalance_every_sessions: number;
-};
+});
 
 export type ResearchDraft = ResearchInputs & {
   editor: EditorState;
@@ -58,6 +71,7 @@ const MAX_TEXT_LENGTH = 10_000;
 
 export function emptyResearchDraft(): ResearchDraft {
   return {
+    researchKind: "factor_evaluation",
     name: "",
     formula: "",
     hypothesis: "",
@@ -126,7 +140,7 @@ export function beginResearchRun(
     : { requestId: createRequestId(), folderId, inputs };
   return {
     draft: { ...draft, pendingAdmission: pending },
-    command: {
+    command: pending.inputs.researchKind === "factor_evaluation" ? {
       request_id: pending.requestId,
       folder_id: pending.folderId,
       name: pending.inputs.name.trim() === "" ? null : pending.inputs.name,
@@ -136,6 +150,18 @@ export function beginResearchRun(
       end_date: pending.inputs.endDate,
       universe: pending.inputs.universe,
       neutralization: pending.inputs.neutralization,
+      research_kind: "factor_evaluation",
+    } : {
+      request_id: pending.requestId,
+      folder_id: pending.folderId,
+      name: pending.inputs.name.trim() === "" ? null : pending.inputs.name,
+      formula: pending.inputs.formula,
+      hypothesis: pending.inputs.hypothesis.trim() === "" ? null : pending.inputs.hypothesis,
+      start_date: pending.inputs.startDate,
+      end_date: pending.inputs.endDate,
+      universe: pending.inputs.universe,
+      neutralization: pending.inputs.neutralization,
+      research_kind: "strategy_backtest",
       holdings_count: Number(pending.inputs.holdingsCount),
       rebalance_every_sessions: Number(pending.inputs.rebalanceEverySessions),
     },
@@ -169,21 +195,23 @@ export function finishResearchRun(
 export function isCompleteResearchInputs(inputs: ResearchInputs): boolean {
   const holdingsCount = Number(inputs.holdingsCount);
   const rebalanceEverySessions = Number(inputs.rebalanceEverySessions);
-  return inputs.formula.trim() !== "" &&
+  const commonComplete = inputs.formula.trim() !== "" &&
     /^\d{4}-\d{2}-\d{2}$/.test(inputs.startDate) &&
     /^\d{4}-\d{2}-\d{2}$/.test(inputs.endDate) &&
     inputs.startDate <= inputs.endDate &&
     ["top300", "top1000", "top2000", "top3000"].includes(inputs.universe) &&
-    ["none", "industry"].includes(inputs.neutralization) &&
+    ["none", "industry"].includes(inputs.neutralization);
+  return commonComplete && (inputs.researchKind === "factor_evaluation" || (
     Number.isInteger(holdingsCount) && holdingsCount >= 1 && holdingsCount <= 100 &&
     Number.isInteger(rebalanceEverySessions) &&
-    rebalanceEverySessions >= 1 && rebalanceEverySessions <= 20;
+    rebalanceEverySessions >= 1 && rebalanceEverySessions <= 20
+  ));
 }
 
 export function hasUnexecutedChanges(draft: ResearchDraft): boolean {
   const current = researchInputs(draft);
   if (draft.lastAdmittedBaseline === null) {
-    return Object.values(current).some((value) => value !== "");
+    return JSON.stringify(current) !== JSON.stringify(researchInputs(emptyResearchDraft()));
   }
   return JSON.stringify(current) !== JSON.stringify(draft.lastAdmittedBaseline);
 }
@@ -203,8 +231,13 @@ export function useResearchAsDraft(
     endDate: input.end_date,
     universe: input.universe,
     neutralization: input.neutralization,
-    holdingsCount: String(input.holdings_count),
-    rebalanceEverySessions: String(input.rebalance_every_sessions),
+    researchKind: input.research_kind,
+    holdingsCount: input.research_kind === "strategy_backtest"
+      ? String(input.holdings_count)
+      : "",
+    rebalanceEverySessions: input.research_kind === "strategy_backtest"
+      ? String(input.rebalance_every_sessions)
+      : "",
   };
   if (
     wouldOverwriteUnexecutedAuthorableValue(current, nextInputs) &&
@@ -232,6 +265,7 @@ function wouldOverwriteUnexecutedAuthorableValue(
     "endDate",
     "universe",
     "neutralization",
+    "researchKind",
     "holdingsCount",
     "rebalanceEverySessions",
   ] as const;
@@ -280,6 +314,7 @@ function readPendingResearchRun(value: unknown): PendingResearchRun | null {
 function readInputs(value: unknown): ResearchInputs | null {
   if (!isRecord(value)) return null;
   const keys = [
+    "researchKind",
     "name",
     "formula",
     "hypothesis",
@@ -293,6 +328,7 @@ function readInputs(value: unknown): ResearchInputs | null {
   if (keys.some((key) => typeof value[key] !== "string")) return null;
   const strings = value as Record<(typeof keys)[number], string>;
   if (
+    !["factor_evaluation", "strategy_backtest"].includes(strings.researchKind) ||
     strings.formula.length > MAX_FORMULA_LENGTH ||
     keys.some((key) => strings[key].length > MAX_TEXT_LENGTH)
   ) return null;

@@ -3,7 +3,13 @@ from contracts import FIELD_BINDINGS, PCT_CHANGE_20
 from series import aligned_market_data
 
 from thesistrace.fixture import build_fixture
-from thesistrace.research_kernel import KernelState, RunInput, RunOutput, run
+from thesistrace.research_kernel import (
+    KernelState,
+    RunInput,
+    RunOutput,
+    StrategyRunInput,
+    run,
+)
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
     evaluate_alpha_matrix,
@@ -109,13 +115,16 @@ def accepted_kernel_run(
             effective_alpha_lookback=20,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
-            holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_interval"]),
-            initial_cash_cny=str(strategy["initial_cash_cny"]),
-            commission_rate_all_in=str(costs["commission_rate_all_in"]),
-            commission_min_cny=str(costs["commission_min_cny"]),
-            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            research_kind="strategy_backtest",
+            strategy=StrategyRunInput(
+                holdings_count=int(strategy["holdings_count"]),
+                rebalance_interval=int(strategy["rebalance_interval"]),
+                initial_cash_cny=str(strategy["initial_cash_cny"]),
+                commission_rate_all_in=str(costs["commission_rate_all_in"]),
+                commission_min_cny=str(costs["commission_min_cny"]),
+                stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+                transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            ),
             research_start_session=str(canonical["research_calendar"][20]),
             research_end_session=str(canonical["research_calendar"][-1]),
         )

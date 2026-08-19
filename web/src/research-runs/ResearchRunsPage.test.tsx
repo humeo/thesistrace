@@ -107,6 +107,7 @@ describe("ResearchRunHistory", () => {
         start_date: "2026-08-01",
         end_date: "2026-08-05",
         formula_summary: "ts_mean(close_adj, 20)",
+        research_kind: "factor_evaluation" as const,
       },
       {
         id: "run_bbbbbbbb",
@@ -117,6 +118,7 @@ describe("ResearchRunHistory", () => {
         start_date: "2026-08-01",
         end_date: "2026-08-05",
         formula_summary: "ts_mean(close_adj, 60)",
+        research_kind: "strategy_backtest" as const,
       },
     ];
 
@@ -148,6 +150,7 @@ describe("ResearchOrganizationPanel", () => {
           start_date: "2026-08-01",
           end_date: "2026-08-05",
           formula_summary: "close_adj",
+          research_kind: "strategy_backtest",
         }}
       />,
     );
@@ -180,6 +183,7 @@ describe("UseAsDraftPanel", () => {
           end_date: "2026-08-05",
           universe: "top300",
           neutralization: "none",
+          research_kind: "strategy_backtest",
           holdings_count: 10,
           rebalance_every_sessions: 2,
         }}

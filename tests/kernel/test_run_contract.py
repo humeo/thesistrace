@@ -4,7 +4,14 @@ from dataclasses import FrozenInstanceError
 import pytest
 from series import aligned_market_data
 
-from thesistrace.research_kernel import KernelRunError, KernelState, RunInput, RunOutput, run
+from thesistrace.research_kernel import (
+    KernelRunError,
+    KernelState,
+    RunInput,
+    RunOutput,
+    StrategyRunInput,
+    run,
+)
 from thesistrace.research_kernel.alpha_expression import validate_normalized_alpha
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_run.result import build_result_payload
@@ -52,6 +59,7 @@ def test_strategy_ledger_is_transient_and_rejected_from_product_state(
 
     result = build_result_payload(
         accepted_kernel_run,
+        research_kind="strategy_backtest",
         rebalance_interval=5,
         universe="top300",
     )
@@ -131,13 +139,16 @@ def test_kernel_run_input_rejects_string_alpha_expression(
             effective_alpha_lookback=20,
             universe=str(definition["universe"]),
             neutralization=str(definition["neutralization"]),
-            holdings_count=int(strategy["holdings_count"]),
-            rebalance_interval=int(strategy["rebalance_interval"]),
-            initial_cash_cny=str(strategy["initial_cash_cny"]),
-            commission_rate_all_in=str(costs["commission_rate_all_in"]),
-            commission_min_cny=str(costs["commission_min_cny"]),
-            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            research_kind="strategy_backtest",
+            strategy=StrategyRunInput(
+                holdings_count=int(strategy["holdings_count"]),
+                rebalance_interval=int(strategy["rebalance_interval"]),
+                initial_cash_cny=str(strategy["initial_cash_cny"]),
+                commission_rate_all_in=str(costs["commission_rate_all_in"]),
+                commission_min_cny=str(costs["commission_min_cny"]),
+                stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+                transfer_fee_rate=str(costs["transfer_fee_rate"]),
+            ),
         )
 
 
@@ -188,13 +199,16 @@ def _run_input(
         ).effective_lookback,
         universe=str(definition["universe"]),
         neutralization=str(definition["neutralization"]),
-        holdings_count=int(strategy["holdings_count"]),
-        rebalance_interval=int(strategy["rebalance_interval"]),
-        initial_cash_cny=str(strategy["initial_cash_cny"]),
-        commission_rate_all_in=str(costs["commission_rate_all_in"]),
-        commission_min_cny=str(costs["commission_min_cny"]),
-        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-        transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=int(strategy["holdings_count"]),
+            rebalance_interval=int(strategy["rebalance_interval"]),
+            initial_cash_cny=str(strategy["initial_cash_cny"]),
+            commission_rate_all_in=str(costs["commission_rate_all_in"]),
+            commission_min_cny=str(costs["commission_min_cny"]),
+            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        ),
         research_start_session=str(calendar[20]) if include_period else None,
         research_end_session=str(calendar[-1]) if include_period else None,
     )

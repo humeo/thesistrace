@@ -161,7 +161,7 @@ def test_running_cancel_cooperatively_stops_child_before_terminal_state(
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     _publish_head(settings, price_offset=0)
-    child_started = Event()
+    child_ready = Event()
     release_child = Event()
     events: list[dict[str, object]] = []
 
@@ -169,18 +169,18 @@ def test_running_cancel_cooperatively_stops_child_before_terminal_state(
         runtime = client.app.state.core_runtime
         run_id = _admit_run(client, request_id="cooperative-running-cancel")
 
-        def hold_started_child(event: dict[str, object]) -> None:
+        def hold_ready_child(event: dict[str, object]) -> None:
             events.append(event)
-            if event["event"] == "research_execution_child_started":
-                child_started.set()
+            if event["event"] == "research_execution_chunk_received":
+                child_ready.set()
                 assert release_child.wait(timeout=20)
 
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = executor.submit(
                 runtime.research_runs.process_next,
-                on_execution_event=hold_started_child,
+                on_execution_event=hold_ready_child,
             )
-            assert child_started.wait(timeout=20)
+            assert child_ready.wait(timeout=20)
             cancel_started = monotonic()
             cancelled = client.post(
                 f"/api/research-runs/{run_id}/cancel",
@@ -582,6 +582,7 @@ def test_terminal_run_wins_over_late_cancel(tmp_path: Path) -> None:
                 "start_date",
                 "end_date",
                 "formula_summary",
+                "research_kind",
             )
         }
         assert client.get(f"/api/research-runs/{run_id}").json() == before

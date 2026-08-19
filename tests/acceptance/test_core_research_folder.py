@@ -1,11 +1,18 @@
+from datetime import date
+
 import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.alpha_language import alpha_language
+from thesistrace.data import DatasetAdmissionSnapshot
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.research_folder import DEFAULT_FOLDER_ID
+from thesistrace.research_run import ImmutableRunInput, ResearchRunService
+from thesistrace.research_run.models import ResearchRunAdmissionCommand
 
 
 @pytest.mark.skipif(
@@ -90,24 +97,36 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
         ).status_code == 409
         assert client.delete(f"/api/research-folders/{DEFAULT_FOLDER_ID}").status_code == 409
 
-        database = PostgresDatabase(settings.database_url)
-        database.open()
-        try:
-            with database.transaction() as transaction:
-                transaction.execute(
-                    """
-                    INSERT INTO research_runs.runs (
-                        id, folder_id, name,
-                        requested_start_date, requested_end_date, status, immutable_input
-                    ) VALUES (
-                        'run_folder_guard', %s, 'Folder guard',
-                        DATE '2026-08-03', DATE '2026-08-04', 'succeeded', '{}'::jsonb
-                    )
-                    """,
-                    (folder["id"],),
-                )
-        finally:
-            database.close()
+        sessions = (date(2026, 8, 3), date(2026, 8, 4))
+        snapshot = DatasetAdmissionSnapshot(
+            generation_manifest_sha256="a" * 64,
+            data_through_session=sessions[-1],
+            coverage_start=sessions[0],
+            coverage_end=sessions[-1],
+            research_sessions=sessions,
+            available_field_ids=frozenset({"price.close.adjusted"}),
+            maximum_universe_cardinality=lambda _universe, _start, _end: 1,
+        )
+        admitted = ResearchRunService(
+            client.app.state.core_runtime.database,
+            compile_formula=alpha_language.compile,
+            current_dataset=lambda: snapshot,
+        ).admit(
+            TypeAdapter(ResearchRunAdmissionCommand).validate_python(
+                {
+                    "request_id": "folder-guard",
+                    "folder_id": folder["id"],
+                    "name": "Folder guard",
+                    "formula": "close_adj",
+                    "start_date": sessions[0].isoformat(),
+                    "end_date": sessions[-1].isoformat(),
+                    "universe": "top300",
+                    "neutralization": "none",
+                    "research_kind": "factor_evaluation",
+                }
+            )
+        )
+        assert admitted.status == "queued"
 
         nonempty = client.delete(f"/api/research-folders/{folder['id']}")
         assert nonempty.status_code == 409
@@ -131,12 +150,13 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
                     ORDER BY ordinal_position
                     """
                 ).fetchall()
-                run = transaction.execute(
+                stored_run = transaction.execute(
                     """
-                    SELECT folder_id, immutable_input
+                    SELECT folder_id, status, immutable_input
                     FROM research_runs.runs
-                    WHERE id = 'run_folder_guard'
-                    """
+                    WHERE id = %s
+                    """,
+                    (admitted.id,),
                 ).fetchone()
             assert [row["column_name"] for row in columns] == [
                 "id",
@@ -145,6 +165,13 @@ def test_custom_folder_mutations_and_database_guards_are_transactional() -> None
                 "created_at",
                 "updated_at",
             ]
-            assert run == {"folder_id": folder["id"], "immutable_input": {}}
+            assert stored_run is not None
+            assert stored_run["folder_id"] == folder["id"]
+            assert stored_run["status"] == "queued"
+            immutable_input = ImmutableRunInput.model_validate(
+                stored_run["immutable_input"]
+            )
+            assert immutable_input.research_kind == "factor_evaluation"
+            assert immutable_input.canonical_value() == stored_run["immutable_input"]
         finally:
             database.close()

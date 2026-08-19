@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         KernelState,
         RunInput,
         RunOutput,
+        StrategyRunInput,
         run,
     )
 
@@ -25,6 +26,7 @@ __all__ = [
     "KernelState",
     "RunInput",
     "RunOutput",
+    "StrategyRunInput",
     "advance",
     "advance_continuation",
     "continuation_snapshot",
@@ -74,6 +76,7 @@ def __getattr__(name: str) -> object:
         "KernelState",
         "RunInput",
         "RunOutput",
+        "StrategyRunInput",
         "run",
     }:
         from thesistrace.research_kernel.kernel_run import (
@@ -82,6 +85,7 @@ def __getattr__(name: str) -> object:
             KernelState,
             RunInput,
             RunOutput,
+            StrategyRunInput,
             run,
         )
 
@@ -91,6 +95,7 @@ def __getattr__(name: str) -> object:
             "KernelState": KernelState,
             "RunInput": RunInput,
             "RunOutput": RunOutput,
+            "StrategyRunInput": StrategyRunInput,
             "run": run,
         }[name]
     raise AttributeError(name)

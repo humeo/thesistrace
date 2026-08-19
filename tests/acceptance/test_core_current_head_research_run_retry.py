@@ -33,7 +33,7 @@ from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
-from thesistrace.research_kernel import RunInput, run
+from thesistrace.research_kernel import RunInput, StrategyRunInput, run
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
@@ -680,6 +680,7 @@ def _run_command(
         "formula": "close_adj",
         "universe": "top300",
         "neutralization": "none",
+        "research_kind": "strategy_backtest",
         "holdings_count": 1,
         "rebalance_every_sessions": 1,
     }
@@ -769,18 +770,26 @@ def _reference_result(
             effective_alpha_lookback=0,
             universe="top300",
             neutralization="none",
-            holdings_count=1,
-            rebalance_interval=1,
-            initial_cash_cny="10000000",
-            commission_rate_all_in="0.0003",
-            commission_min_cny="5",
-            stamp_duty_sell_rate="0.0005",
-            transfer_fee_rate="0.00001",
+            research_kind="strategy_backtest",
+            strategy=StrategyRunInput(
+                holdings_count=1,
+                rebalance_interval=1,
+                initial_cash_cny="10000000",
+                commission_rate_all_in="0.0003",
+                commission_min_cny="5",
+                stamp_duty_sell_rate="0.0005",
+                transfer_fee_rate="0.00001",
+            ),
             research_start_session=sessions[0],
             research_end_session=sessions[-1],
         )
     )
-    return build_result_payload(output, rebalance_interval=1, universe="top300")
+    return build_result_payload(
+        output,
+        research_kind="strategy_backtest",
+        rebalance_interval=1,
+        universe="top300",
+    )
 
 
 def _read_result(runtime, stored: dict[str, object]) -> dict[str, object]:
@@ -791,7 +800,8 @@ def _read_result(runtime, stored: dict[str, object]) -> dict[str, object]:
                 kind="research.result",
                 provenance=stored["result_provenance"],
             )
-        )
+        ),
+        research_kind="strategy_backtest",
     )
 
 

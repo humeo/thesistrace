@@ -10,7 +10,12 @@ from decimal import Decimal
 
 from thesistrace.daily_track.models import TrackingOrigin
 from thesistrace.research_kernel.kernel_advance import continuation_snapshot
-from thesistrace.research_kernel.kernel_run import KernelRunError, KernelState, RunInput
+from thesistrace.research_kernel.kernel_run import (
+    KernelRunError,
+    KernelState,
+    RunInput,
+    StrategyRunInput,
+)
 from thesistrace.research_kernel.numeric import canonical_decimal
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import (
@@ -30,6 +35,7 @@ def project_tracking_checkpoint(
 ) -> dict[str, object]:
     """Project transient Kernel internals into bounded immutable product truth."""
     run_input = state.run_input_with_research_data(state.research_data_snapshot())
+    strategy_input = _strategy_input(run_input)
     output = state.output_snapshot()
     alpha = _mapping(output.get("alpha_matrix"), "Alpha Matrix")
     factor = _mapping(output.get("factor_evaluation"), "Factor Evaluation")
@@ -41,18 +47,19 @@ def project_tracking_checkpoint(
         "origin_session": state.origin_session,
         "boundary_session": state.boundary_session,
         "run_input": {
+            "research_kind": "strategy_backtest",
             "alpha_expression": run_input.alpha_expression_snapshot(),
             "field_bindings": run_input.field_bindings_snapshot(),
             "effective_alpha_lookback": run_input.alpha_execution_plan().effective_lookback,
             "universe": run_input.universe,
             "neutralization": run_input.neutralization,
-            "holdings_count": run_input.holdings_count,
-            "rebalance_interval": run_input.rebalance_interval,
-            "initial_cash_cny": run_input.initial_cash_cny,
-            "commission_rate_all_in": run_input.commission_rate_all_in,
-            "commission_min_cny": run_input.commission_min_cny,
-            "stamp_duty_sell_rate": run_input.stamp_duty_sell_rate,
-            "transfer_fee_rate": run_input.transfer_fee_rate,
+            "holdings_count": strategy_input.holdings_count,
+            "rebalance_interval": strategy_input.rebalance_interval,
+            "initial_cash_cny": strategy_input.initial_cash_cny,
+            "commission_rate_all_in": strategy_input.commission_rate_all_in,
+            "commission_min_cny": strategy_input.commission_min_cny,
+            "stamp_duty_sell_rate": strategy_input.stamp_duty_sell_rate,
+            "transfer_fee_rate": strategy_input.transfer_fee_rate,
         },
         "alpha_state": {
             "expression": alpha["expression"],
@@ -78,6 +85,8 @@ def restore_tracking_checkpoint(
 ) -> KernelState:
     """Restore the compact authoritative state; transient values remain absent."""
     contract = _mapping(value.get("run_input"), "Tracking run input")
+    if contract.get("research_kind") != "strategy_backtest":
+        raise KernelRunError("DailyTrack Checkpoint requires Strategy Backtest input")
     run_input = RunInput(
         research_data=research_data,
         alpha_expression=contract["alpha_expression"],
@@ -88,13 +97,16 @@ def restore_tracking_checkpoint(
         effective_alpha_lookback=int(contract["effective_alpha_lookback"]),
         universe=str(contract["universe"]),
         neutralization=str(contract["neutralization"]),
-        holdings_count=int(contract["holdings_count"]),
-        rebalance_interval=int(contract["rebalance_interval"]),
-        initial_cash_cny=str(contract["initial_cash_cny"]),
-        commission_rate_all_in=str(contract["commission_rate_all_in"]),
-        commission_min_cny=str(contract["commission_min_cny"]),
-        stamp_duty_sell_rate=str(contract["stamp_duty_sell_rate"]),
-        transfer_fee_rate=str(contract["transfer_fee_rate"]),
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=int(contract["holdings_count"]),
+            rebalance_interval=int(contract["rebalance_interval"]),
+            initial_cash_cny=str(contract["initial_cash_cny"]),
+            commission_rate_all_in=str(contract["commission_rate_all_in"]),
+            commission_min_cny=str(contract["commission_min_cny"]),
+            stamp_duty_sell_rate=str(contract["stamp_duty_sell_rate"]),
+            transfer_fee_rate=str(contract["transfer_fee_rate"]),
+        ),
     )
     sessions = research_sessions(research_data)
     if not sessions or sessions[-1] != str(value["boundary_session"]):
@@ -236,8 +248,8 @@ def terminal_strategy_state(state: KernelState) -> dict[str, object]:
     metric_state = _mapping(strategy.get("metric_state"), "Strategy metric state")
     terminal = daily[-1]
     session_count = int(metric_state["session_count"])
-    rebalance_interval = state.run_input_with_research_data(
-        state.research_data_snapshot()
+    rebalance_interval = _strategy_input(
+        state.run_input_with_research_data(state.research_data_snapshot())
     ).rebalance_interval
     return {
         "session": str(terminal["session"]),
@@ -287,13 +299,16 @@ def _origin_run_input(
         effective_alpha_lookback=int(admission["effective_lookback"]),
         universe=str(immutable_input["universe"]),
         neutralization=str(immutable_input["neutralization"]),
-        holdings_count=int(strategy["holdings_count"]),
-        rebalance_interval=int(strategy["rebalance_every_sessions"]),
-        initial_cash_cny=str(strategy["initial_cash_cny"]),
-        commission_rate_all_in=str(costs["commission_rate_all_in"]),
-        commission_min_cny=str(costs["commission_min_cny"]),
-        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-        transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=int(strategy["holdings_count"]),
+            rebalance_interval=int(strategy["rebalance_every_sessions"]),
+            initial_cash_cny=str(strategy["initial_cash_cny"]),
+            commission_rate_all_in=str(costs["commission_rate_all_in"]),
+            commission_min_cny=str(costs["commission_min_cny"]),
+            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        ),
     )
 
 
@@ -364,8 +379,8 @@ def _strategy_state(
     continuation_terminal = resume_daily[-1]
     report_count = int(metric_state["session_count"])
     final_report_count = report_count + 1
-    rebalance_interval = state.run_input_with_research_data(
-        state.research_data_snapshot()
+    rebalance_interval = _strategy_input(
+        state.run_input_with_research_data(state.research_data_snapshot())
     ).rebalance_interval
     return {
         "summary": _compact_strategy_metrics(metrics),
@@ -474,6 +489,12 @@ def _mapping(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise KernelRunError(f"{name} is invalid")
     return value
+
+
+def _strategy_input(run_input: RunInput) -> StrategyRunInput:
+    if run_input.research_kind != "strategy_backtest" or run_input.strategy is None:
+        raise KernelRunError("DailyTrack requires Strategy Backtest input")
+    return run_input.strategy
 
 
 def _rows(value: object, name: str) -> list[Mapping[str, object]]:

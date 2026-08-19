@@ -12,6 +12,9 @@ import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
+from psycopg.errors import CheckViolation
+from psycopg.types.json import Jsonb
+from pydantic import TypeAdapter
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
@@ -128,6 +131,66 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL runtime is not configured",
 )
+def test_current_schema_rejects_missing_null_or_malformed_research_kind_contract() -> None:
+    settings = CoreSettings.from_environment()
+    drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)):
+        malformed_inputs = (
+            {},
+            {"research_kind": None},
+            {"research_kind": 1},
+            {
+                "research_kind": "factor_evaluation",
+                "strategy": None,
+            },
+            {
+                "research_kind": "strategy_backtest",
+                "strategy": None,
+                "costs": {},
+                "risk_free_rate": "0",
+            },
+            {
+                "research_kind": "strategy_backtest",
+                "strategy": {},
+                "costs": None,
+                "risk_free_rate": "0",
+            },
+            {
+                "research_kind": "strategy_backtest",
+                "strategy": {},
+                "costs": {},
+                "risk_free_rate": None,
+            },
+        )
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            for index, immutable_input in enumerate(malformed_inputs):
+                with pytest.raises(CheckViolation):
+                    with database.transaction() as transaction:
+                        transaction.execute(
+                            """
+                            INSERT INTO research_runs.runs (
+                                id, folder_id, name, requested_start_date,
+                                requested_end_date, status, immutable_input
+                            ) VALUES (%s, 'folder_default', 'Malformed', %s, %s, 'queued', %s)
+                            """,
+                            (
+                                f"run_malformed_{index}",
+                                date(2026, 8, 3),
+                                date(2026, 8, 4),
+                                Jsonb(immutable_input),
+                            ),
+                        )
+        finally:
+            database.close()
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL runtime is not configured",
+)
 def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan() -> None:
     settings = CoreSettings.from_environment()
     drop_product_schemas(settings)
@@ -141,7 +204,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
         available_field_ids=frozenset({"price.close.adjusted"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 3000,
     )
-    command = ResearchRunAdmissionCommand.model_validate(
+    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
         {
             **_valid_command("direct-over-budget"),
             "formula": "ts_mean(close_adj, 252)",
@@ -210,6 +273,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "start_date": "2026-08-03",
             "end_date": "2026-08-04",
             "formula_summary": "close_adj",
+            "research_kind": "strategy_backtest",
         }
 
         concurrent_command = _valid_command("direct-concurrent")
@@ -239,6 +303,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "field_bindings": {"price.close.adjusted": "close_adj"},
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "strategy": {
                 "kind": "long_only_top_n_equal_weight",
                 "holdings_count": 1,
@@ -315,6 +380,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "end_date": "2026-08-04",
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         }
@@ -476,6 +542,7 @@ def _valid_command(request_id: str) -> dict[str, object]:
         "end_date": "2026-08-04",
         "universe": "top300",
         "neutralization": "none",
+        "research_kind": "strategy_backtest",
         "holdings_count": 1,
         "rebalance_every_sessions": 1,
     }

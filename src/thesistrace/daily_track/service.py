@@ -2307,6 +2307,7 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
     return {
         "schema_version": origin.verified_result.schema_version,
         "research_run_id": origin.seed_run_id,
+        "research_kind": "strategy_backtest",
         "immutable_input_sha256": hashlib.sha256(
             canonical_json_bytes(origin.immutable_input)
         ).hexdigest(),

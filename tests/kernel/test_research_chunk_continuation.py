@@ -5,19 +5,25 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 import numpy as np
+import pytest
 
 from thesistrace.alpha_language import alpha_language
 from thesistrace.publication import VerifiedBundle, VerifiedPayload
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
 from thesistrace.research_kernel.equivalence import equivalence_bytes
 from thesistrace.research_kernel.factor import evaluate_factor
-from thesistrace.research_kernel.kernel_run import RunInput, run_columnar_chunk
+from thesistrace.research_kernel.kernel_run import (
+    RunInput,
+    StrategyRunInput,
+    run_columnar_chunk,
+)
 from thesistrace.research_kernel.research_chunks import (
     advance_factor_state,
     empty_factor_state,
     empty_research_continuation,
     execute_research_chunk,
     finalize_factor_state,
+    validated_research_continuation,
 )
 from thesistrace.research_run.result import (
     RESULT_DAILY_PARTITION_PREFIX,
@@ -87,6 +93,31 @@ def test_factor_observations_fold_into_chunk_invariant_bounded_aggregate_state()
             "quantile_valid_session_count": 3,
         }
     assert "daily" not in repr(state)
+
+
+def test_research_continuation_requires_the_exact_frozen_kind_shape() -> None:
+    factor = empty_research_continuation("factor_evaluation")
+    strategy = empty_research_continuation("strategy_backtest")
+
+    assert validated_research_continuation(
+        factor,
+        research_kind="factor_evaluation",
+    ) == factor
+    assert validated_research_continuation(
+        strategy,
+        research_kind="strategy_backtest",
+    ) == strategy
+
+    with pytest.raises(ValueError, match="continuation is invalid"):
+        validated_research_continuation(
+            {**factor, "strategy_state": None},
+            research_kind="factor_evaluation",
+        )
+    with pytest.raises(ValueError, match="continuation is invalid"):
+        validated_research_continuation(
+            {name: value for name, value in strategy.items() if name != "strategy_checksum"},
+            research_kind="strategy_backtest",
+        )
 
 
 @dataclass(frozen=True)
@@ -236,13 +267,16 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         effective_alpha_lookback=compiled.effective_lookback,
         universe="top300",
         neutralization="industry",
-        holdings_count=5,
-        rebalance_interval=5,
-        initial_cash_cny="10000000",
-        commission_rate_all_in="0.0003",
-        commission_min_cny="5",
-        stamp_duty_sell_rate="0.0005",
-        transfer_fee_rate="0.00001",
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=5,
+            rebalance_interval=5,
+            initial_cash_cny="10000000",
+            commission_rate_all_in="0.0003",
+            commission_min_cny="5",
+            stamp_duty_sell_rate="0.0005",
+            transfer_fee_rate="0.00001",
+        ),
         research_start_session=sessions[20],
         research_end_session=sessions[-1],
     )
@@ -253,12 +287,13 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         research_data=fixture,
         research_sessions=research_sessions,
         final_chunk=True,
-        continuation=empty_research_continuation(),
+        continuation=empty_research_continuation("strategy_backtest"),
         cancellation_check=lambda: None,
     )
     legacy = build_result_payload(
         run_columnar_chunk(run_input, cancellation_check=lambda: None),
-        rebalance_interval=run_input.rebalance_interval,
+        research_kind="strategy_backtest",
+        rebalance_interval=5,
         universe=run_input.universe,
     )
     for boundaries in (
@@ -266,7 +301,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         ((20, 63), (63, 80)),
         ((20, 64), (64, 80)),
     ):
-        continuation = empty_research_continuation()
+        continuation = empty_research_continuation("strategy_backtest")
         chunk_results = []
         for ordinal, (start, end) in enumerate(boundaries, start=1):
             calculation = execute_research_chunk(
@@ -303,6 +338,45 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         strategy_state = final.continuation["strategy_state"]
         assert len(strategy_state["daily"]) == 1
         assert "daily" not in repr(final.continuation["factor_state"])
+
+    factor_run_input = RunInput(
+        research_data=fixture,
+        alpha_expression=compiled.expression,
+        field_bindings={
+            field_id: identifier
+            for identifier, field_id in compiled.field_ids_by_identifier.items()
+        },
+        effective_alpha_lookback=compiled.effective_lookback,
+        universe="top300",
+        neutralization="industry",
+        research_kind="factor_evaluation",
+        strategy=None,
+        research_start_session=sessions[20],
+        research_end_session=sessions[-1],
+    )
+    factor_continuation = empty_research_continuation("factor_evaluation")
+    factor_results = []
+    for ordinal, (start, end) in enumerate(((20, 64), (64, 80)), start=1):
+        calculation = execute_research_chunk(
+            run_input=factor_run_input,
+            research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
+            research_sessions=sessions[start:end],
+            final_chunk=ordinal == 2,
+            continuation=factor_continuation,
+            cancellation_check=lambda: None,
+        )
+        factor_results.append(calculation)
+        factor_continuation = calculation.continuation
+
+    factor_final = factor_results[-1]
+    assert all(result.phase_seconds["strategy"] == 0.0 for result in factor_results)
+    assert all(not result.strategy_daily_observations for result in factor_results)
+    assert "strategy_state" not in factor_final.continuation
+    assert "strategy_checksum" not in factor_final.continuation
+    assert set(factor_final.final_values or {}) == {"factor_summary"}
+    assert equivalence_bytes(
+        (factor_final.final_values or {})["factor_summary"]
+    ) == equivalence_bytes(uninterrupted.final_values["factor_summary"])
 
 
 def _read_staged_chunk_result(
@@ -363,5 +437,6 @@ def _read_staged_chunk_result(
             manifest_sha256="f" * 64,
             provenance={},
             payloads=payloads,
-        )
+        ),
+        research_kind="strategy_backtest",
     )

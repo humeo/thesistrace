@@ -68,7 +68,29 @@ CREATE TABLE research_runs.runs (
     CONSTRAINT runs_check CHECK ((requested_start_date <= requested_end_date)),
     CONSTRAINT runs_name_check CHECK (name = btrim(name) AND name <> ''),
     CONSTRAINT runs_execution_fence_check CHECK ((execution_fence >= 0)),
-    CONSTRAINT runs_immutable_input_check CHECK ((jsonb_typeof(immutable_input) = 'object'::text)),
+    CONSTRAINT runs_immutable_input_check CHECK (
+        jsonb_typeof(immutable_input) = 'object'::text
+        AND immutable_input ? 'research_kind'
+        AND jsonb_typeof(immutable_input->'research_kind') = 'string'::text
+        AND immutable_input->>'research_kind' IN ('factor_evaluation', 'strategy_backtest')
+        AND (
+            (
+                immutable_input->>'research_kind' = 'factor_evaluation'
+                AND NOT immutable_input ? 'strategy'
+                AND NOT immutable_input ? 'costs'
+                AND NOT immutable_input ? 'risk_free_rate'
+            )
+            OR (
+                immutable_input->>'research_kind' = 'strategy_backtest'
+                AND immutable_input ? 'strategy'
+                AND jsonb_typeof(immutable_input->'strategy') = 'object'::text
+                AND immutable_input ? 'costs'
+                AND jsonb_typeof(immutable_input->'costs') = 'object'::text
+                AND immutable_input ? 'risk_free_rate'
+                AND jsonb_typeof(immutable_input->'risk_free_rate') = 'string'::text
+            )
+        )
+    ),
     CONSTRAINT runs_result_provenance_check CHECK (((result_provenance IS NULL) OR (jsonb_typeof(result_provenance) = 'object'::text))),
     CONSTRAINT runs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'cancelling'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );

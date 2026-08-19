@@ -53,7 +53,8 @@ RESULT_BUDGET_SESSION_BLOCK = 504
 RESULT_BUDGET_BYTE_BLOCK = 1_048_576
 RESULT_DAILY_PARTITION_SESSION_COUNT = 504
 RESULT_DAILY_PARTITION_PREFIX = "strategy_daily_observations.part-"
-RESULT_VALUE_NAMES = frozenset(
+FACTOR_RESULT_VALUE_NAMES = frozenset({"factor_summary"})
+STRATEGY_RESULT_VALUE_NAMES = frozenset(
     {
         "factor_summary",
         "strategy_summary",
@@ -113,8 +114,12 @@ def enforce_result_bundle_budget(
 
 def result_publication_payloads(
     result: Mapping[str, object],
+    *,
+    research_kind: str,
 ) -> dict[str, JsonPayload | ParquetRowsPayload]:
-    _validate_result_values(result)
+    _validate_result_values(result, research_kind=research_kind)
+    if research_kind == "factor_evaluation":
+        return {"factor_summary": JsonPayload(copy.deepcopy(result["factor_summary"]))}
     observations = result.get("strategy_daily_observations")
     if (
         not isinstance(observations, list)
@@ -160,8 +165,18 @@ def result_publication_payloads(
 def result_publication_payloads_from_staged(
     final_values: Mapping[str, object],
     partitions: Sequence[tuple[StagedPayload, int, str, str]],
+    *,
+    research_kind: str,
 ) -> dict[str, JsonPayload | StagedPayload]:
-    if set(final_values) != {
+    if research_kind == "factor_evaluation":
+        if set(final_values) != FACTOR_RESULT_VALUE_NAMES or partitions:
+            raise ResearchResultError("Factor Evaluation Result values are invalid")
+        try:
+            FactorSummaryValue.model_validate(final_values["factor_summary"])
+        except ValidationError as error:
+            raise ResearchResultError("Factor Evaluation Result is invalid") from error
+        return {"factor_summary": JsonPayload(copy.deepcopy(final_values["factor_summary"]))}
+    if research_kind != "strategy_backtest" or set(final_values) != {
         "factor_summary",
         "strategy_summary",
         "terminal_strategy_state",
@@ -221,28 +236,47 @@ def result_publication_payloads_from_staged(
     return payloads
 
 
-def read_result_bundle(bundle: VerifiedBundle) -> dict[str, object]:
-    if bundle.kind != "research.result" or not RESULT_VALUE_NAMES <= set(bundle.payloads):
-        raise ResearchResultError("Result Bundle must contain exactly four durable values")
+def read_result_bundle(
+    bundle: VerifiedBundle,
+    *,
+    research_kind: str,
+) -> dict[str, object]:
+    if bundle.kind != "research.result":
+        raise ResearchResultError("Result Bundle kind is invalid")
+    if research_kind == "factor_evaluation":
+        if set(bundle.payloads) != FACTOR_RESULT_VALUE_NAMES:
+            raise ResearchResultError("Factor Evaluation Result must contain only Factor Summary")
+        result = {"factor_summary": _read_json_value(bundle, "factor_summary")}
+        _validate_result_values(result, research_kind=research_kind)
+        return result
+    if research_kind != "strategy_backtest" or not STRATEGY_RESULT_VALUE_NAMES <= set(
+        bundle.payloads
+    ):
+        raise ResearchResultError("Strategy Backtest Result is incomplete")
     result = {
         "factor_summary": _read_json_value(bundle, "factor_summary"),
         "strategy_summary": _read_json_value(bundle, "strategy_summary"),
         "strategy_daily_observations": _read_daily_observations(bundle),
         "terminal_strategy_state": _read_json_value(bundle, "terminal_strategy_state"),
     }
-    _validate_result_values(result)
+    _validate_result_values(result, research_kind=research_kind)
     return result
 
 
 def build_result_payload(
     output: RunOutput,
     *,
-    rebalance_interval: int,
-    universe: str,
+    research_kind: str,
+    rebalance_interval: int | None = None,
+    universe: str | None = None,
 ) -> dict[str, object]:
     """Project transient Kernel output into the bounded durable Result contract."""
     artifacts = output.artifacts_snapshot()
     factor = _mapping(artifacts, "factor_evaluation")
+    if research_kind == "factor_evaluation":
+        return {"factor_summary": _factor_summary(factor)}
+    if research_kind != "strategy_backtest" or rebalance_interval is None or universe is None:
+        raise ResearchResultError("Strategy Backtest Result inputs are incomplete")
     strategy = _mapping(artifacts, "strategy_backtest")
     daily = _rows(strategy, "daily")
     if not daily:
@@ -473,7 +507,7 @@ def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
         "format": "canonical-parquet",
         "writer_contract": STRATEGY_DAILY_OBSERVATIONS_CONTRACT.descriptor(),
     }
-    expected_payload_names = set(RESULT_VALUE_NAMES)
+    expected_payload_names = set(STRATEGY_RESULT_VALUE_NAMES)
     rows: list[dict[str, object]] = []
     prior_session: str | None = None
     for index, value in enumerate(partitions):
@@ -521,9 +555,19 @@ def _read_daily_observations(bundle: VerifiedBundle) -> list[dict[str, object]]:
     return rows
 
 
-def _validate_result_values(result: Mapping[str, object]) -> None:
-    if set(result) != RESULT_VALUE_NAMES:
-        raise ResearchResultError("Result must contain exactly four durable values")
+def _validate_result_values(result: Mapping[str, object], *, research_kind: str) -> None:
+    if research_kind == "factor_evaluation":
+        if set(result) != FACTOR_RESULT_VALUE_NAMES:
+            raise ResearchResultError("Factor Evaluation Result must contain only Factor Summary")
+        try:
+            FactorSummaryValue.model_validate(result["factor_summary"])
+        except ValidationError as error:
+            raise ResearchResultError(
+                "Result does not match its durable schema: invalid durable type"
+            ) from error
+        return
+    if research_kind != "strategy_backtest" or set(result) != STRATEGY_RESULT_VALUE_NAMES:
+        raise ResearchResultError("Strategy Backtest Result must contain four durable values")
     try:
         FactorSummaryValue.model_validate(result["factor_summary"])
         StrategySummaryValue.model_validate(result["strategy_summary"])

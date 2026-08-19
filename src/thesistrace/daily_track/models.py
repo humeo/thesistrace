@@ -231,6 +231,7 @@ class DailyTrackDetail(BaseModel):
 class KernelRunInputSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    research_kind: Literal["strategy_backtest"]
     alpha_expression: dict[str, object]
     field_bindings: dict[str, str]
     effective_alpha_lookback: int

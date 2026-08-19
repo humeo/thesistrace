@@ -130,6 +130,7 @@ def _before_restart(
             "formula": "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         },
@@ -164,6 +165,7 @@ def _before_restart(
             "formula": "close_adj",
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         },
@@ -191,6 +193,7 @@ def _before_restart(
             "formula": "cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         },
@@ -217,6 +220,7 @@ def _before_restart(
             "formula": "cs_rank(pct_change(close_adj, 20))",
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 1,
             "rebalance_every_sessions": 5,
         },
@@ -287,6 +291,7 @@ def _after_worker_loss(
             "formula": "cs_rank(pct_change(close_adj, 20))",
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 1,
             "rebalance_every_sessions": 5,
         },
@@ -761,7 +766,9 @@ def _durable_result(settings: CoreSettings, run_id: str) -> dict[str, object]:
                 provenance=provenance,
             )
         )
-        assert set(read_result_bundle(bundle)) == {
+        assert set(
+            read_result_bundle(bundle, research_kind="strategy_backtest")
+        ) == {
             "factor_summary",
             "strategy_summary",
             "strategy_daily_observations",

@@ -6,7 +6,7 @@ from decimal import Decimal
 from contracts import CLOSE_ADJUSTED, FIELD_BINDINGS
 from series import aligned_market_data
 
-from thesistrace.research_kernel import RunInput, run
+from thesistrace.research_kernel import RunInput, StrategyRunInput, run
 from thesistrace.research_kernel.alpha import evaluate_alpha_matrix, validate_alpha
 from thesistrace.research_kernel.strategy import run_strategy
 
@@ -660,13 +660,16 @@ def _kernel_run(
             effective_alpha_lookback=0,
             universe="manual",
             neutralization="none",
-            holdings_count=holdings_count,
-            rebalance_interval=rebalance_interval,
-            initial_cash_cny="10000000",
-            commission_rate_all_in="0.0003",
-            commission_min_cny="5",
-            stamp_duty_sell_rate="0.0005",
-            transfer_fee_rate="0.00001",
+            research_kind="strategy_backtest",
+            strategy=StrategyRunInput(
+                holdings_count=holdings_count,
+                rebalance_interval=rebalance_interval,
+                initial_cash_cny="10000000",
+                commission_rate_all_in="0.0003",
+                commission_min_cny="5",
+                stamp_duty_sell_rate="0.0005",
+                transfer_fee_rate="0.00001",
+            ),
             research_start_session=SESSIONS[0],
             research_end_session=SESSIONS[-1],
         )

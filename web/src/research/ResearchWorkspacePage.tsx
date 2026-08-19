@@ -451,6 +451,18 @@ export function ResearchDraftWorkspace({
       <section className="research-run-settings" id="research-parameters" aria-label="Research parameters">
           <header><h2>Research parameters</h2></header>
           <div className="run-configuration-grid">
+            <label>Research type
+              <select
+                onChange={(event) => updateDraft((current) => ({
+                  ...current,
+                  researchKind: event.target.value as ResearchDraft["researchKind"],
+                }))}
+                value={draft.researchKind}
+              >
+                <option value="factor_evaluation">Factor Evaluation</option>
+                <option value="strategy_backtest">Strategy Backtest</option>
+              </select>
+            </label>
             <ResearchDateFields
               coverageEnd={coverage?.end ?? null}
               coverageStart={coverage?.start ?? null}
@@ -475,12 +487,16 @@ export function ResearchDraftWorkspace({
                 <option value="industry">Industry</option>
               </select>
             </label>
-            <label>Holdings count
-              <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, holdingsCount: event.target.value }))} value={draft.holdingsCount} />
-            </label>
-            <label>Rebalance sessions
-              <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, rebalanceEverySessions: event.target.value }))} value={draft.rebalanceEverySessions} />
-            </label>
+            {draft.researchKind === "strategy_backtest" ? (
+              <>
+                <label>Holdings count
+                  <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, holdingsCount: event.target.value }))} value={draft.holdingsCount} />
+                </label>
+                <label>Rebalance sessions
+                  <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, rebalanceEverySessions: event.target.value }))} value={draft.rebalanceEverySessions} />
+                </label>
+              </>
+            ) : null}
             <div className="research-notes">
               <label htmlFor="research-notes">Notes</label>
               <textarea

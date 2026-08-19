@@ -54,6 +54,7 @@ from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
     RunInput,
+    StrategyRunInput,
     advance,
     advance_continuation,
     empty_continuation,
@@ -160,11 +161,60 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
                     kind="research.result",
                     provenance=stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind="strategy_backtest",
         )
         assert canonical_json_bytes(actual) == canonical_json_bytes(
             _reference_result(settings, generation_id, runtime.database, run_id)
         )
+
+        factor_accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "composite-factor-evaluation",
+                formula="cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
+                research_kind="factor_evaluation",
+            ),
+        )
+        assert factor_accepted.status_code == 202, factor_accepted.text
+        factor_run_id = str(factor_accepted.json()["id"])
+        assert factor_accepted.json()["research_kind"] == "factor_evaluation"
+        assert runtime.research_runs.process_next() is True
+        factor_detail = client.get(f"/api/research-runs/{factor_run_id}").json()
+        assert factor_detail["status"] == "succeeded"
+        assert factor_detail["research_kind"] == "factor_evaluation"
+        assert factor_detail["progress"]["completed_research_sessions"] == 3
+        assert factor_detail["progress"]["last_completed_research_session"] == (
+            "2026-08-05"
+        )
+        assert set(factor_detail["result"]) == {"factor", "provenance"}
+        assert factor_detail["result"]["provenance"]["research_kind"] == (
+            "factor_evaluation"
+        )
+        factor_stored = _stored_execution(settings, factor_run_id)
+        factor_bundle = runtime.publication.read(
+            PublishedRef(
+                manifest_sha256=str(factor_stored["result_manifest_sha256"]),
+                kind="research.result",
+                provenance=factor_stored["result_provenance"],
+            )
+        )
+        assert set(factor_bundle.payloads) == {"factor_summary"}
+        factor_result = read_result_bundle(
+            factor_bundle,
+            research_kind="factor_evaluation",
+        )
+        assert canonical_json_bytes(factor_result["factor_summary"]) == (
+            canonical_json_bytes(actual["factor_summary"])
+        )
+        factor_track = client.post(
+            f"/api/research-runs/{factor_run_id}/daily-tracks",
+            json={"request_id": "factor-evaluation-track"},
+        )
+        assert factor_track.status_code == 409
+        assert factor_track.json() == {
+            "detail": "Start Tracking requires a Strategy Backtest Result"
+        }
 
         financial_only = client.post(
             "/api/research-runs",
@@ -182,7 +232,8 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
                     kind="research.result",
                     provenance=financial_stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind="strategy_backtest",
         )
         assert canonical_json_bytes(financial_actual) == canonical_json_bytes(
             _reference_result(
@@ -1406,6 +1457,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "start_date",
             "end_date",
             "formula_summary",
+            "research_kind",
             "input",
             "progress",
             "result",
@@ -1419,6 +1471,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert set(public_run["result"]["provenance"]) == {
             "schema_version",
             "research_run_id",
+            "research_kind",
             "immutable_input_sha256",
             "calculation_contracts",
             "semantic_versions",
@@ -2929,10 +2982,12 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
                     kind="research.result",
                     provenance=stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind="strategy_backtest",
         )
         expected = build_result_payload(
             run(_kernel_input(canonical_a, sessions=sessions)),
+            research_kind="strategy_backtest",
             rebalance_interval=1,
             universe="top300",
         )
@@ -3332,7 +3387,8 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
                     kind="research.result",
                     provenance=stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind="strategy_backtest",
         )
         observations = result["strategy_daily_observations"]
         assert [row["session"] for row in observations] == list(sessions)
@@ -3568,8 +3624,9 @@ def _run_command(
     formula: str = "close_adj",
     start_date: str = "2026-08-03",
     end_date: str = "2026-08-05",
+    research_kind: str = "strategy_backtest",
 ) -> dict[str, object]:
-    return {
+    command: dict[str, object] = {
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": "Attempt-scoped current data",
@@ -3578,9 +3635,16 @@ def _run_command(
         "formula": formula,
         "universe": "top300",
         "neutralization": "none",
-        "holdings_count": 1,
-        "rebalance_every_sessions": 1,
+        "research_kind": research_kind,
     }
+    if research_kind == "strategy_backtest":
+        command.update(
+            {
+                "holdings_count": 1,
+                "rebalance_every_sessions": 1,
+            }
+        )
+    return command
 
 
 def _canonical(
@@ -4125,13 +4189,16 @@ def _kernel_input(
         effective_alpha_lookback=0,
         universe="top300",
         neutralization="none",
-        holdings_count=1,
-        rebalance_interval=1,
-        initial_cash_cny="10000000",
-        commission_rate_all_in="0.0003",
-        commission_min_cny="5",
-        stamp_duty_sell_rate="0.0005",
-        transfer_fee_rate="0.00001",
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=1,
+            rebalance_interval=1,
+            initial_cash_cny="10000000",
+            commission_rate_all_in="0.0003",
+            commission_min_cny="5",
+            stamp_duty_sell_rate="0.0005",
+            transfer_fee_rate="0.00001",
+        ),
         research_start_session=sessions[0],
         research_end_session=sessions[-1],
     )
@@ -4185,17 +4252,21 @@ def _reference_result(
                 effective_alpha_lookback=immutable.alpha_admission.effective_lookback,
                 universe=immutable.universe,
                 neutralization=immutable.neutralization,
-                holdings_count=int(strategy["holdings_count"]),
-                rebalance_interval=int(strategy["rebalance_every_sessions"]),
-                initial_cash_cny=str(strategy["initial_cash_cny"]),
-                commission_rate_all_in=str(costs["commission_rate_all_in"]),
-                commission_min_cny=str(costs["commission_min_cny"]),
-                stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-                transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                research_kind="strategy_backtest",
+                strategy=StrategyRunInput(
+                    holdings_count=int(strategy["holdings_count"]),
+                    rebalance_interval=int(strategy["rebalance_every_sessions"]),
+                    initial_cash_cny=str(strategy["initial_cash_cny"]),
+                    commission_rate_all_in=str(costs["commission_rate_all_in"]),
+                    commission_min_cny=str(costs["commission_min_cny"]),
+                    stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+                    transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                ),
                 research_start_session=selected[0],
                 research_end_session=selected[-1],
             )
         ),
+        research_kind="strategy_backtest",
         rebalance_interval=int(strategy["rebalance_every_sessions"]),
         universe=immutable.universe,
     )

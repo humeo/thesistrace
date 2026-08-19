@@ -128,6 +128,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top1000",
       neutralization: "industry",
+      research_kind: "strategy_backtest",
       holdings_count: 25,
       rebalance_every_sessions: 5,
     }, confirmDiscard);
@@ -166,6 +167,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top300",
       neutralization: "none",
+      research_kind: "strategy_backtest",
       holdings_count: 10,
       rebalance_every_sessions: 2,
     }, confirmDiscard);
@@ -184,6 +186,7 @@ describe("browser Research Draft", () => {
       endDate: "2026-08-05",
       universe: "top300",
       neutralization: "none",
+      researchKind: "strategy_backtest" as const,
       holdingsCount: "10",
       rebalanceEverySessions: "2",
     };
@@ -200,6 +203,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top300",
       neutralization: "none",
+      research_kind: "strategy_backtest",
       holdings_count: 10,
       rebalance_every_sessions: 2,
     });
@@ -277,7 +281,7 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close_adj" })).toBe(true);
     const admitted = { ...emptyResearchDraft(), formula: "close_adj" };
     expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: {
-      name: "", formula: "close_adj", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", holdingsCount: "", rebalanceEverySessions: "",
+      researchKind: "factor_evaluation", name: "", formula: "close_adj", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", holdingsCount: "", rebalanceEverySessions: "",
     } })).toBe(false);
   });
 
