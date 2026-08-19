@@ -592,6 +592,7 @@ def _calculate_chunks(
             continuation = calculation.continuation
             observations = calculation.strategy_daily_observations
             final_values = calculation.final_values
+            del calculation, run_input, research_data
         else:
             lookback = immutable_input.alpha_admission.effective_lookback
             continuation["rolling_tail_sessions"] = (
