@@ -37,8 +37,14 @@ ROOT = Path(__file__).resolve().parents[2]
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -47,12 +53,20 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="current-data-queued-cancel")
-        second_id = _admit_run(client, request_id="current-data-conflict-target")
+        run_id = _admit_run(
+            client,
+            request_id=f"current-data-queued-cancel-{research_kind}",
+            research_kind=research_kind,
+        )
+        second_id = _admit_run(
+            client,
+            request_id=f"current-data-conflict-target-{research_kind}",
+            research_kind=research_kind,
+        )
 
         cancelled = client.post(
             f"/api/research-runs/{run_id}/cancel",
-            json={"request_id": "current-data-cancel"},
+            json={"request_id": f"current-data-cancel-{research_kind}"},
         )
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelled"
@@ -65,7 +79,7 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
 
         replay = client.post(
             f"/api/research-runs/{run_id}/cancel",
-            json={"request_id": "current-data-cancel"},
+            json={"request_id": f"current-data-cancel-{research_kind}"},
         )
         assert replay.status_code == 200
         assert replay.json() == cancelled.json()
@@ -73,7 +87,7 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
 
         conflict = client.post(
             f"/api/research-runs/{second_id}/cancel",
-            json={"request_id": "current-data-cancel"},
+            json={"request_id": f"current-data-cancel-{research_kind}"},
         )
         assert conflict.status_code == 409
         malformed = client.post(
@@ -93,8 +107,14 @@ def test_queued_cancel_replays_and_conflicts_without_malformed_receipt(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -105,7 +125,11 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="current-data-running-cancel")
+        run_id = _admit_run(
+            client,
+            request_id=f"current-data-running-cancel-{research_kind}",
+            research_kind=research_kind,
+        )
 
         def pause_after_prepare(stage: str, _run_id: str) -> None:
             if stage == "prepared":
@@ -126,7 +150,9 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
             try:
                 cancelled = client.post(
                     f"/api/research-runs/{run_id}/cancel",
-                    json={"request_id": "current-data-running-cancel-request"},
+                    json={
+                        "request_id": f"current-data-running-cancel-request-{research_kind}"
+                    },
                 )
                 assert cancelled.status_code == 200
                 assert cancelled.json()["status"] == "cancelling"
@@ -139,11 +165,12 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
         assert _attempt_status(runtime.database, run_id) == "cancelled"
         assert _active_pin_count(runtime.database) == 0
         assert _run_storage(runtime.database, run_id)["result_count"] == 0
+        assert _private_checkpoint_count(runtime.database, run_id) == 0
 
     with TestClient(create_app(settings)) as restarted:
         replay = restarted.post(
             f"/api/research-runs/{run_id}/cancel",
-            json={"request_id": "current-data-running-cancel-request"},
+            json={"request_id": f"current-data-running-cancel-request-{research_kind}"},
         )
         assert replay.status_code == 200
         assert replay.json() == cancelled.json()
@@ -154,8 +181,14 @@ def test_running_cancel_fences_a_stale_prepared_worker_and_survives_restart(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_running_cancel_cooperatively_stops_child_before_terminal_state(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -167,7 +200,11 @@ def test_running_cancel_cooperatively_stops_child_before_terminal_state(
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="cooperative-running-cancel")
+        run_id = _admit_run(
+            client,
+            request_id=f"cooperative-running-cancel-{research_kind}",
+            research_kind=research_kind,
+        )
 
         def hold_ready_child(event: dict[str, object]) -> None:
             events.append(event)
@@ -184,7 +221,7 @@ def test_running_cancel_cooperatively_stops_child_before_terminal_state(
             cancel_started = monotonic()
             cancelled = client.post(
                 f"/api/research-runs/{run_id}/cancel",
-                json={"request_id": "cooperative-running-cancel-request"},
+                json={"request_id": f"cooperative-running-cancel-request-{research_kind}"},
             )
             assert cancelled.status_code == 200
             assert cancelled.json()["status"] == "cancelling"
@@ -207,8 +244,14 @@ def test_running_cancel_cooperatively_stops_child_before_terminal_state(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_running_cancel_forces_an_unresponsive_child_to_exit_within_budget(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -219,7 +262,11 @@ def test_running_cancel_forces_an_unresponsive_child_to_exit_within_budget(
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="forced-running-cancel")
+        run_id = _admit_run(
+            client,
+            request_id=f"forced-running-cancel-{research_kind}",
+            research_kind=research_kind,
+        )
 
         def stop_started_child(event: dict[str, object]) -> None:
             events.append(event)
@@ -236,7 +283,7 @@ def test_running_cancel_forces_an_unresponsive_child_to_exit_within_budget(
             cancel_started = monotonic()
             cancelled = client.post(
                 f"/api/research-runs/{run_id}/cancel",
-                json={"request_id": "forced-running-cancel-request"},
+                json={"request_id": f"forced-running-cancel-request-{research_kind}"},
             )
             assert cancelled.status_code == 200
             assert cancelled.json()["status"] == "cancelling"
@@ -256,8 +303,14 @@ def test_running_cancel_forces_an_unresponsive_child_to_exit_within_budget(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_lost_supervisor_cancel_waits_for_lease_expiry_before_recovery(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -267,7 +320,11 @@ def test_lost_supervisor_cancel_waits_for_lease_expiry_before_recovery(
     owner: subprocess.Popen[str] | None = None
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="lost-supervisor-cancel")
+        run_id = _admit_run(
+            client,
+            request_id=f"lost-supervisor-cancel-{research_kind}",
+            research_kind=research_kind,
+        )
         try:
             owner = _start_claim_barrier_worker(settings, "research")
             assert _wait_for_barrier_claim(owner)["resource_id"] == run_id
@@ -280,7 +337,7 @@ def test_lost_supervisor_cancel_waits_for_lease_expiry_before_recovery(
 
         cancelled = client.post(
             f"/api/research-runs/{run_id}/cancel",
-            json={"request_id": "lost-supervisor-cancel-request"},
+            json={"request_id": f"lost-supervisor-cancel-request-{research_kind}"},
         )
         assert cancelled.status_code == 200
         assert cancelled.json()["status"] == "cancelling"
@@ -304,8 +361,14 @@ def test_lost_supervisor_cancel_waits_for_lease_expiry_before_recovery(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_stale_claim_is_rejected_before_any_result_objects_are_staged(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -316,7 +379,11 @@ def test_stale_claim_is_rejected_before_any_result_objects_are_staged(
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="current-data-pre-stage-fence")
+        run_id = _admit_run(
+            client,
+            request_id=f"current-data-pre-stage-fence-{research_kind}",
+            research_kind=research_kind,
+        )
         before = _publication_object_keys(settings)
 
         def pause_after_claim(stage: str, _run_id: str) -> None:
@@ -338,7 +405,9 @@ def test_stale_claim_is_rejected_before_any_result_objects_are_staged(
             try:
                 cancelled = client.post(
                     f"/api/research-runs/{run_id}/cancel",
-                    json={"request_id": "current-data-pre-stage-fence-cancel"},
+                    json={
+                        "request_id": f"current-data-pre-stage-fence-cancel-{research_kind}"
+                    },
                 )
                 assert cancelled.status_code == 200
                 assert cancelled.json()["status"] == "cancelling"
@@ -701,6 +770,20 @@ def _active_pin_count(database: PostgresDatabase) -> int:
     with database.transaction() as transaction:
         row = transaction.execute(
             "SELECT count(*) AS count FROM data.generation_pins WHERE status = 'active'"
+        ).fetchone()
+    assert row is not None
+    return int(row["count"])
+
+
+def _private_checkpoint_count(database: PostgresDatabase, run_id: str) -> int:
+    with database.transaction() as transaction:
+        row = transaction.execute(
+            """
+            SELECT count(*) AS count
+            FROM research_runs.execution_checkpoints
+            WHERE run_id = %s
+            """,
+            (run_id,),
         ).fetchone()
     assert row is not None
     return int(row["count"])

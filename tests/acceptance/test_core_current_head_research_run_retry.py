@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import signal
 import subprocess
@@ -34,6 +36,10 @@ from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import RunInput, StrategyRunInput, run
+from thesistrace.research_kernel.research_chunks import (
+    empty_research_continuation,
+    execute_research_chunk,
+)
 from thesistrace.research_run import ResearchRunService
 from thesistrace.research_run.execution import SupervisedResearchExecutor
 from thesistrace.research_run.result import build_result_payload, read_result_bundle
@@ -160,8 +166,14 @@ class _BlockedWorker:
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -171,14 +183,25 @@ def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
     with TestClient(create_app(settings)) as first_process:
         run_id = _admit_run(
             first_process,
-            request_id="retry-current-head",
+            request_id=f"retry-current-head-{research_kind}",
             sessions=LONG_SESSIONS,
+            research_kind=research_kind,
         )
+        frozen_plan = _stored_run(settings, run_id)["immutable_input"]["execution_plan"]
         with _blocked_worker(settings, run_id, after_checkpoint_count=2) as blocked:
             blocked.wait_until_blocked()
             assert _checkpoint_ordinals(settings, run_id) == [1, 2]
             committed = first_process.get(f"/api/research-runs/{run_id}").json()
             assert committed["progress"]["committed_chunk_count"] == 2
+            assert committed["progress"]["completed_research_sessions"] == 128
+            assert committed["progress"]["phase"] == "research"
+            if research_kind == "factor_evaluation":
+                _assert_factor_checkpoint_evidence(
+                    first_process.app.state.core_runtime,
+                    settings,
+                    run_id,
+                    expected_generation_id=head_a,
+                )
             blocked.terminate()
             assert blocked.process.returncode != 0, blocked.stdout + blocked.stderr
         assert _attempts(settings, run_id) == [
@@ -222,15 +245,26 @@ def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
             },
         ]
         stored = _stored_run(settings, run_id)
+        assert stored["immutable_input"]["execution_plan"] == frozen_plan
         assert stored["result_provenance"]["data_generation_id"] == head_a
         assert stored["result_provenance"]["data_through_session"] == LONG_SESSIONS[-1]
-        assert set(_read_result(runtime, stored)) == {
-            "factor_summary",
-            "strategy_summary",
-            "strategy_daily_observations",
-            "terminal_strategy_state",
-        }
-        expected = _reference_result(settings, head_a, sessions=LONG_SESSIONS)
+        expected_result_names = (
+            {"factor_summary"}
+            if research_kind == "factor_evaluation"
+            else {
+                "factor_summary",
+                "strategy_summary",
+                "strategy_daily_observations",
+                "terminal_strategy_state",
+            }
+        )
+        assert set(_read_result(runtime, stored)) == expected_result_names
+        expected = _reference_result(
+            settings,
+            head_a,
+            sessions=LONG_SESSIONS,
+            research_kind=research_kind,
+        )
         assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(expected)
         assert len(_attempts(settings, run_id)) == 2
         assert _checkpoint_ordinals(settings, run_id) == []
@@ -240,8 +274,14 @@ def test_worker_loss_retry_resumes_committed_chunks_on_the_frozen_generation(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_publication_retry_reuses_the_validated_final_checkpoint(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -252,8 +292,9 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
         runtime = client.app.state.core_runtime
         run_id = _admit_run(
             client,
-            request_id="retry-final-publication",
+            request_id=f"retry-final-publication-{research_kind}",
             sessions=LONG_SESSIONS,
+            research_kind=research_kind,
         )
         _install_transient_result_publication_failure(settings)
         try:
@@ -285,7 +326,12 @@ def test_publication_retry_reuses_the_validated_final_checkpoint(
         stored = _stored_run(settings, run_id)
         assert stored["result_provenance"]["data_generation_id"] == head
         assert canonical_json_bytes(_read_result(runtime, stored)) == canonical_json_bytes(
-            _reference_result(settings, head, sessions=LONG_SESSIONS)
+            _reference_result(
+                settings,
+                head,
+                sessions=LONG_SESSIONS,
+                research_kind=research_kind,
+            )
         )
 
 
@@ -376,7 +422,15 @@ def test_retry_rejects_checkpoint_after_runtime_semantics_change(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_real_pool_timeout_retries_without_replacing_the_run(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
+def test_real_pool_timeout_retries_without_replacing_the_run(
+    tmp_path: Path,
+    research_kind: str,
+) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
@@ -384,7 +438,11 @@ def test_real_pool_timeout_retries_without_replacing_the_run(tmp_path: Path) -> 
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="retry-pool-timeout")
+        run_id = _admit_run(
+            client,
+            request_id=f"retry-pool-timeout-{research_kind}",
+            research_kind=research_kind,
+        )
         constrained = _InspectablePostgresDatabase(
             settings.database_url,
             pool_max_size=1,
@@ -447,8 +505,14 @@ def test_real_pool_timeout_retries_without_replacing_the_run(tmp_path: Path) -> 
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
 def test_real_publication_unavailability_retries_without_replacing_the_run(
     tmp_path: Path,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -457,7 +521,11 @@ def test_real_publication_unavailability_retries_without_replacing_the_run(
 
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
-        run_id = _admit_run(client, request_id="retry-publication-unavailable")
+        run_id = _admit_run(
+            client,
+            request_id=f"retry-publication-unavailable-{research_kind}",
+            research_kind=research_kind,
+        )
         unavailable_s3 = boto3.client(
             "s3",
             endpoint_url="http://127.0.0.1:1",
@@ -538,14 +606,26 @@ def test_real_child_execution_memory_breach_is_terminal_capacity_failure(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_recovered_winner_fences_a_stale_prepared_attempt(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "research_kind",
+    ("strategy_backtest", "factor_evaluation"),
+    ids=("strategy-backtest", "factor-evaluation"),
+)
+def test_recovered_winner_fences_a_stale_prepared_attempt(
+    tmp_path: Path,
+    research_kind: str,
+) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
     initialize_core(settings.database_url)
     head_a = _publish_head(settings, price_offset=0)
 
     with TestClient(create_app(settings)) as client:
-        run_id = _admit_run(client, request_id="retry-stale-fence")
+        run_id = _admit_run(
+            client,
+            request_id=f"retry-stale-fence-{research_kind}",
+            research_kind=research_kind,
+        )
         with _blocked_worker(settings, run_id) as stale:
             stale.wait_until_blocked()
             backend_pid = stale.backend_pid()
@@ -657,10 +737,15 @@ def _admit_run(
     *,
     request_id: str,
     sessions: tuple[str, ...] = SESSIONS,
+    research_kind: str = "strategy_backtest",
 ) -> str:
     response = client.post(
         "/api/research-runs",
-        json=_run_command(request_id, sessions=sessions),
+        json=_run_command(
+            request_id,
+            sessions=sessions,
+            research_kind=research_kind,
+        ),
     )
     assert response.status_code == 202
     return str(response.json()["id"])
@@ -670,8 +755,9 @@ def _run_command(
     request_id: str,
     *,
     sessions: tuple[str, ...] = SESSIONS,
+    research_kind: str = "strategy_backtest",
 ) -> dict[str, object]:
-    return {
+    command: dict[str, object] = {
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": "Same research question on current data",
@@ -680,10 +766,16 @@ def _run_command(
         "formula": "close_adj",
         "universe": "top300",
         "neutralization": "none",
-        "research_kind": "strategy_backtest",
-        "holdings_count": 1,
-        "rebalance_every_sessions": 1,
+        "research_kind": research_kind,
     }
+    if research_kind == "strategy_backtest":
+        command.update(
+            {
+                "holdings_count": 1,
+                "rebalance_every_sessions": 1,
+            }
+        )
+    return command
 
 
 def _publish_head(
@@ -752,26 +844,26 @@ def _reference_result(
     generation_id: str,
     *,
     sessions: tuple[str, ...] = SESSIONS,
+    research_kind: str = "strategy_backtest",
 ) -> dict[str, object]:
-    canonical = open_complete_refresh_basis(
-        MountedGenerationStore(settings.data_mount), generation_id
-    )
+    store = MountedGenerationStore(settings.data_mount)
+    canonical = open_complete_refresh_basis(store, generation_id)
     research_data = align_canonical_market_data(
         canonical,
         field_bindings={"price.close.adjusted": "close_adj"},
         universe="top300",
         neutralization="none",
     )
-    output = run(
-        RunInput(
-            research_data=research_data,
-            alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
-            field_bindings={"price.close.adjusted": "close_adj"},
-            effective_alpha_lookback=0,
-            universe="top300",
-            neutralization="none",
-            research_kind="strategy_backtest",
-            strategy=StrategyRunInput(
+    run_input = RunInput(
+        research_data=research_data,
+        alpha_expression={"kind": "field", "field_id": "price.close.adjusted"},
+        field_bindings={"price.close.adjusted": "close_adj"},
+        effective_alpha_lookback=0,
+        universe="top300",
+        neutralization="none",
+        research_kind=research_kind,
+        strategy=(
+            StrategyRunInput(
                 holdings_count=1,
                 rebalance_interval=1,
                 initial_cash_cny="10000000",
@@ -779,20 +871,45 @@ def _reference_result(
                 commission_min_cny="5",
                 stamp_duty_sell_rate="0.0005",
                 transfer_fee_rate="0.00001",
-            ),
-            research_start_session=sessions[0],
-            research_end_session=sessions[-1],
-        )
+            )
+            if research_kind == "strategy_backtest"
+            else None
+        ),
+        research_start_session=sessions[0],
+        research_end_session=sessions[-1],
     )
+    if research_kind == "factor_evaluation":
+        columnar = store.read_columnar_slice(
+            generation_id,
+            sessions=list(sessions),
+            universe_name="top300",
+            neutralization="none",
+            field_bindings={"price.close.adjusted": "close_adj"},
+            fact_instrument_ids=frozenset(),
+        )
+        calculation = execute_research_chunk(
+            run_input=run_input.with_research_data(columnar),
+            research_data=columnar,
+            research_sessions=sessions,
+            final_chunk=True,
+            continuation=empty_research_continuation("factor_evaluation"),
+            cancellation_check=lambda: None,
+        )
+        assert calculation.final_values is not None
+        return calculation.final_values
+
+    output = run(run_input)
     return build_result_payload(
         output,
-        research_kind="strategy_backtest",
-        rebalance_interval=1,
+        research_kind=research_kind,
+        rebalance_interval=(1 if research_kind == "strategy_backtest" else None),
         universe="top300",
     )
 
 
 def _read_result(runtime, stored: dict[str, object]) -> dict[str, object]:
+    immutable_input = stored["immutable_input"]
+    assert isinstance(immutable_input, dict)
     return read_result_bundle(
         runtime.publication.read(
             PublishedRef(
@@ -801,7 +918,7 @@ def _read_result(runtime, stored: dict[str, object]) -> dict[str, object]:
                 provenance=stored["result_provenance"],
             )
         ),
-        research_kind="strategy_backtest",
+        research_kind=str(immutable_input["research_kind"]),
     )
 
 
@@ -878,6 +995,96 @@ def _checkpoint_ordinals(settings: CoreSettings, run_id: str) -> list[int]:
         return [int(row["ordinal"]) for row in rows]
     finally:
         database.close()
+
+
+def _assert_factor_checkpoint_evidence(
+    runtime,
+    settings: CoreSettings,
+    run_id: str,
+    *,
+    expected_generation_id: str,
+) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            rows = transaction.execute(
+                """
+                SELECT checkpoint.*, manifest.manifest_bytes,
+                       attempt.fence AS creator_fence,
+                       attempt.data_generation_id,
+                       run.immutable_input
+                FROM research_runs.execution_checkpoints AS checkpoint
+                JOIN research_runs.attempts AS attempt
+                  ON attempt.id = checkpoint.attempt_id
+                JOIN research_runs.runs AS run ON run.id = checkpoint.run_id
+                JOIN publication.manifests AS manifest
+                  ON manifest.sha256 = checkpoint.checkpoint_manifest_sha256
+                WHERE checkpoint.run_id = %s
+                ORDER BY checkpoint.ordinal
+                """,
+                (run_id,),
+            ).fetchall()
+    finally:
+        database.close()
+
+    assert [int(row["ordinal"]) for row in rows] == [1, 2]
+    prior_chain: str | None = None
+    for row in rows:
+        immutable_input = dict(row["immutable_input"])
+        manifest = json.loads(bytes(row["manifest_bytes"]))
+        provenance = manifest["provenance"]
+        assert provenance["research_kind"] == "factor_evaluation"
+        assert provenance["run_id"] == run_id
+        assert provenance["creator_attempt_id"] == row["attempt_id"]
+        assert provenance["creator_fence"] == int(row["creator_fence"])
+        assert provenance["data_generation_id"] == expected_generation_id
+        assert provenance["ordinal"] == int(row["ordinal"])
+        assert provenance["boundary_session"] == row["boundary_session"].isoformat()
+        assert provenance["completed_research_sessions"] == int(
+            row["completed_research_sessions"]
+        )
+        assert provenance["immutable_input_sha256"] == hashlib.sha256(
+            canonical_json_bytes(immutable_input)
+        ).hexdigest()
+        assert provenance["execution_plan_sha256"] == hashlib.sha256(
+            canonical_json_bytes(immutable_input["execution_plan"])
+        ).hexdigest()
+        assert provenance["continuation_payload"] == row["continuation_payload"]
+        assert provenance["observation_payload"] is None
+        assert provenance["final_values_payload"] is None
+        assert provenance["prior_chain_sha256"] == prior_chain
+        assert hashlib.sha256(canonical_json_bytes(provenance)).hexdigest() == row[
+            "chain_sha256"
+        ]
+
+        bundle = runtime.publication.read(
+            PublishedRef(
+                manifest_sha256=str(row["checkpoint_manifest_sha256"]),
+                kind="research.execution-checkpoint",
+                provenance=provenance,
+            )
+        )
+        assert set(bundle.payloads) == {"continuation"}
+        continuation = json.loads(bundle.payloads["continuation"].content)
+        assert set(continuation) == {
+            "schema_version",
+            "research_kind",
+            "completed_research_session_count",
+            "rolling_tail_sessions",
+            "pending_alpha",
+            "alpha_checksum",
+            "factor_state",
+        }
+        assert continuation["research_kind"] == "factor_evaluation"
+        assert continuation["completed_research_session_count"] == int(
+            row["completed_research_sessions"]
+        )
+        assert len(continuation["pending_alpha"]) <= 21
+        assert "strategy" not in repr(continuation).lower()
+        assert row["observation_payload"] is None
+        assert int(row["observation_row_count"]) == 0
+        prior_chain = str(row["chain_sha256"])
 
 
 @contextmanager

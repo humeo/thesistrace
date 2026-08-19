@@ -2567,6 +2567,7 @@ def _checkpoint_binding(
         )
     return {
         "schema_version": "research-execution-checkpoint-v1",
+        "research_kind": immutable_input.research_kind,
         "run_id": run_id,
         "creator_attempt_id": creator_attempt_id,
         "creator_fence": creator_fence,
