@@ -677,7 +677,7 @@ export function ResearchDateFields({
       <div className="research-date-field">
         <label htmlFor="research-start-date">Start date</label>
         <div className="research-date-control">
-          <input id="research-start-date" ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onChange={(event) => onChange({ startDate: event.target.value, endDate })} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
+          <input id="research-start-date" ref={startDateInput} aria-label="Research start date" max={endDate || coverageEnd || undefined} min={coverageStart ?? undefined} onBlur={(event) => onChange({ startDate: event.target.value, endDate })} onChange={(event) => onChange({ startDate: event.target.value, endDate })} onClick={() => startDateInput.current?.showPicker()} type="date" value={startDate} />
           <button aria-label="Open start date calendar" onClick={() => startDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>
@@ -686,7 +686,7 @@ export function ResearchDateFields({
       <div className="research-date-field">
         <label htmlFor="research-end-date">End date</label>
         <div className="research-date-control">
-          <input id="research-end-date" ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onChange={(event) => onChange({ startDate, endDate: event.target.value })} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
+          <input id="research-end-date" ref={endDateInput} aria-label="Research end date" max={coverageEnd ?? undefined} min={startDate || coverageStart || undefined} onBlur={(event) => onChange({ startDate, endDate: event.target.value })} onChange={(event) => onChange({ startDate, endDate: event.target.value })} onClick={() => endDateInput.current?.showPicker()} type="date" value={endDate} />
           <button aria-label="Open end date calendar" onClick={() => endDateInput.current?.showPicker()} type="button">
             <CalendarBlank aria-hidden="true" size={18} weight="regular" />
           </button>

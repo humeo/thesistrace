@@ -18,6 +18,61 @@ test("Notes keeps multiline research context visible", async ({ page }) => {
   expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
 });
 
+test("date inputs retain a browser-populated value when focus leaves the field", async ({ page }) => {
+  await page.route("**/api/**", async (route) => {
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname === "/api/research-folders") {
+      await route.fulfill({ json: { items: [{ id: "folder_default", name: "Default", is_default: true, created_at: "2026-08-13T00:00:00Z" }], next_cursor: null } });
+      return;
+    }
+    if (pathname === "/api/alpha/catalog") {
+      await route.fulfill({ json: { fields: [], builtins: [] } });
+      return;
+    }
+    if (pathname === "/api/data") {
+      await route.fulfill({ json: {
+        market_coverage: { start: "2010-01-04", end: "2026-08-13" },
+        financial_coverage: null,
+        industry_coverage: null,
+        data_through_session: "2026-08-13",
+        last_market_refresh_at: null,
+        last_financial_refresh_at: null,
+        last_industry_refresh_at: null,
+        industry_refresh_status: null,
+        industry_refresh_failure_code: null,
+        market_research_readiness: true,
+        financial_research_readiness: false,
+        industry_research_readiness: false,
+      } });
+      return;
+    }
+    await route.abort();
+  });
+  await page.goto("/research?new");
+  await page.getByLabel("Research name").fill("Browser populated dates");
+  await page.locator(".cm-content").click();
+  await page.keyboard.type("close");
+  await page.getByLabel("Universe").selectOption("top300");
+  await page.getByLabel("Neutralization").selectOption("none");
+
+  for (const [label, value] of [
+    ["Research start date", "2025-08-13"],
+    ["Research end date", "2026-08-13"],
+  ] as const) {
+    const input = page.getByLabel(label);
+    await input.focus();
+    await input.evaluate((element, populatedValue) => {
+      (element as HTMLInputElement).value = populatedValue;
+    }, value);
+    await page.keyboard.press("Tab");
+  }
+
+  await page.getByLabel("Notes").fill("Trigger a controlled React rerender.");
+  await expect(page.getByLabel("Research start date")).toHaveValue("2025-08-13");
+  await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-13");
+  await expect(page.getByRole("button", { name: "Run research" })).toBeEnabled();
+});
+
 test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const responses: string[] = [];
