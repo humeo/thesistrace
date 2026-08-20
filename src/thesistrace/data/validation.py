@@ -155,13 +155,14 @@ def validate_release_batch(
         ):
             raise ValueError("Bootstrap Liquidity Universe coverage is incomplete")
 
-    industries = _required_rows(canonical, "industry_membership")
-    _validate_point_in_time(industries, instrument_ids, "industry_membership")
-    if any(
-        not all(row.get(field) for field in ("sw2021_l1", "sw2021_l2", "sw2021_l3"))
-        for row in industries
-    ):
-        raise ValueError("Bootstrap Industry Membership schema is incomplete")
+    if "industry_membership" in canonical:
+        industries = _required_rows(canonical, "industry_membership")
+        _validate_point_in_time(industries, instrument_ids, "industry_membership")
+        if any(
+            not all(row.get(field) for field in ("sw2021_l1", "sw2021_l2", "sw2021_l3"))
+            for row in industries
+        ):
+            raise ValueError("Bootstrap Industry Membership schema is incomplete")
 
     fields = _required_rows(canonical, "field_catalog")
     field_ids = [str(field.get("field_id", "")) for field in fields]

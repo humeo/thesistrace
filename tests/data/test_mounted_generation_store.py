@@ -33,8 +33,14 @@ from thesistrace.data.source import (
 from thesistrace.publication.serialization import canonical_json_bytes
 
 
-def test_streaming_bootstrap_materializes_the_same_generation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("include_industry", (True, False))
+def test_streaming_bootstrap_materializes_the_same_generation(
+    tmp_path: Path,
+    include_industry: bool,
+) -> None:
     canonical = _canonical()
+    if not include_industry:
+        del canonical["industry_membership"]
     prepared_at = datetime(2026, 8, 9, 0, 0, tzinfo=UTC)
     lineage = {"snapshot": "fixed"}
     in_memory = MountedGenerationStore(tmp_path / "in-memory").materialize(
@@ -43,16 +49,15 @@ def test_streaming_bootstrap_materializes_the_same_generation(tmp_path: Path) ->
         source_name="deterministic-test",
         source_lineage=lineage,
     )
-    static = {
-        key: canonical[key]
-        for key in (
-            "schema_version",
-            "research_calendar",
-            "instruments",
-            "industry_membership",
-            "field_catalog",
-        )
-    }
+    static_keys = [
+        "schema_version",
+        "research_calendar",
+        "instruments",
+        "field_catalog",
+    ]
+    if include_industry:
+        static_keys.append("industry_membership")
+    static = {key: canonical[key] for key in static_keys}
     calendar = [str(value) for value in canonical["research_calendar"]]
 
     def partitions() -> Iterator[CanonicalSessionPartition]:
@@ -88,22 +93,25 @@ def test_streaming_bootstrap_materializes_the_same_generation(tmp_path: Path) ->
     assert streamed == in_memory
 
 
+@pytest.mark.parametrize("include_industry", (True, False))
 def test_columnar_streaming_bootstrap_materializes_the_same_generation(
     tmp_path: Path,
+    include_industry: bool,
 ) -> None:
     canonical = _canonical()
+    if not include_industry:
+        del canonical["industry_membership"]
     prepared_at = datetime(2026, 8, 9, 0, 0, tzinfo=UTC)
     lineage = {"snapshot": "fixed"}
-    static = {
-        key: canonical[key]
-        for key in (
-            "schema_version",
-            "research_calendar",
-            "instruments",
-            "industry_membership",
-            "field_catalog",
-        )
-    }
+    static_keys = [
+        "schema_version",
+        "research_calendar",
+        "instruments",
+        "field_catalog",
+    ]
+    if include_industry:
+        static_keys.append("industry_membership")
+    static = {key: canonical[key] for key in static_keys}
     calendar = [str(value) for value in canonical["research_calendar"]]
     expected = MountedGenerationStore(tmp_path / "rows").materialize(
         canonical,
@@ -424,6 +432,143 @@ def test_family_generation_reopens_from_descriptors_without_publishing_head(
     assert next(
         field for field in price_table["writer_contract"]["schema"] if field["name"] == "open_raw"
     )["logical_type"].startswith("decimal128")
+
+
+def test_market_generation_can_omit_industry_family(tmp_path: Path) -> None:
+    canonical = _canonical()
+    del canonical["industry_membership"]
+    store = MountedGenerationStore(tmp_path)
+
+    candidate = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "market-without-industry"},
+    )
+
+    assert store.validate_generation(candidate.manifest_sha256) == candidate
+    assert "equity.industry_membership" not in {family.family_id for family in candidate.families}
+    refresh_base = store.open_refresh_base(candidate.manifest_sha256)
+    assert "industry_membership" not in refresh_base.canonical
+
+
+def test_industry_family_coverage_can_lag_market_coverage(tmp_path: Path) -> None:
+    canonical = _canonical()
+    store = MountedGenerationStore(tmp_path)
+    candidate = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "industry-lags-market"},
+    )
+    root = _manifest(tmp_path, candidate.manifest_sha256)
+    industry_index = next(
+        index
+        for index, family in enumerate(root["families"])
+        if family["family_id"] == "equity.industry_membership"
+    )
+    industry_reference = root["families"][industry_index]
+    industry_manifest = _manifest(
+        tmp_path,
+        industry_reference["manifest_sha256"],
+    )
+    lagging_coverage = dict(industry_reference["dataset_coverage"])
+    lagging_coverage["end"] = canonical["research_calendar"][-2]
+    industry_reference["dataset_coverage"] = lagging_coverage
+    industry_manifest["dataset_coverage"] = lagging_coverage
+    _replace_family_manifest(tmp_path, root, industry_index, industry_manifest)
+    lagging_generation = _write_candidate_root(tmp_path, root)
+
+    validated = store.validate_generation(lagging_generation)
+
+    industry = next(
+        family for family in validated.families if family.family_id == "equity.industry_membership"
+    )
+    assert industry.dataset_coverage["end"] == canonical["research_calendar"][-2]
+
+
+@pytest.mark.parametrize(
+    ("boundary", "value"),
+    (
+        ("start", "2024-01-01"),
+        ("end", "2027-01-04"),
+    ),
+)
+def test_industry_family_coverage_cannot_exceed_market_coverage(
+    tmp_path: Path,
+    boundary: str,
+    value: str,
+) -> None:
+    store = MountedGenerationStore(tmp_path)
+    candidate = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "industry-exceeds-market"},
+    )
+    root = _manifest(tmp_path, candidate.manifest_sha256)
+    industry_index = next(
+        index
+        for index, family in enumerate(root["families"])
+        if family["family_id"] == "equity.industry_membership"
+    )
+    industry_reference = root["families"][industry_index]
+    industry_manifest = _manifest(
+        tmp_path,
+        industry_reference["manifest_sha256"],
+    )
+    outside_coverage = dict(industry_reference["dataset_coverage"])
+    outside_coverage[boundary] = value
+    industry_reference["dataset_coverage"] = outside_coverage
+    industry_manifest["dataset_coverage"] = outside_coverage
+    _replace_family_manifest(tmp_path, root, industry_index, industry_manifest)
+    outside_generation = _write_candidate_root(tmp_path, root)
+
+    with pytest.raises(GenerationStoreError, match="exceeds Market Coverage"):
+        store.inspect_root(outside_generation)
+
+
+def test_market_refresh_reuses_industry_family_manifest_and_coverage(
+    tmp_path: Path,
+) -> None:
+    predecessor_canonical = _canonical()
+    replacement_canonical = _canonical(GENERATION_SESSION_PARTITION_COUNT + 2)
+    store = MountedGenerationStore(tmp_path)
+    predecessor = store.materialize(
+        predecessor_canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "predecessor"},
+    )
+    predecessor_root = _manifest(tmp_path, predecessor.manifest_sha256)
+    predecessor_industry = next(
+        family
+        for family in predecessor_root["families"]
+        if family["family_id"] == "equity.industry_membership"
+    )
+
+    successor = store.materialize_refresh(
+        predecessor_manifest_sha256=predecessor.manifest_sha256,
+        replacement_canonical=replacement_canonical,
+        replace_from_session=predecessor_canonical["research_calendar"][-20],
+        prepared_at=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "market-only-refresh"},
+    )
+
+    successor_root = _manifest(tmp_path, successor.manifest_sha256)
+    successor_industry = next(
+        family
+        for family in successor_root["families"]
+        if family["family_id"] == "equity.industry_membership"
+    )
+    assert successor.data_through_session == replacement_canonical["research_calendar"][-1]
+    assert successor_industry == predecessor_industry
+    assert (
+        successor_industry["dataset_coverage"]["end"]
+        == (predecessor_canonical["research_calendar"][-1])
+    )
+    assert store.validate_generation(successor.manifest_sha256) == successor
 
 
 def test_family_generation_reuses_manifests_and_objects_for_reordered_content(

@@ -15,15 +15,19 @@ import pyarrow.parquet as pq
 from pyarrow import ArrowException
 
 from thesistrace.data.generation_family import (
-    MARKET_FAMILY_SPECS,
+    CORE_MARKET_FAMILY_SPECS,
+    INDUSTRY_FAMILY_SPEC,
+    NON_FINANCIAL_FAMILY_SPECS,
     FamilyManifestError,
     MountedDatasetFamilyDescriptor,
     MountedFamilyGenerationDescriptor,
     build_family_coverage,
+    get_family_spec,
+    ordered_non_financial_specs,
     validate_family_coverage,
+    validate_generation_coverages,
     validate_preparation,
     validate_summary,
-    validate_synchronized_coverages,
     validation_summary,
 )
 from thesistrace.data.generation_family import (
@@ -166,6 +170,7 @@ class MountedGenerationStore:
                 calendar,
             )
             for spec in MARKET_CANDIDATE_TABLE_SPECS
+            if spec.name != "industry_membership" or spec.name in normalized
         }
         family_references = [
             self._materialize_market_family(
@@ -174,7 +179,7 @@ class MountedGenerationStore:
                 canonical=normalized,
                 calendar=calendar,
             )
-            for family_spec in MARKET_FAMILY_SPECS
+            for family_spec in _non_financial_specs_for_canonical(normalized)
         ]
         field_availability = tuple(
             sorted(str(row["field_id"]) for row in normalized["field_catalog"])
@@ -209,13 +214,16 @@ class MountedGenerationStore:
         prepared_at: datetime,
     ) -> MountedFamilyGenerationDescriptor:
         static = dict(stream.static)
-        if set(static) != {
+        required_static = {
             "schema_version",
             "research_calendar",
             "instruments",
-            "industry_membership",
             "field_catalog",
-        }:
+        }
+        if set(static) not in (
+            required_static,
+            {*required_static, "industry_membership"},
+        ):
             raise GenerationStoreError("Streaming Bootstrap static table set is incompatible")
         calendar_value = static["research_calendar"]
         if not isinstance(calendar_value, list) or not calendar_value:
@@ -235,6 +243,8 @@ class MountedGenerationStore:
         table_references: dict[str, dict[str, object]] = {}
         for spec in MARKET_CANDIDATE_TABLE_SPECS:
             if spec in session_specs:
+                continue
+            if spec.name == "industry_membership" and spec.name not in static:
                 continue
             table_references[spec.name] = self._materialize_table(
                 spec,
@@ -330,7 +340,7 @@ class MountedGenerationStore:
                 canonical=static,
                 calendar=calendar,
             )
-            for family_spec in MARKET_FAMILY_SPECS
+            for family_spec in _non_financial_specs_for_canonical(static)
         ]
         field_catalog_value = static["field_catalog"]
         assert isinstance(field_catalog_value, list)
@@ -376,13 +386,12 @@ class MountedGenerationStore:
         references = root["families"]
         assert isinstance(references, list)
         table_references: dict[str, Mapping[str, object]] = {}
-        for reference, family_spec in zip(
-            references[: len(MARKET_FAMILY_SPECS)],
-            MARKET_FAMILY_SPECS,
-            strict=True,
-        ):
+        for reference in references:
             if not isinstance(reference, Mapping):
                 raise GenerationStoreError("Dataset Family reference is incompatible")
+            if reference.get("family_id") == "equity.financial_pit":
+                continue
+            family_spec = _family_spec_for_reference(reference)
             family_manifest = self._read_family_manifest(family_spec, reference)
             family_table_references = family_manifest["tables"]
             assert isinstance(family_table_references, list)
@@ -426,8 +435,11 @@ class MountedGenerationStore:
         self,
         table_references: Mapping[str, Mapping[str, object]],
     ) -> dict[str, object]:
-        required = {spec.name for spec in MARKET_CANDIDATE_TABLE_SPECS}
-        if set(table_references) != required:
+        required = {
+            table_name for family in CORE_MARKET_FAMILY_SPECS for table_name in family.table_names
+        }
+        actual = set(table_references)
+        if actual not in (required, {*required, "industry_membership"}):
             raise GenerationStoreError("Dataset Family table set is incomplete")
         calendar_spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME["research_calendar"]
         calendar_rows = self._open_table(
@@ -441,7 +453,7 @@ class MountedGenerationStore:
         }
         session_manifests: dict[str, dict[str, object]] = {}
         for spec in MARKET_CANDIDATE_TABLE_SPECS:
-            if spec.name == "research_calendar":
+            if spec.name == "research_calendar" or spec.name not in table_references:
                 continue
             reference = table_references[spec.name]
             if spec.session_field is None:
@@ -477,8 +489,12 @@ class MountedGenerationStore:
                     "schema_version": "canonical-eod",
                     "research_calendar": calendar,
                     "instruments": static_tables["instruments"],
-                    "industry_membership": static_tables["industry_membership"],
                     "field_catalog": static_tables["field_catalog"],
+                    **(
+                        {"industry_membership": static_tables["industry_membership"]}
+                        if "industry_membership" in static_tables
+                        else {}
+                    ),
                 },
             )
 
@@ -489,7 +505,6 @@ class MountedGenerationStore:
             raise GenerationStoreError("Generation table row count is invalid")
 
         instruments = static_tables["instruments"]
-        industries = static_tables["industry_membership"]
         fields = static_tables["field_catalog"]
         return {
             "schema_version": "canonical-eod",
@@ -500,8 +515,12 @@ class MountedGenerationStore:
             "price_limits": [],
             "base_pool": [],
             "liquidity_universes": {name: [] for name in _UNIVERSE_NAMES},
-            "industry_membership": industries,
             "field_catalog": fields,
+            **(
+                {"industry_membership": static_tables["industry_membership"]}
+                if "industry_membership" in static_tables
+                else {}
+            ),
         }
 
     def compose_financial_candidate(
@@ -534,7 +553,12 @@ class MountedGenerationStore:
         ):
             raise GenerationStoreError("Financial candidate is incompatible with Market Data")
         root = self._read_family_generation_root(market_generation_manifest_sha256)
-        market_families = root["families"][: len(MARKET_FAMILY_SPECS)]
+        market_families = [
+            reference
+            for reference in root["families"]
+            if isinstance(reference, Mapping)
+            and reference.get("family_id") != "equity.financial_pit"
+        ]
         market_field_ids = {
             str(field_id)
             for field_id in root["field_availability"]
@@ -1037,7 +1061,12 @@ class MountedGenerationStore:
                 row for row in calendar_rows if str(row["session"]) >= window_start
             ]
         }
-        for family_spec in MARKET_FAMILY_SPECS[1:]:
+        present_family_ids = {
+            str(reference.get("family_id"))
+            for reference in root["families"]
+            if isinstance(reference, Mapping)
+        }
+        for family_spec in ordered_non_financial_specs(present_family_ids)[1:]:
             for table_name in family_spec.table_names:
                 spec, reference = self._family_table_reference(
                     root,
@@ -1100,7 +1129,7 @@ class MountedGenerationStore:
             raise GenerationStoreError("Refresh Research Calendar is invalid")
 
         table_references: dict[str, dict[str, object]] = {}
-        for family_spec in MARKET_FAMILY_SPECS:
+        for family_spec in CORE_MARKET_FAMILY_SPECS:
             for table_name in family_spec.table_names:
                 spec, predecessor_reference = self._family_table_reference(
                     predecessor_root,
@@ -1121,14 +1150,26 @@ class MountedGenerationStore:
                     )
                 )
 
-        family_references = [
-            self._materialize_market_family(
+        refreshed_family_references = {
+            family_spec.family_id: self._materialize_market_family(
                 family_spec,
                 table_references=table_references,
                 canonical=normalized,
                 calendar=new_calendar,
             )
-            for family_spec in MARKET_FAMILY_SPECS
+            for family_spec in CORE_MARKET_FAMILY_SPECS
+        }
+        predecessor_industry_reference = _family_reference(
+            predecessor_root,
+            INDUSTRY_FAMILY_SPEC.family_id,
+        )
+        if predecessor_industry_reference is not None:
+            refreshed_family_references[INDUSTRY_FAMILY_SPEC.family_id] = dict(
+                predecessor_industry_reference
+            )
+        family_references = [
+            refreshed_family_references[spec.family_id]
+            for spec in ordered_non_financial_specs(frozenset(refreshed_family_references))
         ]
         field_availability = tuple(
             sorted(str(row["field_id"]) for row in normalized["field_catalog"])
@@ -1155,10 +1196,9 @@ class MountedGenerationStore:
         root_sha256 = hashlib.sha256(root_bytes).hexdigest()
         self._store_addressed(self._manifest_path(root_sha256), root_sha256, root_bytes)
         market_generation = _family_generation_descriptor_from_root(root_sha256, root_manifest)
-        prior_financial_reference = (
-            predecessor_root["families"][-1]
-            if len(predecessor_root["families"]) > len(MARKET_FAMILY_SPECS)
-            else None
+        prior_financial_reference = _family_reference(
+            predecessor_root,
+            "equity.financial_pit",
         )
         if prior_financial_reference is None:
             return market_generation
@@ -1184,25 +1224,14 @@ class MountedGenerationStore:
         family_id: str,
         table_name: str,
     ) -> tuple[_TableSpec, Mapping[str, object]]:
-        references = root["families"]
-        assert isinstance(references, list)
-        family_index = next(
-            (
-                index
-                for index, spec in enumerate(MARKET_FAMILY_SPECS)
-                if spec.family_id == family_id
-            ),
-            None,
-        )
-        if family_index is None:
+        selected_spec = get_family_spec(family_id)
+        reference = _family_reference(root, family_id)
+        if selected_spec is None or reference is None:
             raise GenerationStoreError("Dataset Family is unavailable")
-        reference = references[family_index]
-        if not isinstance(reference, Mapping):
-            raise GenerationStoreError("Dataset Family reference is incompatible")
-        family = self._read_family_manifest(MARKET_FAMILY_SPECS[family_index], reference)
+        family = self._read_family_manifest(selected_spec, reference)
         table_references = family["tables"]
         assert isinstance(table_references, list)
-        table_index = MARKET_FAMILY_SPECS[family_index].table_names.index(table_name)
+        table_index = selected_spec.table_names.index(table_name)
         table_reference = table_references[table_index]
         if not isinstance(table_reference, Mapping):
             raise GenerationStoreError("Dataset Family table reference is incompatible")
@@ -1368,10 +1397,7 @@ class MountedGenerationStore:
             if isinstance(families, list)
             else []
         )
-        if family_ids not in (
-            [spec.family_id for spec in MARKET_FAMILY_SPECS],
-            [*(spec.family_id for spec in MARKET_FAMILY_SPECS), "equity.financial_pit"],
-        ):
+        if not _valid_generation_family_ids(family_ids):
             raise GenerationStoreError("Family Generation candidate set is incompatible")
         identity = {
             "schema_contract": root["schema_contract"],
@@ -2137,6 +2163,55 @@ def _inventory_sha256(root: Path, directory: str, suffix: str) -> tuple[str, ...
     return tuple(sha256s)
 
 
+def _non_financial_specs_for_canonical(
+    canonical: Mapping[str, object],
+) -> tuple[_DatasetFamilySpec, ...]:
+    family_ids = {spec.family_id for spec in CORE_MARKET_FAMILY_SPECS}
+    if "industry_membership" in canonical:
+        family_ids.add(INDUSTRY_FAMILY_SPEC.family_id)
+    return ordered_non_financial_specs(frozenset(family_ids))
+
+
+def _family_reference(
+    root: Mapping[str, object],
+    family_id: str,
+) -> Mapping[str, object] | None:
+    references = root.get("families")
+    if not isinstance(references, list):
+        raise GenerationStoreError("Family Generation candidate set is incompatible")
+    matches = [
+        reference
+        for reference in references
+        if isinstance(reference, Mapping) and reference.get("family_id") == family_id
+    ]
+    if len(matches) > 1:
+        raise GenerationStoreError("Family Generation candidate set is incompatible")
+    return None if not matches else matches[0]
+
+
+def _family_spec_for_reference(
+    reference: Mapping[str, object],
+) -> _DatasetFamilySpec:
+    selected = get_family_spec(str(reference.get("family_id")))
+    if selected is None:
+        raise GenerationStoreError("Dataset Family reference is incompatible")
+    return selected
+
+
+def _valid_generation_family_ids(family_ids: list[object]) -> bool:
+    core_ids = {spec.family_id for spec in CORE_MARKET_FAMILY_SPECS}
+    without_industry = [
+        spec.family_id for spec in NON_FINANCIAL_FAMILY_SPECS if spec.family_id in core_ids
+    ]
+    with_industry = [spec.family_id for spec in NON_FINANCIAL_FAMILY_SPECS]
+    return family_ids in (
+        without_industry,
+        [*without_industry, "equity.financial_pit"],
+        with_industry,
+        [*with_industry, "equity.financial_pit"],
+    )
+
+
 def _family_generation_descriptor_from_root(
     manifest_sha256: str,
     root: Mapping[str, object],
@@ -2177,28 +2252,29 @@ def _family_generation_descriptor_from_root(
     except FamilyManifestError as error:
         raise GenerationStoreError(str(error)) from error
     family_references = root.get("families")
-    if not isinstance(family_references, list) or len(family_references) not in {
-        len(MARKET_FAMILY_SPECS),
-        len(MARKET_FAMILY_SPECS) + 1,
-    }:
+    family_ids = (
+        [entry.get("family_id") for entry in family_references if isinstance(entry, Mapping)]
+        if isinstance(family_references, list)
+        else []
+    )
+    if not isinstance(family_references, list) or not _valid_generation_family_ids(family_ids):
         raise GenerationStoreError("Family Generation candidate set is incompatible")
     families: list[MountedDatasetFamilyDescriptor] = []
-    for reference, family_spec in zip(
-        family_references[: len(MARKET_FAMILY_SPECS)],
-        MARKET_FAMILY_SPECS,
-        strict=True,
-    ):
+    financial_candidate: str | None = None
+    for reference in family_references:
         if not isinstance(reference, Mapping):
             raise GenerationStoreError("Dataset Family reference is incompatible")
-        families.append(_family_descriptor_from_reference(reference, family_spec))
-    financial_candidate: str | None = None
-    if len(family_references) > len(MARKET_FAMILY_SPECS):
-        reference = family_references[-1]
-        if not isinstance(reference, Mapping):
-            raise GenerationStoreError("Financial Dataset Family reference is incompatible")
-        financial_family = _financial_family_descriptor_from_reference(reference)
-        financial_candidate = financial_family.manifest_sha256
-        families.append(financial_family)
+        if reference.get("family_id") == "equity.financial_pit":
+            financial_family = _financial_family_descriptor_from_reference(reference)
+            financial_candidate = financial_family.manifest_sha256
+            families.append(financial_family)
+            continue
+        families.append(
+            _family_descriptor_from_reference(
+                reference,
+                _family_spec_for_reference(reference),
+            )
+        )
     readiness = root.get("financial_research_readiness")
     coordinate = root.get("financial_publication_coordinate")
     if financial_candidate is None:
@@ -2213,8 +2289,8 @@ def _family_generation_descriptor_from_root(
     if not readiness_valid:
         raise GenerationStoreError("Financial Research Readiness is incompatible")
     try:
-        validate_synchronized_coverages(
-            tuple(families[: len(MARKET_FAMILY_SPECS)]),
+        validate_generation_coverages(
+            tuple(family for family in families if family.family_id != "equity.financial_pit"),
             data_through_session=data_through_session,
         )
     except FamilyManifestError as error:
@@ -2404,13 +2480,14 @@ def _normalize_canonical(canonical: Mapping[str, object]) -> dict[str, object]:
         "price_limits",
         "base_pool",
         "liquidity_universes",
-        "industry_membership",
         "field_catalog",
     }
-    if set(canonical) != required:
+    if set(canonical) not in (required, {*required, "industry_membership"}):
         raise GenerationStoreError("Canonical Generation table set is incompatible")
     normalized_rows: dict[str, list[dict[str, object]]] = {}
     for spec in _TABLE_SPECS:
+        if spec.name == "industry_membership" and spec.name not in canonical:
+            continue
         try:
             normalized_rows[spec.name] = canonicalize_parquet_rows(
                 _table_rows(canonical, spec.name),
@@ -2561,8 +2638,13 @@ def _columnar_keys_cover(
 def _validate_candidate_semantics(
     candidate_tables: Mapping[str, list[dict[str, object]]],
 ) -> dict[str, object]:
-    required = {spec.name for spec in MARKET_CANDIDATE_TABLE_SPECS}
-    if set(candidate_tables) != required:
+    required = {
+        table_name for family in CORE_MARKET_FAMILY_SPECS for table_name in family.table_names
+    }
+    if set(candidate_tables) not in (
+        required,
+        {*required, "industry_membership"},
+    ):
         raise GenerationStoreError("Dataset Family table set is incomplete")
     factors = {
         (str(row["session_date"]), str(row["instrument_id"])): row["source_adjustment_factor"]
@@ -2636,11 +2718,17 @@ def _validate_candidate_projection(
         or descriptor.field_availability != tuple(sorted(actual_fields))
     ):
         raise GenerationStoreError("Family Generation root projection is incompatible")
-    for family, spec in zip(
-        descriptor.families[: len(MARKET_FAMILY_SPECS)],
-        MARKET_FAMILY_SPECS,
-        strict=True,
-    ):
+    for family in descriptor.families:
+        spec = get_family_spec(family.family_id)
+        if spec is None:
+            continue
+        if spec == INDUSTRY_FAMILY_SPEC:
+            rows = canonical.get("industry_membership")
+            if not isinstance(rows, list) or family.dataset_coverage.get("membership_count") != len(
+                rows
+            ):
+                raise GenerationStoreError("Dataset Family Coverage projection is incompatible")
+            continue
         try:
             actual_coverage = build_family_coverage(
                 spec,
@@ -2735,8 +2823,12 @@ def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[
         "price_limits": tables["price_limits"],
         "base_pool": tables["base_pool"],
         "liquidity_universes": universes,
-        "industry_membership": tables["industry_membership"],
         "field_catalog": tables["field_catalog"],
+        **(
+            {"industry_membership": tables["industry_membership"]}
+            if "industry_membership" in tables
+            else {}
+        ),
     }
 
 

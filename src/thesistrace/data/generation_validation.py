@@ -28,8 +28,6 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
         raise GenerationValidationError("Canonical Research Calendar is invalid") from error
     if any(session.weekday() >= 5 for session in parsed_calendar):
         raise GenerationValidationError("Canonical Research Calendar is invalid")
-    calendar_set = set(map(str, calendar))
-
     instruments = _rows(canonical, "instruments")
     instrument_ids = [str(row["instrument_id"]) for row in instruments]
     instrument_set = set(instrument_ids)
@@ -151,7 +149,9 @@ def validate_canonical_generation(canonical: Mapping[str, object]) -> None:
         _finite_decimal(row["lower"], "Canonical Price Limit.lower")
 
     _validate_universes(canonical, calendar, base_by_session)
-    _validate_classification(canonical, calendar_set, instrument_set)
+    if "industry_membership" in canonical:
+        _validate_classification(canonical, instrument_set)
+    _validate_field_catalog(canonical)
 
 
 def _validate_universes(
@@ -193,7 +193,6 @@ def _validate_universes(
 
 def _validate_classification(
     canonical: Mapping[str, object],
-    calendar_set: set[str],
     instrument_set: set[str],
 ) -> None:
     industries = _rows(canonical, "industry_membership")
@@ -214,6 +213,9 @@ def _validate_classification(
         ):
             raise GenerationValidationError("Canonical Industry Membership is invalid")
         prior_end_by_instrument[instrument_id] = active_to
+
+
+def _validate_field_catalog(canonical: Mapping[str, object]) -> None:
     field_ids = [str(row["field_id"]) for row in _rows(canonical, "field_catalog")]
     if not field_ids or len(field_ids) != len(set(field_ids)):
         raise GenerationValidationError("Canonical Field Catalog is invalid")

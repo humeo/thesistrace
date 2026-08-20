@@ -815,9 +815,10 @@ signal session's Alpha, Factor, Benchmark, and new-buy calculations.
 _Avoid_: Liquidity ranking, permanent exclusion
 
 **Industry Classification**:
-The point-in-time SW2021 industry path assigned to an instrument for a Research
-Session.
-_Avoid_: Current-industry backfill, Liquidity Universe
+The single point-in-time primary SW2021 industry path assigned to an instrument
+for a Research Session; raw source memberships do not qualify until they resolve
+to one path.
+_Avoid_: Raw index membership, current-industry backfill, Liquidity Universe
 
 **Industry Neutralization**:
 The optional cross-sectional demeaning of Alpha Values within each instrument's
