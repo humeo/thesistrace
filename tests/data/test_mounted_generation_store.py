@@ -528,6 +528,53 @@ def test_industry_family_coverage_cannot_exceed_market_coverage(
         store.inspect_root(outside_generation)
 
 
+def test_industry_publication_validates_only_the_composed_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = _canonical()
+    del canonical["industry_membership"]
+    store = MountedGenerationStore(tmp_path)
+    market = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+        source_name="market-without-industry",
+        source_lineage={"snapshot": "market"},
+    )
+    original_validate_generation = store.validate_generation
+    validated: list[str] = []
+
+    def counted_validate_generation(
+        manifest_sha256: str,
+    ) -> MountedFamilyGenerationDescriptor:
+        validated.append(manifest_sha256)
+        return original_validate_generation(manifest_sha256)
+
+    monkeypatch.setattr(store, "validate_generation", counted_validate_generation)
+    candidate = store.materialize_industry_candidate(
+        market.manifest_sha256,
+        [
+            {
+                "instrument_id": "equity:A.SH",
+                "active_from": canonical["research_calendar"][0],
+                "active_to": "",
+                "sw2021_l1": "801780",
+                "sw2021_l2": "801783",
+                "sw2021_l3": "851911",
+            }
+        ],
+        observation_through_session=canonical["research_calendar"][-1],
+    )
+    composed = store.compose_industry_candidate(
+        market.manifest_sha256,
+        candidate.manifest_sha256,
+        prepared_at=datetime(2026, 8, 14, tzinfo=UTC),
+        publication_coordinate="a" * 64,
+    )
+
+    assert validated == [composed.manifest_sha256]
+
+
 def test_industry_candidate_replaces_only_industry_family(tmp_path: Path) -> None:
     canonical = _canonical()
     del canonical["industry_membership"]

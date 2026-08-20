@@ -612,7 +612,7 @@ class MountedGenerationStore:
         *,
         observation_through_session: str,
     ) -> MountedDatasetFamilyDescriptor:
-        market = self.validate_generation(market_generation_manifest_sha256)
+        market = self.inspect_root(market_generation_manifest_sha256)
         try:
             through = date.fromisoformat(observation_through_session).isoformat()
         except ValueError as error:
@@ -651,7 +651,7 @@ class MountedGenerationStore:
         prepared_at: datetime,
         publication_coordinate: str,
     ) -> MountedFamilyGenerationDescriptor:
-        current = self.validate_generation(generation_manifest_sha256)
+        current = self.inspect_root(generation_manifest_sha256)
         _require_sha256(publication_coordinate)
         root = self._read_family_generation_root(generation_manifest_sha256)
         candidate_reference = self._industry_family_reference(
