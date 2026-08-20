@@ -47,11 +47,16 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
     empty = {
         "market_coverage": None,
         "financial_coverage": None,
+        "industry_coverage": None,
         "data_through_session": None,
         "last_market_refresh_at": None,
         "last_financial_refresh_at": None,
+        "last_industry_refresh_at": None,
+        "industry_refresh_status": None,
+        "industry_refresh_failure_code": None,
         "market_research_readiness": False,
         "financial_research_readiness": False,
+        "industry_research_readiness": False,
     }
 
     with TestClient(create_app(settings)) as client:
@@ -82,11 +87,20 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
     expected = {
         "market_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
         "financial_coverage": None,
+        "industry_coverage": {
+            "start": "2026-08-07",
+            "observation_through_session": "2026-08-07",
+            "classification_version": "SW2021",
+        },
         "data_through_session": "2026-08-07",
         "last_market_refresh_at": None,
         "last_financial_refresh_at": None,
+        "last_industry_refresh_at": None,
+        "industry_refresh_status": None,
+        "industry_refresh_failure_code": None,
         "market_research_readiness": True,
         "financial_research_readiness": False,
+        "industry_research_readiness": True,
     }
     for _ in range(2):
         with TestClient(create_app(settings)) as client:
@@ -154,11 +168,20 @@ def test_data_overview_does_not_open_generation_parquet(
         assert client.get("/api/data").json() == {
             "market_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
             "financial_coverage": None,
+            "industry_coverage": {
+                "start": "2026-08-07",
+                "observation_through_session": "2026-08-07",
+                "classification_version": "SW2021",
+            },
             "data_through_session": "2026-08-07",
             "last_market_refresh_at": None,
             "last_financial_refresh_at": None,
+            "last_industry_refresh_at": None,
+            "industry_refresh_status": None,
+            "industry_refresh_failure_code": None,
             "market_research_readiness": True,
             "financial_research_readiness": False,
+            "industry_research_readiness": True,
         }
 
 

@@ -3835,11 +3835,16 @@ def test_daily_track_uses_overlap_corrections_only_for_future_sessions(
         assert set(overview.json()) == {
             "market_coverage",
             "financial_coverage",
+            "industry_coverage",
             "data_through_session",
             "last_market_refresh_at",
             "last_financial_refresh_at",
+            "last_industry_refresh_at",
+            "industry_refresh_status",
+            "industry_refresh_failure_code",
             "market_research_readiness",
             "financial_research_readiness",
+            "industry_research_readiness",
         }
         assert "correction" not in overview.text.lower()
 

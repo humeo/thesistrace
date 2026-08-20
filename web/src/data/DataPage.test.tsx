@@ -16,11 +16,20 @@ const overview: DataOverview = {
     seed_policy: "latest-pre-start-annual-flow-and-balance-facts",
     sparse_facts: true,
   },
+  industry_coverage: {
+    start: "2025-08-08",
+    observation_through_session: "2026-08-07",
+    classification_version: "SW2021",
+  },
   data_through_session: "2026-08-07",
   last_market_refresh_at: null,
   last_financial_refresh_at: "2026-08-07T03:00:00Z",
+  last_industry_refresh_at: "2026-08-07T04:00:00Z",
+  industry_refresh_status: "succeeded",
+  industry_refresh_failure_code: null,
   market_research_readiness: true,
   financial_research_readiness: true,
+  industry_research_readiness: true,
 };
 
 const catalog: AlphaCatalog = {
@@ -78,6 +87,9 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("complete");
     expect(markup).toContain("Last financial refresh");
     expect(markup).toContain("Finance ready");
+    expect(markup).toContain("Industry ready");
+    expect(markup).toContain("SW2021");
+    expect(markup).toContain("2026-08-07T04:00:00Z");
     expect(markup).toContain("Research fields");
     expect(markup).toContain("Market data fields");
     expect(markup).toContain("Financial data fields");
@@ -103,19 +115,61 @@ describe("DataOverviewView", () => {
       overview: {
         market_coverage: null,
         financial_coverage: null,
+        industry_coverage: null,
         data_through_session: null,
         last_market_refresh_at: null,
         last_financial_refresh_at: null,
+        last_industry_refresh_at: null,
+        industry_refresh_status: null,
+        industry_refresh_failure_code: null,
         market_research_readiness: false,
         financial_research_readiness: false,
+        industry_research_readiness: false,
       },
       onRefresh: vi.fn(),
     }));
 
     expect(markup).toContain("Market not ready");
     expect(markup).toContain("Finance not ready");
-    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(8);
+    expect(markup).toContain("Industry not ready");
+    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(12);
     expect(markup).toContain("No fields are currently available for research.");
+  });
+
+  it("distinguishes stale Industry coverage from the latest failed refresh", () => {
+    const staleOverview: DataOverview = {
+      ...overview,
+      financial_coverage: null,
+      industry_coverage: {
+        start: "2025-08-08",
+        observation_through_session: "2026-08-06",
+        classification_version: "SW2021",
+      },
+      last_financial_refresh_at: null,
+      last_industry_refresh_at: "2026-08-06T03:00:00Z",
+      industry_refresh_status: "succeeded",
+      financial_research_readiness: false,
+      industry_research_readiness: false,
+    };
+    const stale = renderToStaticMarkup(createElement(DataOverviewView, {
+      catalog,
+      overview: staleOverview,
+      onRefresh: vi.fn(),
+    }));
+    expect(stale).toContain("Industry stale");
+    expect(stale).not.toContain("Last refresh failed");
+
+    const failed = renderToStaticMarkup(createElement(DataOverviewView, {
+      catalog,
+      overview: {
+        ...staleOverview,
+        industry_refresh_status: "failed",
+        industry_refresh_failure_code: "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION",
+      },
+      onRefresh: vi.fn(),
+    }));
+    expect(failed).toContain("Last refresh failed");
+    expect(failed).toContain("OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION");
   });
 
   it("loads coverage and fields together and turns either failure into visible state", async () => {

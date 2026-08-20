@@ -16,13 +16,14 @@ from thesistrace.adapters.tushare_industry import (
 from thesistrace.data import (
     DataGarbageCollector,
     DatasetLifecycle,
+    DatasetOverviewService,
     IndustryRefreshError,
     IndustryRefreshService,
     MountedGenerationStore,
 )
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
-from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.fixture import build_fixture, build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
 
 NOW = datetime(2026, 8, 14, 1, tzinfo=UTC)
@@ -117,6 +118,48 @@ def test_industry_refresh_publishes_only_industry_family(
         assert IndustryRefreshService(database, tmp_path, source).inspect(
             "industry-success"
         )["status"] == "succeeded"
+        overview = DatasetOverviewService(database, tmp_path).overview()
+        assert overview.industry_coverage is not None
+        assert overview.industry_coverage.model_dump(mode="json") == {
+            "start": through,
+            "observation_through_session": through,
+            "classification_version": "SW2021",
+        }
+        assert overview.last_industry_refresh_at == NOW
+        assert overview.industry_refresh_status == "succeeded"
+        assert overview.industry_refresh_failure_code is None
+        assert overview.industry_research_readiness is True
+    finally:
+        database.close()
+
+
+def test_data_overview_marks_lagging_industry_coverage_stale(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        _source, canonical = build_fixture(session_count=2)
+        del canonical["industry_membership"]
+        market = MountedGenerationStore(tmp_path).materialize(
+            canonical,
+            prepared_at=NOW,
+            source_name="industry-overview-stale-test",
+            source_lineage={"fixture": "market"},
+        ).manifest_sha256
+        _establish_head(database, tmp_path, market)
+        first_session = str(canonical["research_calendar"][0])
+        source, _instrument = _static_source(first_session)
+        IndustryRefreshService(database, tmp_path, source, clock=lambda: NOW).publish(
+            idempotency_key="industry-stale",
+            observation_through_session=first_session,
+        )
+
+        overview = DatasetOverviewService(database, tmp_path).overview()
+        assert overview.industry_coverage is not None
+        assert overview.industry_coverage.observation_through_session.isoformat() == first_session
+        assert overview.industry_refresh_status == "succeeded"
+        assert overview.industry_research_readiness is False
     finally:
         database.close()
 
@@ -257,6 +300,14 @@ def test_overlapping_industry_refresh_fails_without_moving_head(
         )
         assert operation["candidate_manifest_sha256"] is None
         assert operation["source_lineage_sha256"] is not None
+        overview = DatasetOverviewService(database, tmp_path).overview()
+        assert overview.industry_coverage is None
+        assert overview.last_industry_refresh_at is None
+        assert overview.industry_refresh_status == "failed"
+        assert overview.industry_refresh_failure_code == (
+            "OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION"
+        )
+        assert overview.industry_research_readiness is False
     finally:
         database.close()
 

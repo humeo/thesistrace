@@ -40,9 +40,15 @@ EXPECTED_OVERVIEW = {
         "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
         "sparse_facts": True,
     },
+    "industry_coverage": {
+        "start": "2009-12-07",
+        "observation_through_session": "2026-08-05",
+        "classification_version": "SW2021",
+    },
     "data_through_session": "2026-08-05",
     "market_research_readiness": True,
     "financial_research_readiness": True,
+    "industry_research_readiness": True,
 }
 READY_DEPENDENCIES = {
     "postgresql": {"status": "ready", "code": "POSTGRESQL_READY"},

@@ -76,11 +76,16 @@ const catalog = {
 const data = {
   market_coverage: { start: "2025-01-01", end: "2026-08-12" },
   financial_coverage: null,
+  industry_coverage: null,
   data_through_session: "2026-08-12",
   last_market_refresh_at: "2026-08-13T00:00:00Z",
   last_financial_refresh_at: null,
+  last_industry_refresh_at: null,
+  industry_refresh_status: null,
+  industry_refresh_failure_code: null,
   market_research_readiness: true,
   financial_research_readiness: false,
+  industry_research_readiness: false,
 };
 
 describe("browser Research Draft", () => {

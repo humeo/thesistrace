@@ -95,11 +95,20 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
     expected_overview = {
         "market_coverage": {"start": "2026-08-07", "end": "2026-08-07"},
         "financial_coverage": None,
+        "industry_coverage": {
+            "start": "2026-08-07",
+            "observation_through_session": "2026-08-07",
+            "classification_version": "SW2021",
+        },
         "data_through_session": "2026-08-07",
         "last_market_refresh_at": None,
         "last_financial_refresh_at": None,
+        "last_industry_refresh_at": None,
+        "industry_refresh_status": None,
+        "industry_refresh_failure_code": None,
         "market_research_readiness": True,
         "financial_research_readiness": False,
+        "industry_research_readiness": True,
     }
 
     for role in ("research", "tracking"):

@@ -66,7 +66,12 @@ from thesistrace.data.lifecycle import (
     GenerationPin,
     PinnedGeneration,
 )
-from thesistrace.data.models import DataOverview, DatasetCoverage, FinancialCoverage
+from thesistrace.data.models import (
+    DataOverview,
+    DatasetCoverage,
+    FinancialCoverage,
+    IndustryCoverage,
+)
 from thesistrace.data.operator import BootstrapOutcome, DataOperator, DataOperatorError
 from thesistrace.data.overview import DatasetOverviewService
 from thesistrace.data.refresh import DataRefreshError, DataRefreshService, RefreshOutcome
@@ -142,6 +147,7 @@ __all__ = [
     "IndustryRefreshError",
     "IndustryRefreshOutcome",
     "IndustryRefreshService",
+    "IndustryCoverage",
     "PinnedGeneration",
     "RefreshOutcome",
     "alpha_field_catalog",

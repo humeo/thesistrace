@@ -14,11 +14,20 @@ export type DataOverview = {
     seed_policy: string;
     sparse_facts: boolean;
   } | null;
+  industry_coverage: {
+    start: string;
+    observation_through_session: string;
+    classification_version: "SW2021";
+  } | null;
   data_through_session: string | null;
   last_market_refresh_at: string | null;
   last_financial_refresh_at: string | null;
+  last_industry_refresh_at: string | null;
+  industry_refresh_status: "running" | "succeeded" | "failed" | null;
+  industry_refresh_failure_code: string | null;
   market_research_readiness: boolean;
   financial_research_readiness: boolean;
+  industry_research_readiness: boolean;
 };
 
 type DataPageResources = {
@@ -75,6 +84,14 @@ export function DataOverviewView({
 }) {
   const marketCoverage = overview.market_coverage;
   const financialCoverage = overview.financial_coverage;
+  const industryCoverage = overview.industry_coverage;
+  const industryState = overview.industry_refresh_status === "failed"
+    ? "Last refresh failed"
+    : overview.industry_research_readiness
+      ? "Industry ready"
+      : industryCoverage === null
+        ? "Industry not ready"
+        : "Industry stale";
   return (
     <section aria-label="Data" className="page-section data-page">
       <header className="page-hero">
@@ -132,6 +149,33 @@ export function DataOverviewView({
           <dd>{overview.last_financial_refresh_at ?? "Not available"}</dd>
         </div>
       </dl>
+      <div className="signal-strip" aria-label="Industry data readiness">
+        <span className="signal-strip-label"><span className="health-dot" /> Industry data</span>
+        <strong>{industryState}</strong>
+      </div>
+      <dl className="data-overview-stats" aria-label="Industry data coverage">
+        <div>
+          <dt>Industry coverage start</dt>
+          <dd>{industryCoverage?.start ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Observed through</dt>
+          <dd>{industryCoverage?.observation_through_session ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Classification</dt>
+          <dd>{industryCoverage?.classification_version ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Last industry refresh</dt>
+          <dd>{overview.last_industry_refresh_at ?? "Not available"}</dd>
+        </div>
+      </dl>
+      {overview.industry_refresh_failure_code === null ? null : (
+        <p className="data-coverage-note">
+          Latest Industry Refresh failure: <code>{overview.industry_refresh_failure_code}</code>
+        </p>
+      )}
       <ResearchFieldCatalog catalog={catalog} />
     </section>
   );
