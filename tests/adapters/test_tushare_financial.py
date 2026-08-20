@@ -72,6 +72,46 @@ def test_non_truncated_financial_endpoints_remain_one_logical_request() -> None:
     assert provider.requests == [("income", {"ts_code": "000001.SZ"}, fields)]
 
 
+def test_cashflow_boundary_response_is_completed_through_bounded_pages() -> None:
+    fields = ("ts_code", "row_id")
+    rows = tuple(("000001.SZ", ordinal) for ordinal in range(128))
+
+    class BoundaryCappedProvider(PagingProvider):
+        def query_raw(
+            self,
+            api_name: str,
+            *,
+            params: Mapping[str, object],
+            fields: Sequence[str],
+        ) -> RawSourceResponse:
+            copied_params = dict(params)
+            copied_fields = tuple(fields)
+            self.requests.append((api_name, copied_params, copied_fields))
+            if "offset" not in copied_params:
+                return RawSourceResponse(copied_fields, rows[:100])
+            offset = int(copied_params["offset"])
+            limit = int(copied_params["limit"])
+            return RawSourceResponse(copied_fields, rows[offset : offset + limit])
+
+    provider = BoundaryCappedProvider(rows)
+
+    response = TushareFinancialSource(provider).query_raw(
+        "cashflow",
+        params={"ts_code": "000001.SZ"},
+        fields=fields,
+    )
+
+    assert response == RawSourceResponse(fields, rows)
+    assert provider.requests == [
+        ("cashflow", {"ts_code": "000001.SZ"}, fields),
+        (
+            "cashflow",
+            {"ts_code": "000001.SZ", "limit": 100, "offset": 100},
+            fields,
+        ),
+    ]
+
+
 def test_balancesheet_pagination_fails_closed_when_offset_is_ignored() -> None:
     fields = ("ts_code", "row_id")
     repeated_page = tuple(("000001.SZ", ordinal) for ordinal in range(100))
