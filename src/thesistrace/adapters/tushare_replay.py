@@ -130,6 +130,28 @@ class ReplayTushareProvider:
             raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
         return response
 
+    def query_paginated(
+        self,
+        api_name: str,
+        *,
+        params: Mapping[str, object],
+        fields: Sequence[str],
+        primary_key: Sequence[str],
+    ) -> list[dict[str, object]]:
+        del primary_key
+        if api_name == "index_classify" and params == {"src": "SW2021"}:
+            rows = self._snapshot.get("industry_classification", [])
+        elif api_name == "index_member_all" and not params:
+            rows = self._snapshot.get("industry_membership", [])
+        else:
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        if any(
+            not isinstance(row, dict) or not set(fields) <= set(row)
+            for row in rows
+        ):
+            raise TushareSourceError("REPLAY_REQUEST_MISMATCH", source_code=0)
+        return [{field: row[field] for field in fields} for row in rows]
+
 
 def _financial_responses(value: object) -> dict[tuple[str, str], RawSourceResponse]:
     if not isinstance(value, dict):

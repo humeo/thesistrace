@@ -62,6 +62,27 @@ def test_private_financial_operator_exposes_explicit_contract_inputs(
         assert "--date-shard" not in output
 
 
+def test_private_industry_operator_exposes_refresh_and_inspection_contracts(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as refresh_exit:
+        data_operator.main(["refresh-industry", "--help"])
+
+    assert refresh_exit.value.code == 0
+    refresh_help = capsys.readouterr().out
+    assert "--idempotency-key" in refresh_help
+    assert "--observation-through-session" in refresh_help
+    assert "--replay" in refresh_help
+
+    with pytest.raises(SystemExit) as inspect_exit:
+        data_operator.main(["inspect-industry-refresh", "--help"])
+
+    assert inspect_exit.value.code == 0
+    inspect_help = capsys.readouterr().out
+    assert "--idempotency-key" in inspect_help
+    assert "--observation-through-session" not in inspect_help
+
+
 def test_financial_probe_does_not_require_database_or_data_mount(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

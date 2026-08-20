@@ -528,6 +528,125 @@ def test_industry_family_coverage_cannot_exceed_market_coverage(
         store.inspect_root(outside_generation)
 
 
+def test_industry_candidate_replaces_only_industry_family(tmp_path: Path) -> None:
+    canonical = _canonical()
+    del canonical["industry_membership"]
+    store = MountedGenerationStore(tmp_path)
+    market = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+        source_name="market-without-industry",
+        source_lineage={"snapshot": "market"},
+    )
+    rows = [
+        {
+            "instrument_id": "equity:A.SH",
+            "active_from": canonical["research_calendar"][0],
+            "active_to": "",
+            "sw2021_l1": "801780",
+            "sw2021_l2": "801783",
+            "sw2021_l3": "851911",
+        }
+    ]
+
+    candidate = store.materialize_industry_candidate(
+        market.manifest_sha256,
+        rows,
+        observation_through_session=canonical["research_calendar"][-2],
+    )
+    composed = store.compose_industry_candidate(
+        market.manifest_sha256,
+        candidate.manifest_sha256,
+        prepared_at=datetime(2026, 8, 14, tzinfo=UTC),
+        publication_coordinate="a" * 64,
+    )
+
+    industry = next(
+        family for family in composed.families if family.family_id == "equity.industry_membership"
+    )
+    assert industry == candidate
+    assert industry.dataset_coverage == {
+        "kind": "membership-range",
+        "start": canonical["research_calendar"][0],
+        "end": canonical["research_calendar"][-2],
+        "membership_count": 1,
+    }
+    assert {
+        family.family_id: family.manifest_sha256
+        for family in composed.families
+        if family.family_id != "equity.industry_membership"
+    } == {family.family_id: family.manifest_sha256 for family in market.families}
+
+
+def test_industry_candidate_coverage_cannot_exceed_market(tmp_path: Path) -> None:
+    canonical = _canonical()
+    del canonical["industry_membership"]
+    store = MountedGenerationStore(tmp_path)
+    market = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+        source_name="market-without-industry",
+        source_lineage={"snapshot": "market"},
+    )
+
+    with pytest.raises(GenerationStoreError, match="Industry Coverage exceeds Market Coverage"):
+        store.materialize_industry_candidate(
+            market.manifest_sha256,
+            [],
+            observation_through_session="2026-08-14",
+        )
+
+
+def test_market_refresh_inherits_industry_publication_coordinate(tmp_path: Path) -> None:
+    predecessor = _canonical()
+    replacement = _canonical(GENERATION_SESSION_PARTITION_COUNT + 2)
+    del predecessor["industry_membership"]
+    del replacement["industry_membership"]
+    store = MountedGenerationStore(tmp_path)
+    market = store.materialize(
+        predecessor,
+        prepared_at=datetime(2026, 8, 13, tzinfo=UTC),
+        source_name="market",
+        source_lineage={"snapshot": "market"},
+    )
+    candidate = store.materialize_industry_candidate(
+        market.manifest_sha256,
+        [
+            {
+                "instrument_id": "equity:A.SH",
+                "active_from": predecessor["research_calendar"][0],
+                "active_to": "",
+                "sw2021_l1": "801780",
+                "sw2021_l2": "801783",
+                "sw2021_l3": "851911",
+            }
+        ],
+        observation_through_session=predecessor["research_calendar"][-1],
+    )
+    industry = store.compose_industry_candidate(
+        market.manifest_sha256,
+        candidate.manifest_sha256,
+        prepared_at=datetime(2026, 8, 14, tzinfo=UTC),
+        publication_coordinate="b" * 64,
+    )
+
+    refreshed = store.materialize_refresh(
+        predecessor_manifest_sha256=industry.manifest_sha256,
+        replacement_canonical=replacement,
+        replace_from_session=predecessor["research_calendar"][-20],
+        prepared_at=datetime(2026, 8, 15, tzinfo=UTC),
+        source_name="market-refresh",
+        source_lineage={"snapshot": "next-market"},
+    )
+
+    assert refreshed.industry_publication_coordinate == "b" * 64
+    assert next(
+        family.manifest_sha256
+        for family in refreshed.families
+        if family.family_id == "equity.industry_membership"
+    ) == candidate.manifest_sha256
+
+
 def test_market_refresh_reuses_industry_family_manifest_and_coverage(
     tmp_path: Path,
 ) -> None:

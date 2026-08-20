@@ -315,6 +315,7 @@ class DatasetLifecycle:
         operation_id: str,
         prepared_at: datetime | None = None,
         financial_publication_key: str | None = None,
+        industry_publication_key: str | None = None,
     ) -> DatasetHeadPointer:
         # protect_candidate already decoded and validated every immutable object.
         # Re-resolve only the content-addressed descriptor at publication time.
@@ -361,6 +362,23 @@ class DatasetLifecycle:
                     )
                     if receipt.rowcount != 1:
                         raise DataLifecycleError("Financial publication receipt conflicted")
+                if industry_publication_key is not None:
+                    receipt = transaction.execute(
+                        """
+                        UPDATE data.industry_refresh_operations
+                        SET publication_head_moved_at = %s, updated_at = now()
+                        WHERE idempotency_key = %s AND status = 'succeeded'
+                          AND composed_generation_manifest_sha256 = %s
+                          AND publication_head_moved_at IS NULL
+                        """,
+                        (
+                            prepared_at,
+                            industry_publication_key,
+                            candidate_generation_manifest_sha256,
+                        ),
+                    )
+                    if receipt.rowcount != 1:
+                        raise DataLifecycleError("Industry publication receipt conflicted")
                 transaction.execute(
                     """
                     UPDATE data.generation_candidates

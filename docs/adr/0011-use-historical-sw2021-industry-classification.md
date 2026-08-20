@@ -5,10 +5,14 @@ status: accepted
 # Use historical SW2021 industry classification
 
 ThesisTrace V1 publishes the complete SW2021 L1, L2, and L3 hierarchy and each
-stock's historical industry membership as Canonical Market Data. Every Data
-Generation identifies the classification version and retains the membership
-history needed to resolve an instrument's industry for each market session.
-Research never substitutes a stock's current industry for its historical one.
+stock's historical primary classification in the optional immutable
+`equity.industry_membership` Dataset Family. A Dataset Generation that includes
+this Family identifies its classification version and retains the membership
+history needed to resolve an instrument's industry for every session inside the
+Family's own Coverage. Research never substitutes a stock's current industry
+for its historical one. Market publication may advance without this Family and
+must reuse its exact manifest when it is present; Industry has an independent
+collection, validation, candidate, and publication lifecycle.
 ADR-0087 represents each historical membership as a left-closed,
 right-open effective-date interval and rejects overlaps.
 

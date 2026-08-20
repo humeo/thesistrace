@@ -54,6 +54,11 @@ from thesistrace.data.head_store import (
     DatasetHeadPointer,
     MountedDatasetHeadStore,
 )
+from thesistrace.data.industry_refresh import (
+    IndustryRefreshError,
+    IndustryRefreshOutcome,
+    IndustryRefreshService,
+)
 from thesistrace.data.lifecycle import (
     DataLifecycleError,
     DataNotReady,
@@ -134,6 +139,9 @@ __all__ = [
     "MountedDatasetFamilyDescriptor",
     "MountedFamilyGenerationDescriptor",
     "MountedGenerationStore",
+    "IndustryRefreshError",
+    "IndustryRefreshOutcome",
+    "IndustryRefreshService",
     "PinnedGeneration",
     "RefreshOutcome",
     "alpha_field_catalog",

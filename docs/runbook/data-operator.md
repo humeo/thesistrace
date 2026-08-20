@@ -91,6 +91,40 @@ Collection retains the current Head, live candidates, and active execution
 pins. It does not make completed ResearchRuns depend on permanently retained
 market-data Generations.
 
+## Industry refresh
+
+Industry uses the independent `tushare-industry-v1` contract. The operation
+requests `index_classify` and the complete `index_member_all` history, retaining
+the source `is_new`, `in_date`, `out_date`, and L1/L2/L3 values as immutable
+SHA-256-addressed lineage. It does not run as part of Market bootstrap or
+Market refresh:
+
+```sh
+docker compose -f deploy/core/compose.yaml run --rm \
+  -e THESISTRACE_TUSHARE_TOKEN \
+  api thesistrace-data-operator refresh-industry \
+  --idempotency-key industry-2026-08-14 \
+  --observation-through-session 2026-08-14
+
+thesistrace-data-operator inspect-industry-refresh \
+  --idempotency-key industry-2026-08-14
+```
+
+The requested observation-through date must be a Research Session in the
+current Market Coverage. A successful operation replaces only the immutable
+`equity.industry_membership` Family and composes it with the latest Market and
+Financial Families before the one Dataset Head CAS. A concurrent Market or
+Financial publication is therefore preserved. If another Industry publication
+has replaced the source Family, the operation fails with
+`INDUSTRY_TARGET_CHANGED`.
+
+`(SW2021, instrument, session)` remains a single-valued primary
+classification. Overlapping source intervals fail the Industry operation with
+`OVERLAPPING_PRIMARY_INDUSTRY_CLASSIFICATION`, retain bounded diagnostics and
+source lineage, and do not create a candidate or move Dataset Head. There is no
+automatic interval closing, winning-row selection, `UNKNOWN`, override, or
+fallback. `--replay` is an explicit deterministic test input only.
+
 Financial collection and refresh require the live capability report and token
 in deployment. Deterministic acceptance may replace only the remote transport
 with the versioned product replay while exercising the same collection,

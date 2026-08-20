@@ -178,10 +178,14 @@ Bootstrap, Refresh, inspection, work execution, and garbage collection belong
 to the deployment-private `thesistrace-data-operator` command. They are not HTTP
 routes or Web actions.
 
-Bootstrap creates the first complete Data Generation and Dataset Head. Refresh
-collects a bounded overlap plus new completed sessions, builds and validates a
-candidate beside the active Generation, and atomically moves the Head only if
-the expected Head is still current. Failure leaves the previous Head readable.
+Bootstrap creates the first Core Market Data Generation and Dataset Head.
+Market, Financial, and Industry publish independent immutable Family manifests
+which are composed into one Generation behind the one mutable Dataset Head.
+Market Refresh collects a bounded overlap plus new completed sessions without
+calling Industry endpoints. Financial and Industry Refresh each build and
+validate their own candidate, recompose it with the latest unaffected Families,
+and atomically move Head only if its target Family is still current. Any
+failure leaves the previous Head readable.
 
 An active execution pins one Data Generation. Garbage collection retains the
 current Head, live candidates, and active pins; completed Results and Tracking

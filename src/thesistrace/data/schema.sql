@@ -99,6 +99,7 @@ CREATE TABLE data.current_dataset_state (
     singleton smallint NOT NULL,
     last_market_refresh_at timestamp with time zone,
     last_financial_refresh_at timestamp with time zone,
+    last_industry_refresh_at timestamp with time zone,
     CONSTRAINT current_dataset_state_singleton_check CHECK ((singleton = 1))
 );
 
@@ -177,6 +178,45 @@ CREATE TABLE data.financial_refresh_operations (
     CONSTRAINT financial_refresh_operations_counts_check CHECK (((expected_shard_count IS NULL) OR ((expected_shard_count >= 0) AND (completed_shard_count >= 0) AND (completed_shard_count <= expected_shard_count) AND (resumed_shard_count >= 0) AND (resumed_shard_count <= completed_shard_count)))),
     CONSTRAINT financial_refresh_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text]))),
     CONSTRAINT financial_refresh_operations_state_check CHECK ((((status = 'running'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = 'succeeded'::text) AND (candidate_manifest_sha256 IS NOT NULL) AND (expected_shard_count IS NOT NULL) AND (completed_shard_count IS NOT NULL) AND (resumed_shard_count IS NOT NULL) AND (expected_shard_count = completed_shard_count) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL))))
+);
+
+
+--
+-- Name: industry_refresh_operations; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.industry_refresh_operations (
+    idempotency_key text NOT NULL,
+    fingerprint text NOT NULL,
+    source_generation_manifest_sha256 text NOT NULL,
+    prior_industry_manifest_sha256 text,
+    observation_through_session date NOT NULL,
+    status text NOT NULL,
+    source_lineage_sha256 text,
+    failure_code text,
+    failure_diagnostic jsonb,
+    candidate_manifest_sha256 text,
+    composed_generation_manifest_sha256 text,
+    publication_prepared_at timestamp with time zone,
+    publication_head_moved_at timestamp with time zone,
+    published_generation_manifest_sha256 text,
+    published_at timestamp with time zone,
+    published_outcome jsonb,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    finished_at timestamp with time zone,
+    retention_released_at timestamp with time zone,
+    CONSTRAINT industry_refresh_operations_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
+    CONSTRAINT industry_refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT industry_refresh_operations_source_generation_check CHECK ((source_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT industry_refresh_operations_prior_check CHECK (((prior_industry_manifest_sha256 IS NULL) OR (prior_industry_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT industry_refresh_operations_lineage_check CHECK (((source_lineage_sha256 IS NULL) OR (source_lineage_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT industry_refresh_operations_candidate_check CHECK (((candidate_manifest_sha256 IS NULL) OR (candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT industry_refresh_operations_composed_check CHECK (((composed_generation_manifest_sha256 IS NULL) OR (composed_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT industry_refresh_operations_published_check CHECK (((published_generation_manifest_sha256 IS NULL) OR (published_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT industry_refresh_operations_publication_state_check CHECK (((published_generation_manifest_sha256 IS NULL) = (published_at IS NULL)) AND ((published_generation_manifest_sha256 IS NULL) = (published_outcome IS NULL))),
+    CONSTRAINT industry_refresh_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text]))),
+    CONSTRAINT industry_refresh_operations_state_check CHECK ((((status = 'running'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = 'succeeded'::text) AND (candidate_manifest_sha256 IS NOT NULL) AND (source_lineage_sha256 IS NOT NULL) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (candidate_manifest_sha256 IS NULL) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL))))
 );
 
 
@@ -365,6 +405,10 @@ ALTER TABLE ONLY data.financial_collection_operations
 
 ALTER TABLE ONLY data.financial_refresh_operations
     ADD CONSTRAINT financial_refresh_operations_pkey PRIMARY KEY (idempotency_key);
+
+
+ALTER TABLE ONLY data.industry_refresh_operations
+    ADD CONSTRAINT industry_refresh_operations_pkey PRIMARY KEY (idempotency_key);
 
 
 ALTER TABLE ONLY data.financial_raw_batches

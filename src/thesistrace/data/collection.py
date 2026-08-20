@@ -265,19 +265,26 @@ class DataGarbageCollector:
     def _validated_retained_files(
         self,
         root_ids: tuple[str, ...],
-        financial_outputs: tuple[GenerationFileRef, ...],
+        retained_outputs: tuple[GenerationFileRef, ...],
     ) -> frozenset[GenerationFileRef]:
         retained: set[GenerationFileRef] = set()
         for manifest_sha256 in root_ids:
             self._generations.validate_generation(manifest_sha256)
             retained.update(self._generations.referenced_files(manifest_sha256))
-        for output in financial_outputs:
+        for output in retained_outputs:
             if output.kind == "financial_candidate":
                 retained.update(
                     self._generations.financial_candidate_referenced_files(output.sha256)
                 )
             elif output.kind == "raw_financial":
                 self._generations.validate_raw_financial_batch(output.sha256)
+                retained.add(output)
+            elif output.kind == "industry_candidate":
+                retained.update(
+                    self._generations.industry_candidate_referenced_files(output.sha256)
+                )
+            elif output.kind == "raw_industry":
+                self._generations.validate_raw_industry_batch(output.sha256)
                 retained.add(output)
             else:
                 raise DataCollectionError("COLLECTION_ROOTS_INVALID")
@@ -332,6 +339,8 @@ def _data_work_is_active(transaction: PostgresTransaction) -> bool:
             SELECT 1 FROM data.financial_collection_operations WHERE status = 'running'
             UNION ALL
             SELECT 1 FROM data.financial_refresh_operations WHERE status = 'running'
+            UNION ALL
+            SELECT 1 FROM data.industry_refresh_operations WHERE status = 'running'
         ) AS active
         """
     ).fetchone()
@@ -368,6 +377,28 @@ def _retention_snapshot(
     ).fetchall()
     retained.update(
         GenerationFileRef("raw_financial", str(row["batch_sha256"])) for row in raw_rows
+    )
+    industry_candidate_rows = transaction.execute(
+        """
+        SELECT candidate_manifest_sha256
+        FROM data.industry_refresh_operations
+        WHERE status = 'succeeded' AND retention_released_at IS NULL
+        """
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("industry_candidate", str(row["candidate_manifest_sha256"]))
+        for row in industry_candidate_rows
+    )
+    industry_raw_rows = transaction.execute(
+        """
+        SELECT source_lineage_sha256
+        FROM data.industry_refresh_operations
+        WHERE source_lineage_sha256 IS NOT NULL AND retention_released_at IS NULL
+        """
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("raw_industry", str(row["source_lineage_sha256"]))
+        for row in industry_raw_rows
     )
     return roots, tuple(sorted(retained))
 

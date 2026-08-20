@@ -200,6 +200,7 @@ class MountedGenerationStore:
             "data_identity": data_identity,
             **identity,
             "financial_publication_coordinate": None,
+            "industry_publication_coordinate": None,
             "preparation": preparation,
         }
         root_bytes = _bounded_manifest_bytes(root_manifest)
@@ -360,6 +361,7 @@ class MountedGenerationStore:
             "data_identity": data_identity,
             **identity,
             "financial_publication_coordinate": None,
+            "industry_publication_coordinate": None,
             "preparation": _preparation(
                 prepared_at,
                 stream.source_name,
@@ -585,6 +587,9 @@ class MountedGenerationStore:
             "financial_publication_coordinate": (
                 publication_coordinate or financial_candidate_manifest_sha256
             ),
+            "industry_publication_coordinate": root.get(
+                "industry_publication_coordinate"
+            ),
             "preparation": _preparation(
                 prepared_at,
                 "financial-composition",
@@ -598,6 +603,145 @@ class MountedGenerationStore:
         sha256 = hashlib.sha256(content).hexdigest()
         self._store_addressed(self._manifest_path(sha256), sha256, content)
         return self.validate_generation(sha256)
+
+    def materialize_industry_candidate(
+        self,
+        market_generation_manifest_sha256: str,
+        rows: list[dict[str, object]],
+        *,
+        observation_through_session: str,
+    ) -> MountedDatasetFamilyDescriptor:
+        market = self.validate_generation(market_generation_manifest_sha256)
+        try:
+            through = date.fromisoformat(observation_through_session).isoformat()
+        except ValueError as error:
+            raise GenerationStoreError("Industry Coverage is invalid") from error
+        if through not in market.research_sessions:
+            raise GenerationStoreError("Industry Coverage exceeds Market Coverage")
+        allowed = {
+            identity.instrument_id
+            for identity in self.read_historical_ordinary_a_share_identities(
+                market_generation_manifest_sha256
+            )
+        }
+        if any(str(row.get("instrument_id")) not in allowed for row in rows):
+            raise GenerationStoreError("Industry instrument identity is incompatible")
+        calendar = list(
+            market.research_sessions[: market.research_sessions.index(through) + 1]
+        )
+        table = self._materialize_table(
+            _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME["industry_membership"],
+            rows,
+            calendar,
+        )
+        reference = self._materialize_market_family(
+            INDUSTRY_FAMILY_SPEC,
+            table_references={"industry_membership": table},
+            canonical={"industry_membership": rows},
+            calendar=calendar,
+        )
+        return _family_descriptor_from_reference(reference, INDUSTRY_FAMILY_SPEC)
+
+    def compose_industry_candidate(
+        self,
+        generation_manifest_sha256: str,
+        industry_candidate_manifest_sha256: str,
+        *,
+        prepared_at: datetime,
+        publication_coordinate: str,
+    ) -> MountedFamilyGenerationDescriptor:
+        current = self.validate_generation(generation_manifest_sha256)
+        _require_sha256(publication_coordinate)
+        root = self._read_family_generation_root(generation_manifest_sha256)
+        candidate_reference = self._industry_family_reference(
+            industry_candidate_manifest_sha256
+        )
+        coverage = candidate_reference["dataset_coverage"]
+        if (
+            str(coverage["start"]) < current.research_sessions[0]
+            or str(coverage["end"]) > current.data_through_session
+        ):
+            raise GenerationStoreError("Industry candidate is incompatible with Market Data")
+        non_financial = {
+            str(reference["family_id"]): dict(reference)
+            for reference in root["families"]
+            if isinstance(reference, Mapping)
+            and reference.get("family_id") != "equity.financial_pit"
+            and reference.get("family_id") != INDUSTRY_FAMILY_SPEC.family_id
+        }
+        non_financial[INDUSTRY_FAMILY_SPEC.family_id] = candidate_reference
+        family_references = [
+            non_financial[spec.family_id]
+            for spec in ordered_non_financial_specs(frozenset(non_financial))
+        ]
+        financial_reference = _family_reference(root, "equity.financial_pit")
+        if financial_reference is not None:
+            family_references.append(dict(financial_reference))
+        identity = {
+            "schema_contract": root["schema_contract"],
+            "data_through_session": root["data_through_session"],
+            "research_sessions": root["research_sessions"],
+            "field_availability": root["field_availability"],
+            "families": family_references,
+            "financial_research_readiness": root["financial_research_readiness"],
+        }
+        manifest = {
+            "format": _FAMILY_GENERATION_FORMAT,
+            "version": _MANIFEST_VERSION,
+            "data_identity": hashlib.sha256(canonical_json_bytes(identity)).hexdigest(),
+            **identity,
+            "financial_publication_coordinate": root["financial_publication_coordinate"],
+            "industry_publication_coordinate": publication_coordinate,
+            "preparation": _preparation(
+                prepared_at,
+                "industry-composition",
+                {
+                    "source_generation_manifest_sha256": generation_manifest_sha256,
+                    "industry_candidate_manifest_sha256": (
+                        industry_candidate_manifest_sha256
+                    ),
+                },
+            ),
+        }
+        content = _bounded_manifest_bytes(manifest)
+        sha256 = hashlib.sha256(content).hexdigest()
+        self._store_addressed(self._manifest_path(sha256), sha256, content)
+        return self.validate_generation(sha256)
+
+    def open_industry_candidate(
+        self,
+        manifest_sha256: str,
+    ) -> MountedDatasetFamilyDescriptor:
+        return _family_descriptor_from_reference(
+            self._industry_family_reference(manifest_sha256),
+            INDUSTRY_FAMILY_SPEC,
+        )
+
+    def _industry_family_reference(self, manifest_sha256: str) -> dict[str, object]:
+        _require_sha256(manifest_sha256)
+        manifest = self._read_manifest(manifest_sha256)
+        if (
+            manifest.get("format") != _FAMILY_MANIFEST_FORMAT
+            or manifest.get("version") != _MANIFEST_VERSION
+            or manifest.get("family_id") != INDUSTRY_FAMILY_SPEC.family_id
+            or manifest.get("schema_contract") != INDUSTRY_FAMILY_SPEC.schema_contract
+        ):
+            raise GenerationStoreError("Industry candidate is incompatible")
+        tables = manifest.get("tables")
+        if not isinstance(tables, list):
+            raise GenerationStoreError("Industry candidate is incompatible")
+        content = _bounded_manifest_bytes(manifest)
+        reference = {
+            "family_id": INDUSTRY_FAMILY_SPEC.family_id,
+            "schema_contract": INDUSTRY_FAMILY_SPEC.schema_contract,
+            "dataset_coverage": manifest.get("dataset_coverage"),
+            "validation_summary": manifest.get("validation_summary"),
+            "manifest_sha256": manifest_sha256,
+            "manifest_byte_count": len(content),
+            "table_names": list(INDUSTRY_FAMILY_SPEC.table_names),
+        }
+        self._read_family_manifest(INDUSTRY_FAMILY_SPEC, reference)
+        return reference
 
     def read_historical_ordinary_a_share_identities(
         self,
@@ -1190,6 +1334,9 @@ class MountedGenerationStore:
             "data_identity": data_identity,
             **identity,
             "financial_publication_coordinate": None,
+            "industry_publication_coordinate": predecessor_root.get(
+                "industry_publication_coordinate"
+            ),
             "preparation": preparation,
         }
         root_bytes = _bounded_manifest_bytes(root_manifest)
@@ -1282,6 +1429,29 @@ class MountedGenerationStore:
             raise GenerationStoreError("Financial retained candidate is invalid") from error
         return frozenset(self._financial_referenced_files(manifest_sha256))
 
+    def industry_candidate_referenced_files(
+        self,
+        manifest_sha256: str,
+    ) -> frozenset[GenerationFileRef]:
+        reference = self._industry_family_reference(manifest_sha256)
+        manifest = self._read_family_manifest(INDUSTRY_FAMILY_SPEC, reference)
+        references = {GenerationFileRef("manifest", manifest_sha256)}
+        for table in manifest["tables"]:
+            if not isinstance(table, Mapping):
+                raise GenerationStoreError("Industry retained candidate is invalid")
+            table_sha256 = str(table["manifest_sha256"])
+            references.add(GenerationFileRef("manifest", table_sha256))
+            table_manifest = self._read_manifest(table_sha256)
+            objects = table_manifest.get("objects")
+            if not isinstance(objects, list):
+                raise GenerationStoreError("Industry retained candidate is invalid")
+            references.update(
+                GenerationFileRef("object", str(item["sha256"]))
+                for item in objects
+                if isinstance(item, Mapping)
+            )
+        return frozenset(references)
+
     def validate_raw_financial_batch(self, sha256: str) -> None:
         from thesistrace.data.financial_collection import (
             FinancialCollectionError,
@@ -1292,6 +1462,17 @@ class MountedGenerationStore:
             RawFinancialBatchStore(self._root).read(sha256)
         except FinancialCollectionError as error:
             raise GenerationStoreError("Financial retained raw batch is invalid") from error
+
+    def validate_raw_industry_batch(self, sha256: str) -> None:
+        _require_sha256(sha256)
+        try:
+            self._files.read(
+                self._raw_industry_path(sha256),
+                sha256,
+                max_byte_count=128 * 1024 * 1024,
+            )
+        except AddressedFileError as error:
+            raise GenerationStoreError("Industry retained raw batch is invalid") from error
 
     def _financial_referenced_files(
         self,
@@ -1354,6 +1535,10 @@ class MountedGenerationStore:
             GenerationFileRef("raw_financial", sha256)
             for sha256 in _inventory_sha256(self._root, "financial/raw", ".json")
         )
+        references.update(
+            GenerationFileRef("raw_industry", sha256)
+            for sha256 in _inventory_sha256(self._root, "industry/raw", ".json")
+        )
         return frozenset(references)
 
     def delete_file(self, reference: GenerationFileRef) -> bool:
@@ -1363,6 +1548,8 @@ class MountedGenerationStore:
             target = self._object_path(reference.sha256)
         elif reference.kind == "raw_financial":
             target = self._raw_financial_path(reference.sha256)
+        elif reference.kind == "raw_industry":
+            target = self._raw_industry_path(reference.sha256)
         else:
             raise GenerationStoreError("Generation file kind is invalid")
         try:
@@ -1377,7 +1564,7 @@ class MountedGenerationStore:
             or root.get("version") != _MANIFEST_VERSION
         ):
             raise GenerationStoreError("Family Generation candidate is incompatible")
-        if set(root) != {
+        expected_keys = {
             "format",
             "version",
             "data_identity",
@@ -1389,7 +1576,8 @@ class MountedGenerationStore:
             "financial_research_readiness",
             "financial_publication_coordinate",
             "preparation",
-        }:
+        }
+        if set(root) not in (expected_keys, {*expected_keys, "industry_publication_coordinate"}):
             raise GenerationStoreError("Family Generation candidate schema is incompatible")
         families = root["families"]
         family_ids = (
@@ -2127,6 +2315,10 @@ class MountedGenerationStore:
         _require_sha256(sha256)
         return self._root / "financial" / "raw" / "sha256" / sha256[:2] / f"{sha256}.json"
 
+    def _raw_industry_path(self, sha256: str) -> Path:
+        _require_sha256(sha256)
+        return self._root / "industry" / "raw" / "sha256" / sha256[:2] / f"{sha256}.json"
+
 
 def _inventory_sha256(root: Path, directory: str, suffix: str) -> tuple[str, ...]:
     base = root / directory / "sha256"
@@ -2277,6 +2469,7 @@ def _family_generation_descriptor_from_root(
         )
     readiness = root.get("financial_research_readiness")
     coordinate = root.get("financial_publication_coordinate")
+    industry_coordinate = root.get("industry_publication_coordinate")
     if financial_candidate is None:
         readiness_valid = readiness is None and coordinate is None
     else:
@@ -2288,6 +2481,8 @@ def _family_generation_descriptor_from_root(
         )
     if not readiness_valid:
         raise GenerationStoreError("Financial Research Readiness is incompatible")
+    if industry_coordinate is not None:
+        _require_sha256(industry_coordinate)
     try:
         validate_generation_coverages(
             tuple(family for family in families if family.family_id != "equity.financial_pit"),
@@ -2316,6 +2511,9 @@ def _family_generation_descriptor_from_root(
         ),
         financial_research_readiness=(None if readiness is None else dict(readiness)),
         financial_publication_coordinate=(None if coordinate is None else str(coordinate)),
+        industry_publication_coordinate=(
+            None if industry_coordinate is None else str(industry_coordinate)
+        ),
     )
 
 

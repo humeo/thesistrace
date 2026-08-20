@@ -132,6 +132,7 @@ class MountedFamilyGenerationDescriptor:
     financial_candidate_manifest_sha256: str | None = None
     financial_research_readiness: dict[str, object] | None = None
     financial_publication_coordinate: str | None = None
+    industry_publication_coordinate: str | None = None
 
 
 _SESSION_COVERAGE = ResearchSessionRangeCoverage()

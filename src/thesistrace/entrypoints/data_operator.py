@@ -14,6 +14,10 @@ from typing import NoReturn
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_financial import TushareFinancialSource
+from thesistrace.adapters.tushare_industry import (
+    IndustrySourceError,
+    TushareIndustrySource,
+)
 from thesistrace.adapters.tushare_provider import (
     HttpTushareTransport,
     TushareAdapter,
@@ -39,6 +43,8 @@ from thesistrace.data import (
     FinancialDateShard,
     FinancialRefreshError,
     FinancialRefreshService,
+    IndustryRefreshError,
+    IndustryRefreshService,
     RefreshOutcome,
     probe_financial_capability,
 )
@@ -52,6 +58,12 @@ _emit_data_operator_event = non_blocking_operational_event_sink(
     emit_operational_event_data,
     component="data_operator",
 )
+
+
+class _UnavailableIndustrySource:
+    def collect(self, *, allowed_codes: set[str]) -> NoReturn:
+        del allowed_codes
+        raise IndustrySourceError("INDUSTRY_SOURCE_UNAVAILABLE")
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -72,6 +84,8 @@ def main(arguments: list[str] | None = None) -> None:
     except FinancialCollectionError as error:
         _failure(error.code, diagnostic=error.diagnostic(), command=command)
     except (FinancialCandidateError, FinancialRefreshError) as error:
+        _failure(str(error), command=command)
+    except (IndustryRefreshError, IndustrySourceError) as error:
         _failure(str(error), command=command)
     except Exception:
         _failure("OPERATOR_FAILURE", command=command)
@@ -124,6 +138,12 @@ def _run(
     financial_refresh.add_argument("--prior-candidate-manifest-sha256")
     financial_refresh.add_argument("--observation-through-session", required=True)
     financial_refresh.add_argument("--replay", type=Path)
+    industry_refresh = subcommands.add_parser("refresh-industry")
+    industry_refresh.add_argument("--idempotency-key", required=True)
+    industry_refresh.add_argument("--observation-through-session", required=True)
+    industry_refresh.add_argument("--replay", type=Path)
+    industry_inspect = subcommands.add_parser("inspect-industry-refresh")
+    industry_inspect.add_argument("--idempotency-key", required=True)
     parsed = parser.parse_args(arguments)
 
     transport: HttpTushareTransport | None = None
@@ -157,6 +177,12 @@ def _run(
             )
         if parsed.command == "inspect-refresh":
             return DataRefreshService(database, mount_root).inspect(parsed.idempotency_key)
+        if parsed.command == "inspect-industry-refresh":
+            return IndustryRefreshService(
+                database,
+                mount_root,
+                _UnavailableIndustrySource(),
+            ).inspect(parsed.idempotency_key)
         if parsed.command == "collect":
             return DataGarbageCollector(database, mount_root).collect(
                 idempotency_key=parsed.idempotency_key
@@ -219,6 +245,23 @@ def _run(
                 "expected_shard_count": outcome.expected_shard_count,
                 "completed_shard_count": outcome.completed_shard_count,
                 "resumed_shard_count": outcome.resumed_shard_count,
+            }
+        if parsed.command == "refresh-industry":
+            outcome = IndustryRefreshService(
+                database,
+                mount_root,
+                TushareIndustrySource(provider),
+                progress=_progress,
+            ).publish(
+                idempotency_key=parsed.idempotency_key,
+                observation_through_session=parsed.observation_through_session,
+            )
+            return {
+                "idempotency_key": outcome.idempotency_key,
+                "status": "succeeded",
+                "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
+                "generation_manifest_sha256": outcome.generation_manifest_sha256,
+                "source_lineage_sha256": outcome.source_lineage_sha256,
             }
         source = TushareDataSource(
             provider=provider,
