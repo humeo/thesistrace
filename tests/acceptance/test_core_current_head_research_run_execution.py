@@ -1782,7 +1782,7 @@ def test_blocked_and_retry_wait_tracks_stop_without_future_attempts(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
-def test_tracking_heartbeat_pool_timeout_enters_the_transient_cycle(
+def test_tracking_pool_timeout_enters_the_transient_cycle(
     tmp_path: Path,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
@@ -1817,6 +1817,7 @@ def test_tracking_heartbeat_pool_timeout_enters_the_transient_cycle(
             pool_timeout_seconds=0.2,
         )
         constrained.open()
+        failed_requests_before = constrained.failed_request_count()
         injected = Event()
         tracking_events: list[dict[str, object]] = []
         heartbeat_timed_out = Event()
@@ -1854,6 +1855,7 @@ def test_tracking_heartbeat_pool_timeout_enters_the_transient_cycle(
                 processor.process_next(on_execution_event=exhaust_pool_during_calculation)
             assert injected.is_set()
             assert heartbeat_timed_out.is_set()
+            assert constrained.failed_request_count() > failed_requests_before
         finally:
             constrained.close()
 

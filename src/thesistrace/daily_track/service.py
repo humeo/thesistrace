@@ -492,6 +492,17 @@ class DailyTrackService:
                 stopping_pending = False
                 stop_monitor: Thread | None = None
                 stop_monitor_finished = Event()
+
+                def observe_stop_pending() -> None:
+                    nonlocal failure, stopping_pending
+                    try:
+                        stopping_pending = (
+                            stopping_pending or self._stop_is_pending(current_claim)
+                        )
+                    except Exception as error:
+                        if failure is None:
+                            failure = error
+
                 with self._maintain_current_claim(current_claim, emit) as authority_lost:
                     try:
                         execution = self._execute_current(
@@ -579,9 +590,7 @@ class DailyTrackService:
                         failure = error
                     finally:
                         if execution is not None:
-                            stopping_pending = (
-                                stopping_pending or self._stop_is_pending(current_claim)
-                            )
+                            observe_stop_pending()
                             if stopping_pending:
                                 execution.cancel()
                             else:
@@ -589,7 +598,7 @@ class DailyTrackService:
                         stop_monitor_finished.set()
                         if stop_monitor is not None:
                             stop_monitor.join(timeout=5)
-                stopping_pending = stopping_pending or self._stop_is_pending(current_claim)
+                observe_stop_pending()
                 if stopping_pending:
                     if self._confirm_stopped(current_claim):
                         emit(
