@@ -51,10 +51,10 @@ from thesistrace.daily_track.planning import (
 )
 from thesistrace.daily_track.session_persistence import SessionCoordinateRepository
 from thesistrace.data import (
-    FINANCIAL_FIELDS,
     DatasetLifecycle,
     MountedGenerationStore,
 )
+from thesistrace.data.dependencies import DataDependencies, resolve_data_dependencies
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
     JsonPayload,
@@ -87,10 +87,10 @@ ACTIVE_DAILY_TRACK_LIMIT = 10
 PUBLIC_BLOCKED_REASON = "DailyTrack could not process the current dataset."
 CAPACITY_BLOCKED_REASON = "DailyTrack target exceeds Tracking Worker capacity."
 FINANCIAL_COVERAGE_BLOCKED_REASON = "Financial Coverage ends before the next Research Session."
+INDUSTRY_COVERAGE_BLOCKED_REASON = "Industry Coverage ends before the next Research Session."
 INFRASTRUCTURE_EXHAUSTED_BLOCKED_REASON = (
     "DailyTrack exhausted its automatic infrastructure retries."
 )
-_FINANCIAL_FIELD_IDS = frozenset(field.field_id for field in FINANCIAL_FIELDS)
 _TRACKING_ELIGIBILITY_SELECT = """
     SELECT track.id, track.origin, track.execution_fence,
            checkpoint.boundary_session,
@@ -145,6 +145,10 @@ class DailyTrackProgressionFailed(RuntimeError):
 
 
 class FinancialCoverageUnavailable(RuntimeError):
+    pass
+
+
+class IndustryCoverageUnavailable(RuntimeError):
     pass
 
 
@@ -204,6 +208,7 @@ class _SessionProgressionClaim:
     current_session: str
     target_sessions: tuple[str, ...]
     financial_coverage_unavailable: bool
+    industry_coverage_unavailable: bool
 
 
 @dataclass(frozen=True)
@@ -609,6 +614,23 @@ class DailyTrackService:
                         current_claim,
                         failure,
                         blocked_reason=FINANCIAL_COVERAGE_BLOCKED_REASON,
+                    )
+                    if recorded is None:
+                        emit(
+                            _tracking_event(
+                                "tracking_attempt_fenced",
+                                track_id=current_claim.track_id,
+                                attempt_id=current_claim.attempt_id,
+                                outcome="fenced",
+                            )
+                        )
+                    else:
+                        _emit_tracking_failure(emit, recorded)
+                elif isinstance(failure, IndustryCoverageUnavailable):
+                    recorded = self._record_current_failure(
+                        current_claim,
+                        failure,
+                        blocked_reason=INDUSTRY_COVERAGE_BLOCKED_REASON,
                     )
                     if recorded is None:
                         emit(
@@ -1473,19 +1495,45 @@ class DailyTrackService:
                 if not target_sessions:
                     continue
                 origin = TrackingOrigin.model_validate(row["origin"])
+                dependencies = _origin_dependencies(origin)
                 financial_coverage_unavailable = False
-                if _uses_financial_fields(origin):
-                    financial_through = admission.financial_observation_through_session
+                industry_coverage_unavailable = False
+                coverage_limits = tuple(
+                    coverage
+                    for required, coverage in (
+                        (
+                            dependencies.financial,
+                            admission.financial_observation_through_session,
+                        ),
+                        (
+                            dependencies.industry,
+                            admission.industry_observation_through_session,
+                        ),
+                    )
+                    if required
+                )
+                if coverage_limits:
                     covered_targets = tuple(
                         session
                         for session in target_sessions
-                        if financial_through is not None and session <= financial_through
+                        if all(
+                            coverage is not None and session <= coverage
+                            for coverage in coverage_limits
+                        )
                     )
                     if covered_targets:
                         target_sessions = covered_targets
                     else:
                         target_sessions = (target_sessions[0],)
-                        financial_coverage_unavailable = True
+                        financial_coverage_unavailable = dependencies.financial and (
+                            admission.financial_observation_through_session is None
+                            or target_sessions[-1]
+                            > admission.financial_observation_through_session
+                        )
+                        industry_coverage_unavailable = dependencies.industry and (
+                            admission.industry_observation_through_session is None
+                            or target_sessions[-1] > admission.industry_observation_through_session
+                        )
                 existing = transaction.execute(
                     """
                     SELECT id,
@@ -1510,9 +1558,13 @@ class DailyTrackService:
                     target_sessions = tuple(
                         value.isoformat() for value in existing["target_sessions"]
                     )
-                    financial_coverage_unavailable = _uses_financial_fields(origin) and (
+                    financial_coverage_unavailable = dependencies.financial and (
                         admission.financial_observation_through_session is None
                         or target_sessions[-1] > admission.financial_observation_through_session
+                    )
+                    industry_coverage_unavailable = dependencies.industry and (
+                        admission.industry_observation_through_session is None
+                        or target_sessions[-1] > admission.industry_observation_through_session
                     )
                 planning_candidates = target_sessions[:MAX_CHUNK_SESSION_COUNT]
                 planning = _origin_planning_facts(origin)
@@ -1660,6 +1712,7 @@ class DailyTrackService:
                     current_session=current_session,
                     target_sessions=target_sessions,
                     financial_coverage_unavailable=financial_coverage_unavailable,
+                    industry_coverage_unavailable=industry_coverage_unavailable,
                 )
         return None
 
@@ -2146,6 +2199,10 @@ class DailyTrackService:
             raise FinancialCoverageUnavailable(
                 "Financial Coverage does not include the next Research Session"
             )
+        if claim.industry_coverage_unavailable:
+            raise IndustryCoverageUnavailable(
+                "Industry Coverage does not include the next Research Session"
+            )
         predecessor = _read_publication_json(
             self._publication,
             PublishedRef(
@@ -2505,11 +2562,14 @@ def _tracking_failure_is_retryable(error: Exception) -> bool:
     )
 
 
-def _uses_financial_fields(origin: TrackingOrigin) -> bool:
+def _origin_dependencies(origin: TrackingOrigin) -> DataDependencies:
     field_bindings = origin.immutable_input.get("field_bindings")
     if not isinstance(field_bindings, Mapping):
         raise RuntimeError("DailyTrack field bindings are invalid")
-    return bool(set(field_bindings) & _FINANCIAL_FIELD_IDS)
+    return resolve_data_dependencies(
+        field_ids=set(field_bindings),
+        neutralization=origin_neutralization(origin),
+    )
 
 
 def _origin_planning_facts(origin: TrackingOrigin) -> dict[str, int]:

@@ -97,6 +97,7 @@ class MountedGenerationAdmission:
     generation: MountedFamilyGenerationDescriptor
     research_calendar: tuple[str, ...]
     financial_observation_through_session: str | None
+    industry_observation_through_session: str | None
 
 
 @dataclass(frozen=True)
@@ -1131,10 +1132,26 @@ class MountedGenerationStore:
                 financial_through = date.fromisoformat(str(value)).isoformat()
             except (KeyError, StopIteration, ValueError) as error:
                 raise GenerationStoreError("Financial admission projection is invalid") from error
+        industry_through: str | None = None
+        industry_family = next(
+            (
+                family
+                for family in descriptor.families
+                if family.family_id == "equity.industry_membership"
+            ),
+            None,
+        )
+        if industry_family is not None:
+            try:
+                value = industry_family.dataset_coverage["end"]
+                industry_through = date.fromisoformat(str(value)).isoformat()
+            except (KeyError, ValueError) as error:
+                raise GenerationStoreError("Industry admission projection is invalid") from error
         return MountedGenerationAdmission(
             generation=descriptor,
             research_calendar=calendar,
             financial_observation_through_session=financial_through,
+            industry_observation_through_session=industry_through,
         )
 
     def maximum_universe_cardinality(

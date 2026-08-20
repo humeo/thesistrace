@@ -27,6 +27,8 @@ class DatasetAdmissionSnapshot:
     maximum_universe_cardinality: MaximumUniverseCardinality
     financial_coverage_start: date | None = None
     financial_coverage_end: date | None = None
+    industry_coverage_start: date | None = None
+    industry_coverage_end: date | None = None
 
     def research_period(self, start: date, end: date) -> tuple[date, ...]:
         if start > end:
@@ -78,6 +80,14 @@ class DatasetAdmissionService:
                 if family.family_id == "equity.financial_pit"
             )
             financial_start = date.fromisoformat(str(financial_family.dataset_coverage["start"]))
+        industry_family = next(
+            (
+                family
+                for family in admission.generation.families
+                if family.family_id == "equity.industry_membership"
+            ),
+            None,
+        )
         return DatasetAdmissionSnapshot(
             generation_manifest_sha256=admission.generation.manifest_sha256,
             data_through_session=date.fromisoformat(
@@ -100,5 +110,15 @@ class DatasetAdmissionService:
                 None
                 if admission.financial_observation_through_session is None
                 else date.fromisoformat(admission.financial_observation_through_session)
+            ),
+            industry_coverage_start=(
+                None
+                if industry_family is None
+                else date.fromisoformat(str(industry_family.dataset_coverage["start"]))
+            ),
+            industry_coverage_end=(
+                None
+                if industry_family is None
+                else date.fromisoformat(str(industry_family.dataset_coverage["end"]))
             ),
         )

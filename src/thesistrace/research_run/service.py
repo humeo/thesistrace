@@ -24,13 +24,13 @@ from thesistrace._postgres import PostgresDatabase, PostgresTransaction
 from thesistrace.alpha_language import CompiledAlpha, FormulaCompilationError, alpha_language
 from thesistrace.daily_track import DailyTrackSummary, TrackingOrigin
 from thesistrace.data import (
-    FINANCIAL_FIELDS,
     DatasetAdmissionSnapshot,
     DatasetLifecycle,
     DatasetWarmupUnavailable,
     MountedFamilyGenerationDescriptor,
     MountedGenerationStore,
 )
+from thesistrace.data.dependencies import resolve_data_dependencies
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
     JsonPayload,
@@ -3012,8 +3012,11 @@ def _admitted_input(
                 )
             ]
         )
-    financial_field_ids = {field.field_id for field in FINANCIAL_FIELDS}
-    if field_ids & financial_field_ids:
+    dependencies = resolve_data_dependencies(
+        field_ids=field_ids,
+        neutralization=command.neutralization,
+    )
+    if dependencies.financial:
         first_index = snapshot.research_sessions.index(sessions[0])
         warmup_index = first_index - compiled.effective_lookback
         financial_start = snapshot.financial_coverage_start
@@ -3038,6 +3041,32 @@ def _admitted_input(
                         message=(
                             "Financial Formula needs its requested period and lookback inside "
                             f"Financial Coverage; current Financial Coverage is {available}."
+                        ),
+                    )
+                ]
+            )
+    if dependencies.industry:
+        industry_start = snapshot.industry_coverage_start
+        industry_end = snapshot.industry_coverage_end
+        if (
+            industry_start is None
+            or industry_end is None
+            or sessions[0] < industry_start
+            or sessions[-1] > industry_end
+        ):
+            available = (
+                "not ready"
+                if industry_start is None or industry_end is None
+                else f"{industry_start.isoformat()} to {industry_end.isoformat()}"
+            )
+            raise ResearchRunAdmissionRejected(
+                [
+                    ResearchRunAdmissionIssue(
+                        code="INDUSTRY_CALCULATION_OUTSIDE_COVERAGE",
+                        field="neutralization",
+                        message=(
+                            "Industry Neutralization needs its requested period inside "
+                            f"Industry Coverage; current Industry Coverage is {available}."
                         ),
                     )
                 ]

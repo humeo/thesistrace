@@ -1024,6 +1024,74 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
+def test_industry_track_blocks_at_cutoff_then_requires_retry(tmp_path: Path) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    seed_sessions = (
+        "2010-01-04",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+    )
+    seed_head = _publish_composite_head(settings, sessions=seed_sessions)
+    with TestClient(create_app(settings)) as client:
+        accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "industry-track-seed",
+                neutralization="industry",
+            ),
+        )
+        run_id = accepted.json()["id"]
+        assert client.app.state.core_runtime.research_runs.process_next() is True
+        track_id = client.post(
+            f"/api/research-runs/{run_id}/daily-tracks",
+            json={"request_id": "industry-track-activation"},
+        ).json()["id"]
+        before = _tracking_checkpoint_history(settings, track_id)
+
+        lagged_sessions = (*seed_sessions, "2026-08-06")
+        lagged_head = _publish_composite_head(
+            settings,
+            sessions=lagged_sessions,
+            industry_through=seed_sessions[-1],
+            expected_manifest=seed_head,
+            operation_id="industry-track-lagged",
+        )
+        assert client.app.state.core_runtime.daily_tracks.process_next() is True
+        blocked = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert blocked["status"] == "blocked"
+        assert blocked["strategy_session"] == seed_sessions[-1]
+        assert blocked["blocked_reason"] == (
+            "Industry Coverage ends before the next Research Session."
+        )
+        assert _tracking_checkpoint_history(settings, track_id) == before
+
+        _publish_composite_head(
+            settings,
+            sessions=lagged_sessions,
+            expected_manifest=lagged_head,
+            operation_id="industry-track-recovered",
+        )
+        retry = client.post(
+            f"/api/daily-tracks/{track_id}/retry",
+            json={"request_id": "industry-track-retry"},
+        )
+        assert retry.status_code == 202
+        assert client.app.state.core_runtime.daily_tracks.process_next() is True
+        recovered = client.get(f"/api/daily-tracks/{track_id}").json()
+        assert recovered["status"] == "active"
+        assert recovered["strategy_session"] == "2026-08-06"
+        after = _tracking_checkpoint_history(settings, track_id)
+        assert len(after) == len(before) + 1
+        assert len({checkpoint["manifest_sha256"] for checkpoint in after}) == len(after)
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
 def test_tracking_advance_freezes_and_publishes_only_the_oldest_64_sessions(
     tmp_path: Path,
 ) -> None:
@@ -1966,6 +2034,87 @@ def test_financial_admission_explains_coverage_without_blocking_market_only_form
                 "market-only-after-finance-cutoff",
                 start_date="2026-08-07",
                 end_date="2026-08-07",
+            ),
+        )
+        assert market_only.status_code == 202
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_industry_admission_requires_only_neutralized_period_coverage(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    sessions = (
+        "2010-01-04",
+        "2026-08-03",
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+    )
+    market_head = _publish_head(
+        settings,
+        sessions=sessions,
+        price_offset=0,
+        include_industry=False,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        missing = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "industry-not-ready",
+                start_date="2026-08-07",
+                end_date="2026-08-07",
+                neutralization="industry",
+            ),
+        )
+        assert missing.status_code == 422
+        issues = missing.json()["issues"]
+        assert len(issues) == 1
+        assert issues[0]["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
+        assert issues[0]["message"].endswith("Industry Coverage is not ready.")
+
+    _publish_composite_head(
+        settings,
+        sessions=sessions,
+        industry_through="2026-08-06",
+        expected_manifest=market_head,
+    )
+
+    with TestClient(create_app(settings)) as client:
+        rejected = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "industry-outside-coverage",
+                start_date="2026-08-07",
+                end_date="2026-08-07",
+                neutralization="industry",
+            ),
+        )
+        assert rejected.status_code == 422
+        issues = rejected.json()["issues"]
+        assert len(issues) == 1
+        assert issues[0]["code"] == "INDUSTRY_CALCULATION_OUTSIDE_COVERAGE"
+        assert issues[0]["field"] == "neutralization"
+        assert issues[0]["message"] == (
+            "Industry Neutralization needs its requested period inside "
+            "Industry Coverage; current Industry Coverage is "
+            "2010-01-04 to 2026-08-06."
+        )
+
+        market_only = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "industry-not-required",
+                start_date="2026-08-07",
+                end_date="2026-08-07",
+                neutralization="none",
             ),
         )
         assert market_only.status_code == 202
@@ -4546,6 +4695,7 @@ def _run_command(
     formula: str = "close",
     start_date: str = "2026-08-03",
     end_date: str = "2026-08-05",
+    neutralization: str = "none",
     research_kind: str = "strategy_backtest",
     holdings_count: int = 1,
     rebalance_every_sessions: int = 1,
@@ -4558,7 +4708,7 @@ def _run_command(
         "end_date": end_date,
         "formula": formula,
         "universe": "top300",
-        "neutralization": "none",
+        "neutralization": neutralization,
         "research_kind": research_kind,
     }
     if research_kind == "strategy_backtest":
@@ -4924,6 +5074,7 @@ def _publish_composite_head(
     *,
     sessions: tuple[str, ...],
     financial_through: str | None = None,
+    industry_through: str | None = None,
     expected_manifest: str | None = None,
     operation_id: str = "composite-e2e",
 ) -> str:
@@ -4936,6 +5087,19 @@ def _publish_composite_head(
         source_name="composite-alpha-test",
         source_lineage={"fixture": "composite-alpha"},
     )
+    if industry_through is not None:
+        canonical = _two_instrument_canonical(sessions, corrected=False)
+        industry = store.materialize_industry_candidate(
+            market.manifest_sha256,
+            list(canonical["industry_membership"]),
+            observation_through_session=industry_through,
+        )
+        market = store.compose_industry_candidate(
+            market.manifest_sha256,
+            industry.manifest_sha256,
+            prepared_at=datetime(2026, 8, 5, 10, 30, tzinfo=UTC),
+            publication_coordinate="d" * 64,
+        )
     endpoint_fields = {
         "income": (
             "ts_code",
@@ -5077,13 +5241,17 @@ def _publish_head(
     price_offset: int,
     expected_manifest: str | None = None,
     available_field_id: str = "price.close.adjusted",
+    include_industry: bool = True,
 ) -> str:
+    canonical = _canonical(
+        sessions,
+        price_offset=price_offset,
+        available_field_id=available_field_id,
+    )
+    if not include_industry:
+        canonical.pop("industry_membership")
     generation = MountedGenerationStore(settings.data_mount).materialize(
-        _canonical(
-            sessions,
-            price_offset=price_offset,
-            available_field_id=available_field_id,
-        ),
+        canonical,
         prepared_at=datetime(2026, 8, 9, price_offset, tzinfo=UTC),
         source_name="attempt-execution-test",
         source_lineage={"price_offset": price_offset},
