@@ -36,8 +36,14 @@ COMPLETED_AT = datetime(2026, 8, 9, 12, 5, tzinfo=UTC)
 
 
 class RecordingBootstrapSource:
-    def __init__(self, *, failure: DataSourceError | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        failure: DataSourceError | None = None,
+        include_industry: bool = True,
+    ) -> None:
         self.failure = failure
+        self.include_industry = include_industry
         self.plans: list[BootstrapCollectionPlan] = []
 
     def collect_bootstrap(self, plan: BootstrapCollectionPlan) -> CanonicalSourceBatch:
@@ -45,6 +51,8 @@ class RecordingBootstrapSource:
         if self.failure is not None:
             raise self.failure
         canonical = build_minimal_canonical_fixture()
+        if not self.include_industry:
+            del canonical["industry_membership"]
         return CanonicalSourceBatch(
             source_name="tushare-replay",
             collection_kind="bootstrap",
@@ -88,6 +96,30 @@ def test_private_operator_bootstraps_once_and_reopens_idempotently(
         with pytest.raises(DataOperatorError, match="HEAD_ALREADY_EXISTS"):
             operator.bootstrap(idempotency_key="cannot-overwrite", as_of=AS_OF)
         assert len(source.plans) == 1
+    finally:
+        database.close()
+
+
+def test_private_operator_bootstraps_market_without_industry_family(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        outcome = DataOperator(
+            database,
+            tmp_path,
+            RecordingBootstrapSource(include_industry=False),
+            clock=iter((PREPARED_AT, COMPLETED_AT)).__next__,
+        ).bootstrap(idempotency_key="bootstrap-market-only", as_of=AS_OF)
+
+        generation = MountedGenerationStore(tmp_path).validate_generation(
+            outcome.generation_manifest_sha256
+        )
+
+        assert "equity.industry_membership" not in {
+            family.family_id for family in generation.families
+        }
     finally:
         database.close()
 

@@ -13,6 +13,7 @@ from thesistrace.adapters.tushare_provider import (
     TushareBootstrapArchive,
     TushareSourceError,
     merge_incremental_industries,
+    normalize_industries,
     normalize_tushare_increment,
     normalize_tushare_snapshot,
 )
@@ -145,7 +146,7 @@ def test_tushare_bootstrap_returns_the_canonical_source_batch(
     monkeypatch.setattr(
         "thesistrace.adapters.tushare_data.normalize_tushare_snapshot",
         lambda _snapshot: (
-            {"source": "tushare", "source_contract_version": "tushare-v2"},
+            {"source": "tushare", "source_contract_version": "tushare-market-v1"},
             canonical,
         ),
     )
@@ -190,8 +191,6 @@ def test_tushare_bootstrap_stream_matches_whole_snapshot_normalization() -> None
             for name in ("calendar_sse", "calendar_szse", "stock_basic")
         },
         sessions=tuple(sessions),
-        industry_classification=[],
-        industry_membership=snapshot["industry_membership"],
         source_lineage=lineage,
         _load_session=market_by_session.__getitem__,
     )
@@ -294,7 +293,7 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
     monkeypatch.setattr(
         "thesistrace.adapters.tushare_data.normalize_tushare_increment",
         lambda _snapshot, _previous: (
-            {"source": "tushare", "source_contract_version": "tushare-v2"},
+            {"source": "tushare", "source_contract_version": "tushare-market-v1"},
             {
                 "research_calendar_append": [appended],
                 "instruments_replace": previous["instruments"],
@@ -304,7 +303,6 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
                 "base_pool_append": [],
                 "liquidity_universes_append": {},
                 "liquidity_universes_replace": {},
-                "industry_membership_replace": previous["industry_membership"],
                 "price_corrections": [],
             },
         ),
@@ -320,6 +318,7 @@ def test_tushare_increment_uses_only_frontier_and_previous_canonical(
         *previous["research_calendar"],
         appended,
     ]
+    assert "industry_membership" not in batch.canonical
     assert batch.covered_session_range == (
         previous["research_calendar"][0],
         appended,
@@ -336,7 +335,7 @@ def test_tushare_refresh_reports_source_collection_and_merge_timings(
     monkeypatch.setattr(
         "thesistrace.adapters.tushare_data.normalize_tushare_increment",
         lambda _snapshot, _previous: (
-            {"source": "tushare", "source_contract_version": "tushare-v2"},
+            {"source": "tushare", "source_contract_version": "tushare-market-v1"},
             {
                 "research_calendar_append": [appended],
                 "instruments_replace": previous["instruments"],
@@ -346,7 +345,6 @@ def test_tushare_refresh_reports_source_collection_and_merge_timings(
                 "base_pool_append": [],
                 "liquidity_universes_append": {},
                 "liquidity_universes_replace": {},
-                "industry_membership_replace": previous["industry_membership"],
                 "price_corrections": [],
             },
         ),
@@ -784,7 +782,7 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
     sessions = normalizer_bootstrap_sessions()
     source, canonical = normalize_tushare_snapshot(normalizer_snapshot(sessions))
 
-    assert source["source_contract_version"] == "tushare-v2"
+    assert source["source_contract_version"] == "tushare-market-v1"
     assert canonical["research_calendar"] == [
         f"{session[:4]}-{session[4:6]}-{session[6:]}" for session in sessions
     ]
@@ -821,18 +819,9 @@ def test_tushare_normalizer_maps_a_complete_bootstrap_and_increment() -> None:
     assert canonical_delta["price_corrections"] == []
 
 
-def test_tushare_normalizer_scopes_industries_to_canonical_instruments() -> None:
+def test_industry_normalizer_scopes_memberships_to_canonical_instruments() -> None:
     sessions = normalizer_bootstrap_sessions()
     snapshot = normalizer_snapshot(sessions)
-    snapshot["stock_basic"].append(
-        {
-            "ts_code": "920007.BJ",
-            "exchange": "BSE",
-            "market": "北交所",
-            "list_date": "20220101",
-            "delist_date": "",
-        }
-    )
     out_of_scope_industries = [
         {
             "ts_code": ts_code,
@@ -846,24 +835,12 @@ def test_tushare_normalizer_scopes_industries_to_canonical_instruments() -> None
     ]
     snapshot["industry_membership"].extend(out_of_scope_industries)
 
-    source, canonical = normalize_tushare_snapshot(snapshot)
+    canonical = normalize_industries(
+        snapshot["industry_membership"],
+        allowed_codes={"600000.SH"},
+    )
 
-    assert len(source["responses"]["industry_membership"]) == 3
-    assert [row["instrument_id"] for row in canonical["industry_membership"]] == [
-        "equity:600000.SH"
-    ]
-
-    next_session = "20260806"
-    increment = normalizer_snapshot([next_session])
-    increment["stock_basic"].append(copy.deepcopy(snapshot["stock_basic"][-1]))
-    increment["industry_membership"].extend(copy.deepcopy(out_of_scope_industries))
-
-    source_delta, canonical_delta = normalize_tushare_increment(increment, canonical)
-
-    assert len(source_delta["responses"]["industry_membership"]) == 3
-    assert [
-        row["instrument_id"] for row in canonical_delta["industry_membership_replace"]
-    ] == ["equity:600000.SH"]
+    assert [row["instrument_id"] for row in canonical] == ["equity:600000.SH"]
 
 
 def test_tushare_normalizer_keeps_historical_adjusted_prices_stable_when_future_factors_arrive(
@@ -1134,14 +1111,7 @@ def test_tushare_increment_rejects_historical_reference_changes() -> None:
         instrument_failure.value.reason_code == "HISTORICAL_INSTRUMENT_CORRECTION_REQUIRES_REVIEW"
     )
 
-    industry_change = copy.deepcopy(snapshot)
-    industry_change["industry_membership"][0]["l1_code"] = "CHANGED"
-    with pytest.raises(TushareSourceError) as industry_failure:
-        normalize_tushare_increment(industry_change, canonical)
-    assert industry_failure.value.reason_code == "HISTORICAL_INDUSTRY_CORRECTION_REQUIRES_REVIEW"
-
-
-def test_tushare_refresh_backfills_newly_discovered_historical_industries() -> None:
+def test_industry_merge_backfills_newly_discovered_historical_memberships() -> None:
     prior = [
         {
             "instrument_id": "equity:600000.SH",
@@ -1242,7 +1212,7 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
 
     assert result["status"] == "available"
     assert result["source"] == "tushare"
-    assert result["source_contract_version"] == "tushare-v2"
+    assert result["source_contract_version"] == "tushare-market-v1"
     assert {(item["contract"], item["api_name"]) for item in result["permissions"]} == {
         ("reference", "stock_basic"),
         ("calendar_sse", "trade_cal"),
@@ -1251,8 +1221,6 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
         ("adjustment", "adj_factor"),
         ("suspension", "suspend_d"),
         ("price_limit", "stk_limit"),
-        ("sw2021_classification", "index_classify"),
-        ("sw2021_membership", "index_member_all"),
     }
     assert all(item["status"] == "available" for item in result["permissions"])
     assert "deployment-secret-token" not in repr(result)
@@ -1263,11 +1231,27 @@ def test_tushare_provider_preflight_checks_every_contract_without_exposing_token
     assert suspension_probe["params"]["suspend_type"] == "S"
 
 
+def test_market_provider_preflight_does_not_require_industry_capability() -> None:
+    transport = RecordingTransport(denied_api="index_member_all", denied_code=2002)
+    provider = TushareAdapter(
+        token="secret",
+        transport=transport,
+        throttle_seconds=0,
+    )
+
+    result = provider.preflight()
+
+    assert result["status"] == "available"
+    assert {payload["api_name"] for payload in transport.payloads}.isdisjoint(
+        {"index_classify", "index_member_all"}
+    )
+
+
 @pytest.mark.parametrize("denied_code", [2002])
 def test_tushare_provider_names_the_denied_contract_and_api(denied_code: int) -> None:
     provider = TushareAdapter(
         token="secret",
-        transport=RecordingTransport(denied_api="index_member_all", denied_code=denied_code),
+        transport=RecordingTransport(denied_api="stk_limit", denied_code=denied_code),
         throttle_seconds=0,
     )
 
@@ -1277,8 +1261,8 @@ def test_tushare_provider_names_the_denied_contract_and_api(denied_code: int) ->
     assert failure.value.diagnostic() == {
         "reason_code": "MISSING_PERMISSION",
         "source_code": denied_code,
-        "contract": "sw2021_membership",
-        "api_name": "index_member_all",
+        "contract": "price_limit",
+        "api_name": "stk_limit",
     }
 
 
@@ -1540,17 +1524,6 @@ def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
                         "down_limit": "9",
                     }
                 ]
-            if api_name == "index_member_all":
-                return [
-                    {
-                        "l1_code": "801010",
-                        "l2_code": "801011",
-                        "l3_code": "850111",
-                        "ts_code": "600000.SH",
-                        "in_date": "20220103",
-                        "out_date": "",
-                    }
-                ]
             return []
 
     provider = WindowRecordingAdapter()
@@ -1597,6 +1570,9 @@ def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
     ]
     assert "st" not in snapshot
     assert all(api_name != "stock_st" for api_name, _params in provider.calls)
+    assert {api_name for api_name, _params in provider.calls}.isdisjoint(
+        {"index_classify", "index_member_all"}
+    )
     phase_events = [event for event in progress if event["event"] == "collection_phase"]
     assert [(event["phase"], event["status"]) for event in phase_events] == [
         ("calendar", "started"),
@@ -1605,10 +1581,7 @@ def test_tushare_bootstrap_queries_market_facts_one_session_at_a_time() -> None:
         ("instrument_reference", "completed"),
         ("market_facts", "started"),
         ("market_facts", "completed"),
-        ("industry", "started"),
-        ("industry", "completed"),
     ]
-    assert phase_events[-1]["membership_rows"] == 1
 
 
 def test_tushare_bootstrap_resumes_after_per_session_checkpoint(
@@ -1701,17 +1674,6 @@ def test_tushare_bootstrap_resumes_after_per_session_checkpoint(
                         "down_limit": "9",
                     }
                 ]
-            if api_name == "index_member_all":
-                return [
-                    {
-                        "l1_code": "801010",
-                        "l2_code": "801011",
-                        "l3_code": "850111",
-                        "ts_code": "600000.SH",
-                        "in_date": "20220103",
-                        "out_date": "",
-                    }
-                ]
             return []
 
     checkpoint = tmp_path / "bootstrap-checkpoint.json"
@@ -1726,7 +1688,7 @@ def test_tushare_bootstrap_resumes_after_per_session_checkpoint(
     assert checkpoint.is_file()
     checkpoint_payload = json.loads(checkpoint.read_text())
     assert "version" not in checkpoint_payload
-    assert checkpoint_payload["source_contract_version"] == "tushare-v2"
+    assert checkpoint_payload["source_contract_version"] == "tushare-market-v1"
     assert set(checkpoint_payload["market_sessions"]) == {"20260803"}
     assert "secret" not in checkpoint.read_text()
     assert any(
@@ -1851,6 +1813,9 @@ def test_tushare_incremental_queries_market_facts_one_session_at_a_time() -> Non
     assert [params for api, params in provider.calls if api == "suspend_d"] == [
         {**params, "suspend_type": "S"} for params in expected_session_requests
     ]
+    assert {api_name for api_name, _params in provider.calls}.isdisjoint(
+        {"index_classify", "index_member_all"}
+    )
 
 
 def test_tushare_provider_paginates_deduplicates_and_sorts() -> None:
@@ -2012,7 +1977,6 @@ def test_tushare_materializes_price_corrections_by_field(
                 "base_pool_append": [],
                 "liquidity_universes_append": {},
                 "liquidity_universes_replace": {},
-                "industry_membership_replace": previous["industry_membership"],
                 "price_corrections": [
                     {
                         "session": target["session"],
@@ -2051,7 +2015,6 @@ def test_tushare_rejects_non_source_price_correction_fields(field: str) -> None:
         "base_pool_append": [],
         "liquidity_universes_append": {},
         "liquidity_universes_replace": {},
-        "industry_membership_replace": previous["industry_membership"],
         "price_corrections": [
             {
                 "session": target["session"],

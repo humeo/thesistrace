@@ -38,6 +38,13 @@ Bootstrap records internal preparation time in the Head but does not set a
 successful Refresh timestamp. Repeating the same key and request returns the
 same outcome. A different key cannot overwrite an existing Head.
 
+Market bootstrap and refresh use the `tushare-market-v1` source contract and
+never call `index_classify` or `index_member_all`. A fresh bootstrap therefore
+publishes the required Core Market Families without an Industry Family. When a
+current Head already references `equity.industry_membership`, Market refresh
+reuses that exact immutable Family manifest and its existing Coverage while
+advancing only Market Coverage.
+
 Live bootstrap persists a bounded, token-free checkpoint containing the
 calendars and instrument reference before starting market-fact collection.
 After all four market-fact endpoints succeed for one Research Session, that

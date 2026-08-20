@@ -12,7 +12,6 @@ from thesistrace.adapters.tushare_provider import (
     TushareBootstrapArchive,
     TushareSessionNormalizer,
     TushareSourceError,
-    normalize_industries,
     normalize_instruments,
     normalize_tushare_increment,
     normalize_tushare_snapshot,
@@ -146,6 +145,7 @@ class TushareDataSource:
                     if plan.kind == "refresh":
                         _remove_synthetic_predecessor(canonical, request_start)
                         _recompute_liquidity_universes(canonical)
+                canonical.pop("industry_membership", None)
                 lineage = _compact_source_lineage(lineage)
         except TushareSourceError as error:
             raise DataSourceError(
@@ -257,15 +257,10 @@ def _stream_bootstrap_archive(
         f"{session[:4]}-{session[4:6]}-{session[6:]}" for session in sessions
     ]
     instruments = normalize_instruments(archive.foundation["stock_basic"])
-    industries = normalize_industries(
-        archive.industry_membership,
-        allowed_codes={str(row["ts_code"]) for row in instruments},
-    )
     static = {
         "schema_version": "canonical-eod",
         "research_calendar": iso_sessions,
         "instruments": instruments,
-        "industry_membership": industries,
         "field_catalog": field_catalog(iso_sessions[-1]),
     }
 
@@ -382,7 +377,6 @@ def _materialize_increment(
     replacement_fields = {
         "instruments_replace": "instruments",
         "prices_replace": "prices",
-        "industry_membership_replace": "industry_membership",
     }
     for delta_name, canonical_name in replacement_fields.items():
         replacement = delta.get(delta_name)

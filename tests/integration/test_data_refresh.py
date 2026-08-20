@@ -190,6 +190,49 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         database.close()
 
 
+def test_market_refresh_without_industry_input_reuses_industry_family_manifest(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    database = _database(core_settings)
+    try:
+        current = _twenty_session_canonical()
+        original_manifest = _establish_head(database, tmp_path, current)
+        original = MountedGenerationStore(tmp_path).inspect_root(original_manifest)
+        original_industry = next(
+            family
+            for family in original.families
+            if family.family_id == "equity.industry_membership"
+        )
+        market_candidate = copy.deepcopy(current)
+        _append_session(market_candidate)
+        del market_candidate["industry_membership"]
+        refresh = DataRefreshService(
+            database,
+            tmp_path,
+            clock=iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT)).__next__,
+        )
+        refresh.submit(idempotency_key="market-only-refresh", as_of=AS_OF)
+
+        assert refresh.process_next(RecordingRefreshSource(market_candidate)) is True
+
+        pointer = DatasetLifecycle(database, tmp_path).current_pointer()
+        assert pointer is not None
+        published = MountedGenerationStore(tmp_path).validate_generation(
+            pointer.generation_manifest_sha256
+        )
+        published_industry = next(
+            family
+            for family in published.families
+            if family.family_id == "equity.industry_membership"
+        )
+        assert published.data_through_session == market_candidate["research_calendar"][-1]
+        assert published_industry.manifest_sha256 == original_industry.manifest_sha256
+        assert published_industry.dataset_coverage == original_industry.dataset_coverage
+    finally:
+        database.close()
+
+
 def test_refresh_reports_only_canonical_phase_timings(
     core_settings: CoreSettings,
     tmp_path: Path,

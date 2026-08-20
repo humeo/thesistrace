@@ -27,7 +27,7 @@ from thesistrace.data.canonical_mapping import (
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.source import RawSourceError, RawSourceResponse
 
-SOURCE_CONTRACT_VERSION = "tushare-v2"
+SOURCE_CONTRACT_VERSION = "tushare-market-v1"
 _BOOTSTRAP_CHECKPOINT_FORMAT = "thesistrace-tushare-bootstrap-checkpoint"
 _BOOTSTRAP_CHECKPOINT_MAX_BYTES = 128 * 1024 * 1024
 _BOOTSTRAP_MARKET_SESSION_MAX_BYTES = 32 * 1024 * 1024
@@ -106,8 +106,6 @@ class TushareBootstrapArchive:
     request_end: date
     foundation: dict[str, list[dict[str, object]]]
     sessions: tuple[str, ...]
-    industry_classification: list[dict[str, object]]
-    industry_membership: list[dict[str, object]]
     source_lineage: dict[str, object]
     _load_session: Callable[[str], dict[str, list[dict[str, object]]]]
 
@@ -130,8 +128,6 @@ class TushareBootstrapArchive:
         return {
             **self.foundation,
             **market_facts,
-            "industry_classification": self.industry_classification,
-            "industry_membership": self.industry_membership,
         }
 
 
@@ -301,18 +297,6 @@ def permission_probes(reference_date: date | None = None) -> tuple[PermissionPro
             {"trade_date": current_text},
             ("trade_date", "ts_code", "pre_close", "up_limit", "down_limit"),
         ),
-        PermissionProbe(
-            "sw2021_classification",
-            "index_classify",
-            {"level": "L1", "src": "SW2021"},
-            ("index_code", "industry_name", "level", "src"),
-        ),
-        PermissionProbe(
-            "sw2021_membership",
-            "index_member_all",
-            {"is_new": "Y"},
-            ("l1_code", "l2_code", "l3_code", "ts_code", "in_date", "out_date"),
-        ),
     )
 
 
@@ -459,28 +443,6 @@ class TushareAdapter:
             }
         )
 
-        self._progress({"event": "collection_phase", "phase": "industry", "status": "started"})
-        industry_classification = self.query_paginated(
-            "index_classify",
-            params={"src": "SW2021"},
-            fields=("index_code", "industry_name", "level", "src"),
-            primary_key=("index_code",),
-        )
-        industry_membership = self.query_paginated(
-            "index_member_all",
-            params={},
-            fields=("l1_code", "l2_code", "l3_code", "ts_code", "in_date", "out_date"),
-            primary_key=("ts_code", "in_date", "l3_code"),
-        )
-        self._progress(
-            {
-                "event": "collection_phase",
-                "phase": "industry",
-                "status": "completed",
-                "classification_rows": len(industry_classification),
-                "membership_rows": len(industry_membership),
-            }
-        )
         foundation = {
             "calendar_sse": sse_calendar,
             "calendar_szse": szse_calendar,
@@ -511,8 +473,6 @@ class TushareAdapter:
             request_end=completed_through_date,
             foundation=foundation,
             sessions=tuple(shared_open),
-            industry_classification=industry_classification,
-            industry_membership=industry_membership,
             source_lineage={
                 "source": "tushare",
                 "source_contract_version": SOURCE_CONTRACT_VERSION,
@@ -526,10 +486,6 @@ class TushareAdapter:
                     for session, descriptor in sorted(market_sessions.items())
                 },
                 "market_row_counts": dict(market_row_counts),
-                "industry_row_counts": {
-                    "classification": len(industry_classification),
-                    "membership": len(industry_membership),
-                },
             },
             _load_session=load_session,
         )
@@ -678,12 +634,6 @@ class TushareAdapter:
             "calendar_szse": calendar_szse,
             "stock_basic": stock_basic,
             **market_facts,
-            "industry_membership": self.query_paginated(
-                "index_member_all",
-                params={"is_new": "Y"},
-                fields=("l1_code", "l2_code", "l3_code", "ts_code", "in_date", "out_date"),
-                primary_key=("ts_code", "in_date", "l3_code"),
-            ),
         }
 
     def _collect_market_facts(
@@ -1285,10 +1235,6 @@ def normalize_tushare_snapshot(
                 )
 
     canonical_prices = causal_adjusted_prices(canonical_prices)
-    industries = normalize_industries(
-        snapshot["industry_membership"],
-        allowed_codes=set(instrument_by_code),
-    )
     canonical = {
         "schema_version": "canonical-eod",
         "research_calendar": sessions,
@@ -1300,7 +1246,6 @@ def normalize_tushare_snapshot(
         "liquidity_universes": liquidity_universes(
             sessions, base_pool, canonical_prices, trading_states
         ),
-        "industry_membership": industries,
         "field_catalog": field_catalog(sessions[-1]),
     }
     source = {
@@ -1488,18 +1433,6 @@ def normalize_tushare_increment(
         "responses": {key: value for key, value in sorted(snapshot.items())},
         "corrections": [],
     }
-    current_industries = normalize_industries(
-        snapshot["industry_membership"],
-        allowed_codes=set(instrument_by_code),
-    )
-    prior_industries = prior.get("industry_membership")
-    if not isinstance(prior_industries, list):
-        raise TushareSourceError("INVALID_PREDECESSOR_CANONICAL", source_code=0)
-    industries = merge_incremental_industries(
-        prior_industries,
-        current_industries,
-        str(prior_calendar[-1]),
-    )
     canonical_delta = {
         "research_calendar_append": sessions,
         "instruments_replace": instruments,
@@ -1511,7 +1444,6 @@ def normalize_tushare_increment(
             name: rows[-len(sessions) :] for name, rows in universes.items()
         },
         "liquidity_universes_replace": {},
-        "industry_membership_replace": industries,
         "price_corrections": [],
     }
     return source, canonical_delta

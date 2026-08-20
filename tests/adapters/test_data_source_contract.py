@@ -98,7 +98,7 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
             return {
                 "status": "available",
                 "source": "tushare",
-                "source_contract_version": "tushare-v2",
+                "source_contract_version": "tushare-market-v1",
                 "permissions": [
                     {"contract": "price_limit", "api_name": "stk_limit", "status": "available"}
                 ],
@@ -129,7 +129,7 @@ def test_live_tushare_gate_is_separate_from_the_default_gate(
         "provider_preflight": {
             "status": "available",
             "source": "tushare",
-            "source_contract_version": "tushare-v2",
+            "source_contract_version": "tushare-market-v1",
             "permissions": [
                 {"contract": "price_limit", "api_name": "stk_limit", "status": "available"}
             ],
@@ -151,8 +151,8 @@ def test_live_tushare_gate_reports_the_exact_failed_permission(
             raise TushareSourceError(
                 "MISSING_PERMISSION",
                 source_code=40203,
-                contract="sw2021_membership",
-                api_name="index_member_all",
+                contract="daily",
+                api_name="daily",
             )
 
         def collect_bootstrap_snapshot(
@@ -176,8 +176,8 @@ def test_live_tushare_gate_reports_the_exact_failed_permission(
         "error": {
             "reason_code": "MISSING_PERMISSION",
             "source_code": 40203,
-            "contract": "sw2021_membership",
-            "api_name": "index_member_all",
+            "contract": "daily",
+            "api_name": "daily",
         },
     }
 
@@ -188,7 +188,7 @@ def test_live_tushare_gate_reports_rate_limit_after_successful_preflight(
     preflight = {
         "status": "available",
         "source": "tushare",
-        "source_contract_version": "tushare-v2",
+        "source_contract_version": "tushare-market-v1",
         "permissions": [
             {"contract": "adjustment", "api_name": "adj_factor", "status": "available"}
         ],

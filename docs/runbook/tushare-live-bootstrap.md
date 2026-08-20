@@ -18,6 +18,11 @@ lists every required provider contract with its Tushare `api_name` and status,
 and includes the canonical schema, covered session range, and Research Session
 count under `bootstrap_collection`.
 
+This gate covers the `tushare-market-v1` contract only. It does not probe or
+call `index_classify` or `index_member_all`, and a successful report is not
+evidence that Industry data is available. Industry capability and publication
+belong to the independent Industry lifecycle.
+
 If either phase fails, the command exits non-zero and prints a structured
 report with the completed preflight evidence, failed Tushare API name, and
 source error code when available.
