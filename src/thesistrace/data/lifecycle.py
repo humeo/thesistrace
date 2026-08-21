@@ -260,7 +260,10 @@ class DatasetLifecycle:
             generation_manifest_sha256=generation_manifest_sha256,
             lease_seconds=lease_seconds,
         )
-        with self._heads.resolved_pointer_candidate(generation_manifest_sha256) as resolved:
+        # Market refresh materialization validates the replacement window and preserves
+        # unchanged content-addressed Families. Resolve only the resulting root here so
+        # candidate protection does not revalidate immutable historical objects.
+        with self._heads.resolved_descriptor_candidate(generation_manifest_sha256) as resolved:
             yield ProtectedRefreshCandidate(
                 operation_id=operation_id,
                 generation_manifest_sha256=generation_manifest_sha256,

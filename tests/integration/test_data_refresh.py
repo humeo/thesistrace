@@ -85,6 +85,7 @@ class ReplayRefreshProvider:
 def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
     core_settings: CoreSettings,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     database = _database(core_settings)
     try:
@@ -113,6 +114,15 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
             tmp_path,
             clock=lambda: next(operator_times),
             lifecycle_event=lossy_lifecycle,
+        )
+
+        def reject_revalidation(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("refresh revalidated its producer-validated Candidate")
+
+        monkeypatch.setattr(
+            MountedGenerationStore,
+            "validate_generation",
+            reject_revalidation,
         )
 
         accepted = _operator_command(

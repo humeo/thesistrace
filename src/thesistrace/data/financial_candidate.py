@@ -530,6 +530,44 @@ class FinancialCandidateStore:
         )
         return candidate
 
+    def reopen_against_prevalidated_market_generation(
+        self,
+        manifest_sha256: str,
+        generation_manifest_sha256: str,
+    ) -> FinancialFamilyCandidate:
+        """Rebind an immutable published Family to a separately validated Market root."""
+        candidate = self.reopen(manifest_sha256)
+        manifest = self._read_family(manifest_sha256)
+        source_generation = str(manifest["source_generation_manifest_sha256"])
+        if source_generation == generation_manifest_sha256:
+            return candidate
+        current = self._market.inspect_root(generation_manifest_sha256)
+        prior = self._market.inspect_root(source_generation)
+        current_sessions = [
+            session
+            for session in current.research_sessions
+            if session <= candidate.observation_through_session
+        ]
+        prior_sessions = [
+            session
+            for session in prior.research_sessions
+            if session <= candidate.observation_through_session
+        ]
+        if current_sessions != prior_sessions:
+            raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
+        current_lifecycles = self._market.read_historical_ordinary_a_share_lifecycles(
+            generation_manifest_sha256
+        )
+        checkpoints = tuple(
+            _checkpoint_from_evidence(item)
+            for item in self._read_evidence_index(manifest["raw_evidence"])
+        )
+        self._validate_historical_identities(
+            checkpoints,
+            {item.instrument_id: item.ts_code for item in current_lifecycles},
+        )
+        return candidate
+
     def source_fields_by_endpoint(
         self,
         manifest_sha256: str,

@@ -409,6 +409,46 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
         generation_store.validate_generation(forged_sha256)
 
 
+def test_market_refresh_reuses_previously_validated_financial_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    market_manifest = _market_generation(tmp_path)
+    candidate_store = FinancialCandidateStore(tmp_path)
+    complete = candidate_store.materialize(
+        _empty_complete_snapshot(
+            tmp_path,
+            market_manifest,
+            idempotency_key="validated-financial-family",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        observation_through_session="2026-08-13",
+    )
+    generation_store = MountedGenerationStore(tmp_path)
+    composite = generation_store.compose_financial_candidate(
+        market_manifest,
+        complete.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+    refresh_base = generation_store.open_refresh_base(composite.manifest_sha256)
+
+    def reject_revalidation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("market refresh revalidated an immutable Financial Family")
+
+    monkeypatch.setattr(FinancialCandidateStore, "validate", reject_revalidation)
+
+    refreshed = generation_store.materialize_refresh(
+        predecessor_manifest_sha256=composite.manifest_sha256,
+        replacement_canonical=refresh_base.canonical,
+        replace_from_session=str(refresh_base.canonical["research_calendar"][-3]),
+        prepared_at=datetime(2026, 8, 14, 10, tzinfo=UTC),
+        source_name="market-refresh",
+        source_lineage={"snapshot": "next-market"},
+    )
+
+    assert refreshed.financial_candidate_manifest_sha256 == complete.manifest_sha256
+
+
 def test_financial_generation_rejects_an_incomplete_research_readiness_slice(
     tmp_path: Path,
 ) -> None:

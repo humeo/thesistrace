@@ -5,7 +5,7 @@ import hashlib
 import json
 import os
 import threading
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -15,6 +15,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
+import thesistrace.data.generation_store as generation_store_module
+import thesistrace.publication.serialization as serialization_module
 from thesistrace.data.generation_files import AddressedFileError, AddressedFileStore
 from thesistrace.data.generation_schema import MARKET_CANDIDATE_TABLE_SPECS
 from thesistrace.data.generation_store import (
@@ -30,7 +32,7 @@ from thesistrace.data.source import (
     CanonicalColumnarSessionPartition,
     CanonicalSessionPartition,
 )
-from thesistrace.publication.serialization import canonical_json_bytes
+from thesistrace.publication.serialization import ParquetWriterContract, canonical_json_bytes
 
 
 @pytest.mark.parametrize("include_industry", (True, False))
@@ -227,6 +229,33 @@ def test_generation_validation_does_not_accumulate_session_tables(
     monkeypatch.setattr(store, "_open_table", reject_full_session_table)
 
     assert store.validate_generation(generation.manifest_sha256) == generation
+
+
+def test_generation_validation_releases_arrow_memory_after_each_partition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = MountedGenerationStore(tmp_path)
+    generation = store.materialize(
+        _canonical(),
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "fixed"},
+    )
+    released_partitions = 0
+
+    def record_release() -> None:
+        nonlocal released_partitions
+        released_partitions += 1
+
+    monkeypatch.setattr(
+        generation_store_module,
+        "_release_arrow_partition_memory",
+        record_release,
+    )
+
+    assert store.validate_generation(generation.manifest_sha256) == generation
+    assert released_partitions == 2
 
 
 def test_generation_preserves_data_unavailable_without_price_or_limit(
@@ -1366,6 +1395,58 @@ def test_refresh_window_and_rewritten_partition_count_do_not_grow_with_history(
     expected = copy.deepcopy(canonical)
     expected["prices"][-1]["turnover_cny"] = "999999.00"
     assert reopened == expected
+
+
+def test_refresh_canonicalizes_each_rewritten_price_partition_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    canonical = _canonical(GENERATION_SESSION_PARTITION_COUNT + 2)
+    store = MountedGenerationStore(tmp_path)
+    current = store.materialize(
+        canonical,
+        prepared_at=datetime(2026, 8, 9, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "current"},
+    )
+    replacement = copy.deepcopy(store.open_refresh_base(current.manifest_sha256).canonical)
+    replacement["prices"][-1]["turnover_cny"] = "999999.00"
+    original = serialization_module.canonicalize_parquet_rows
+    eod_canonicalization_sizes: list[int] = []
+
+    def record_canonicalization(
+        rows: Sequence[Mapping[str, object]],
+        contract: ParquetWriterContract,
+    ) -> list[dict[str, object]]:
+        if getattr(contract, "name", None) == "canonical-generation-eod-prices":
+            eod_canonicalization_sizes.append(len(rows))
+        return original(rows, contract)
+
+    monkeypatch.setattr(
+        generation_store_module,
+        "canonicalize_parquet_rows",
+        record_canonicalization,
+    )
+    monkeypatch.setattr(
+        serialization_module,
+        "canonicalize_parquet_rows",
+        record_canonicalization,
+    )
+
+    store.materialize_refresh(
+        predecessor_manifest_sha256=current.manifest_sha256,
+        replacement_canonical=replacement,
+        replace_from_session=str(replacement["research_calendar"][-20]),
+        prepared_at=datetime(2026, 8, 10, 0, 0, tzinfo=UTC),
+        source_name="deterministic-test",
+        source_lineage={"snapshot": "refresh"},
+    )
+
+    assert eod_canonicalization_sizes == [
+        GENERATION_SESSION_PARTITION_COUNT * 2,
+        GENERATION_SESSION_PARTITION_COUNT * 2,
+        4,
+    ]
 
 
 def test_refresh_does_not_open_immutable_partitions_before_its_window(

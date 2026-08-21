@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -477,29 +477,34 @@ class MountedGenerationStore:
             start = ordinal * GENERATION_SESSION_PARTITION_COUNT
             block_calendar = calendar[start : start + GENERATION_SESSION_PARTITION_COUNT]
             block_tables: dict[str, pa.Table] = {}
-            for name, manifest in session_manifests.items():
-                spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name]
-                objects = manifest["objects"]
-                assert isinstance(objects, list)
-                table = self._open_canonical_partition_table(spec, objects[ordinal], ordinal)
-                opened_row_counts[name] += table.num_rows
-                self._validate_columnar_session_extent(spec, table, tuple(block_calendar))
-                block_tables[name] = table
-            _validate_columnar_candidate_semantics(
-                block_tables,
-                tuple(block_calendar),
-                {
-                    "schema_version": "canonical-eod",
-                    "research_calendar": calendar,
-                    "instruments": static_tables["instruments"],
-                    "field_catalog": static_tables["field_catalog"],
-                    **(
-                        {"industry_membership": static_tables["industry_membership"]}
-                        if "industry_membership" in static_tables
-                        else {}
-                    ),
-                },
-            )
+            try:
+                for name, manifest in session_manifests.items():
+                    spec = _MARKET_CANDIDATE_TABLE_SPEC_BY_NAME[name]
+                    objects = manifest["objects"]
+                    assert isinstance(objects, list)
+                    table = self._open_canonical_partition_table(spec, objects[ordinal], ordinal)
+                    opened_row_counts[name] += table.num_rows
+                    self._validate_columnar_session_extent(spec, table, tuple(block_calendar))
+                    block_tables[name] = table
+                _validate_columnar_candidate_semantics(
+                    block_tables,
+                    tuple(block_calendar),
+                    {
+                        "schema_version": "canonical-eod",
+                        "research_calendar": calendar,
+                        "instruments": static_tables["instruments"],
+                        "field_catalog": static_tables["field_catalog"],
+                        **(
+                            {"industry_membership": static_tables["industry_membership"]}
+                            if "industry_membership" in static_tables
+                            else {}
+                        ),
+                    },
+                )
+            finally:
+                block_tables.clear()
+                table = None
+                _release_arrow_partition_memory()
 
         if any(
             opened_row_counts[name] != manifest["row_count"]
@@ -534,15 +539,35 @@ class MountedGenerationStore:
         prepared_at: datetime,
         publication_coordinate: str | None = None,
     ) -> MountedFamilyGenerationDescriptor:
-        from thesistrace.data.fields import FINANCIAL_FIELDS
         from thesistrace.data.financial_candidate import FinancialCandidateStore
 
-        market = self.validate_generation(market_generation_manifest_sha256)
+        self.validate_generation(market_generation_manifest_sha256)
         financial_store = FinancialCandidateStore(self._root)
-        financial = financial_store.validate_against_market_generation(
+        financial_store.validate_against_market_generation(
             financial_candidate_manifest_sha256,
             market_generation_manifest_sha256,
         )
+        return self._compose_prevalidated_financial_candidate(
+            market_generation_manifest_sha256,
+            financial_candidate_manifest_sha256,
+            prepared_at=prepared_at,
+            publication_coordinate=publication_coordinate,
+        )
+
+    def _compose_prevalidated_financial_candidate(
+        self,
+        market_generation_manifest_sha256: str,
+        financial_candidate_manifest_sha256: str,
+        *,
+        prepared_at: datetime,
+        publication_coordinate: str | None,
+    ) -> MountedFamilyGenerationDescriptor:
+        from thesistrace.data.fields import FINANCIAL_FIELDS
+        from thesistrace.data.financial_candidate import FinancialCandidateStore
+
+        market = self.inspect_root(market_generation_manifest_sha256)
+        financial_store = FinancialCandidateStore(self._root)
+        financial = financial_store.reopen(financial_candidate_manifest_sha256)
         source_fields = financial_store.source_fields_by_endpoint(
             financial_candidate_manifest_sha256
         )
@@ -603,7 +628,7 @@ class MountedGenerationStore:
         content = _bounded_manifest_bytes(manifest)
         sha256 = hashlib.sha256(content).hexdigest()
         self._store_addressed(self._manifest_path(sha256), sha256, content)
-        return self.validate_generation(sha256)
+        return _family_generation_descriptor_from_root(sha256, manifest)
 
     def materialize_industry_candidate(
         self,
@@ -1259,8 +1284,8 @@ class MountedGenerationStore:
         source_name: str,
         source_lineage: Mapping[str, object],
     ) -> MountedFamilyGenerationDescriptor:
-        normalized = _normalize_canonical(replacement_canonical)
-        _validate_generation(normalized)
+        _validate_generation(replacement_canonical)
+        normalized = replacement_canonical
         replacement_calendar = [str(value) for value in normalized["research_calendar"]]
         if replace_from_session not in replacement_calendar:
             raise GenerationStoreError("Refresh replacement boundary is outside Coverage")
@@ -1297,14 +1322,17 @@ class MountedGenerationStore:
                     family_spec.family_id,
                     table_name,
                 )
-                rows = _table_rows(normalized, table_name)
                 table_references[table_name] = (
-                    self._materialize_table(spec, rows, new_calendar)
+                    self._materialize_table(
+                        spec,
+                        _table_rows(normalized, table_name),
+                        new_calendar,
+                    )
                     if spec.session_field is None
                     else self._materialize_refresh_table(
                         spec,
                         predecessor_reference,
-                        replacement_rows=rows,
+                        replacement_rows=_iter_table_rows(normalized, table_name),
                         replace_from_session=replace_from_session,
                         rewrite_start_session=rewrite_start_session,
                         new_calendar=new_calendar,
@@ -1371,11 +1399,13 @@ class MountedGenerationStore:
         from thesistrace.data.financial_candidate import FinancialCandidateStore
 
         prior_candidate = str(prior_financial_reference["manifest_sha256"])
-        financial = FinancialCandidateStore(self._root).validate_against_market_generation(
-            prior_candidate,
-            market_generation.manifest_sha256,
+        financial_store = FinancialCandidateStore(self._root)
+        financial = financial_store.reopen_against_prevalidated_market_generation(
+            prior_candidate, market_generation.manifest_sha256
         )
-        return self.compose_financial_candidate(
+        if dict(prior_financial_reference) != financial_store.family_reference(prior_candidate):
+            raise GenerationStoreError("Financial Dataset Family reference is incompatible")
+        return self._compose_prevalidated_financial_candidate(
             market_generation.manifest_sha256,
             financial.manifest_sha256,
             prepared_at=prepared_at,
@@ -1982,7 +2012,7 @@ class MountedGenerationStore:
         spec: _TableSpec,
         predecessor_reference: Mapping[str, object],
         *,
-        replacement_rows: list[dict[str, object]],
+        replacement_rows: Iterable[Mapping[str, object]],
         replace_from_session: str,
         rewrite_start_session: str,
         new_calendar: list[str],
@@ -1992,7 +2022,16 @@ class MountedGenerationStore:
         predecessor_objects = predecessor_manifest["objects"]
         assert isinstance(predecessor_objects, list)
         preserved_objects: list[dict[str, object]] = []
-        prefix_rows: list[dict[str, object]] = []
+        by_partition: dict[int, list[dict[str, object]]] = {}
+        session_index = {session: index for index, session in enumerate(new_calendar)}
+
+        def retain(row: Mapping[str, object]) -> None:
+            session = str(row[spec.session_field])
+            if session not in session_index:
+                raise GenerationStoreError(f"Canonical {spec.name} session is outside Coverage")
+            partition = session_index[session] // GENERATION_SESSION_PARTITION_COUNT
+            by_partition.setdefault(partition, []).append(dict(row))
+
         for ordinal, object_ref in enumerate(predecessor_objects):
             _validate_object_reference(object_ref, ordinal)
             assert isinstance(object_ref, Mapping)
@@ -2007,32 +2046,17 @@ class MountedGenerationStore:
                 continue
             if str(first_key[0]) >= replace_from_session:
                 continue
-            prefix_rows.extend(
-                row
-                for row in self._open_partition(spec, object_ref, ordinal)
-                if rewrite_start_session <= str(row[spec.session_field]) < replace_from_session
-            )
-        affected_rows = [
-            *prefix_rows,
-            *(
-                row
-                for row in replacement_rows
-                if str(row[spec.session_field]) >= replace_from_session
-            ),
-        ]
-        canonical_rows = canonicalize_parquet_rows(affected_rows, spec.contract)
-        session_index = {session: index for index, session in enumerate(new_calendar)}
-        by_partition: dict[int, list[dict[str, object]]] = {}
-        for row in canonical_rows:
-            session = str(row[spec.session_field])
-            if session not in session_index:
-                raise GenerationStoreError(f"Canonical {spec.name} session is outside Coverage")
-            partition = session_index[session] // GENERATION_SESSION_PARTITION_COUNT
-            by_partition.setdefault(partition, []).append(row)
+            for row in self._open_partition(spec, object_ref, ordinal):
+                if rewrite_start_session <= str(row[spec.session_field]) < replace_from_session:
+                    retain(row)
+        for row in replacement_rows:
+            if str(row[spec.session_field]) >= replace_from_session:
+                retain(row)
         objects = preserved_objects
         for partition in sorted(by_partition):
             rows = canonicalize_parquet_rows(by_partition[partition], spec.contract)
-            objects.append(self._materialize_partition(spec, rows, len(objects)))
+            table = pa.Table.from_pylist(rows, schema=spec.contract.schema)
+            objects.append(self._materialize_columnar_partition(spec, table, len(objects)))
         for ordinal, object_ref in enumerate(objects):
             object_ref["ordinal"] = ordinal
         row_count = sum(int(object_ref["row_count"]) for object_ref in objects)
@@ -2834,6 +2858,10 @@ def _validate_columnar_candidate_semantics(
             prior = members
 
 
+def _release_arrow_partition_memory() -> None:
+    pa.default_memory_pool().release_unused()
+
+
 def _columnar_position_keys(table: pa.Table, session_field: str) -> pa.Array:
     sessions = pc.cast(table[session_field], pa.string())
     return pc.binary_join_element_wise(sessions, table["instrument_id"], "|")
@@ -2962,11 +2990,20 @@ def _decimal_text(value: object, scale: int) -> str:
 
 
 def _table_rows(canonical: Mapping[str, object], table: str) -> list[dict[str, object]]:
+    return list(_iter_table_rows(canonical, table))
+
+
+def _iter_table_rows(
+    canonical: Mapping[str, object],
+    table: str,
+) -> Iterable[dict[str, object]]:
     if table == "research_calendar":
-        return [{"session": str(session)} for session in canonical[table]]
+        for session in canonical[table]:
+            yield {"session": str(session)}
+        return
     if table == "eod_prices":
-        return [
-            {
+        for row in _iter_table_rows(canonical, "prices"):
+            yield {
                 "session_date": date.fromisoformat(str(row["session"])),
                 "instrument_id": str(row["instrument_id"]),
                 "open_raw": Decimal(str(row["open_raw"])),
@@ -2984,41 +3021,37 @@ def _table_rows(canonical: Mapping[str, object], table: str) -> list[dict[str, o
                 "low_adj": Decimal(str(row["low_adj"])),
                 "close_adj": Decimal(str(row["close_adj"])),
             }
-            for row in _table_rows(canonical, "prices")
-        ]
+        return
     if table == "adjustment_factors":
-        return [
-            {
+        for row in _iter_table_rows(canonical, "prices"):
+            yield {
                 "session_date": date.fromisoformat(str(row["session"])),
                 "instrument_id": str(row["instrument_id"]),
                 "source_adjustment_factor": Decimal(str(row["adjustment_factor"])),
             }
-            for row in _table_rows(canonical, "prices")
-        ]
+        return
     if table == "liquidity_universes":
         universes = canonical[table]
         if not isinstance(universes, Mapping):
             raise GenerationStoreError("Canonical Liquidity Universes are incompatible")
-        result: list[dict[str, object]] = []
         for universe, rows in universes.items():
             if not isinstance(rows, list):
                 continue
             for row in rows:
                 if not isinstance(row, Mapping):
                     continue
-                value = {"universe": universe, **dict(row)}
-                result.append(value)
-        return result
+                yield {"universe": universe, **dict(row)}
+        return
     rows = canonical[table]
     if not isinstance(rows, list) or any(not isinstance(row, Mapping) for row in rows):
         raise GenerationStoreError(f"Canonical table is incompatible: {table}")
-    result = [dict(row) for row in rows]
-    if table == "base_pool":
-        for row in result:
+    for source in rows:
+        row = dict(source)
+        if table == "base_pool":
             instrument_ids = row.get("instrument_ids")
             if isinstance(instrument_ids, list):
                 row["instrument_ids"] = sorted(str(item) for item in instrument_ids)
-    return result
+        yield row
 
 
 def _canonical_from_rows(tables: Mapping[str, list[dict[str, object]]]) -> dict[str, object]:
