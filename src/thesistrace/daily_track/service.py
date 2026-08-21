@@ -2221,6 +2221,7 @@ class DailyTrackService:
             ),
             payload_name="checkpoint",
         )
+        continuation = self._load_current_working_cache(claim, predecessor)
         return self._executor.execute(
             TrackingExecutionRequest(
                 track_id=claim.track_id,
@@ -2230,6 +2231,7 @@ class DailyTrackService:
                 origin=claim.origin.model_dump(mode="json"),
                 predecessor=predecessor,
                 predecessor_manifest_sha256=claim.predecessor_manifest_sha256,
+                continuation=continuation,
                 current_session=claim.current_session,
                 target_sessions=claim.target_sessions,
                 watchdog_grace_seconds=self._child_watchdog_grace_seconds,
@@ -2238,6 +2240,29 @@ class DailyTrackService:
             authority_lost=authority_lost,
             stop_requested=stop_requested,
         )
+
+    def _load_current_working_cache(
+        self,
+        claim: _SessionProgressionClaim,
+        predecessor: Mapping[str, object],
+    ) -> Mapping[str, object] | None:
+        if (
+            self._working_cache is None
+            or predecessor.get("schema_version") != "daily-track-checkpoint-v1"
+        ):
+            return None
+        try:
+            return self._working_cache.load(
+                track_id=claim.track_id,
+                head_manifest_sha256=claim.predecessor_manifest_sha256,
+                fence=claim.fence - 1,
+                continuation_sha256=str(predecessor["continuation_sha256"]),
+                pending_alpha_sessions=int(predecessor["pending_alpha_sessions"]),
+                rolling_factor_rows=int(predecessor["rolling_factor_rows"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            self._working_cache.delete(claim.track_id)
+            return None
 
     def _prepare_current_result(
         self,
@@ -2322,7 +2347,6 @@ class DailyTrackService:
         try:
             stored = self._working_cache.store(
                 track_id=claim.track_id,
-                basis_sha256=result.continuation_basis_sha256,
                 head_manifest_sha256=published.manifest_sha256,
                 fence=claim.fence,
                 verified_continuation=result.continuation,

@@ -800,6 +800,17 @@ def test_research_execution_child_has_one_columnar_calculation_route() -> None:
         assert authority not in child_environment
 
 
+def test_tracking_execution_child_has_one_columnar_calculation_route() -> None:
+    calculation_source = (
+        ROOT / "src" / "thesistrace" / "daily_track" / "calculation.py"
+    ).read_text()
+
+    assert "read_columnar_slice(" in calculation_source
+    assert "read_composite_slice(" not in calculation_source
+    assert "to_pylist(" not in calculation_source
+    assert "deepcopy(" not in calculation_source
+
+
 def test_daily_track_owns_activation_sql_and_copied_origin() -> None:
     track_source = (ROOT / "src" / "thesistrace" / "daily_track" / "service.py").read_text()
     track_schema = (ROOT / "src" / "thesistrace" / "daily_track" / "schema.sql").read_text()

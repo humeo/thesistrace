@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -12,7 +11,6 @@ from thesistrace.daily_track.checkpoint import (
 )
 from thesistrace.daily_track.models import KernelStateCheckpoint, TrackingOrigin
 from thesistrace.data import MountedGenerationStore
-from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
     KernelState,
@@ -24,7 +22,7 @@ from thesistrace.research_kernel import (
 from thesistrace.research_kernel.numeric import require_current_numeric_contract
 from thesistrace.research_series import (
     AlignedResearchData,
-    research_data_identity,
+    ColumnarResearchSeries,
     research_sessions,
     slice_research_sessions,
 )
@@ -75,28 +73,6 @@ def origin_neutralization(origin: TrackingOrigin) -> str:
     return str(neutralization)
 
 
-def continuation_dependency_slice(state: KernelState) -> AlignedResearchData:
-    research_data = state.research_data_snapshot()
-    calendar = research_sessions(research_data)
-    boundary_index = calendar.index(state.boundary_session)
-    dependency_session_count = (
-        504
-        + state.run_input_with_research_data(
-            research_data
-        ).alpha_execution_plan().effective_lookback
-    )
-    return slice_research_sessions(
-        research_data,
-        calendar[max(0, boundary_index - dependency_session_count + 1) : boundary_index + 1],
-    )
-
-
-def continuation_basis_sha256(research_data: AlignedResearchData) -> str:
-    return hashlib.sha256(
-        canonical_json_bytes(research_data_identity(research_data))
-    ).hexdigest()
-
-
 def state_payload(
     state: KernelState,
     *,
@@ -112,7 +88,7 @@ def state_payload(
 
 def state_from_payload(
     value: Mapping[str, object],
-    research_data: AlignedResearchData,
+    research_data: AlignedResearchData | ColumnarResearchSeries,
 ) -> KernelState:
     checkpoint = KernelStateCheckpoint.model_validate(value)
     return restore_tracking_checkpoint(
@@ -145,13 +121,13 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
     target_end_index = full_calendar.index(target_sessions[-1])
     if tuple(full_calendar[current_index + 1 : target_end_index + 1]) != target_sessions:
         raise RuntimeError("Pinned Data Generation does not contain the frozen Target")
-    dependency_session_count = 504 + origin_effective_lookback(origin)
     calculation_start_index = origin_calculation_start_index(origin, full_calendar)
+    lookback = origin_effective_lookback(origin)
     dependency_sessions = full_calendar[
-        max(calculation_start_index, current_index - dependency_session_count + 1) :
+        max(calculation_start_index, current_index - max(lookback, 21) + 1) :
         target_end_index + 1
     ]
-    generation = store.read_composite_slice(
+    research_data = store.read_columnar_slice(
         generation_id,
         sessions=dependency_sessions,
         universe_name=origin_universe(origin),
@@ -160,8 +136,8 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
             str(key): str(binding)
             for key, binding in origin.immutable_input["field_bindings"].items()
         },
+        fact_instrument_ids=_predecessor_instrument_ids(predecessor),
     )
-    research_data = generation.research_data
     calendar = research_sessions(research_data)
     local_current_index = calendar.index(current_session)
     prior_research_data = slice_research_sessions(
@@ -178,11 +154,19 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
         )
     else:
         prior = state_from_payload(predecessor, prior_research_data)
-    continuation = advance_continuation(
-        run_input=prior.run_input_with_research_data(prior_research_data),
-        prior_continuation=empty_continuation(),
-        target_research_data=prior_research_data,
-        appended_sessions=research_sessions(prior_research_data)[-504:],
+    continuation_value = value.get("continuation")
+    continuation = (
+        dict(continuation_value)
+        if isinstance(continuation_value, Mapping)
+        else _rebuild_continuation(
+            store,
+            generation_id=generation_id,
+            origin=origin,
+            calendar=full_calendar,
+            calculation_start_index=calculation_start_index,
+            current_index=current_index,
+            predecessor=predecessor,
+        )
     )
     state = advance(
         AdvanceInput(
@@ -203,13 +187,77 @@ def execute_tracking_target(value: Mapping[str, object]) -> dict[str, object]:
         ),
         "terminal_strategy_state": terminal_strategy_state(state),
         "continuation": continuation_snapshot(state),
-        "continuation_basis_sha256": continuation_basis_sha256(
-            continuation_dependency_slice(state)
-        ),
     }
+
+
+def _rebuild_continuation(
+    store: MountedGenerationStore,
+    *,
+    generation_id: str,
+    origin: TrackingOrigin,
+    calendar: list[str],
+    calculation_start_index: int,
+    current_index: int,
+    predecessor: Mapping[str, object],
+) -> dict[str, object]:
+    """Rebuild bounded transient state without retaining a 504-session data slice."""
+    lookback = origin_effective_lookback(origin)
+    appended_start = max(calculation_start_index, current_index - 504 + 1)
+    continuation = empty_continuation()
+    chunk_size = 32
+    for chunk_start in range(appended_start, current_index + 1, chunk_size):
+        chunk_end = min(current_index, chunk_start + chunk_size - 1)
+        context_start = max(
+            calculation_start_index,
+            chunk_start - max(lookback, 21),
+        )
+        chunk_data = store.read_columnar_slice(
+            generation_id,
+            sessions=calendar[context_start : chunk_end + 1],
+            universe_name=origin_universe(origin),
+            neutralization=origin_neutralization(origin),
+            field_bindings={
+                str(key): str(binding)
+                for key, binding in origin.immutable_input["field_bindings"].items()
+            },
+            fact_instrument_ids=_predecessor_instrument_ids(predecessor),
+        )
+        run_input = restore_tracking_origin(
+            origin,
+            origin.initial_strategy_state.model_dump(mode="json"),
+            chunk_data,
+        ).run_input_with_research_data(chunk_data)
+        continuation = advance_continuation(
+            run_input=run_input,
+            prior_continuation=continuation,
+            target_research_data=chunk_data,
+            appended_sessions=calendar[chunk_start : chunk_end + 1],
+        )
+    return continuation
 
 
 def _mapping_value(value: object, name: str) -> Mapping[str, object]:
     if not isinstance(value, Mapping):
         raise RuntimeError(f"{name} is invalid")
     return value
+
+
+def _predecessor_instrument_ids(predecessor: Mapping[str, object]) -> frozenset[str]:
+    if predecessor.get("schema_version") == "daily-track-activation-checkpoint-v1":
+        terminal = _mapping_value(
+            predecessor.get("terminal_strategy_state"),
+            "Activation Terminal Strategy State",
+        )
+    else:
+        strategy_state = _mapping_value(
+            predecessor.get("strategy_state"),
+            "Tracking Strategy State",
+        )
+        terminal = _mapping_value(
+            strategy_state.get("terminal"),
+            "Tracking Terminal Strategy State",
+        )
+    positions = terminal.get("continuation_positions", terminal.get("positions"))
+    if not isinstance(positions, list) or any(not isinstance(item, Mapping) for item in positions):
+        raise RuntimeError("Tracking predecessor Positions are invalid")
+    return frozenset(str(item["instrument_id"]) for item in positions)

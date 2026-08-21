@@ -251,7 +251,6 @@ def advance_continuation(
     prior_rows = prior_alpha.get("sessions")
     if not isinstance(evaluated_rows, list) or not isinstance(prior_rows, list):
         raise KernelRunError("Continuation rebuild Alpha state is invalid")
-    selected_set = set(calendar[-MAX_ROLLING_FACTOR_SESSIONS:])
     new_set = set(appended_sessions)
     alpha_rows = [dict(item) for item in prior_rows if isinstance(item, Mapping)]
     alpha_rows.extend(
@@ -259,7 +258,6 @@ def advance_continuation(
         for item in evaluated_rows
         if isinstance(item, Mapping)
         and str(item.get("session")) in new_set
-        and str(item.get("session")) in selected_set
     )
     alpha_by_session = {str(item["session"]): item for item in alpha_rows}
     matrix = {
@@ -270,6 +268,23 @@ def advance_continuation(
         "checksum": alpha_matrix_checksum(list(alpha_by_session.values())),
     }
     prior_horizons = _mapping(prior_factor.get("horizons"), "prior Factor horizons")
+    retained_session_candidates = set(alpha_by_session)
+    for horizon in HORIZONS:
+        prior_daily = _mapping(
+            prior_horizons.get(str(horizon)),
+            f"prior Factor horizon {horizon}",
+        ).get("daily")
+        if not isinstance(prior_daily, list):
+            raise KernelRunError("Continuation rebuild prior Factor rows are invalid")
+        retained_session_candidates.update(
+            str(item["session"])
+            for item in prior_daily
+            if isinstance(item, Mapping)
+        )
+    retained_sessions = sorted(retained_session_candidates)[
+        -MAX_ROLLING_FACTOR_SESSIONS:
+    ]
+    selected_set = set(retained_sessions)
     rolling_factor: list[dict[str, object]] = []
     for horizon in HORIZONS:
         affected = [
@@ -311,14 +326,14 @@ def advance_continuation(
         by_session.update({str(item["session"]): item for item in partial_daily})
         rolling_factor.extend(
             {"horizon": horizon, **by_session[session]}
-            for session in calendar[-MAX_ROLLING_FACTOR_SESSIONS:]
+            for session in retained_sessions
             if session in by_session
         )
     return {
         "schema_version": "daily-track-working-state-v1",
         "pending_alpha": [
             alpha_by_session[session]
-            for session in calendar[-MAX_PENDING_ALPHA_SESSIONS:]
+            for session in sorted(alpha_by_session)[-MAX_PENDING_ALPHA_SESSIONS:]
             if session in alpha_by_session
         ],
         "rolling_factor": rolling_factor,

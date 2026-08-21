@@ -83,19 +83,21 @@ class ColumnarResearchSeries(Protocol):
     def adjusted_open_decimal_matrix(self, instruments: tuple[str, ...]) -> np.ndarray: ...
 
 
-def research_sessions(data: AlignedResearchData) -> list[str]:
+def research_sessions(data: AlignedResearchData | ColumnarResearchSeries) -> list[str]:
     return list(data.sessions)
 
 
 def slice_research_sessions(
-    data: AlignedResearchData,
+    data: AlignedResearchData | ColumnarResearchSeries,
     sessions: list[str] | tuple[str, ...],
-) -> AlignedResearchData:
+) -> AlignedResearchData | ColumnarResearchSeries:
     selected_sessions = tuple(str(session) for session in sessions)
     if not selected_sessions or selected_sessions != tuple(sorted(set(selected_sessions))):
         raise ValueError("Aligned Research Sessions are invalid")
     if any(session not in data.sessions for session in selected_sessions):
         raise ValueError("Aligned Research Sessions are outside the input slice")
+    if isinstance(data, ColumnarResearchSeries):
+        return data.slice_sessions(selected_sessions)
     selected = set(selected_sessions)
 
     def selected_coordinates(

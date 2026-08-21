@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,10 +12,10 @@ from thesistrace.daily_track.cache import (
     MAX_WORKING_CACHE_BYTES,
     _DailyTrackWorkingCache,
 )
+from thesistrace.daily_track.service import DailyTrackService
 from thesistrace.publication.serialization import canonical_json_bytes
 
 TRACK_ID = "working-cache-contract"
-BASIS_SHA256 = "basis-a"
 HEAD_MANIFEST_SHA256 = "checkpoint-a"
 FENCE = 7
 CONTINUATION = {
@@ -30,10 +31,6 @@ CONTINUATION = {
         ("valid", None),
         ("missing", lambda target: target.unlink()),
         ("corrupt", lambda target: target.write_text("{", encoding="utf-8")),
-        (
-            "stale-basis",
-            lambda target: _replace(target, "basis_sha256", "basis-b"),
-        ),
         (
             "stale-head",
             lambda target: _replace(target, "head_manifest_sha256", "other"),
@@ -78,10 +75,37 @@ def test_working_cache_reconciliation_retains_only_live_track_entries(
     assert not cache.path("deleted-track").exists()
 
 
+def test_worker_loads_the_cache_verified_by_the_published_predecessor(
+    tmp_path: Path,
+) -> None:
+    cache = _DailyTrackWorkingCache(tmp_path / "cache")
+    _store(cache)
+    service = object.__new__(DailyTrackService)
+    service._working_cache = cache
+    predecessor = {
+        "schema_version": "daily-track-checkpoint-v1",
+        "continuation_sha256": hashlib.sha256(
+            canonical_json_bytes(CONTINUATION)
+        ).hexdigest(),
+        "pending_alpha_sessions": 1,
+        "rolling_factor_rows": 1,
+    }
+
+    loaded = service._load_current_working_cache(
+        SimpleNamespace(
+            track_id=TRACK_ID,
+            predecessor_manifest_sha256=HEAD_MANIFEST_SHA256,
+            fence=FENCE + 1,
+        ),
+        predecessor,
+    )
+
+    assert loaded == CONTINUATION
+
+
 def _store(cache: _DailyTrackWorkingCache, *, track_id: str = TRACK_ID) -> None:
     assert cache.store(
         track_id=track_id,
-        basis_sha256=BASIS_SHA256,
         head_manifest_sha256=HEAD_MANIFEST_SHA256,
         fence=FENCE,
         verified_continuation=CONTINUATION,
@@ -92,7 +116,6 @@ def _load(cache: _DailyTrackWorkingCache) -> Mapping[str, object] | None:
     continuation_sha256 = hashlib.sha256(canonical_json_bytes(CONTINUATION)).hexdigest()
     return cache.load(
         track_id=TRACK_ID,
-        basis_sha256=BASIS_SHA256,
         head_manifest_sha256=HEAD_MANIFEST_SHA256,
         fence=FENCE,
         continuation_sha256=continuation_sha256,

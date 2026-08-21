@@ -48,6 +48,7 @@ class TrackingExecutionRequest:
     origin: Mapping[str, object]
     predecessor: Mapping[str, object]
     predecessor_manifest_sha256: str
+    continuation: Mapping[str, object] | None
     current_session: str
     target_sessions: tuple[str, ...]
     watchdog_grace_seconds: float
@@ -58,7 +59,6 @@ class TrackingExecutionResult:
     checkpoint: dict[str, object]
     terminal_strategy_state: dict[str, object]
     continuation: dict[str, object]
-    continuation_basis_sha256: str
     child_peak_rss_bytes: int
 
 
@@ -308,6 +308,9 @@ class SupervisedTrackingExecutor:
                         "predecessor_manifest_sha256": (
                             request.predecessor_manifest_sha256
                         ),
+                        "continuation": (
+                            None if request.continuation is None else dict(request.continuation)
+                        ),
                         "current_session": request.current_session,
                         "target_sessions": list(request.target_sessions),
                         "watchdog_grace_seconds": request.watchdog_grace_seconds,
@@ -526,17 +529,15 @@ def _result_from_response(value: Mapping[str, object]) -> TrackingExecutionResul
     if not all(isinstance(item, dict) for item in (checkpoint, terminal, continuation)):
         raise TrackingExecutionError("Tracking execution result payload is invalid")
     try:
-        basis = str(value["continuation_basis_sha256"])
         peak = int(value["child_peak_rss_bytes"])
     except (KeyError, TypeError, ValueError) as error:
         raise TrackingExecutionError("Tracking execution result metadata is invalid") from error
-    if len(basis) != 64 or peak <= 0:
+    if peak <= 0:
         raise TrackingExecutionError("Tracking execution result metadata is invalid")
     return TrackingExecutionResult(
         checkpoint=dict(checkpoint),
         terminal_strategy_state=dict(terminal),
         continuation=dict(continuation),
-        continuation_basis_sha256=basis,
         child_peak_rss_bytes=peak,
     )
 

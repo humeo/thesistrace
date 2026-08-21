@@ -366,6 +366,44 @@ def test_cold_continuation_rebuild_uses_lookback_before_504_retained_sessions() 
     assert rebuilt == continuation_snapshot(reference)
 
 
+def test_cold_continuation_rebuild_is_identical_when_data_is_read_in_bounded_chunks(
+    accepted_calculation_case: dict[str, object],
+    accepted_kernel_state: KernelState,
+) -> None:
+    definition = accepted_calculation_case["definition"]
+    canonical = accepted_calculation_case["canonical"]
+    assert isinstance(definition, dict)
+    assert isinstance(canonical, dict)
+    complete = _research_data(canonical, definition)
+    calendar = list(canonical["research_calendar"])
+    start = calendar.index(accepted_kernel_state.origin_session)
+    appended = calendar[start:]
+    expected = advance_continuation(
+        run_input=accepted_kernel_state.run_input_with_research_data(complete),
+        prior_continuation=empty_continuation(),
+        target_research_data=complete,
+        appended_sessions=appended,
+    )
+
+    actual = empty_continuation()
+    maximum_slice_sessions = 0
+    for chunk_start in range(start, len(calendar), 8):
+        chunk_end = min(len(calendar), chunk_start + 8)
+        context_start = max(0, chunk_start - 21)
+        selected = calendar[context_start:chunk_end]
+        maximum_slice_sessions = max(maximum_slice_sessions, len(selected))
+        chunk_data = slice_research_sessions(complete, selected)
+        actual = advance_continuation(
+            run_input=accepted_kernel_state.run_input_with_research_data(chunk_data),
+            prior_continuation=actual,
+            target_research_data=chunk_data,
+            appended_sessions=calendar[chunk_start:chunk_end],
+        )
+
+    assert maximum_slice_sessions <= 29
+    assert actual == expected
+
+
 def test_kernel_rebuilds_only_bounded_alpha_and_factor_continuation(
     accepted_calculation_case: dict[str, object],
     accepted_kernel_state: KernelState,
