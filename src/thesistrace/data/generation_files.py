@@ -63,6 +63,30 @@ class AddressedFileStore:
         except OSError as error:
             raise AddressedFileError("addressed filesystem write failed or is unsafe") from error
 
+    def require_present(self, path: Path) -> None:
+        """Require an immutable addressed object to remain a regular file.
+
+        Published objects were checksum-validated before their manifest became
+        reachable. Reopening a published graph only needs a bounded referential
+        integrity check; consumers still checksum-validate content when they
+        read it.
+        """
+        try:
+            with self._open_parent(path, create=False) as (parent_fd, name):
+                flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+                descriptor = os.open(name, flags, dir_fd=parent_fd)
+                try:
+                    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                        raise AddressedFileError("addressed file is not a regular file")
+                finally:
+                    os.close(descriptor)
+        except AddressedFileError:
+            raise
+        except FileNotFoundError as error:
+            raise AddressedFileError("addressed file is missing") from error
+        except OSError as error:
+            raise AddressedFileError("addressed filesystem read failed or is unsafe") from error
+
     def delete(self, target: Path) -> bool:
         try:
             with self._open_parent(target, create=False) as (parent_fd, name):

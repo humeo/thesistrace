@@ -294,7 +294,7 @@ class FinancialCandidateStore:
         prior_candidate_manifest_sha256: str,
         observation_through_session: str,
     ) -> FinancialFamilyCandidate:
-        prior = self.validate(prior_candidate_manifest_sha256)
+        prior = self.reopen(prior_candidate_manifest_sha256)
         if prior.observation_through_session > observation_through_session:
             raise FinancialCandidateError("FINANCIAL_REFRESH_CUTOFF_REGRESSION")
         prior_manifest = self._read_family(prior_candidate_manifest_sha256)
@@ -321,6 +321,7 @@ class FinancialCandidateStore:
         ):
             raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
         prior_entries = self._read_evidence_index(prior_manifest["raw_evidence"])
+        self._require_evidence_present(prior_entries)
         prior_checkpoints = tuple(_checkpoint_from_evidence(item) for item in prior_entries)
         prior_shards = self._manifest_evidence_shards(prior_manifest)
         historical = {item.instrument_id: item.ts_code for item in current_lifecycles}
@@ -348,7 +349,7 @@ class FinancialCandidateStore:
         contract: FinancialCollectionContract,
         observation_through_session: str,
     ) -> None:
-        prior = self.validate(prior_candidate_manifest_sha256)
+        prior = self.reopen(prior_candidate_manifest_sha256)
         if prior.observation_through_session > observation_through_session:
             raise FinancialCandidateError("FINANCIAL_REFRESH_CUTOFF_REGRESSION")
         prior_manifest = self._read_family(prior_candidate_manifest_sha256)
@@ -372,6 +373,7 @@ class FinancialCandidateStore:
         ):
             raise FinancialCandidateError("FINANCIAL_REFRESH_CALENDAR_MISMATCH")
         prior_entries = self._read_evidence_index(prior_manifest["raw_evidence"])
+        self._require_evidence_present(prior_entries)
         prior_checkpoints = tuple(_checkpoint_from_evidence(item) for item in prior_entries)
         historical = {item.instrument_id: item.ts_code for item in current_lifecycles}
         self._validate_historical_identities(prior_checkpoints, historical)
@@ -905,7 +907,7 @@ class FinancialCandidateStore:
 
     def _validated_market_sessions(self, manifest_sha256: str, through: str) -> list[str]:
         try:
-            descriptor = self._market.validate_generation(manifest_sha256)
+            descriptor = self._market.validate_market_generation(manifest_sha256)
             date.fromisoformat(through)
         except (GenerationStoreError, ValueError) as error:
             raise FinancialCandidateError("MARKET_GENERATION_INVALID") from error
@@ -1035,6 +1037,13 @@ class FinancialCandidateStore:
     def _read_raw_batch(self, batch_sha256: str) -> dict[str, object]:
         try:
             return self._raw.read(batch_sha256)
+        except FinancialCollectionError as error:
+            raise FinancialCandidateError("FINANCIAL_RAW_BATCH_INVALID") from error
+
+    def _require_evidence_present(self, entries: Sequence[Mapping[str, object]]) -> None:
+        try:
+            for entry in entries:
+                self._raw.require_present(str(entry.get("batch_sha256")))
         except FinancialCollectionError as error:
             raise FinancialCandidateError("FINANCIAL_RAW_BATCH_INVALID") from error
 

@@ -896,6 +896,15 @@ def test_daily_track_working_cache_is_private_concrete_and_worker_local() -> Non
     assert "/api/working-cache" not in http_source
 
 
+def test_financial_refresh_composes_only_its_prevalidated_candidate() -> None:
+    source = (
+        ROOT / "src" / "thesistrace" / "data" / "financial_refresh.py"
+    ).read_text()
+
+    assert "._compose_prevalidated_financial_candidate(" in source
+    assert ".compose_financial_candidate(" not in source
+
+
 def test_research_kernel_run_has_no_product_or_infrastructure_dependency() -> None:
     package = ROOT / "src" / "thesistrace" / "research_kernel"
     source = "\n".join(path.read_text() for path in package.rglob("*.py"))

@@ -445,6 +445,14 @@ class RawFinancialBatchStore:
             raise FinancialCollectionError("INVALID_RAW_BATCH")
         return value
 
+    def require_present(self, sha256: str) -> None:
+        if len(sha256) != 64 or any(character not in "0123456789abcdef" for character in sha256):
+            raise FinancialCollectionError("INVALID_RAW_BATCH_REFERENCE")
+        try:
+            self._files.require_present(self._path(sha256))
+        except AddressedFileError as error:
+            raise FinancialCollectionError("RAW_BATCH_READ_FAILED") from error
+
     def _path(self, sha256: str) -> Path:
         return self._root / "financial" / "raw" / "sha256" / sha256[:2] / f"{sha256}.json"
 

@@ -206,7 +206,7 @@ class FinancialRefreshService:
                 prepared_at = self._validated_clock()
                 operation_id = _publication_operation_id(idempotency_key, attempt)
                 with mounted_data_mutation_lock(self._database):
-                    composed = self._generations.compose_financial_candidate(
+                    composed = self._generations._compose_prevalidated_financial_candidate(
                         current.generation_manifest_sha256,
                         outcome.candidate.manifest_sha256,
                         prepared_at=prepared_at,

@@ -385,6 +385,41 @@ class MountedGenerationStore:
         self,
         manifest_sha256: str,
     ) -> MountedFamilyGenerationDescriptor:
+        descriptor = self.validate_market_generation(manifest_sha256)
+        if descriptor.financial_candidate_manifest_sha256 is None:
+            return descriptor
+        root = self._read_family_generation_root(manifest_sha256)
+        references = root["families"]
+        assert isinstance(references, list)
+        from thesistrace.data.financial_candidate import (
+            FinancialCandidateError,
+            FinancialCandidateStore,
+        )
+
+        financial_store = FinancialCandidateStore(self._root)
+        try:
+            financial = financial_store.validate(descriptor.financial_candidate_manifest_sha256)
+            expected_reference = financial_store.family_reference(
+                descriptor.financial_candidate_manifest_sha256
+            )
+        except FinancialCandidateError as error:
+            raise GenerationStoreError("Financial Dataset Family is invalid") from error
+        financial_reference = references[-1]
+        if not isinstance(financial_reference, Mapping) or dict(financial_reference) != (
+            expected_reference
+        ):
+            raise GenerationStoreError(
+                "Financial Dataset Family reference does not match its manifest"
+            )
+        if financial.observation_through_session > descriptor.data_through_session:
+            raise GenerationStoreError("Financial candidate exceeds Market Coverage")
+        return descriptor
+
+    def validate_market_generation(
+        self,
+        manifest_sha256: str,
+    ) -> MountedFamilyGenerationDescriptor:
+        """Validate Market and Industry Families without reopening Financial PIT."""
         root = self._read_family_generation_root(manifest_sha256)
         references = root["families"]
         assert isinstance(references, list)
@@ -408,29 +443,6 @@ class MountedGenerationStore:
                 table_references[table_name] = table_reference
         canonical = self._validate_market_tables_streaming(table_references)
         descriptor = _family_generation_descriptor_from_root(manifest_sha256, root)
-        if descriptor.financial_candidate_manifest_sha256 is not None:
-            from thesistrace.data.financial_candidate import (
-                FinancialCandidateError,
-                FinancialCandidateStore,
-            )
-
-            financial_store = FinancialCandidateStore(self._root)
-            try:
-                financial = financial_store.validate(descriptor.financial_candidate_manifest_sha256)
-                expected_reference = financial_store.family_reference(
-                    descriptor.financial_candidate_manifest_sha256
-                )
-            except FinancialCandidateError as error:
-                raise GenerationStoreError("Financial Dataset Family is invalid") from error
-            financial_reference = references[-1]
-            if not isinstance(financial_reference, Mapping) or dict(financial_reference) != (
-                expected_reference
-            ):
-                raise GenerationStoreError(
-                    "Financial Dataset Family reference does not match its manifest"
-                )
-            if financial.observation_through_session > descriptor.data_through_session:
-                raise GenerationStoreError("Financial candidate exceeds Market Coverage")
         _validate_candidate_projection(descriptor, canonical)
         return descriptor
 

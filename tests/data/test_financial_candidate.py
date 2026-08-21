@@ -923,6 +923,66 @@ def test_rebuild_unions_prior_evidence_and_never_deletes_absent_versions(
         store.validate(forged_sha256)
 
 
+def test_preflight_checks_prior_references_without_deep_revalidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    original_validate = store.validate
+
+    def reject_redundant_prior_validation(manifest_sha256: str):
+        if manifest_sha256 == prior.manifest_sha256:
+            raise AssertionError("immutable prior candidate was deep revalidated")
+        return original_validate(manifest_sha256)
+
+    monkeypatch.setattr(store, "validate", reject_redundant_prior_validation)
+    monkeypatch.setattr(
+        store._market,
+        "validate_generation",
+        lambda _manifest_sha256: (_ for _ in ()).throw(
+            AssertionError("financial preflight used full Generation validation")
+        ),
+    )
+
+    store.preflight_rebuild(
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        generation_manifest_sha256=snapshot.generation_manifest_sha256,
+        contract=snapshot.contract,
+        observation_through_session=prior.observation_through_session,
+    )
+
+
+def test_rebuild_checks_prior_references_without_deep_revalidation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    original_validate = store.validate
+    validated: list[str] = []
+
+    def record_validation(manifest_sha256: str):
+        validated.append(manifest_sha256)
+        if manifest_sha256 == prior.manifest_sha256:
+            raise AssertionError("immutable prior candidate was deep revalidated")
+        return original_validate(manifest_sha256)
+
+    monkeypatch.setattr(store, "validate", record_validation)
+    monkeypatch.setattr(
+        store._market,
+        "validate_generation",
+        lambda _manifest_sha256: (_ for _ in ()).throw(
+            AssertionError("financial rebuild used full Generation validation")
+        ),
+    )
+
+    assert store.rebuild(
+        replace(snapshot, idempotency_key="head-anchored-prior-rebuild"),
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        observation_through_session=prior.observation_through_session,
+    ) == prior
+    assert validated == []
+
+
 def test_rebuild_rejects_prior_evidence_missing_from_current_market_identity_map(
     tmp_path: Path,
 ) -> None:
