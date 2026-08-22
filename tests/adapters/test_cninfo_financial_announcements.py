@@ -167,6 +167,48 @@ def test_default_akshare_transport_applies_a_bounded_request_timeout(
     assert stock_disclosure_cninfo.requests is transport
 
 
+def test_default_akshare_transport_bounds_prerequisite_get_and_query_post(
+    monkeypatch,
+) -> None:
+    observed_requests: list[tuple[str, float]] = []
+
+    class RequestsTransport:
+        def get(self, _url: str, **kwargs: object) -> object:
+            observed_requests.append(("get", float(kwargs["timeout"])))
+            return object()
+
+        def post(self, _url: str, **kwargs: object) -> object:
+            observed_requests.append(("post", float(kwargs["timeout"])))
+            return object()
+
+    transport = RequestsTransport()
+
+    def query(**_kwargs: object) -> _Frame:
+        stock_disclosure_cninfo.requests.get("https://example.test/securities")
+        stock_disclosure_cninfo.requests.post(
+            "https://example.test/announcements", data={}
+        )
+        return _Frame([])
+
+    monkeypatch.setattr(stock_disclosure_cninfo, "requests", transport)
+    monkeypatch.setattr(akshare, "stock_zh_a_disclosure_report_cninfo", query)
+
+    discovery = AkshareCninfoFinancialAnnouncementSource(timeout_seconds=2).discover(
+        start_date="2026-08-12",
+        end_date="2026-08-18",
+        allowed_ts_codes={"000001.SZ"},
+    )
+
+    assert discovery.completed_categories == FINANCIAL_ANNOUNCEMENT_CATEGORIES
+    assert discovery.gaps == ()
+    assert observed_requests == [
+        request
+        for _category in FINANCIAL_ANNOUNCEMENT_CATEGORIES
+        for request in (("get", 2.0), ("post", 2.0))
+    ]
+    assert stock_disclosure_cninfo.requests is transport
+
+
 def test_default_akshare_timeout_is_published_as_an_unavailable_gap(
     monkeypatch,
 ) -> None:

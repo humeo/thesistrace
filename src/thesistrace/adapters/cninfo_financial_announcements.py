@@ -38,6 +38,8 @@ class _AkshareClient(Protocol):
 
 
 class _RequestsTransport(Protocol):
+    def get(self, *args: object, **kwargs: object) -> object: ...
+
     def post(self, *args: object, **kwargs: object) -> object: ...
 
 
@@ -45,6 +47,10 @@ class _RequestsWithTimeout:
     def __init__(self, transport: _RequestsTransport, timeout_seconds: float) -> None:
         self._transport = transport
         self._timeout_seconds = timeout_seconds
+
+    def get(self, *args: object, **kwargs: object) -> object:
+        kwargs.setdefault("timeout", self._timeout_seconds)
+        return self._transport.get(*args, **kwargs)
 
     def post(self, *args: object, **kwargs: object) -> object:
         kwargs.setdefault("timeout", self._timeout_seconds)
