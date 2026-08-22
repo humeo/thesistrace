@@ -51,4 +51,4 @@ compose up --detach --wait --wait-timeout 300 api research-worker tracking-worke
 compose restart api research-worker tracking-worker
 compose up --detach --wait --wait-timeout 300 api research-worker tracking-worker
 compose exec --no-TTY api python -c \
-  "from thesistrace.data import MountedDatasetHeadStore; h = MountedDatasetHeadStore('/var/lib/thesistrace/canonical-data').current(); assert h is not None and h.data_through_session == '2026-08-03'"
+  "from thesistrace.data import MountedDatasetHeadStore; h = MountedDatasetHeadStore('/var/lib/thesistrace/canonical-data').current_pointer(); assert h is not None and h.data_through_session == '2026-08-03'"
