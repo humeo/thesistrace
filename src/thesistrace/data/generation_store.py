@@ -2622,22 +2622,26 @@ def _financial_readiness_declaration(
 ) -> dict[str, object]:
     from thesistrace.data.fields import FINANCIAL_FIELDS
 
-    if coverage.get("kind") == "financial-announcement-observation-range":
-        status = str(coverage.get("readiness_status"))
-        attempted = str(coverage.get("discovery_attempted_through_session"))
-        complete = str(coverage.get("discovery_complete_through_session"))
-        pending_count = coverage.get("pending_instrument_count")
-        gap_count = coverage.get("discovery_gap_count")
-        earliest = coverage.get("earliest_unresolved_date")
-    elif coverage.get("kind") == "financial-observation-range":
-        status = "ready"
-        attempted = str(coverage.get("observation_through_session"))
-        complete = attempted
-        pending_count = 0
-        gap_count = 0
-        earliest = None
-    else:
+    common = {
+        "field_ids": sorted(field.field_id for field in FINANCIAL_FIELDS),
+        "series_reader": "session-aligned-financial-fields",
+        "research_run": "composite-alpha",
+        "daily_track": "batch-incremental-composite-alpha",
+        "performance_evidence": _FINANCIAL_PERFORMANCE_EVIDENCE,
+    }
+    if coverage.get("kind") == "financial-observation-range":
+        return {
+            "status": "ready",
+            **common,
+        }
+    if coverage.get("kind") != "financial-announcement-observation-range":
         raise GenerationStoreError("Financial Research Readiness is incompatible")
+    status = str(coverage.get("readiness_status"))
+    attempted = str(coverage.get("discovery_attempted_through_session"))
+    complete = str(coverage.get("discovery_complete_through_session"))
+    pending_count = coverage.get("pending_instrument_count")
+    gap_count = coverage.get("discovery_gap_count")
+    earliest = coverage.get("earliest_unresolved_date")
     if (
         status not in {"ready", "ready_with_pending", "ready_with_gaps"}
         or not isinstance(pending_count, int)
@@ -2663,11 +2667,7 @@ def _financial_readiness_declaration(
         "pending_instrument_count": pending_count,
         "discovery_gap_count": gap_count,
         "earliest_unresolved_date": normalized_earliest,
-        "field_ids": sorted(field.field_id for field in FINANCIAL_FIELDS),
-        "series_reader": "session-aligned-financial-fields",
-        "research_run": "composite-alpha",
-        "daily_track": "batch-incremental-composite-alpha",
-        "performance_evidence": _FINANCIAL_PERFORMANCE_EVIDENCE,
+        **common,
     }
 
 

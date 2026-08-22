@@ -501,6 +501,68 @@ def test_financial_generation_rejects_an_incomplete_research_readiness_slice(
         MountedGenerationStore(tmp_path).validate_generation(sha256)
 
 
+def test_financial_generation_reopens_the_immutable_bootstrap_readiness_contract(
+    tmp_path: Path,
+) -> None:
+    candidate_store, _incomplete, _repeated, _snapshot = _materialized_candidate(tmp_path)
+    market_manifest = candidate_store.source_generation_manifest_sha256(
+        _incomplete.manifest_sha256
+    )
+    complete = candidate_store.materialize(
+        _empty_complete_snapshot(
+            tmp_path,
+            market_manifest,
+            idempotency_key="immutable-bootstrap-readiness",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        observation_through_session="2026-08-13",
+    )
+    generation_store = MountedGenerationStore(tmp_path)
+    generation = generation_store.compose_financial_candidate(
+        market_manifest,
+        complete.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+    root_path = (
+        tmp_path
+        / "manifests"
+        / "sha256"
+        / generation.manifest_sha256[:2]
+        / f"{generation.manifest_sha256}.json"
+    )
+    root = json.loads(root_path.read_bytes())
+    readiness = root["financial_research_readiness"]
+    for daily_key in (
+        "attempted_through_session",
+        "complete_through_session",
+        "pending_instrument_count",
+        "discovery_gap_count",
+        "earliest_unresolved_date",
+    ):
+        readiness.pop(daily_key, None)
+    identity = {
+        key: root[key]
+        for key in (
+            "schema_contract",
+            "data_through_session",
+            "research_sessions",
+            "field_availability",
+            "families",
+            "financial_research_readiness",
+        )
+    }
+    root["data_identity"] = hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
+    content = canonical_json_bytes(root)
+    sha256 = hashlib.sha256(content).hexdigest()
+    path = tmp_path / "manifests" / "sha256" / sha256[:2] / f"{sha256}.json"
+    AddressedFileStore(tmp_path).store(path, sha256, content)
+
+    reopened = generation_store.validate_generation(sha256)
+
+    assert reopened.financial_research_readiness == readiness
+    assert generation_store.open_admission(sha256).financial_research_readiness == "ready"
+
+
 def test_financial_series_read_projects_requested_columns_and_instruments(
     tmp_path: Path,
 ) -> None:
