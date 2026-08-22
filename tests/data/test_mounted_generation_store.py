@@ -557,7 +557,7 @@ def test_industry_family_coverage_cannot_exceed_market_coverage(
         store.inspect_root(outside_generation)
 
 
-def test_industry_publication_validates_only_the_composed_generation(
+def test_industry_publication_reuses_prevalidated_unchanged_families(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -570,16 +570,6 @@ def test_industry_publication_validates_only_the_composed_generation(
         source_name="market-without-industry",
         source_lineage={"snapshot": "market"},
     )
-    original_validate_generation = store.validate_generation
-    validated: list[str] = []
-
-    def counted_validate_generation(
-        manifest_sha256: str,
-    ) -> MountedFamilyGenerationDescriptor:
-        validated.append(manifest_sha256)
-        return original_validate_generation(manifest_sha256)
-
-    monkeypatch.setattr(store, "validate_generation", counted_validate_generation)
     candidate = store.materialize_industry_candidate(
         market.manifest_sha256,
         [
@@ -594,14 +584,21 @@ def test_industry_publication_validates_only_the_composed_generation(
         ],
         observation_through_session=canonical["research_calendar"][-1],
     )
-    composed = store.compose_industry_candidate(
-        market.manifest_sha256,
-        candidate.manifest_sha256,
-        prepared_at=datetime(2026, 8, 14, tzinfo=UTC),
-        publication_coordinate="a" * 64,
-    )
 
-    assert validated == [composed.manifest_sha256]
+    def reject_full_generation_scan(_manifest_sha256: str) -> None:
+        pytest.fail("Industry publication reopened unchanged Dataset Families")
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(store, "validate_generation", reject_full_generation_scan)
+        patcher.setattr(store, "validate_market_generation", reject_full_generation_scan)
+        composed = store.compose_industry_candidate(
+            market.manifest_sha256,
+            candidate.manifest_sha256,
+            prepared_at=datetime(2026, 8, 14, tzinfo=UTC),
+            publication_coordinate="a" * 64,
+        )
+
+    assert store.validate_generation(composed.manifest_sha256) == composed
 
 
 def test_industry_candidate_replaces_only_industry_family(tmp_path: Path) -> None:

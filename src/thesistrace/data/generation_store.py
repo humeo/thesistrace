@@ -760,7 +760,7 @@ class MountedGenerationStore:
         content = _bounded_manifest_bytes(manifest)
         sha256 = hashlib.sha256(content).hexdigest()
         self._store_addressed(self._manifest_path(sha256), sha256, content)
-        return self.validate_generation(sha256)
+        return _family_generation_descriptor_from_root(sha256, manifest)
 
     def open_industry_candidate(
         self,
