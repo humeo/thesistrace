@@ -182,6 +182,131 @@ CREATE TABLE data.financial_refresh_operations (
 
 
 --
+-- Name: financial_daily_refresh_operations; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_daily_refresh_operations (
+    idempotency_key text PRIMARY KEY,
+    fingerprint text NOT NULL,
+    source_generation_manifest_sha256 text NOT NULL,
+    prior_financial_manifest_sha256 text NOT NULL,
+    discovery_baseline_session date NOT NULL,
+    prior_attempted_through_session date NOT NULL,
+    prior_complete_through_session date NOT NULL,
+    target_session date NOT NULL,
+    discovery_start_date date,
+    discovery_end_date date,
+    discovery_evidence jsonb,
+    source_lineage_sha256 text,
+    status text NOT NULL,
+    candidate_manifest_sha256 text,
+    composed_generation_manifest_sha256 text,
+    publication_prepared_at timestamp with time zone,
+    publication_head_moved_at timestamp with time zone,
+    published_generation_manifest_sha256 text,
+    published_at timestamp with time zone,
+    published_outcome jsonb,
+    failure_code text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    finished_at timestamp with time zone,
+    retention_released_at timestamp with time zone,
+    CONSTRAINT financial_daily_refresh_operations_key_check CHECK (((idempotency_key <> ''::text) AND (idempotency_key = btrim(idempotency_key)))),
+    CONSTRAINT financial_daily_refresh_operations_fingerprint_check CHECK ((fingerprint ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_daily_refresh_operations_source_generation_check CHECK ((source_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_daily_refresh_operations_prior_financial_check CHECK ((prior_financial_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_daily_refresh_operations_lineage_check CHECK (((source_lineage_sha256 IS NULL) OR (source_lineage_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_daily_refresh_operations_candidate_check CHECK (((candidate_manifest_sha256 IS NULL) OR (candidate_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_daily_refresh_operations_composed_generation_check CHECK (((composed_generation_manifest_sha256 IS NULL) OR (composed_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_daily_refresh_operations_published_generation_check CHECK (((published_generation_manifest_sha256 IS NULL) OR (published_generation_manifest_sha256 ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT financial_daily_refresh_operations_coordinates_check CHECK ((discovery_baseline_session <= prior_complete_through_session) AND (prior_complete_through_session <= prior_attempted_through_session) AND (prior_attempted_through_session <= target_session)),
+    CONSTRAINT financial_daily_refresh_operations_discovery_check CHECK (((discovery_evidence IS NULL) = (source_lineage_sha256 IS NULL)) AND ((discovery_evidence IS NULL) = (discovery_start_date IS NULL)) AND ((discovery_evidence IS NULL) = (discovery_end_date IS NULL)) AND ((discovery_start_date IS NULL) OR (discovery_start_date <= discovery_end_date))),
+    CONSTRAINT financial_daily_refresh_operations_status_check CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'succeeded_with_pending'::text, 'succeeded_with_gaps'::text, 'failed'::text]))),
+    CONSTRAINT financial_daily_refresh_operations_publication_state_check CHECK (((composed_generation_manifest_sha256 IS NULL) = (publication_prepared_at IS NULL)) AND ((published_generation_manifest_sha256 IS NULL) = (published_at IS NULL)) AND ((published_generation_manifest_sha256 IS NULL) = (published_outcome IS NULL))),
+    CONSTRAINT financial_daily_refresh_operations_state_check CHECK ((((status = 'running'::text) AND (published_generation_manifest_sha256 IS NULL) AND (failure_code IS NULL) AND (finished_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::text, 'succeeded_with_pending'::text, 'succeeded_with_gaps'::text])) AND (candidate_manifest_sha256 IS NOT NULL) AND (composed_generation_manifest_sha256 IS NOT NULL) AND (publication_prepared_at IS NOT NULL) AND (publication_head_moved_at IS NOT NULL) AND (published_generation_manifest_sha256 IS NOT NULL) AND (failure_code IS NULL) AND (finished_at IS NOT NULL)) OR ((status = 'failed'::text) AND (published_generation_manifest_sha256 IS NULL) AND (failure_code IS NOT NULL) AND (finished_at IS NOT NULL))))
+);
+
+
+--
+-- Name: financial_discovery_gaps; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_discovery_gaps (
+    gap_id text PRIMARY KEY,
+    category text NOT NULL,
+    query_start_date date NOT NULL,
+    query_end_date date NOT NULL,
+    unresolved_from_date date NOT NULL,
+    failure_code text NOT NULL,
+    status text NOT NULL,
+    first_seen_operation_key text NOT NULL REFERENCES data.financial_daily_refresh_operations(idempotency_key) ON DELETE CASCADE,
+    last_seen_operation_key text NOT NULL,
+    resolved_by_operation_key text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    resolved_at timestamp with time zone,
+    CONSTRAINT financial_discovery_gaps_id_check CHECK ((gap_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_discovery_gaps_category_check CHECK ((category = ANY (ARRAY['年报'::text, '半年报'::text, '一季报'::text, '三季报'::text, '补充更正'::text]))),
+    CONSTRAINT financial_discovery_gaps_range_check CHECK ((query_start_date <= unresolved_from_date) AND (unresolved_from_date <= query_end_date)),
+    CONSTRAINT financial_discovery_gaps_status_check CHECK ((status = ANY (ARRAY['open'::text, 'resolved'::text]))),
+    CONSTRAINT financial_discovery_gaps_state_check CHECK ((((status = 'open'::text) AND (resolved_by_operation_key IS NULL) AND (resolved_at IS NULL)) OR ((status = 'resolved'::text) AND (resolved_by_operation_key IS NOT NULL) AND (resolved_at IS NOT NULL))))
+);
+
+
+--
+-- Name: financial_announcement_triggers; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_announcement_triggers (
+    announcement_id text PRIMARY KEY,
+    category text NOT NULL,
+    instrument_id text NOT NULL,
+    ts_code text NOT NULL,
+    instrument_name text NOT NULL,
+    title text NOT NULL,
+    source_published_date date NOT NULL,
+    report_period date,
+    source_url text NOT NULL,
+    source_lineage_sha256 text NOT NULL,
+    status text NOT NULL,
+    accepted_no_match_count integer DEFAULT 0 NOT NULL,
+    first_seen_operation_key text NOT NULL REFERENCES data.financial_daily_refresh_operations(idempotency_key) ON DELETE CASCADE,
+    last_attempt_operation_key text,
+    resolution_code text,
+    created_at timestamp with time zone NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    resolved_at timestamp with time zone,
+    CONSTRAINT financial_announcement_triggers_id_check CHECK ((announcement_id ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_announcement_triggers_category_check CHECK ((category = ANY (ARRAY['年报'::text, '半年报'::text, '一季报'::text, '三季报'::text, '补充更正'::text]))),
+    CONSTRAINT financial_announcement_triggers_identity_check CHECK (((instrument_id <> ''::text) AND (ts_code <> ''::text))),
+    CONSTRAINT financial_announcement_triggers_lineage_check CHECK ((source_lineage_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT financial_announcement_triggers_count_check CHECK (((accepted_no_match_count >= 0) AND (accepted_no_match_count <= 5))),
+    CONSTRAINT financial_announcement_triggers_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'matched'::text, 'checked_no_structured_change'::text]))),
+    CONSTRAINT financial_announcement_triggers_state_check CHECK ((((status = 'pending'::text) AND (resolution_code IS NULL) AND (resolved_at IS NULL)) OR ((status = 'matched'::text) AND (resolution_code = 'matched_source_version'::text) AND (resolved_at IS NOT NULL)) OR ((status = 'checked_no_structured_change'::text) AND (accepted_no_match_count = 5) AND (resolution_code = 'checked_no_structured_change'::text) AND (resolved_at IS NOT NULL))))
+);
+
+
+--
+-- Name: financial_refresh_instrument_attempts; Type: TABLE; Schema: data; Owner: -
+--
+
+CREATE TABLE data.financial_refresh_instrument_attempts (
+    idempotency_key text NOT NULL REFERENCES data.financial_daily_refresh_operations(idempotency_key) ON DELETE CASCADE,
+    instrument_id text NOT NULL,
+    status text NOT NULL,
+    matched_announcement_ids jsonb NOT NULL,
+    checkpoints jsonb NOT NULL,
+    failure_code text,
+    failure_endpoint text,
+    attempted_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (idempotency_key, instrument_id),
+    CONSTRAINT financial_refresh_instrument_attempts_identity_check CHECK ((instrument_id <> ''::text)),
+    CONSTRAINT financial_refresh_instrument_attempts_status_check CHECK ((status = ANY (ARRAY['accepted'::text, 'failed'::text]))),
+    CONSTRAINT financial_refresh_instrument_attempts_state_check CHECK ((((status = 'accepted'::text) AND (failure_code IS NULL) AND (failure_endpoint IS NULL)) OR ((status = 'failed'::text) AND (failure_code IS NOT NULL) AND (failure_endpoint IS NOT NULL))))
+);
+
+
+--
 -- Name: industry_refresh_operations; Type: TABLE; Schema: data; Owner: -
 --
 

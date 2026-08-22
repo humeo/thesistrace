@@ -3,15 +3,26 @@ import { useCallback, useEffect, useState } from "react";
 
 import type { AlphaCatalog, AlphaCatalogField } from "../alphaCatalog";
 
+type FinancialResearchReadiness =
+  | "ready"
+  | "ready_with_pending"
+  | "ready_with_gaps"
+  | "not_ready";
+
 export type DataOverview = {
   market_coverage: { start: string; end: string } | null;
   financial_coverage: {
     start: string;
-    observation_through_session: string;
-    reconciliation_status: string;
+    discovery_baseline_session: string;
+    discovery_attempted_through_session: string;
+    discovery_complete_through_session: string;
     historical_reconciliation_watermark: string;
     revision_coverage: string;
     seed_policy: string;
+    readiness_status: Exclude<FinancialResearchReadiness, "not_ready">;
+    pending_instrument_count: number;
+    discovery_gap_count: number;
+    earliest_unresolved_date: string | null;
     sparse_facts: boolean;
   } | null;
   industry_coverage: {
@@ -26,7 +37,7 @@ export type DataOverview = {
   industry_refresh_status: "running" | "succeeded" | "failed" | null;
   industry_refresh_failure_code: string | null;
   market_research_readiness: boolean;
-  financial_research_readiness: boolean;
+  financial_research_readiness: FinancialResearchReadiness;
   industry_research_readiness: boolean;
 };
 
@@ -92,6 +103,12 @@ export function DataOverviewView({
       : industryCoverage === null
         ? "Industry not ready"
         : "Industry stale";
+  const financialState = {
+    ready: "Finance ready",
+    ready_with_pending: "Finance ready with pending instruments",
+    ready_with_gaps: "Finance ready with discovery gaps",
+    not_ready: "Finance not ready",
+  }[overview.financial_research_readiness];
   return (
     <section aria-label="Data" className="page-section data-page">
       <header className="page-hero">
@@ -129,7 +146,7 @@ export function DataOverviewView({
       </dl>
       <div className="signal-strip" aria-label="Financial data readiness">
         <span className="signal-strip-label"><span className="health-dot" /> Financial data</span>
-        <strong>{overview.financial_research_readiness ? "Finance ready" : "Finance not ready"}</strong>
+        <strong>{financialState}</strong>
       </div>
       <dl className="data-overview-stats" aria-label="Financial data coverage">
         <div>
@@ -137,16 +154,32 @@ export function DataOverviewView({
           <dd>{financialCoverage?.start ?? "Not available"}</dd>
         </div>
         <div>
-          <dt>Observed through</dt>
-          <dd>{financialCoverage?.observation_through_session ?? "Not available"}</dd>
+          <dt>Discovery baseline</dt>
+          <dd>{financialCoverage?.discovery_baseline_session ?? "Not available"}</dd>
         </div>
         <div>
-          <dt>Reconciliation</dt>
-          <dd>{financialCoverage?.reconciliation_status ?? "Not available"}</dd>
+          <dt>Attempted through</dt>
+          <dd>{financialCoverage?.discovery_attempted_through_session ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Complete through</dt>
+          <dd>{financialCoverage?.discovery_complete_through_session ?? "Not available"}</dd>
         </div>
         <div>
           <dt>Last financial refresh</dt>
           <dd>{overview.last_financial_refresh_at ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Pending instruments</dt>
+          <dd>{financialCoverage?.pending_instrument_count ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Discovery gaps</dt>
+          <dd>{financialCoverage?.discovery_gap_count ?? "Not available"}</dd>
+        </div>
+        <div>
+          <dt>Earliest unresolved</dt>
+          <dd>{financialCoverage?.earliest_unresolved_date ?? "Not available"}</dd>
         </div>
       </dl>
       <div className="signal-strip" aria-label="Industry data readiness">

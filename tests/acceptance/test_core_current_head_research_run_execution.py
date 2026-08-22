@@ -42,7 +42,10 @@ from thesistrace.daily_track.checkpoint import (
 )
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
 from thesistrace.data.canonical_mapping import field_catalog
-from thesistrace.data.financial_candidate import FinancialCandidateStore
+from thesistrace.data.financial_candidate import (
+    FinancialCandidateStore,
+    FinancialDiscoveryPublication,
+)
 from thesistrace.data.financial_collection import (
     CompletedFinancialCollection,
     FinancialCollectionContract,
@@ -1002,6 +1005,7 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         _publish_composite_head(
             settings,
             sessions=recovered_sessions,
+            financial_readiness_status="ready_with_pending",
             expected_manifest=lagged_head,
             operation_id="financial-track-recovered",
         )
@@ -1018,6 +1022,13 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         assert recovered["status"] == "active"
         assert recovered["strategy_session"] == recovered_sessions[-1]
         assert _tracking_checkpoint_history(settings, track_id)[: len(before)] == before
+        recovered_state = _stored_tracking_activation(settings, track_id)
+        assert recovered_state["current_checkpoint_provenance"][
+            "financial_research_readiness"
+        ] == "ready_with_pending"
+        assert _latest_tracking_progression_provenance(settings, track_id)[
+            "financial_research_readiness"
+        ] == "ready_with_pending"
 
 
 @pytest.mark.skipif(
@@ -1071,6 +1082,7 @@ def test_industry_track_blocks_at_cutoff_then_requires_retry(tmp_path: Path) -> 
         _publish_composite_head(
             settings,
             sessions=lagged_sessions,
+            industry_through=lagged_sessions[-1],
             expected_manifest=lagged_head,
             operation_id="industry-track-recovered",
         )
@@ -5081,6 +5093,7 @@ def _publish_composite_head(
     *,
     sessions: tuple[str, ...],
     financial_through: str | None = None,
+    financial_readiness_status: str = "ready",
     industry_through: str | None = None,
     expected_manifest: str | None = None,
     operation_id: str = "composite-e2e",
@@ -5088,12 +5101,25 @@ def _publish_composite_head(
     observation_through = financial_through or sessions[-1]
     finished_date = max(observation_through, "2026-08-05")
     store = MountedGenerationStore(settings.data_mount)
-    market = store.materialize(
-        _two_instrument_canonical(sessions, corrected=False),
-        prepared_at=datetime(2026, 8, 5, 10, tzinfo=UTC),
-        source_name="composite-alpha-test",
-        source_lineage={"fixture": "composite-alpha"},
-    )
+    market_canonical = _two_instrument_canonical(sessions, corrected=False)
+    prepared_at = datetime(2026, 8, 5, 10, tzinfo=UTC)
+    if expected_manifest is None:
+        market = store.materialize(
+            market_canonical,
+            prepared_at=prepared_at,
+            source_name="composite-alpha-test",
+            source_lineage={"fixture": "composite-alpha"},
+        )
+    else:
+        predecessor = store.validate_generation(expected_manifest)
+        market = store.materialize_refresh(
+            predecessor_manifest_sha256=expected_manifest,
+            replacement_canonical=market_canonical,
+            replace_from_session=predecessor.research_sessions[-1],
+            prepared_at=prepared_at,
+            source_name="composite-alpha-test",
+            source_lineage={"fixture": "composite-alpha"},
+        )
     if industry_through is not None:
         canonical = _two_instrument_canonical(sessions, corrected=False)
         industry = store.materialize_industry_candidate(
@@ -5206,17 +5232,50 @@ def _publish_composite_head(
         ),
         shards=(FinancialDateShard("complete-history"),),
     )
-    financial = FinancialCandidateStore(settings.data_mount).materialize(
-        CompletedFinancialCollection(
-            idempotency_key=operation_id,
-            generation_manifest_sha256=market.manifest_sha256,
-            contract=contract,
-            finished_at=f"{finished_date}T10:00:00+00:00",
-            target_count=len(checkpoints),
-            shards=tuple(checkpoints),
-        ),
-        observation_through_session=observation_through,
+    collection = CompletedFinancialCollection(
+        idempotency_key=operation_id,
+        generation_manifest_sha256=market.manifest_sha256,
+        contract=contract,
+        finished_at=f"{finished_date}T10:00:00+00:00",
+        target_count=len(checkpoints),
+        shards=tuple(checkpoints),
     )
+    candidates = FinancialCandidateStore(settings.data_mount)
+    if financial_readiness_status == "ready":
+        financial = candidates.materialize(
+            collection,
+            observation_through_session=observation_through,
+        )
+    else:
+        assert financial_readiness_status in {"ready_with_pending", "ready_with_gaps"}
+        assert expected_manifest is not None
+        prior_generation = store.validate_generation(expected_manifest)
+        prior_financial_manifest = prior_generation.financial_candidate_manifest_sha256
+        assert prior_financial_manifest is not None
+        prior_financial = candidates.reopen(prior_financial_manifest)
+        pending_count = 1 if financial_readiness_status == "ready_with_pending" else 0
+        gap_count = 1 if financial_readiness_status == "ready_with_gaps" else 0
+        financial = candidates.rebuild_daily(
+            collection,
+            prior_candidate_manifest_sha256=prior_financial_manifest,
+            discovery=FinancialDiscoveryPublication(
+                baseline_session=(
+                    prior_financial.discovery_baseline_session
+                    or prior_financial.observation_through_session
+                ),
+                attempted_through_session=observation_through,
+                complete_through_session=(
+                    observation_through
+                    if financial_readiness_status == "ready_with_pending"
+                    else prior_financial.observation_through_session
+                ),
+                source_lineage_sha256="f" * 64,
+                readiness_status=financial_readiness_status,
+                pending_instrument_count=pending_count,
+                discovery_gap_count=gap_count,
+                earliest_unresolved_date=observation_through,
+            ),
+        )
     composite = store.compose_financial_candidate(
         market.manifest_sha256,
         financial.manifest_sha256,
@@ -5680,6 +5739,30 @@ def _tracking_checkpoint_history(
                 (track_id,),
             ).fetchall()
         return rows
+    finally:
+        database.close()
+
+
+def _latest_tracking_progression_provenance(
+    settings: CoreSettings,
+    track_id: str,
+) -> dict[str, object]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT provenance
+                FROM daily_tracks.session_progressions
+                WHERE track_id = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT 1
+                """,
+                (track_id,),
+            ).fetchone()
+        assert row is not None
+        return dict(row["provenance"])
     finally:
         database.close()
 

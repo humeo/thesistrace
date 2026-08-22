@@ -13,3 +13,8 @@ and a candidate Data Generation remains unpublished until the complete expected
 shard set passes schema, truncation, and coverage validation. This accepts a
 slower bootstrap and refresh path in exchange for one deployable 2000-point
 permission contract with deterministic provenance and failure behavior.
+
+ADR-0219 supersedes complete expected shard-set publication for post-bootstrap
+daily refresh. Bootstrap keeps this complete-history collector; daily refresh
+targets only instruments selected by persisted CNINFO announcement triggers and
+publishes explicit gaps or pending instruments.

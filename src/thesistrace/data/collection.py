@@ -340,6 +340,8 @@ def _data_work_is_active(transaction: PostgresTransaction) -> bool:
             UNION ALL
             SELECT 1 FROM data.financial_refresh_operations WHERE status = 'running'
             UNION ALL
+            SELECT 1 FROM data.financial_daily_refresh_operations WHERE status = 'running'
+            UNION ALL
             SELECT 1 FROM data.industry_refresh_operations WHERE status = 'running'
         ) AS active
         """
@@ -364,6 +366,18 @@ def _retention_snapshot(
         GenerationFileRef("financial_candidate", str(row["candidate_manifest_sha256"]))
         for row in candidate_rows
     )
+    daily_candidate_rows = transaction.execute(
+        """
+        SELECT candidate_manifest_sha256
+        FROM data.financial_daily_refresh_operations
+        WHERE status IN ('succeeded', 'succeeded_with_pending', 'succeeded_with_gaps')
+          AND retention_released_at IS NULL
+        """
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("financial_candidate", str(row["candidate_manifest_sha256"]))
+        for row in daily_candidate_rows
+    )
     raw_rows = transaction.execute(
         """
         SELECT DISTINCT shard.batch_sha256
@@ -377,6 +391,24 @@ def _retention_snapshot(
     ).fetchall()
     retained.update(
         GenerationFileRef("raw_financial", str(row["batch_sha256"])) for row in raw_rows
+    )
+    daily_raw_rows = transaction.execute(
+        """
+        SELECT DISTINCT checkpoint.value ->> 'batch_sha256' AS batch_sha256
+        FROM data.financial_daily_refresh_operations AS operation
+        JOIN data.financial_refresh_instrument_attempts AS attempt
+          ON attempt.idempotency_key = operation.idempotency_key
+        CROSS JOIN LATERAL jsonb_array_elements(attempt.checkpoints) AS checkpoint(value)
+        WHERE operation.status IN (
+                  'succeeded', 'succeeded_with_pending', 'succeeded_with_gaps'
+              )
+          AND operation.retention_released_at IS NULL
+          AND attempt.status = 'accepted'
+        """
+    ).fetchall()
+    retained.update(
+        GenerationFileRef("raw_financial", str(row["batch_sha256"]))
+        for row in daily_raw_rows
     )
     industry_candidate_rows = transaction.execute(
         """

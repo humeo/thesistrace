@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0219
 ---
 
 # Rebuild the complete financial family on every V1 refresh

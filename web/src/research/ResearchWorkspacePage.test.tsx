@@ -84,7 +84,7 @@ const data = {
   industry_refresh_status: null,
   industry_refresh_failure_code: null,
   market_research_readiness: true,
-  financial_research_readiness: false,
+  financial_research_readiness: "not_ready" as const,
   industry_research_readiness: false,
 };
 

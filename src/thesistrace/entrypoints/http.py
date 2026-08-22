@@ -166,6 +166,7 @@ def create_app(
         app,
         financial_authoring_ready=lambda request: (
             _runtime(request).data_overview.overview().financial_research_readiness
+            != "not_ready"
         ),
     )
 

@@ -12,6 +12,7 @@ import pytest
 from thesistrace.data.financial_candidate import (
     FinancialCandidateError,
     FinancialCandidateStore,
+    FinancialDiscoveryPublication,
     FinancialSourceObservation,
     FinancialVersionProjector,
 )
@@ -24,7 +25,7 @@ from thesistrace.data.financial_collection import (
     RawFinancialBatchStore,
 )
 from thesistrace.data.generation_files import AddressedFileStore
-from thesistrace.data.generation_store import MountedGenerationStore
+from thesistrace.data.generation_store import GenerationFileRef, MountedGenerationStore
 from thesistrace.fixture import build_minimal_canonical_fixture
 from thesistrace.publication.serialization import canonical_json_bytes
 
@@ -1122,6 +1123,567 @@ def test_complete_history_refresh_extends_cutoff(
     assert store.validate(current.manifest_sha256) == current
 
 
+def test_daily_rebuild_publishes_targeted_evidence_and_degraded_discovery_coverage(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    accepted = tuple(
+        replace(checkpoint, ordinal=ordinal)
+        for ordinal, checkpoint in enumerate(
+            checkpoint
+            for checkpoint in snapshot.shards
+            if checkpoint.instrument_id == "equity:000001.SZ"
+        )
+    )
+    targeted = replace(
+        snapshot,
+        idempotency_key="daily-financial-20260813",
+        target_count=len(accepted),
+        shards=accepted,
+    )
+
+    current = store.rebuild_daily(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="f" * 64,
+            readiness_status="ready_with_pending",
+            pending_instrument_count=1,
+            discovery_gap_count=0,
+            earliest_unresolved_date="2026-08-13",
+        ),
+    )
+
+    coverage = store.family_reference(current.manifest_sha256)["dataset_coverage"]
+    assert coverage == {
+        "kind": "financial-announcement-observation-range",
+        "start": "2010-01-04",
+        "discovery_baseline_session": "2026-08-13",
+        "discovery_attempted_through_session": "2026-08-13",
+        "discovery_complete_through_session": "2026-08-13",
+        "historical_reconciliation_watermark": "2026-08-13",
+        "revision_coverage": "cninfo-announcement-driven-tushare-observed",
+        "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+        "readiness_status": "ready_with_pending",
+        "pending_instrument_count": 1,
+        "discovery_gap_count": 0,
+        "earliest_unresolved_date": "2026-08-13",
+        "source_lineage_sha256": "f" * 64,
+    }
+    assert current.raw_batch_count == prior.raw_batch_count
+    assert store.read_table(
+        current.manifest_sha256, "income_statement_versions"
+    ) == store.read_table(prior.manifest_sha256, "income_statement_versions")
+
+
+def test_zero_trigger_daily_rebuild_reuses_validated_parent_without_historical_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    empty = replace(
+        snapshot,
+        idempotency_key="daily-financial-zero-trigger",
+        target_count=0,
+        shards=(),
+    )
+    prior_manifest = _read_manifest(tmp_path, prior.manifest_sha256)
+
+    def reject_historical_read(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("zero-trigger daily refresh reopened historical evidence")
+
+    monkeypatch.setattr(store, "_require_evidence_present", reject_historical_read)
+    monkeypatch.setattr(store, "_canonical_versions", reject_historical_read)
+
+    current = store.rebuild_daily(
+        empty,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="e" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+
+    current_manifest = _read_manifest(tmp_path, current.manifest_sha256)
+    assert current_manifest["tables"] == prior_manifest["tables"]
+    assert current_manifest["raw_evidence"] == prior_manifest["raw_evidence"]
+    assert current_manifest["quarantine"] == prior_manifest["quarantine"]
+    assert current_manifest["source_collection"]["prior_candidate_manifest_sha256"] == (
+        prior.manifest_sha256
+    )
+    assert store.validate(current.manifest_sha256) == current
+    assert store.read_table(
+        current.manifest_sha256, "income_statement_versions"
+    ) == store.read_table(prior.manifest_sha256, "income_statement_versions")
+
+
+def test_daily_composition_does_not_revalidate_the_published_parent_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    market = _market_generation(tmp_path)
+    store = FinancialCandidateStore(tmp_path)
+    snapshot = _empty_complete_snapshot(
+        tmp_path,
+        market,
+        idempotency_key="daily-composition-prior",
+        fields=FULL_EXECUTABLE_FIELDS,
+    )
+    prior = store.materialize(snapshot, observation_through_session="2026-08-13")
+    generations = MountedGenerationStore(tmp_path)
+    source = generations.compose_financial_candidate(
+        market,
+        prior.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 9, tzinfo=UTC),
+    )
+    empty = replace(
+        snapshot,
+        idempotency_key="daily-financial-prevalidated-parent",
+        generation_manifest_sha256=source.manifest_sha256,
+        target_count=0,
+        shards=(),
+    )
+    original_validate = FinancialCandidateStore.validate
+
+    def bounded_validate(
+        candidate_store: FinancialCandidateStore,
+        manifest_sha256: str,
+    ):
+        if manifest_sha256 == prior.manifest_sha256:
+            raise AssertionError("daily path revalidated the published parent Family")
+        return original_validate(candidate_store, manifest_sha256)
+
+    def reject_market_revalidation(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("daily path revalidated a published Market root")
+
+    monkeypatch.setattr(FinancialCandidateStore, "validate", bounded_validate)
+    monkeypatch.setattr(
+        MountedGenerationStore,
+        "validate_market_generation",
+        reject_market_revalidation,
+    )
+    candidate = store.rebuild_daily(
+        empty,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="a" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+
+    composed = generations.compose_financial_candidate(
+        source.manifest_sha256,
+        candidate.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 10, tzinfo=UTC),
+    )
+
+    assert composed.financial_candidate_manifest_sha256 == candidate.manifest_sha256
+
+
+def test_targeted_daily_rebuild_reads_only_affected_instrument_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    accepted = tuple(
+        replace(checkpoint, ordinal=ordinal)
+        for ordinal, checkpoint in enumerate(
+            checkpoint
+            for checkpoint in snapshot.shards
+            if checkpoint.instrument_id == "equity:000001.SZ"
+        )
+    )
+    targeted = replace(
+        snapshot,
+        idempotency_key="daily-financial-targeted-read-bound",
+        target_count=len(accepted),
+        shards=accepted,
+    )
+    forbidden_hashes = {
+        checkpoint.batch_sha256
+        for checkpoint in snapshot.shards
+        if checkpoint.instrument_id == "equity:000002.SZ"
+    }
+    original_read = store._read_raw_batch
+
+    def bounded_read(batch_sha256: str) -> dict[str, object]:
+        if batch_sha256 in forbidden_hashes:
+            raise AssertionError("targeted refresh read an unaffected instrument raw batch")
+        return original_read(batch_sha256)
+
+    monkeypatch.setattr(store, "_read_raw_batch", bounded_read)
+
+    current = store.rebuild_daily(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="d" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+
+    assert store.validate(current.manifest_sha256) == current
+    current_manifest = _read_manifest(tmp_path, current.manifest_sha256)
+    prior_manifest = _read_manifest(tmp_path, prior.manifest_sha256)
+    assert current_manifest["tables"] == prior_manifest["tables"]
+
+
+def test_daily_instrument_validation_rejects_a_new_undated_source_row(
+    tmp_path: Path,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    raw = RawFinancialBatchStore(tmp_path)
+    targeted: list[FinancialShardCheckpoint] = []
+    for checkpoint in snapshot.shards:
+        if checkpoint.instrument_id != "equity:000001.SZ":
+            continue
+        assert checkpoint.batch_sha256 is not None
+        payload = raw.read(checkpoint.batch_sha256)
+        items = [*payload["items"]]
+        if checkpoint.endpoint == "income":
+            items.append(
+                [
+                    checkpoint.ts_code,
+                    "",
+                    "",
+                    "20260630",
+                    "1",
+                    "1",
+                    "2",
+                    "999",
+                    "0",
+                ]
+            )
+        publications = [str(item[2] or item[1]) for item in items if item[2] or item[1]]
+        payload["items"] = items
+        payload["row_count"] = len(items)
+        payload["source_date_extent"] = [min(publications), max(publications)]
+        payload["payload_sha256"] = hashlib.sha256(
+            canonical_json_bytes({"fields": list(FIELDS), "items": items})
+        ).hexdigest()
+        targeted.append(
+            replace(
+                checkpoint,
+                ordinal=len(targeted),
+                batch_sha256=raw.store(canonical_json_bytes(payload)),
+                collected_at="2026-08-13T08:30:00+00:00",
+                first_observed_at="2026-08-13T08:30:00+00:00",
+            )
+        )
+    collection = replace(
+        snapshot,
+        idempotency_key="daily-financial-undated-row",
+        target_count=len(targeted),
+        shards=tuple(targeted),
+    )
+
+    with pytest.raises(
+        FinancialCandidateError,
+        match="FINANCIAL_DAILY_INSTRUMENT_INVALID",
+    ):
+        store.validate_daily_instrument(
+            collection,
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+
+def test_daily_instrument_validation_reads_the_parent_evidence_index_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    prior_manifest = _read_manifest(tmp_path, prior.manifest_sha256)
+    evidence_index = _read_manifest(
+        tmp_path,
+        prior_manifest["raw_evidence"]["manifest_sha256"],
+    )
+    parent_chunk_hashes = {item["sha256"] for item in evidence_index["chunks"]}
+    parent_chunk_reads = 0
+    original_read_json = store._read_json
+
+    def count_parent_chunk_reads(
+        path: Path,
+        sha256: str,
+        byte_count: int | None = None,
+    ) -> dict[str, object]:
+        nonlocal parent_chunk_reads
+        if sha256 in parent_chunk_hashes:
+            parent_chunk_reads += 1
+        return original_read_json(path, sha256, byte_count)
+
+    monkeypatch.setattr(store, "_read_json", count_parent_chunk_reads)
+    for instrument_id in ("equity:000001.SZ", "equity:000002.SZ"):
+        checkpoints = tuple(
+            replace(checkpoint, ordinal=ordinal)
+            for ordinal, checkpoint in enumerate(
+                item for item in snapshot.shards if item.instrument_id == instrument_id
+            )
+        )
+        store.validate_daily_instrument(
+            replace(
+                snapshot,
+                idempotency_key=f"daily-parent-index-{instrument_id}",
+                target_count=len(checkpoints),
+                shards=checkpoints,
+            ),
+            prior_candidate_manifest_sha256=prior.manifest_sha256,
+            observation_through_session="2026-08-13",
+        )
+
+    assert parent_chunk_reads == len(parent_chunk_hashes)
+
+
+def test_targeted_daily_rebuild_appends_only_changed_rows_to_immutable_tables(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, prior, _repeated, snapshot = _materialized_candidate(tmp_path)
+    raw = RawFinancialBatchStore(tmp_path)
+    accepted: list[FinancialShardCheckpoint] = []
+    for checkpoint in snapshot.shards:
+        if checkpoint.instrument_id != "equity:000001.SZ":
+            continue
+        assert checkpoint.batch_sha256 is not None
+        payload = raw.read(checkpoint.batch_sha256)
+        items = [*payload["items"]]
+        items.append(
+            [
+                checkpoint.ts_code,
+                "20260813",
+                "",
+                "20260630",
+                "1",
+                "1",
+                "2",
+                f"{900 + len(accepted)}",
+                "0",
+            ]
+        )
+        publications = [str(item[2] or item[1]) for item in items if item[2] or item[1]]
+        payload["items"] = items
+        payload["row_count"] = len(items)
+        payload["source_date_extent"] = [min(publications), max(publications)]
+        payload["payload_sha256"] = hashlib.sha256(
+            canonical_json_bytes({"fields": list(FIELDS), "items": items})
+        ).hexdigest()
+        accepted.append(
+            replace(
+                checkpoint,
+                ordinal=len(accepted),
+                batch_sha256=raw.store(canonical_json_bytes(payload)),
+                collected_at="2026-08-13T08:30:00+00:00",
+                first_observed_at="2026-08-13T08:30:00+00:00",
+            )
+        )
+    targeted = replace(
+        snapshot,
+        idempotency_key="daily-financial-targeted-delta",
+        target_count=len(accepted),
+        shards=tuple(accepted),
+    )
+    forbidden_hashes = {
+        checkpoint.batch_sha256
+        for checkpoint in snapshot.shards
+        if checkpoint.instrument_id == "equity:000002.SZ"
+    }
+    original_read = store._read_raw_batch
+
+    def bounded_read(batch_sha256: str) -> dict[str, object]:
+        if batch_sha256 in forbidden_hashes:
+            raise AssertionError("targeted refresh read an unaffected instrument raw batch")
+        return original_read(batch_sha256)
+
+    monkeypatch.setattr(store, "_read_raw_batch", bounded_read)
+    current = store.rebuild_daily(
+        targeted,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="c" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+
+    assert store.validate(current.manifest_sha256) == current
+    prior_manifest = _read_manifest(tmp_path, prior.manifest_sha256)
+    current_manifest = _read_manifest(tmp_path, current.manifest_sha256)
+    for prior_reference, current_reference in zip(
+        prior_manifest["tables"], current_manifest["tables"], strict=True
+    ):
+        table = _read_manifest(tmp_path, current_reference["manifest_sha256"])
+        prior_table = _read_manifest(tmp_path, prior_reference["manifest_sha256"])
+        assert table["partitioning"]["kind"] == "immutable-base-with-delta-objects"
+        assert table["partitioning"]["base_manifest_sha256"] == (
+            prior_reference["manifest_sha256"]
+        )
+        assert table["objects"][: len(prior_table["objects"])] == prior_table["objects"]
+        assert current_reference["object_count"] > prior_reference["object_count"]
+    income = store.read_table(current.manifest_sha256, "income_statement_versions")
+    assert sum(row["revenue"] == "900" for row in income) == 1
+    retained = MountedGenerationStore(tmp_path).financial_candidate_referenced_files(
+        current.manifest_sha256
+    )
+    assert GenerationFileRef("manifest", prior.manifest_sha256) in retained
+    assert all(
+        GenerationFileRef("manifest", reference["manifest_sha256"]) in retained
+        for reference in prior_manifest["tables"]
+    )
+
+    second_checkpoints: list[FinancialShardCheckpoint] = []
+    for checkpoint in accepted:
+        assert checkpoint.batch_sha256 is not None
+        payload = raw.read(checkpoint.batch_sha256)
+        items = [*payload["items"]]
+        items.append(
+            [
+                checkpoint.ts_code,
+                "20260813",
+                "",
+                "20260630",
+                "1",
+                "1",
+                "2",
+                f"{950 + len(second_checkpoints)}",
+                "0",
+            ]
+        )
+        publications = [str(item[2] or item[1]) for item in items if item[2] or item[1]]
+        payload["items"] = items
+        payload["row_count"] = len(items)
+        payload["source_date_extent"] = [min(publications), max(publications)]
+        payload["payload_sha256"] = hashlib.sha256(
+            canonical_json_bytes({"fields": list(FIELDS), "items": items})
+        ).hexdigest()
+        second_checkpoints.append(
+            replace(
+                checkpoint,
+                ordinal=len(second_checkpoints),
+                batch_sha256=raw.store(canonical_json_bytes(payload)),
+                collected_at="2026-08-13T08:45:00+00:00",
+                first_observed_at="2026-08-13T08:45:00+00:00",
+            )
+        )
+    second = store.rebuild_daily(
+        replace(
+            targeted,
+            idempotency_key="daily-financial-targeted-second-delta",
+            shards=tuple(second_checkpoints),
+        ),
+        prior_candidate_manifest_sha256=current.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="b" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+    assert store.validate(second.manifest_sha256) == second
+    second_income = store.read_table(second.manifest_sha256, "income_statement_versions")
+    assert sum(row["revenue"] == "900" for row in second_income) == 1
+    assert sum(row["revenue"] == "950" for row in second_income) == 1
+    second_retained = MountedGenerationStore(tmp_path).financial_candidate_referenced_files(
+        second.manifest_sha256
+    )
+    assert GenerationFileRef("manifest", current.manifest_sha256) in second_retained
+    assert all(
+        GenerationFileRef("manifest", reference["manifest_sha256"]) in second_retained
+        for reference in current_manifest["tables"]
+    )
+
+
+def test_generation_admission_preserves_degraded_financial_readiness(
+    tmp_path: Path,
+) -> None:
+    market = _market_generation(tmp_path)
+    store = FinancialCandidateStore(tmp_path)
+    prior = store.materialize(
+        _empty_complete_snapshot(
+            tmp_path,
+            market,
+            idempotency_key="readiness-prior",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        observation_through_session="2026-08-13",
+    )
+    generation_store = MountedGenerationStore(tmp_path)
+    source = generation_store.compose_financial_candidate(
+        market,
+        prior.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 8, tzinfo=UTC),
+    )
+    empty = replace(
+        _empty_complete_snapshot(
+            tmp_path,
+            source.manifest_sha256,
+            idempotency_key="readiness-prior-daily",
+            fields=FULL_EXECUTABLE_FIELDS,
+        ),
+        target_count=0,
+        shards=(),
+    )
+    current = store.rebuild_daily(
+        empty,
+        prior_candidate_manifest_sha256=prior.manifest_sha256,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session="2026-08-13",
+            attempted_through_session="2026-08-13",
+            complete_through_session="2026-08-13",
+            source_lineage_sha256="f" * 64,
+            readiness_status="ready_with_pending",
+            pending_instrument_count=1,
+            discovery_gap_count=0,
+            earliest_unresolved_date="2026-08-13",
+        ),
+    )
+    composite = generation_store.compose_financial_candidate(
+        source.manifest_sha256,
+        current.manifest_sha256,
+        prepared_at=datetime(2026, 8, 13, 9, tzinfo=UTC),
+        publication_coordinate="a" * 64,
+    )
+    assert composite.financial_research_readiness is not None
+    assert composite.financial_research_readiness["status"] == "ready_with_pending"
+    assert composite.financial_research_readiness[
+        "attempted_through_session"
+    ] == "2026-08-13"
+    assert composite.financial_research_readiness[
+        "complete_through_session"
+    ] == "2026-08-13"
+    admission = generation_store.open_admission(composite.manifest_sha256)
+    assert admission.financial_research_readiness == "ready_with_pending"
+
+
 def _empty_complete_snapshot(
     root: Path,
     market_manifest: str,
@@ -1226,4 +1788,16 @@ def _market_generation(root: Path, *, include_second: bool = True) -> str:
             source_lineage={"fixture": "financial-candidate"},
         )
         .manifest_sha256
+    )
+
+
+def _read_manifest(root: Path, sha256: str) -> dict[str, object]:
+    return json.loads(
+        (
+            root
+            / "manifests"
+            / "sha256"
+            / sha256[:2]
+            / f"{sha256}.json"
+        ).read_bytes()
     )

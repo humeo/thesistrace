@@ -55,7 +55,7 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
         "industry_refresh_status": None,
         "industry_refresh_failure_code": None,
         "market_research_readiness": False,
-        "financial_research_readiness": False,
+        "financial_research_readiness": "not_ready",
         "industry_research_readiness": False,
     }
 
@@ -99,7 +99,7 @@ def test_empty_and_prepared_data_overview_survive_real_http_restart(
         "industry_refresh_status": None,
         "industry_refresh_failure_code": None,
         "market_research_readiness": True,
-        "financial_research_readiness": False,
+        "financial_research_readiness": "not_ready",
         "industry_research_readiness": True,
     }
     for _ in range(2):
@@ -180,7 +180,7 @@ def test_data_overview_does_not_open_generation_parquet(
             "industry_refresh_status": None,
             "industry_refresh_failure_code": None,
             "market_research_readiness": True,
-            "financial_research_readiness": False,
+            "financial_research_readiness": "not_ready",
             "industry_research_readiness": True,
         }
 

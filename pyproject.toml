@@ -12,6 +12,7 @@ dependencies = [
   "uvicorn[standard]>=0.35.0,<1",
   "boto3>=1.40,<2",
   "numpy>=2.3,<3",
+  "akshare==1.18.94",
 ]
 
 [project.scripts]

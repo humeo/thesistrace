@@ -18,3 +18,8 @@ ResearchRun using financial fields cannot extend beyond the family's
 observation-through cutoff, and a DailyTrack using them blocks before the first
 uncovered session until a complete Financial Refresh advances that cutoff;
 market-only execution remains independent.
+
+ADR-0219 supersedes the complete-shard and all-or-nothing DailyTrack clauses for
+post-bootstrap financial refresh. Financial Coverage now separates attempted
+and complete discovery coordinates and permits explicitly degraded execution
+with pending instruments or discovery gaps.

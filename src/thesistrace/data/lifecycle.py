@@ -318,6 +318,7 @@ class DatasetLifecycle:
         operation_id: str,
         prepared_at: datetime | None = None,
         financial_publication_key: str | None = None,
+        daily_financial_publication_key: str | None = None,
         industry_publication_key: str | None = None,
     ) -> DatasetHeadPointer:
         # protect_candidate already decoded and validated every immutable object.
@@ -365,6 +366,25 @@ class DatasetLifecycle:
                     )
                     if receipt.rowcount != 1:
                         raise DataLifecycleError("Financial publication receipt conflicted")
+                if daily_financial_publication_key is not None:
+                    receipt = transaction.execute(
+                        """
+                        UPDATE data.financial_daily_refresh_operations
+                        SET publication_head_moved_at = %s, updated_at = now()
+                        WHERE idempotency_key = %s AND status = 'running'
+                          AND composed_generation_manifest_sha256 = %s
+                          AND publication_head_moved_at IS NULL
+                        """,
+                        (
+                            prepared_at,
+                            daily_financial_publication_key,
+                            candidate_generation_manifest_sha256,
+                        ),
+                    )
+                    if receipt.rowcount != 1:
+                        raise DataLifecycleError(
+                            "Daily Financial publication receipt conflicted"
+                        )
                 if industry_publication_key is not None:
                     receipt = transaction.execute(
                         """

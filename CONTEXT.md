@@ -295,8 +295,10 @@ _Avoid_: Total Track history, execution concurrency
 
 **Daily Tracking**:
 The forward-only simulated-portfolio process that extends an explicitly active
-DailyTrack through later Research Sessions.
-_Avoid_: Rolling backtest, live trading, persisted Alpha history
+DailyTrack through later Research Sessions. It may use degraded-but-executable
+Financial Research Readiness and records that state without rewriting a
+completed Tracking Advance after later data arrives.
+_Avoid_: Rolling backtest, live trading, persisted Alpha history, rewritten past
 
 **DailyTrack**:
 The stable identity of one continuous fixed-origin tracking stream started from
@@ -619,14 +621,21 @@ Research Session.
 _Avoid_: Financial Coverage, Research Period
 
 **Financial Coverage**:
-The Dataset Coverage of Point-in-Time Financial Data, including its source
-version and reconciliation limits.
-_Avoid_: Non-null guarantee, market date range
+The quality-bearing Dataset Coverage of Point-in-Time Financial Data, including
+its discovery baseline, attempted-through and complete-through coordinates,
+pending instruments, discovery gaps, and reconciliation limits.
+_Avoid_: One observation-through date, non-null guarantee, market date range
 
 **Financial Coverage Start**:
-The first Research Session from which Financial Coverage guarantees complete
-collection of newly available Source Financial Versions.
-_Avoid_: Earliest retained row, source request start
+The first Research Session from which the bootstrap financial family can resolve
+covered Source Financial Versions under its declared revision limits.
+_Avoid_: Financial Discovery Baseline, earliest retained row, source request start
+
+**Financial Discovery Baseline**:
+The observation-through Research Session of the last accepted complete-history
+Tushare bootstrap or explicit reconciliation, after which announcement-driven
+discovery continuity begins.
+_Avoid_: Financial Coverage Start, historical CNINFO scan, hard-coded date
 
 **Financial Seed Fact**:
 A pre-Coverage Financial Fact retained only to resolve a correct
@@ -634,14 +643,16 @@ Session-Aligned Financial Field at Financial Coverage Start.
 _Avoid_: Earlier Financial Coverage, invented value
 
 **Data Overview**:
-The read-only product view of current Dataset Coverage, freshness, and Financial
-Research Readiness.
-_Avoid_: Data Refresh control, raw table browser
+The read-only product view of current Dataset Coverage, freshness, Financial
+Research Readiness, and aggregate pending or discovery-gap counts.
+_Avoid_: Data Refresh control, raw table browser, instrument failure dump
 
 **Financial Research Readiness**:
-The published guarantee that the current Data Generation has complete Financial
-Coverage and executable financial Alpha fields.
-_Avoid_: Raw ingestion completion, partial authorability
+The published financial input-quality status of a Data Generation: `ready`,
+`ready_with_pending`, `ready_with_gaps`, or `not_ready`. The first three remain
+executable and are frozen into ResearchRun and DailyTrack provenance;
+`not_ready` blocks use.
+_Avoid_: Boolean readiness, raw ingestion completion, hidden stale input
 
 **Data Operator**:
 The trusted private actor allowed to initialize, inspect, refresh, and collect
@@ -664,9 +675,38 @@ current financial families.
 _Avoid_: Financial Refresh, independent Dataset Head
 
 **Financial Refresh**:
-A Data Refresh that reconciles Point-in-Time Financial Data while retaining the
-current market families.
-_Avoid_: Partial publication, independent Dataset Head
+A Data Refresh that uses Financial Announcement Discovery to atomically
+re-request all three Tushare statements only for affected instruments while
+retaining prior facts for failed instruments and current market families.
+_Avoid_: Full-universe daily rebuild, mixed per-instrument snapshot, fallback,
+independent Dataset Head
+
+**Financial Announcement Discovery**:
+The immutable CNINFO evidence, obtained through the pinned AKShare adapter, that
+produces Financial Announcement Triggers and Financial Discovery Gaps but no
+Canonical financial values.
+_Avoid_: Tushare statement collection, numeric data source, title-only guess
+
+**Financial Discovery Attempted Through**:
+The latest Research Session through which a Financial Refresh published either
+complete announcement evidence or explicit discovery gaps.
+_Avoid_: Financial Discovery Complete Through, implicit success
+
+**Financial Discovery Complete Through**:
+The latest Research Session through which every declared announcement category
+and page has been observed without an unresolved Financial Discovery Gap.
+_Avoid_: Financial Discovery Attempted Through, Tushare statement freshness
+
+**Financial Discovery Gap**:
+A persisted incomplete CNINFO category, page, and date interval whose affected
+instruments remain unknown and which must be retried by a later refresh.
+_Avoid_: Known instrument failure, discarded remote error, complete discovery
+
+**Financial Announcement Trigger**:
+A deduplicated current-instrument disclosure or correction that requires an
+atomic three-statement Tushare refresh and remains unresolved until explicitly
+matched or closed under the accepted no-structured-change rule.
+_Avoid_: Canonical Financial Fact, one-shot notification, best-effort log
 
 **Canonical Market Data**:
 The source-neutral market and reference facts governed by stable field names,
@@ -699,9 +739,9 @@ Price.
 _Avoid_: Latest-factor anchor, Raw Market Price
 
 **Tushare Upstream**:
-The sole external source for the Dataset Families currently supported by
-ThesisTrace.
-_Avoid_: Fallback source, provider consensus
+The sole external source of Canonical market, industry, and financial values.
+CNINFO supplies financial discovery evidence only and never substitutes values.
+_Avoid_: Sole evidence source, AKShare financial values, fallback, consensus
 
 **Field Catalog**:
 The Data-owned inventory of stable Canonical Fields and their research meaning.
@@ -732,14 +772,15 @@ instrument.
 _Avoid_: Random UUID, asset-specific data record
 
 **Point-in-Time Financial Data**:
-Financial facts keyed by when they became available so research never sees a
-later disclosure or revision early.
-_Avoid_: Current snapshot, future backfill
+Financial facts keyed by source availability and first observation so research
+never sees a later disclosure early and late ingestion never rewrites a
+completed DailyTrack progression.
+_Avoid_: Current snapshot, future leak, rewritten Tracking history
 
 **Source Financial Version**:
 One financial statement version actually returned by Tushare with its source
-availability and revision evidence.
-_Avoid_: Invented revision, destructive overwrite
+availability, first-observed time, and revision evidence.
+_Avoid_: Invented revision, destructive overwrite, merged time coordinates
 
 **Financial Fact**:
 One nullable Canonical numeric measurement from a Source Financial Version with

@@ -27,6 +27,13 @@ from thesistrace.data import (
     MountedDatasetHeadStore,
     MountedGenerationStore,
 )
+from thesistrace.data.daily_financial_refresh import DailyFinancialRefreshService
+from thesistrace.data.financial_announcements import (
+    FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+    FinancialAnnouncement,
+    FinancialAnnouncementDiscovery,
+    FinancialDiscoveryGap,
+)
 from thesistrace.data.financial_collection import (
     FINANCIAL_ENDPOINTS,
     FinancialCollectionContract,
@@ -36,7 +43,7 @@ from thesistrace.data.financial_collection import (
     RawFinancialBatchStore,
 )
 from thesistrace.data.generation_files import AddressedFileStore
-from thesistrace.data.source import RawSourceResponse
+from thesistrace.data.source import RawSourceError, RawSourceResponse
 from thesistrace.entrypoints.runtime import CoreSettings
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -765,15 +772,20 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
         assert overview.financial_coverage is not None
         assert overview.financial_coverage.model_dump(mode="json") == {
             "start": "2010-01-04",
-            "observation_through_session": "2026-08-13",
-            "reconciliation_status": "complete",
+            "discovery_baseline_session": "2026-08-13",
+            "discovery_attempted_through_session": "2026-08-13",
+            "discovery_complete_through_session": "2026-08-13",
             "historical_reconciliation_watermark": "2026-08-13",
             "revision_coverage": "source-dated-and-first-observed-corrections",
             "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "readiness_status": "ready",
+            "pending_instrument_count": 0,
+            "discovery_gap_count": 0,
+            "earliest_unresolved_date": None,
             "sparse_facts": True,
         }
         assert overview.last_financial_refresh_at == COLLECTED_AT + timedelta(days=1)
-        assert overview.financial_research_readiness is True
+        assert overview.financial_research_readiness == "ready"
         assert [event["event"] for event in lifecycle_events] == [
             "data_refresh_started",
             "data_refresh_phase_completed",
@@ -801,6 +813,584 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             prior_candidate_manifest_sha256=prior.manifest_sha256,
             observation_through_session="2026-08-13",
         ) == published
+    finally:
+        database.close()
+
+
+def test_daily_financial_refresh_discovers_one_stock_and_moves_the_one_head(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    class AnnouncementSource:
+        def discover(
+            self,
+            *,
+            start_date: str,
+            end_date: str,
+            allowed_ts_codes: set[str] | frozenset[str],
+        ) -> FinancialAnnouncementDiscovery:
+            assert (start_date, end_date) == ("2026-08-07", "2026-08-14")
+            assert allowed_ts_codes == {"000001.SZ"}
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date,
+                end_date=end_date,
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=(
+                    FinancialAnnouncement(
+                        announcement_id="a" * 64,
+                        category="半年报",
+                        ts_code="000001.SZ",
+                        name="平安银行",
+                        title="平安银行2026年半年度报告",
+                        source_published_date="2026-08-14",
+                        report_period="2026-06-30",
+                        url="https://example.test/announcement/a",
+                    ),
+                ),
+                gaps=(),
+                source_lineage_sha256="b" * 64,
+            )
+
+    class DailyStatementSource(StatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            assert fields == EXECUTABLE_FIELDS[endpoint]
+            ts_code = str(params["ts_code"])
+            self.requests.append((endpoint, ts_code, "complete-history"))
+            values = {
+                "income": ("11", "5"),
+                "balancesheet": ("21", "8", "13"),
+                "cashflow": ("7",),
+            }[endpoint]
+            return RawSourceResponse(
+                fields,
+                (
+                    (
+                        ts_code,
+                        "20260814",
+                        "",
+                        "20260630",
+                        "1",
+                        "1",
+                        "2",
+                        *values,
+                        "0",
+                    ),
+                ),
+            )
+
+    database = _database(core_settings)
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id="daily-financial-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="daily-financial-prior",
+            contract=contract,
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="daily-financial-source",
+            expected=market,
+        )
+        statement_source = DailyStatementSource()
+        service = DailyFinancialRefreshService(
+            database,
+            tmp_path,
+            AnnouncementSource(),
+            statement_source,
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+        )
+
+        published = service.publish(
+            idempotency_key="daily-financial-publish",
+            observation_through_session="2026-08-14",
+        )
+
+        assert published.status == "succeeded"
+        assert published.attempted_through_session == "2026-08-14"
+        assert published.complete_through_session == "2026-08-14"
+        assert published.accepted_instrument_count == 1
+        assert published.failed_instrument_count == 0
+        assert statement_source.requests == [
+            (endpoint, "000001.SZ", "complete-history")
+            for endpoint in FINANCIAL_ENDPOINTS
+        ]
+        pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert pointer is not None
+        assert pointer.generation_manifest_sha256 == published.generation_manifest_sha256
+        generation = MountedGenerationStore(tmp_path).validate_generation(
+            pointer.generation_manifest_sha256
+        )
+        assert generation.financial_candidate_manifest_sha256 == (
+            published.candidate.manifest_sha256
+        )
+        assert published.candidate.readiness_status == "ready"
+        assert published.candidate.discovery_baseline_session == "2026-08-13"
+        overview = DatasetOverviewService(database, tmp_path).overview()
+        assert overview.financial_research_readiness == "ready"
+        assert overview.financial_coverage is not None
+        assert overview.financial_coverage.model_dump(mode="json") == {
+            "start": "2010-01-04",
+            "discovery_baseline_session": "2026-08-13",
+            "discovery_attempted_through_session": "2026-08-14",
+            "discovery_complete_through_session": "2026-08-14",
+            "historical_reconciliation_watermark": "2026-08-13",
+            "revision_coverage": "cninfo-announcement-driven-tushare-observed",
+            "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+            "readiness_status": "ready",
+            "pending_instrument_count": 0,
+            "discovery_gap_count": 0,
+            "earliest_unresolved_date": None,
+            "sparse_facts": True,
+        }
+        assert service.publish(
+            idempotency_key="daily-financial-publish",
+            observation_through_session="2026-08-14",
+        ) == published
+        assert len(statement_source.requests) == 3
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize(
+    ("has_gap", "expected_status", "expected_complete", "expected_readiness"),
+    (
+        (False, "succeeded", "2026-08-14", "ready"),
+        (True, "succeeded_with_gaps", "2026-08-13", "ready_with_gaps"),
+    ),
+)
+def test_daily_financial_refresh_publishes_zero_trigger_discovery_state(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    *,
+    has_gap: bool,
+    expected_status: str,
+    expected_complete: str,
+    expected_readiness: str,
+) -> None:
+    class AnnouncementSource:
+        def discover(
+            self,
+            *,
+            start_date: str,
+            end_date: str,
+            allowed_ts_codes: set[str] | frozenset[str],
+        ) -> FinancialAnnouncementDiscovery:
+            assert start_date == "2026-08-07"
+            assert end_date == "2026-08-14"
+            assert allowed_ts_codes == {"000001.SZ"}
+            failed_category = FINANCIAL_ANNOUNCEMENT_CATEGORIES[-1]
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date,
+                end_date=end_date,
+                completed_categories=(
+                    FINANCIAL_ANNOUNCEMENT_CATEGORIES[:-1]
+                    if has_gap
+                    else FINANCIAL_ANNOUNCEMENT_CATEGORIES
+                ),
+                announcements=(),
+                gaps=(
+                    (
+                        FinancialDiscoveryGap(
+                            category=failed_category,
+                            start_date=start_date,
+                            end_date=end_date,
+                            failure_code="CNINFO_DISCOVERY_UNAVAILABLE",
+                        ),
+                    )
+                    if has_gap
+                    else ()
+                ),
+                source_lineage_sha256="c" * 64,
+            )
+
+    class UnexpectedStatementSource(ExecutableStatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            del endpoint, params, fields
+            raise AssertionError("zero-trigger refresh must not call Tushare")
+
+    database = _database(core_settings)
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+        )
+        _establish_head(database, tmp_path, market, operation_id=f"zero-trigger-market-{has_gap}")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"zero-trigger-prior-{has_gap}",
+            contract=contract,
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"zero-trigger-source-{has_gap}",
+            expected=market,
+        )
+
+        published = DailyFinancialRefreshService(
+            database,
+            tmp_path,
+            AnnouncementSource(),
+            UnexpectedStatementSource(),
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+        ).publish(
+            idempotency_key=f"zero-trigger-publish-{has_gap}",
+            observation_through_session="2026-08-14",
+        )
+
+        assert published.status == expected_status
+        assert published.accepted_instrument_count == 0
+        assert published.failed_instrument_count == 0
+        assert published.pending_instrument_count == 0
+        assert published.discovery_gap_count == int(has_gap)
+        assert published.complete_through_session == expected_complete
+        assert published.candidate.readiness_status == expected_readiness
+        head = MountedDatasetHeadStore(tmp_path).current_pointer()
+        assert head is not None
+        assert head.generation_manifest_sha256 == published.generation_manifest_sha256
+    finally:
+        database.close()
+
+
+@pytest.mark.parametrize("failure_mode", ("source", "undated_source_row"))
+def test_daily_financial_refresh_publishes_other_stocks_when_one_stock_fails(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+    failure_mode: str,
+) -> None:
+    class AnnouncementSource:
+        def discover(
+            self,
+            *,
+            start_date: str,
+            end_date: str,
+            allowed_ts_codes: set[str] | frozenset[str],
+        ) -> FinancialAnnouncementDiscovery:
+            assert allowed_ts_codes == {"000001.SZ", "000002.SZ"}
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date,
+                end_date=end_date,
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=tuple(
+                    FinancialAnnouncement(
+                        announcement_id=character * 64,
+                        category="半年报",
+                        ts_code=ts_code,
+                        name=ts_code,
+                        title=f"{ts_code} 2026年半年度报告",
+                        source_published_date="2026-08-14",
+                        report_period="2026-06-30",
+                        url=f"https://example.test/{ts_code}",
+                    )
+                    for character, ts_code in (
+                        ("a", "000001.SZ"),
+                        ("b", "000002.SZ"),
+                    )
+                ),
+                gaps=(),
+                source_lineage_sha256="c" * 64,
+            )
+
+    class PartiallyInvalidStatementSource(StatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            ts_code = str(params["ts_code"])
+            self.requests.append((endpoint, ts_code, "complete-history"))
+            if (
+                failure_mode == "source"
+                and ts_code == "000002.SZ"
+                and endpoint == "balancesheet"
+            ):
+                raise RawSourceError("upstream unavailable")
+            values = {
+                "income": ("11", "5"),
+                "balancesheet": ("21", "8", "13"),
+                "cashflow": ("7",),
+            }[endpoint]
+            return RawSourceResponse(
+                fields,
+                (
+                    (
+                        ts_code,
+                        (
+                            ""
+                            if failure_mode == "undated_source_row"
+                            and ts_code == "000002.SZ"
+                            else "20260814"
+                        ),
+                        "",
+                        "20260630",
+                        "1",
+                        "1",
+                        "2",
+                        *values,
+                        "0",
+                    ),
+                ),
+            )
+
+    database = _database(core_settings)
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=(
+                "2010-01-04",
+                "2026-08-07",
+                "2026-08-13",
+                "2026-08-14",
+                "2026-08-17",
+            ),
+            second_listed_to="",
+        )
+        _establish_head(
+            database,
+            tmp_path,
+            market,
+            operation_id=f"partial-daily-market-{failure_mode}",
+        )
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key=f"partial-daily-prior-{failure_mode}",
+            contract=contract,
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id=f"partial-daily-source-{failure_mode}",
+            expected=market,
+        )
+        source = PartiallyInvalidStatementSource()
+
+        published = DailyFinancialRefreshService(
+            database,
+            tmp_path,
+            AnnouncementSource(),
+            source,
+            clock=lambda: datetime(2026, 8, 17, 10, tzinfo=UTC),
+        ).publish(
+            idempotency_key=f"partial-daily-publish-{failure_mode}",
+            observation_through_session="2026-08-17",
+        )
+
+        assert published.status == "succeeded_with_pending"
+        assert published.accepted_instrument_count == 1
+        assert published.failed_instrument_count == 1
+        assert published.pending_instrument_count == 1
+        assert published.discovery_gap_count == 0
+        assert published.complete_through_session == "2026-08-17"
+        assert published.candidate.readiness_status == "ready_with_pending"
+        assert source.requests == [
+            *((endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS),
+            *(
+                (("income", "000002.SZ", "complete-history"),
+                 ("balancesheet", "000002.SZ", "complete-history"))
+                if failure_mode == "source"
+                else tuple(
+                    (endpoint, "000002.SZ", "complete-history")
+                    for endpoint in FINANCIAL_ENDPOINTS
+                )
+            ),
+        ]
+        candidate_rows = FinancialCandidateStore(tmp_path).read_financial_rows(
+            published.candidate.manifest_sha256,
+            "income",
+            ("instrument_id", "source_report_period", "total_revenue"),
+            ("2026-08-13", "2026-08-17"),
+            frozenset({"equity:000001.SZ", "equity:000002.SZ"}),
+        )
+        assert any(
+            row["instrument_id"] == "equity:000001.SZ"
+            and row["source_report_period"] == "20260630"
+            and row["total_revenue"] == "11"
+            for row in candidate_rows
+        ), candidate_rows
+        assert any(
+            row["instrument_id"] == "equity:000002.SZ"
+            and row["source_report_period"] == "20091231"
+            and row["total_revenue"] == "10"
+            for row in candidate_rows
+        ), candidate_rows
+    finally:
+        database.close()
+
+
+def test_daily_financial_refresh_resumes_after_each_durable_stock_checkpoint(
+    core_settings: CoreSettings,
+    tmp_path: Path,
+) -> None:
+    class AnnouncementSource:
+        def discover(
+            self,
+            *,
+            start_date: str,
+            end_date: str,
+            allowed_ts_codes: set[str] | frozenset[str],
+        ) -> FinancialAnnouncementDiscovery:
+            assert allowed_ts_codes == {"000001.SZ", "000002.SZ"}
+            return FinancialAnnouncementDiscovery(
+                start_date=start_date,
+                end_date=end_date,
+                completed_categories=FINANCIAL_ANNOUNCEMENT_CATEGORIES,
+                announcements=tuple(
+                    FinancialAnnouncement(
+                        announcement_id=character * 64,
+                        category="半年报",
+                        ts_code=ts_code,
+                        name=ts_code,
+                        title=f"{ts_code} 2026年半年度报告",
+                        source_published_date="2026-08-14",
+                        report_period="2026-06-30",
+                        url=f"https://example.test/{ts_code}",
+                    )
+                    for character, ts_code in (
+                        ("a", "000001.SZ"),
+                        ("b", "000002.SZ"),
+                    )
+                ),
+                gaps=(),
+                source_lineage_sha256="c" * 64,
+            )
+
+    class DailyStatementSource(StatementSource):
+        def query_raw(
+            self,
+            endpoint: str,
+            *,
+            params: dict[str, object],
+            fields: tuple[str, ...],
+        ) -> RawSourceResponse:
+            ts_code = str(params["ts_code"])
+            self.requests.append((endpoint, ts_code, "complete-history"))
+            values = {
+                "income": ("11", "5"),
+                "balancesheet": ("21", "8", "13"),
+                "cashflow": ("7",),
+            }[endpoint]
+            return RawSourceResponse(
+                fields,
+                (
+                    (
+                        ts_code,
+                        "20260814",
+                        "",
+                        "20260630",
+                        "1",
+                        "1",
+                        "2",
+                        *values,
+                        "0",
+                    ),
+                ),
+            )
+
+    database = _database(core_settings)
+    try:
+        market = _market_generation(
+            tmp_path,
+            sessions=("2010-01-04", "2026-08-07", "2026-08-13", "2026-08-14"),
+            second_listed_to="",
+        )
+        _establish_head(database, tmp_path, market, operation_id="daily-resume-market")
+        contract = _executable_contract()
+        prior = _initial_candidate(
+            database,
+            tmp_path,
+            ExecutableStatementSource(),
+            market,
+            idempotency_key="daily-resume-prior",
+            contract=contract,
+        )
+        source_generation = _financial_generation(tmp_path, market, prior)
+        _establish_head(
+            database,
+            tmp_path,
+            source_generation,
+            operation_id="daily-resume-source",
+            expected=market,
+        )
+        statement_source = DailyStatementSource()
+        interrupted = False
+
+        def interrupt_after_first(event: dict[str, object]) -> None:
+            nonlocal interrupted
+            if event.get("phase") == "instrument_checkpoint" and not interrupted:
+                interrupted = True
+                raise RuntimeError("interrupt after first stock checkpoint")
+
+        service = DailyFinancialRefreshService(
+            database,
+            tmp_path,
+            AnnouncementSource(),
+            statement_source,
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+            progress=interrupt_after_first,
+        )
+        with pytest.raises(RuntimeError, match="interrupt after first stock checkpoint"):
+            service.publish(
+                idempotency_key="daily-resume-publish",
+                observation_through_session="2026-08-14",
+            )
+        assert statement_source.requests == [
+            (endpoint, "000001.SZ", "complete-history")
+            for endpoint in FINANCIAL_ENDPOINTS
+        ]
+
+        outcome = DailyFinancialRefreshService(
+            database,
+            tmp_path,
+            AnnouncementSource(),
+            statement_source,
+            clock=lambda: datetime(2026, 8, 14, 10, tzinfo=UTC),
+        ).publish(
+            idempotency_key="daily-resume-publish",
+            observation_through_session="2026-08-14",
+        )
+
+        assert outcome.status == "succeeded"
+        assert statement_source.requests == [
+            *((endpoint, "000001.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS),
+            *((endpoint, "000002.SZ", "complete-history") for endpoint in FINANCIAL_ENDPOINTS),
+        ]
     finally:
         database.close()
 
@@ -2213,9 +2803,13 @@ def _initial_candidate(
     )
 
 
-def _market_generation(root: Path) -> str:
+def _market_generation(
+    root: Path,
+    *,
+    sessions: tuple[str, ...] = ("2010-01-04", "2026-08-07", "2026-08-13"),
+    second_listed_to: str = "2020-01-01",
+) -> str:
     canonical = build_minimal_canonical_fixture()
-    sessions = ("2010-01-04", "2026-08-07", "2026-08-13")
     price = dict(canonical["prices"][0])
     state = dict(canonical["trading_states"][0])
     limits = dict(canonical["price_limits"][0])
@@ -2242,7 +2836,7 @@ def _market_generation(root: Path) -> str:
             "exchange": "SZSE",
             "board": "main",
             "listed_from": "1991-01-29",
-            "listed_to": "2020-01-01",
+            "listed_to": second_listed_to,
         }
     )
     canonical["instruments"] = instruments
@@ -2302,8 +2896,13 @@ def _database(settings: CoreSettings) -> PostgresDatabase:
     database.open()
     with database.transaction() as transaction:
         transaction.execute(
-            "TRUNCATE data.financial_refresh_operations, "
+            "TRUNCATE data.financial_daily_refresh_operations, "
+            "data.financial_refresh_operations, "
             "data.financial_collection_shards, "
-            "data.financial_raw_batches, data.financial_collection_operations"
+            "data.financial_raw_batches, data.financial_collection_operations CASCADE"
+        )
+        transaction.execute(
+            "UPDATE data.current_dataset_state SET last_financial_refresh_at = NULL "
+            "WHERE singleton = 1"
         )
     return database

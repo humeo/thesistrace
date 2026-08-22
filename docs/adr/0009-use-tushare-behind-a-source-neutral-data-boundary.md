@@ -19,3 +19,8 @@ them into Canonical Market Data, and records their provenance in each Data
 Generation. Browser Draft and ResearchRun never call Tushare or
 depend on its field names. This boundary stabilizes the research contract; it
 is not a multi-source framework.
+
+ADR-0219 supersedes only the sole-external-evidence-source claim: CNINFO through
+AKShare now supplies financial announcement discovery evidence, while Tushare
+remains the sole source of Canonical data values and the no-fallback boundary
+remains unchanged.

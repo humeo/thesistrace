@@ -8,6 +8,7 @@ from pathlib import Path
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data.generation_store import MountedGenerationStore
 from thesistrace.data.lifecycle import DatasetLifecycle
+from thesistrace.data.models import FinancialResearchReadiness
 
 type MaximumUniverseCardinality = Callable[[str, date, date], int]
 
@@ -25,6 +26,7 @@ class DatasetAdmissionSnapshot:
     research_sessions: tuple[date, ...]
     available_field_ids: frozenset[str]
     maximum_universe_cardinality: MaximumUniverseCardinality
+    financial_research_readiness: FinancialResearchReadiness
     financial_coverage_start: date | None = None
     financial_coverage_end: date | None = None
     industry_coverage_start: date | None = None
@@ -104,6 +106,11 @@ class DatasetAdmissionService:
                     start_session=start.isoformat(),
                     end_session=end.isoformat(),
                 )
+            ),
+            financial_research_readiness=(
+                "not_ready"
+                if admission.financial_research_readiness is None
+                else admission.financial_research_readiness
             ),
             financial_coverage_start=financial_start,
             financial_coverage_end=(

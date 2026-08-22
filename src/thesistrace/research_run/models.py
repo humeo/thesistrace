@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from thesistrace.alpha_language.models import DiagnosticDetails, SourceRange
+from thesistrace.data.models import FinancialResearchReadiness
 
 RequestId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
 FolderId = Annotated[str, Field(strict=True, min_length=1, max_length=200)]
@@ -139,6 +140,7 @@ class DataAdmissionFacts(BaseModel):
     last_research_session: NaturalDate
     calculation_session_count: int
     universe_instrument_count: int
+    financial_research_readiness: FinancialResearchReadiness
 
 
 class ResearchExecutionChunk(BaseModel):

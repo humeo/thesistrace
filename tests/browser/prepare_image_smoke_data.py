@@ -109,7 +109,7 @@ def _publish_financial_candidate(settings: CoreSettings, end: str, mode: str) ->
         completed = subprocess.run(
             [
                 "thesistrace-data-operator",
-                "refresh-financial",
+                "bootstrap-financial",
                 "--idempotency-key",
                 f"production-image-smoke-financial-publication-{mode}",
                 "--generation-manifest-sha256",
@@ -127,7 +127,7 @@ def _publish_financial_candidate(settings: CoreSettings, end: str, mode: str) ->
             timeout=120,
         )
     if completed.returncode != 0:
-        raise RuntimeError(f"Image Smoke Financial Refresh failed: {completed.stderr}")
+        raise RuntimeError(f"Image Smoke Financial Bootstrap failed: {completed.stderr}")
     outcome = json.loads(completed.stdout)
     print(
         json.dumps(

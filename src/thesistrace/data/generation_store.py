@@ -97,6 +97,7 @@ class MountedGenerationAdmission:
     generation: MountedFamilyGenerationDescriptor
     research_calendar: tuple[str, ...]
     financial_observation_through_session: str | None
+    financial_research_readiness: str | None
     industry_observation_through_session: str | None
 
 
@@ -553,8 +554,18 @@ class MountedGenerationStore:
     ) -> MountedFamilyGenerationDescriptor:
         from thesistrace.data.financial_candidate import FinancialCandidateStore
 
-        self.validate_generation(market_generation_manifest_sha256)
         financial_store = FinancialCandidateStore(self._root)
+        prior_candidate = financial_store.prior_candidate_manifest_sha256(
+            financial_candidate_manifest_sha256
+        )
+        if prior_candidate is None:
+            self.validate_generation(market_generation_manifest_sha256)
+        else:
+            current = self.inspect_root(market_generation_manifest_sha256)
+            if current.financial_candidate_manifest_sha256 != prior_candidate:
+                raise GenerationStoreError(
+                    "Incremental Financial candidate does not extend the current Family"
+                )
         financial_store.validate_against_market_generation(
             financial_candidate_manifest_sha256,
             market_generation_manifest_sha256,
@@ -580,6 +591,9 @@ class MountedGenerationStore:
         market = self.inspect_root(market_generation_manifest_sha256)
         financial_store = FinancialCandidateStore(self._root)
         financial = financial_store.reopen(financial_candidate_manifest_sha256)
+        financial_reference = financial_store.family_reference(
+            financial_candidate_manifest_sha256
+        )
         source_fields = financial_store.source_fields_by_endpoint(
             financial_candidate_manifest_sha256
         )
@@ -613,9 +627,11 @@ class MountedGenerationStore:
             ),
             "families": [
                 *market_families,
-                financial_store.family_reference(financial_candidate_manifest_sha256),
+                financial_reference,
             ],
-            "financial_research_readiness": _financial_readiness_declaration(),
+            "financial_research_readiness": _financial_readiness_declaration(
+                financial_reference["dataset_coverage"]
+            ),
         }
         manifest = {
             "format": _FAMILY_GENERATION_FORMAT,
@@ -1158,6 +1174,7 @@ class MountedGenerationStore:
         }:
             raise GenerationStoreError("Generation admission projection is incompatible")
         financial_through: str | None = None
+        financial_readiness: str | None = None
         if descriptor.financial_candidate_manifest_sha256 is not None:
             try:
                 financial_family = next(
@@ -1165,8 +1182,18 @@ class MountedGenerationStore:
                     for family in descriptor.families
                     if family.family_id == "equity.financial_pit"
                 )
-                value = financial_family.dataset_coverage["observation_through_session"]
+                coverage = financial_family.dataset_coverage
+                value = (
+                    coverage["discovery_attempted_through_session"]
+                    if coverage.get("kind")
+                    == "financial-announcement-observation-range"
+                    else coverage["observation_through_session"]
+                )
                 financial_through = date.fromisoformat(str(value)).isoformat()
+                readiness = descriptor.financial_research_readiness
+                if readiness is None:
+                    raise KeyError("financial_research_readiness")
+                financial_readiness = str(readiness["status"])
             except (KeyError, StopIteration, ValueError) as error:
                 raise GenerationStoreError("Financial admission projection is invalid") from error
         industry_through: str | None = None
@@ -1188,6 +1215,7 @@ class MountedGenerationStore:
             generation=descriptor,
             research_calendar=calendar,
             financial_observation_through_session=financial_through,
+            financial_research_readiness=financial_readiness,
             industry_observation_through_session=industry_through,
         )
 
@@ -1539,6 +1567,11 @@ class MountedGenerationStore:
     ) -> set[GenerationFileRef]:
         references = {GenerationFileRef("manifest", manifest_sha256)}
         manifest = self._read_manifest(manifest_sha256)
+        source_collection = manifest.get("source_collection")
+        if isinstance(source_collection, Mapping):
+            prior_candidate = source_collection.get("prior_candidate_manifest_sha256")
+            if isinstance(prior_candidate, str):
+                references.add(GenerationFileRef("manifest", prior_candidate))
         source_generation = manifest.get("source_generation_manifest_sha256")
         if isinstance(source_generation, str):
             references.update(self.referenced_files(source_generation))
@@ -1550,6 +1583,17 @@ class MountedGenerationStore:
                 table_sha256 = str(table.get("manifest_sha256"))
                 references.add(GenerationFileRef("manifest", table_sha256))
                 table_manifest = self._read_manifest(table_sha256)
+                base_sha256 = _financial_base_table_manifest_sha256(table_manifest)
+                seen_base_manifests: set[str] = set()
+                while base_sha256 is not None:
+                    if base_sha256 in seen_base_manifests:
+                        raise GenerationStoreError(
+                            "Financial retained candidate has a cyclic table base"
+                        )
+                    seen_base_manifests.add(base_sha256)
+                    references.add(GenerationFileRef("manifest", base_sha256))
+                    base_manifest = self._read_manifest(base_sha256)
+                    base_sha256 = _financial_base_table_manifest_sha256(base_manifest)
                 objects = table_manifest.get("objects")
                 if isinstance(objects, list):
                     references.update(
@@ -2506,12 +2550,14 @@ def _family_generation_descriptor_from_root(
         raise GenerationStoreError("Family Generation candidate set is incompatible")
     families: list[MountedDatasetFamilyDescriptor] = []
     financial_candidate: str | None = None
+    financial_coverage: Mapping[str, object] | None = None
     for reference in family_references:
         if not isinstance(reference, Mapping):
             raise GenerationStoreError("Dataset Family reference is incompatible")
         if reference.get("family_id") == "equity.financial_pit":
             financial_family = _financial_family_descriptor_from_reference(reference)
             financial_candidate = financial_family.manifest_sha256
+            financial_coverage = financial_family.dataset_coverage
             families.append(financial_family)
             continue
         families.append(
@@ -2527,7 +2573,8 @@ def _family_generation_descriptor_from_root(
         readiness_valid = readiness is None and coordinate is None
     else:
         readiness_valid = (
-            readiness == _financial_readiness_declaration()
+            financial_coverage is not None
+            and readiness == _financial_readiness_declaration(financial_coverage)
             and isinstance(coordinate, str)
             and len(coordinate) == 64
             and all(character in "0123456789abcdef" for character in coordinate)
@@ -2570,11 +2617,52 @@ def _family_generation_descriptor_from_root(
     )
 
 
-def _financial_readiness_declaration() -> dict[str, object]:
+def _financial_readiness_declaration(
+    coverage: Mapping[str, object],
+) -> dict[str, object]:
     from thesistrace.data.fields import FINANCIAL_FIELDS
 
+    if coverage.get("kind") == "financial-announcement-observation-range":
+        status = str(coverage.get("readiness_status"))
+        attempted = str(coverage.get("discovery_attempted_through_session"))
+        complete = str(coverage.get("discovery_complete_through_session"))
+        pending_count = coverage.get("pending_instrument_count")
+        gap_count = coverage.get("discovery_gap_count")
+        earliest = coverage.get("earliest_unresolved_date")
+    elif coverage.get("kind") == "financial-observation-range":
+        status = "ready"
+        attempted = str(coverage.get("observation_through_session"))
+        complete = attempted
+        pending_count = 0
+        gap_count = 0
+        earliest = None
+    else:
+        raise GenerationStoreError("Financial Research Readiness is incompatible")
+    if (
+        status not in {"ready", "ready_with_pending", "ready_with_gaps"}
+        or not isinstance(pending_count, int)
+        or isinstance(pending_count, bool)
+        or pending_count < 0
+        or not isinstance(gap_count, int)
+        or isinstance(gap_count, bool)
+        or gap_count < 0
+    ):
+        raise GenerationStoreError("Financial Research Readiness is incompatible")
+    try:
+        attempted = date.fromisoformat(attempted).isoformat()
+        complete = date.fromisoformat(complete).isoformat()
+        normalized_earliest = (
+            None if earliest is None else date.fromisoformat(str(earliest)).isoformat()
+        )
+    except ValueError as error:
+        raise GenerationStoreError("Financial Research Readiness is incompatible") from error
     return {
-        "status": "ready",
+        "status": status,
+        "attempted_through_session": attempted,
+        "complete_through_session": complete,
+        "pending_instrument_count": pending_count,
+        "discovery_gap_count": gap_count,
+        "earliest_unresolved_date": normalized_earliest,
         "field_ids": sorted(field.field_id for field in FINANCIAL_FIELDS),
         "series_reader": "session-aligned-financial-fields",
         "research_run": "composite-alpha",
@@ -2667,7 +2755,11 @@ def _financial_family_descriptor_from_reference(
             "cash_flow_statement_versions",
         ]
         or not isinstance(coverage, Mapping)
-        or coverage.get("kind") != "financial-observation-range"
+        or coverage.get("kind")
+        not in {
+            "financial-observation-range",
+            "financial-announcement-observation-range",
+        }
     ):
         raise GenerationStoreError("Financial Dataset Family reference is incompatible")
     summary = reference.get("validation_summary")
@@ -3222,6 +3314,19 @@ def _required_byte_count(value: object, subject: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
         raise GenerationStoreError(f"{subject} byte count is invalid")
     return value
+
+
+def _financial_base_table_manifest_sha256(
+    manifest: Mapping[str, object],
+) -> str | None:
+    partitioning = manifest.get("partitioning")
+    if not isinstance(partitioning, Mapping) or partitioning.get("kind") != (
+        "immutable-base-with-delta-objects"
+    ):
+        return None
+    value = partitioning.get("base_manifest_sha256")
+    _require_sha256(value)
+    return str(value)
 
 
 __all__ = (

@@ -189,7 +189,7 @@ with `FINANCIAL_COVERAGE_START_UNAVAILABLE` after collection.
 "${tt_compose[@]}" run --rm -T \
   --volume "$PWD/.local/operator:/private/operator:ro" \
   -e THESISTRACE_TUSHARE_TOKEN \
-  api thesistrace-data-operator refresh-financial \
+  api thesistrace-data-operator bootstrap-financial \
   --idempotency-key financial-live-20260701-v2 \
   --generation-manifest-sha256 "$GENERATION" \
   --observation-through-session 2026-07-01 \
@@ -199,13 +199,45 @@ with `FINANCIAL_COVERAGE_START_UNAVAILABLE` after collection.
 Add `--replay /private/operator/tushare-financial-product-replay.json` only for
 an explicitly mounted deterministic replay; it is not used for live collection.
 
-Omit `--prior-candidate-manifest-sha256` only for the first Financial Refresh
-of a market-only Head. Every later refresh supplies the current financial
-candidate so accepted historical versions are retained when the source no
-longer returns them.
+`bootstrap-financial` is the one-time complete-history initialization of a
+market-only Head. It cannot update an already published Financial Family.
 
 Replay is an explicit test/incident-reproduction input, never an automatic
 fallback from a failed live provider.
+
+After bootstrap, each trading-day Financial Refresh discovers affected current
+instruments from CNINFO through the pinned AKShare adapter, then requests the
+three ordinary Tushare statements only for those instruments. It reads the
+current Dataset Head and Financial contract automatically:
+
+Each underlying AKShare CNINFO request has a 30-second timeout. A timed-out or
+invalid category is recorded as a discovery gap; it does not hide the gap or
+block valid instruments from publication.
+
+The candidate path is incremental. With no triggers it reuses the prior
+Financial table objects and Raw Evidence index. With accepted instruments it
+replays only those instruments' prior evidence and appends only changed rows as
+immutable delta objects; it does not scan or rewrite the unaffected historical
+Financial Family.
+
+```sh
+"${tt_compose[@]}" run --rm -T \
+  -e THESISTRACE_TUSHARE_TOKEN \
+  api thesistrace-data-operator refresh-financial \
+  --idempotency-key financial-daily-20260702-v1 \
+  --observation-through-session 2026-07-02
+
+"${tt_compose[@]}" run --rm -T \
+  api thesistrace-data-operator inspect-financial-refresh \
+  --idempotency-key financial-daily-20260702-v1
+```
+
+The daily command has no replay, capability-report, prior-candidate, or
+Generation argument. A failed instrument retains its prior or missing facts and
+remains pending for the next trading-day refresh; a discovery gap is published
+as degraded readiness rather than hidden. A three-statement response that
+introduces an unprojectable PIT row is handled as an instrument failure. Trigger
+matching requires a known report period and the exact source publication date.
 
 The ordinary-interface contract has one complete-history logical shard per
 `endpoint × instrument`. `balancesheet` is transparently collected with fixed

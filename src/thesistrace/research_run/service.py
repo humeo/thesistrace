@@ -3164,6 +3164,7 @@ def _admitted_input(
             last_research_session=sessions[-1],
             calculation_session_count=calculation_session_count,
             universe_instrument_count=universe_instrument_count,
+            financial_research_readiness=snapshot.financial_research_readiness,
         ),
         execution_plan=execution_plan,
     )
@@ -3192,6 +3193,8 @@ def _generation_matches_frozen_facts(
         and generation.research_sessions[-1] == facts.coverage_end.isoformat()
         and set(immutable_input.field_bindings)
         <= set(getattr(generation, "field_availability", ()))
+        and _generation_financial_readiness(generation)
+        == facts.financial_research_readiness
     )
 
 
@@ -3215,9 +3218,24 @@ def _result_provenance(claim: ResearchRunExecutionClaim) -> dict[str, object]:
         "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
         "data_generation_id": claim.data_generation_id,
         "data_through_session": claim.data_through_session,
+        "financial_research_readiness": value["data_admission"][
+            "financial_research_readiness"
+        ],
         "calculation_contracts": calculation_contracts,
         "semantic_versions": value["semantic_versions"],
     }
+
+
+def _generation_financial_readiness(generation: object) -> str:
+    declaration = getattr(generation, "financial_research_readiness", None)
+    if declaration is None:
+        return "not_ready"
+    if not isinstance(declaration, Mapping):
+        raise ResearchResultError("Data Generation Financial Readiness is invalid")
+    status = declaration.get("status")
+    if status not in {"ready", "ready_with_pending", "ready_with_gaps"}:
+        raise ResearchResultError("Data Generation Financial Readiness is invalid")
+    return str(status)
 
 
 def _research_event(

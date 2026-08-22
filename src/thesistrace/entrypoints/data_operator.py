@@ -6,12 +6,15 @@ import logging
 import os
 import stat
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
 from typing import NoReturn
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.adapters.cninfo_financial_announcements import (
+    AkshareCninfoFinancialAnnouncementSource,
+)
 from thesistrace.adapters.tushare_data import TushareDataSource
 from thesistrace.adapters.tushare_financial import TushareFinancialSource
 from thesistrace.adapters.tushare_industry import (
@@ -27,6 +30,7 @@ from thesistrace.adapters.tushare_replay import ReplayTushareProvider
 from thesistrace.data import (
     BootstrapOutcome,
     CollectionOutcome,
+    DailyFinancialRefreshService,
     DataCollectionError,
     DataGarbageCollector,
     DataOperator,
@@ -40,6 +44,7 @@ from thesistrace.data import (
     FinancialCollectionError,
     FinancialCollectionOutcome,
     FinancialCollectionService,
+    FinancialDailyRefreshError,
     FinancialDateShard,
     FinancialRefreshError,
     FinancialRefreshService,
@@ -48,6 +53,8 @@ from thesistrace.data import (
     RefreshOutcome,
     probe_financial_capability,
 )
+from thesistrace.data.financial_announcements import FinancialAnnouncementDiscovery
+from thesistrace.data.source import RawSourceResponse
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import (
     emit_operational_event_data,
@@ -64,6 +71,30 @@ class _UnavailableIndustrySource:
     def collect(self, *, allowed_codes: set[str]) -> NoReturn:
         del allowed_codes
         raise IndustrySourceError("INDUSTRY_SOURCE_UNAVAILABLE")
+
+
+class _UnavailableFinancialAnnouncementSource:
+    def discover(
+        self,
+        *,
+        start_date: str,
+        end_date: str,
+        allowed_ts_codes: set[str] | frozenset[str],
+    ) -> FinancialAnnouncementDiscovery:
+        del start_date, end_date, allowed_ts_codes
+        raise FinancialDailyRefreshError("FINANCIAL_ANNOUNCEMENT_SOURCE_UNAVAILABLE")
+
+
+class _UnavailableFinancialSource:
+    def query_raw(
+        self,
+        api_name: str,
+        *,
+        params: Mapping[str, object],
+        fields: Sequence[str],
+    ) -> RawSourceResponse:
+        del api_name, params, fields
+        raise FinancialDailyRefreshError("FINANCIAL_SOURCE_UNAVAILABLE")
 
 
 def main(arguments: list[str] | None = None) -> None:
@@ -83,7 +114,11 @@ def main(arguments: list[str] | None = None) -> None:
         )
     except FinancialCollectionError as error:
         _failure(error.code, diagnostic=error.diagnostic(), command=command)
-    except (FinancialCandidateError, FinancialRefreshError) as error:
+    except (
+        FinancialCandidateError,
+        FinancialDailyRefreshError,
+        FinancialRefreshError,
+    ) as error:
         _failure(str(error), command=command)
     except (IndustryRefreshError, IndustrySourceError) as error:
         _failure(str(error), command=command)
@@ -131,13 +166,17 @@ def _run(
     financial_collect.add_argument("--generation-manifest-sha256", required=True)
     financial_collect.add_argument("--capability-report", type=Path, required=True)
     financial_collect.add_argument("--replay", type=Path)
+    financial_bootstrap = subcommands.add_parser("bootstrap-financial")
+    financial_bootstrap.add_argument("--idempotency-key", required=True)
+    financial_bootstrap.add_argument("--generation-manifest-sha256", required=True)
+    financial_bootstrap.add_argument("--capability-report", type=Path, required=True)
+    financial_bootstrap.add_argument("--observation-through-session", required=True)
+    financial_bootstrap.add_argument("--replay", type=Path)
     financial_refresh = subcommands.add_parser("refresh-financial")
     financial_refresh.add_argument("--idempotency-key", required=True)
-    financial_refresh.add_argument("--generation-manifest-sha256", required=True)
-    financial_refresh.add_argument("--capability-report", type=Path, required=True)
-    financial_refresh.add_argument("--prior-candidate-manifest-sha256")
     financial_refresh.add_argument("--observation-through-session", required=True)
-    financial_refresh.add_argument("--replay", type=Path)
+    financial_inspect = subcommands.add_parser("inspect-financial-refresh")
+    financial_inspect.add_argument("--idempotency-key", required=True)
     industry_refresh = subcommands.add_parser("refresh-industry")
     industry_refresh.add_argument("--idempotency-key", required=True)
     industry_refresh.add_argument("--observation-through-session", required=True)
@@ -183,6 +222,13 @@ def _run(
                 mount_root,
                 _UnavailableIndustrySource(),
             ).inspect(parsed.idempotency_key)
+        if parsed.command == "inspect-financial-refresh":
+            return DailyFinancialRefreshService(
+                database,
+                mount_root,
+                _UnavailableFinancialAnnouncementSource(),
+                _UnavailableFinancialSource(),
+            ).inspect(parsed.idempotency_key)
         if parsed.command == "collect":
             return DataGarbageCollector(database, mount_root).collect(
                 idempotency_key=parsed.idempotency_key
@@ -209,7 +255,7 @@ def _run(
             )
             provider = live_provider
             financial_source = TushareFinancialSource(live_provider)
-        if parsed.command in {"collect-financial", "refresh-financial"}:
+        if parsed.command in {"collect-financial", "bootstrap-financial"}:
             if live_provider is None and replay is None:
                 raise FinancialCollectionError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
             report = _load_financial_capability(parsed.capability_report)
@@ -234,7 +280,7 @@ def _run(
                 idempotency_key=parsed.idempotency_key,
                 generation_manifest_sha256=parsed.generation_manifest_sha256,
                 contract=contract,
-                prior_candidate_manifest_sha256=parsed.prior_candidate_manifest_sha256,
+                prior_candidate_manifest_sha256=None,
                 observation_through_session=parsed.observation_through_session,
             )
             return {
@@ -245,6 +291,31 @@ def _run(
                 "expected_shard_count": outcome.expected_shard_count,
                 "completed_shard_count": outcome.completed_shard_count,
                 "resumed_shard_count": outcome.resumed_shard_count,
+            }
+        if parsed.command == "refresh-financial":
+            if live_provider is None:
+                raise FinancialDailyRefreshError("LIVE_FINANCIAL_COLLECTION_REQUIRED")
+            outcome = DailyFinancialRefreshService(
+                database,
+                mount_root,
+                AkshareCninfoFinancialAnnouncementSource(),
+                TushareFinancialSource(live_provider),
+                progress=_progress,
+            ).publish(
+                idempotency_key=parsed.idempotency_key,
+                observation_through_session=parsed.observation_through_session,
+            )
+            return {
+                "idempotency_key": outcome.idempotency_key,
+                "status": outcome.status,
+                "candidate_manifest_sha256": outcome.candidate.manifest_sha256,
+                "generation_manifest_sha256": outcome.generation_manifest_sha256,
+                "attempted_through_session": outcome.attempted_through_session,
+                "complete_through_session": outcome.complete_through_session,
+                "accepted_instrument_count": outcome.accepted_instrument_count,
+                "failed_instrument_count": outcome.failed_instrument_count,
+                "pending_instrument_count": outcome.pending_instrument_count,
+                "discovery_gap_count": outcome.discovery_gap_count,
             }
         if parsed.command == "refresh-industry":
             outcome = IndustryRefreshService(

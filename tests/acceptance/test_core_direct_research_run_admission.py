@@ -217,6 +217,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
         research_sessions=sessions,
         available_field_ids=frozenset({"price.close.adjusted"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 3000,
+        financial_research_readiness="not_ready",
     )
     command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
         {
@@ -251,6 +252,50 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
         chunk["session_count"] == plan["chunk_session_count"] for chunk in plan["chunks"][:-1]
     )
     assert _admission_counts(settings) == {"requests": 1, "runs": 1}
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL runtime is not configured",
+)
+def test_degraded_financial_readiness_is_admitted_and_frozen() -> None:
+    settings = CoreSettings.from_environment()
+    drop_product_schemas(settings)
+    sessions = tuple(date(2026, 8, 3) + timedelta(days=index) for index in range(4))
+    snapshot = DatasetAdmissionSnapshot(
+        generation_manifest_sha256="b" * 64,
+        data_through_session=sessions[-1],
+        coverage_start=sessions[0],
+        coverage_end=sessions[-1],
+        research_sessions=sessions,
+        available_field_ids=frozenset({"financial.income.total_revenue.latest_fy"}),
+        maximum_universe_cardinality=lambda _universe, _start, _end: 300,
+        financial_coverage_start=sessions[0],
+        financial_coverage_end=sessions[-1],
+        financial_research_readiness="ready_with_pending",
+    )
+    command = ResearchRunAdmissionCommand.model_validate(
+        {
+            **_valid_command("degraded-financial-readiness"),
+            "formula": "total_revenue_latest_fy",
+            "start_date": sessions[0],
+            "end_date": sessions[-1],
+        }
+    )
+
+    with TestClient(create_app(settings)) as client:
+        service = ResearchRunService(
+            client.app.state.core_runtime.database,
+            compile_formula=alpha_language.compile,
+            current_dataset=lambda: snapshot,
+        )
+        admitted = service.admit(command)
+
+    assert admitted.status == "queued"
+    frozen = _stored_run(settings, admitted.id)["immutable_input"]
+    assert frozen["data_admission"]["financial_research_readiness"] == (
+        "ready_with_pending"
+    )
 
 
 @pytest.mark.skipif(
@@ -363,6 +408,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
                 "last_research_session": "2026-08-04",
                 "calculation_session_count": 2,
                 "universe_instrument_count": 1,
+                "financial_research_readiness": "not_ready",
             },
             "execution_plan": {
                 "execution_memory_bytes": 1536 * 1024**2,

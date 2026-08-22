@@ -752,7 +752,7 @@ def test_real_private_financial_command_uses_product_replay(
             sys.executable,
             "-m",
             "thesistrace.entrypoints.data_operator",
-            "refresh-financial",
+            "bootstrap-financial",
             "--idempotency-key",
             "financial-cli-refresh",
             "--generation-manifest-sha256",

@@ -40,7 +40,7 @@ class DatasetOverviewService:
                     industry_refresh_status=None,
                     industry_refresh_failure_code=None,
                     market_research_readiness=False,
-                    financial_research_readiness=False,
+                    financial_research_readiness="not_ready",
                     industry_research_readiness=False,
                 )
             if pointer != self._validated_pointer:
@@ -94,18 +94,7 @@ class DatasetOverviewService:
                 financial_coverage=(
                     None
                     if coverage is None
-                    else FinancialCoverage(
-                        start=coverage["start"],
-                        observation_through_session=coverage[
-                            "observation_through_session"
-                        ],
-                        reconciliation_status=coverage["reconciliation_status"],
-                        historical_reconciliation_watermark=coverage[
-                            "historical_reconciliation_watermark"
-                        ],
-                        revision_coverage=coverage["revision_coverage"],
-                        seed_policy=coverage["seed_policy"],
-                    )
+                    else _financial_coverage(coverage)
                 ),
                 industry_coverage=(
                     None
@@ -123,9 +112,9 @@ class DatasetOverviewService:
                 industry_refresh_failure_code=state["industry_refresh_failure_code"],
                 market_research_readiness=True,
                 financial_research_readiness=(
-                    financial is not None
-                    and descriptor.financial_research_readiness is not None
-                    and descriptor.financial_research_readiness["status"] == "ready"
+                    "not_ready"
+                    if financial is None or descriptor.financial_research_readiness is None
+                    else str(descriptor.financial_research_readiness["status"])
                 ),
                 industry_research_readiness=(
                     industry_coverage is not None
@@ -133,3 +122,45 @@ class DatasetOverviewService:
                     and industry_coverage["end"] >= market_end
                 ),
             )
+
+
+def _financial_coverage(coverage: dict[str, object]) -> FinancialCoverage:
+    kind = coverage.get("kind")
+    if kind == "financial-announcement-observation-range":
+        return FinancialCoverage(
+            start=coverage["start"],
+            discovery_baseline_session=coverage["discovery_baseline_session"],
+            discovery_attempted_through_session=coverage[
+                "discovery_attempted_through_session"
+            ],
+            discovery_complete_through_session=coverage[
+                "discovery_complete_through_session"
+            ],
+            historical_reconciliation_watermark=coverage[
+                "historical_reconciliation_watermark"
+            ],
+            revision_coverage=coverage["revision_coverage"],
+            seed_policy=coverage["seed_policy"],
+            readiness_status=coverage["readiness_status"],
+            pending_instrument_count=coverage["pending_instrument_count"],
+            discovery_gap_count=coverage["discovery_gap_count"],
+            earliest_unresolved_date=coverage["earliest_unresolved_date"],
+        )
+    if kind == "financial-observation-range":
+        through = coverage["observation_through_session"]
+        return FinancialCoverage(
+            start=coverage["start"],
+            discovery_baseline_session=through,
+            discovery_attempted_through_session=through,
+            discovery_complete_through_session=through,
+            historical_reconciliation_watermark=coverage[
+                "historical_reconciliation_watermark"
+            ],
+            revision_coverage=coverage["revision_coverage"],
+            seed_policy=coverage["seed_policy"],
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        )
+    raise RuntimeError("Financial Coverage kind is invalid")

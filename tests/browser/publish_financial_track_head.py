@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import json
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 from thesistrace._postgres import PostgresDatabase
-from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data import DatasetLifecycle, FinancialCandidateStore, MountedGenerationStore
+from thesistrace.data.financial_candidate import FinancialDiscoveryPublication
+from thesistrace.data.financial_collection import CompletedFinancialCollection
 from thesistrace.entrypoints.runtime import CoreSettings
 
 
@@ -41,25 +44,77 @@ def main() -> None:
             )
         finally:
             database.close()
-        prior = root.financial_candidate_manifest_sha256
-        if prior is None:
-            raise RuntimeError("financial release candidate is unavailable")
-        outcome = _run_operator(
-            "refresh-financial",
-            "--idempotency-key",
-            "financial-release-financial-refresh",
-            "--generation-manifest-sha256",
-            root.manifest_sha256,
-            "--capability-report",
-            str(fixture_root / "tushare-financial-capability.json"),
-            "--prior-candidate-manifest-sha256",
-            prior,
-            "--observation-through-session",
-            "2026-08-11",
-            "--replay",
-            str(fixture_root / "tushare-financial-product-replay.json"),
+        outcome = _publish_ready_financial_fixture(
+            database_url=settings.database_url,
+            mount_root=settings.data_mount,
+            generation=root.manifest_sha256,
         )
     print(json.dumps({"mode": mode, "operator_outcome": outcome}, sort_keys=True))
+
+
+def _publish_ready_financial_fixture(
+    *,
+    database_url: str,
+    mount_root: Path,
+    generation: str,
+) -> dict[str, object]:
+    prepared_at = datetime(2026, 8, 11, 10, tzinfo=UTC)
+    candidates = FinancialCandidateStore(mount_root)
+    generations = MountedGenerationStore(mount_root)
+    root = generations.inspect_root(generation)
+    prior_manifest = root.financial_candidate_manifest_sha256
+    if prior_manifest is None:
+        raise RuntimeError("financial release candidate is unavailable")
+    prior = candidates.reopen(prior_manifest)
+    candidate = candidates.rebuild_daily(
+        CompletedFinancialCollection(
+            idempotency_key="financial-release-financial-fixture",
+            generation_manifest_sha256=generation,
+            contract=candidates.collection_contract(prior_manifest),
+            finished_at=prepared_at.isoformat(),
+            target_count=0,
+            shards=(),
+        ),
+        prior_candidate_manifest_sha256=prior_manifest,
+        discovery=FinancialDiscoveryPublication(
+            baseline_session=(
+                prior.discovery_baseline_session or prior.observation_through_session
+            ),
+            attempted_through_session="2026-08-11",
+            complete_through_session="2026-08-11",
+            source_lineage_sha256="d" * 64,
+            readiness_status="ready",
+            pending_instrument_count=0,
+            discovery_gap_count=0,
+            earliest_unresolved_date=None,
+        ),
+    )
+    composed = generations.compose_financial_candidate(
+        generation,
+        candidate.manifest_sha256,
+        prepared_at=prepared_at,
+        publication_coordinate="e" * 64,
+    )
+    database = PostgresDatabase(database_url)
+    database.open()
+    try:
+        lifecycle = DatasetLifecycle(database, mount_root)
+        lifecycle.protect_candidate(
+            operation_id="financial-release-financial-fixture",
+            generation_manifest_sha256=composed.manifest_sha256,
+            lease_seconds=60,
+        )
+        lifecycle.compare_and_swap_head(
+            expected_generation_manifest_sha256=generation,
+            candidate_generation_manifest_sha256=composed.manifest_sha256,
+            operation_id="financial-release-financial-fixture",
+        )
+    finally:
+        database.close()
+    return {
+        "status": "succeeded",
+        "generation_manifest_sha256": composed.manifest_sha256,
+    }
 
 
 def _run_operator(*arguments: str) -> dict[str, object]:

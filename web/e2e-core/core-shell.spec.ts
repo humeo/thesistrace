@@ -41,7 +41,7 @@ test("date inputs retain a browser-populated value when focus leaves the field",
         industry_refresh_status: null,
         industry_refresh_failure_code: null,
         market_research_readiness: true,
-        financial_research_readiness: false,
+        financial_research_readiness: "not_ready",
         industry_research_readiness: false,
       } });
       return;

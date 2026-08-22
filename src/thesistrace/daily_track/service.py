@@ -55,6 +55,7 @@ from thesistrace.data import (
     MountedGenerationStore,
 )
 from thesistrace.data.dependencies import DataDependencies, resolve_data_dependencies
+from thesistrace.data.models import FinancialResearchReadiness
 from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication import (
     JsonPayload,
@@ -207,6 +208,7 @@ class _SessionProgressionClaim:
     predecessor_provenance: dict[str, object]
     current_session: str
     target_sessions: tuple[str, ...]
+    financial_research_readiness: FinancialResearchReadiness
     financial_coverage_unavailable: bool
     industry_coverage_unavailable: bool
 
@@ -1609,6 +1611,9 @@ class DailyTrackService:
                     "estimated_peak_bytes": plan.estimated_peak_bytes,
                     "estimated_target_work": plan.estimated_target_work,
                     "time_target_exceeded": plan.time_target_exceeded,
+                    "financial_research_readiness": _generation_financial_readiness(
+                        generation
+                    ),
                 }
                 if existing is None:
                     progression_id = f"track_progression_{uuid4().hex[:20]}"
@@ -1720,6 +1725,7 @@ class DailyTrackService:
                     predecessor_provenance=dict(row["provenance"]),
                     current_session=current_session,
                     target_sessions=target_sessions,
+                    financial_research_readiness=_generation_financial_readiness(generation),
                     financial_coverage_unavailable=financial_coverage_unavailable,
                     industry_coverage_unavailable=industry_coverage_unavailable,
                 )
@@ -2280,6 +2286,7 @@ class DailyTrackService:
             "boundary_session": checkpoint.boundary_session,
             "data_generation_id": claim.data_generation_id,
             "data_through_session": claim.data_through_session,
+            "financial_research_readiness": claim.financial_research_readiness,
             "calculation_contracts": claim.origin.calculation_contracts,
         }
         prepared = self._publication.prepare(
@@ -2682,6 +2689,18 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
         origin.immutable_input.get("semantic_versions"),
         "Tracking semantic versions",
     )
+    data_admission = _mapping_value(
+        origin.immutable_input.get("data_admission"),
+        "Tracking data admission",
+    )
+    financial_readiness = data_admission.get("financial_research_readiness")
+    if financial_readiness not in {
+        "ready",
+        "ready_with_pending",
+        "ready_with_gaps",
+        "not_ready",
+    }:
+        raise RuntimeError("Tracking Financial Research Readiness is invalid")
     return {
         "schema_version": origin.verified_result.schema_version,
         "research_run_id": origin.seed_run_id,
@@ -2691,9 +2710,22 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
         ).hexdigest(),
         "data_generation_id": origin.seed_data_generation_id,
         "data_through_session": origin.seed_data_through_session,
+        "financial_research_readiness": financial_readiness,
         "calculation_contracts": origin.calculation_contracts,
         "semantic_versions": dict(semantic_versions),
     }
+
+
+def _generation_financial_readiness(generation: object) -> FinancialResearchReadiness:
+    declaration = getattr(generation, "financial_research_readiness", None)
+    if declaration is None:
+        return "not_ready"
+    if not isinstance(declaration, Mapping):
+        raise RuntimeError("Data Generation Financial Readiness is invalid")
+    status = declaration.get("status")
+    if status not in {"ready", "ready_with_pending", "ready_with_gaps"}:
+        raise RuntimeError("Data Generation Financial Readiness is invalid")
+    return status
 
 
 def _collect_publication_deletions(

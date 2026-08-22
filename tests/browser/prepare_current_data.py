@@ -53,7 +53,7 @@ def main() -> None:
     completed = subprocess.run(
         [
             "thesistrace-data-operator",
-            "refresh-financial",
+            "bootstrap-financial",
             "--idempotency-key",
             "financial-release-initial-publication",
             "--generation-manifest-sha256",

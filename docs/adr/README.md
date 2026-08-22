@@ -178,6 +178,7 @@ their real authority instead of adding an ADR.
 - [ADR-0186 — Apply the six financial fields to all company types](0186-apply-the-six-financial-fields-to-all-company-types.md)
 - [ADR-0188 — Expose financial data only through Alpha authoring and Data readiness](0188-expose-financial-data-only-through-alpha-authoring-and-data-readiness.md)
 - [ADR-0192 — Paginate the ordinary balance sheet inside one logical shard](0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md)
+- [ADR-0219 — Drive daily financial refresh from CNINFO disclosures](0219-drive-daily-financial-refresh-from-cninfo-disclosures.md)
 
 ## Bounded execution and operations
 

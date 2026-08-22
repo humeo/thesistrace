@@ -107,7 +107,7 @@ def test_http_and_worker_process_restarts_reopen_one_prepared_head(tmp_path: Pat
         "industry_refresh_status": None,
         "industry_refresh_failure_code": None,
         "market_research_readiness": True,
-        "financial_research_readiness": False,
+        "financial_research_readiness": "not_ready",
         "industry_research_readiness": True,
     }
 

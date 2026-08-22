@@ -9,11 +9,16 @@ const overview: DataOverview = {
   market_coverage: { start: "2025-08-08", end: "2026-08-07" },
   financial_coverage: {
     start: "2010-01-04",
-    observation_through_session: "2026-08-06",
-    reconciliation_status: "complete",
+    discovery_baseline_session: "2026-08-06",
+    discovery_attempted_through_session: "2026-08-07",
+    discovery_complete_through_session: "2026-08-07",
     historical_reconciliation_watermark: "2026-08-06",
-    revision_coverage: "source-dated-and-first-observed-corrections",
+    revision_coverage: "cninfo-announcement-driven-tushare-observed",
     seed_policy: "latest-pre-start-annual-flow-and-balance-facts",
+    readiness_status: "ready",
+    pending_instrument_count: 0,
+    discovery_gap_count: 0,
+    earliest_unresolved_date: null,
     sparse_facts: true,
   },
   industry_coverage: {
@@ -28,7 +33,7 @@ const overview: DataOverview = {
   industry_refresh_status: "succeeded",
   industry_refresh_failure_code: null,
   market_research_readiness: true,
-  financial_research_readiness: true,
+  financial_research_readiness: "ready",
   industry_research_readiness: true,
 };
 
@@ -81,10 +86,13 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("Market ready");
     expect(markup).toContain("Financial coverage start");
     expect(markup).toContain("2010-01-04");
-    expect(markup).toContain("Observed through");
-    expect(markup).toContain("2026-08-06");
-    expect(markup).toContain("Reconciliation");
-    expect(markup).toContain("complete");
+    expect(markup).toContain("Discovery baseline");
+    expect(markup).toContain("Attempted through");
+    expect(markup).toContain("Complete through");
+    expect(markup).toContain("2026-08-07");
+    expect(markup).toContain("Pending instruments");
+    expect(markup).toContain("Discovery gaps");
+    expect(markup).toContain("Earliest unresolved");
     expect(markup).toContain("Last financial refresh");
     expect(markup).toContain("Finance ready");
     expect(markup).toContain("Industry ready");
@@ -123,7 +131,7 @@ describe("DataOverviewView", () => {
         industry_refresh_status: null,
         industry_refresh_failure_code: null,
         market_research_readiness: false,
-        financial_research_readiness: false,
+        financial_research_readiness: "not_ready",
         industry_research_readiness: false,
       },
       onRefresh: vi.fn(),
@@ -132,8 +140,48 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("Market not ready");
     expect(markup).toContain("Finance not ready");
     expect(markup).toContain("Industry not ready");
-    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(12);
+    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(16);
     expect(markup).toContain("No fields are currently available for research.");
+  });
+
+  it.each([
+    {
+      readiness: "ready_with_pending" as const,
+      pending: 2,
+      gaps: 0,
+      expected: "Finance ready with pending instruments",
+    },
+    {
+      readiness: "ready_with_gaps" as const,
+      pending: 1,
+      gaps: 2,
+      expected: "Finance ready with discovery gaps",
+    },
+  ])("renders $readiness as usable degraded data", ({ readiness, pending, gaps, expected }) => {
+    const markup = renderToStaticMarkup(createElement(DataOverviewView, {
+      catalog,
+      overview: {
+        ...overview,
+        financial_coverage: {
+          ...overview.financial_coverage!,
+          discovery_attempted_through_session: "2026-08-14",
+          discovery_complete_through_session: gaps === 0 ? "2026-08-14" : "2026-08-13",
+          readiness_status: readiness,
+          pending_instrument_count: pending,
+          discovery_gap_count: gaps,
+          earliest_unresolved_date: "2026-08-14",
+        },
+        data_through_session: "2026-08-14",
+        financial_research_readiness: readiness,
+      },
+      onRefresh: vi.fn(),
+    }));
+
+    expect(markup).toContain(expected);
+    expect(markup).toContain(`<dd>${pending}</dd>`);
+    expect(markup).toContain(`<dd>${gaps}</dd>`);
+    expect(markup).toContain("2026-08-14");
+    expect(markup).not.toContain("Finance not ready");
   });
 
   it("distinguishes stale Industry coverage from the latest failed refresh", () => {
@@ -148,7 +196,7 @@ describe("DataOverviewView", () => {
       last_financial_refresh_at: null,
       last_industry_refresh_at: "2026-08-06T03:00:00Z",
       industry_refresh_status: "succeeded",
-      financial_research_readiness: false,
+      financial_research_readiness: "not_ready",
       industry_research_readiness: false,
     };
     const stale = renderToStaticMarkup(createElement(DataOverviewView, {

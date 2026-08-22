@@ -33,11 +33,16 @@ EXPECTED_OVERVIEW = {
     "market_coverage": {"start": "2009-12-07", "end": "2026-08-05"},
     "financial_coverage": {
         "start": "2010-01-01",
-        "observation_through_session": "2026-08-05",
-        "reconciliation_status": "complete",
+        "discovery_baseline_session": "2026-08-05",
+        "discovery_attempted_through_session": "2026-08-05",
+        "discovery_complete_through_session": "2026-08-05",
         "historical_reconciliation_watermark": "2026-08-05",
         "revision_coverage": "source-dated-and-first-observed-corrections",
         "seed_policy": "latest-pre-start-annual-flow-and-balance-facts",
+        "readiness_status": "ready",
+        "pending_instrument_count": 0,
+        "discovery_gap_count": 0,
+        "earliest_unresolved_date": None,
         "sparse_facts": True,
     },
     "industry_coverage": {
@@ -47,7 +52,7 @@ EXPECTED_OVERVIEW = {
     },
     "data_through_session": "2026-08-05",
     "market_research_readiness": True,
-    "financial_research_readiness": True,
+    "financial_research_readiness": "ready",
     "industry_research_readiness": True,
 }
 READY_DEPENDENCIES = {
@@ -2515,7 +2520,9 @@ def _assert_private_operator_installed() -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "bootstrap" in result.stdout
+    assert "bootstrap-financial" in result.stdout
     assert "refresh-financial" in result.stdout
+    assert "inspect-financial-refresh" in result.stdout
 
 
 def _assert_expected_overview(overview: dict[str, object]) -> None:
