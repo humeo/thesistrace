@@ -625,8 +625,8 @@ Formula, Investment Hypothesis, Requested Research Dates, Universe,
 neutralization, Research Kind, applicable Strategy parameters, and editor
 state. It has no server identity, Revision, or audit authority. Run does not
 clear it. When absent, the editor starts empty and never restores a prior
-ResearchRun automatically; `Use as Draft` is the only action that copies a
-selected Run's frozen input into it. `New` and `Use as Draft` require
+ResearchRun automatically; `Create draft` is the only action that copies a
+selected Run's frozen input into it. `New Research` and `Create draft` require
 confirmation before overwriting unexecuted local changes.
 _Avoid_: ResearchRun, server Draft, latest Run, autosaved Definition
 
@@ -636,7 +636,7 @@ Alpha Compiler and admission checks. Rejection returns Diagnostics and creates
 no durable backend resource; acceptance atomically creates one ResearchRun with
 the submitted input and selected Data Generation frozen. The Browser Draft
 remains local; the backend chooses data rather than the user.
-_Avoid_: Save, Refresh, Use as Draft, execution Attempt
+_Avoid_: Save, Refresh, Create draft, execution Attempt
 
 **Research Kind**:
 The frozen choice between `factor_evaluation`, which ends after Alpha and Factor
@@ -690,7 +690,7 @@ state but never deletes a DailyTrack seeded from it; Track-owned or shared
 physical objects remain until no durable reference needs them.
 _Avoid_: Cancel, Folder removal, cascading DailyTrack deletion
 
-**Use as Draft**:
+**Create draft**:
 The sole action for reusing a ResearchRun's authorable values. It explicitly
 copies them, including Research Kind and applicable Strategy parameters, into
 that Research Folder's Browser Draft after any required overwrite confirmation,
@@ -704,7 +704,7 @@ One infrastructure execution attempt belonging to an existing ResearchRun,
 and the lifecycle boundary of exactly one supervised execution. A retry retains
 the Run's frozen Data Generation and resumes from the latest valid ResearchRun
 Execution Checkpoint; it cannot publish or combine unchecked partial artifacts.
-_Avoid_: ResearchRun, Use as Draft, modified run input
+_Avoid_: ResearchRun, Create draft, modified run input
 
 **ResearchRun Failure Policy**:
 The closed distinction between retryable transient infrastructure failure and

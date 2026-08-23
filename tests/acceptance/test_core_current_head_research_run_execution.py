@@ -1597,6 +1597,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "end_date",
             "formula_summary",
             "research_kind",
+            "key_metrics",
             "input",
             "progress",
             "execution_timing",
@@ -1621,6 +1622,12 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "semantic_versions",
         }
         assert len(public_run["result"]["strategy"]["observations"]) == 3
+        result_metrics = public_run["result"]["strategy"]["summary"]["metrics"]
+        assert public_run["key_metrics"] == {
+            "annualized_excess_return": result_metrics["annualized_excess_return"],
+            "sharpe": result_metrics["sharpe"],
+            "maximum_drawdown": result_metrics["maximum_drawdown"]["value"],
+        }
         terminal_account = public_run["result"]["terminal_strategy_state"]
         assert terminal_account["session"] == sessions[-1]
         assert (
@@ -3574,6 +3581,15 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
             strategy_metrics = result["strategy_summary"]["metrics"]
             assert strategy_metrics["annualized_volatility"] is None
             assert strategy_metrics["sharpe"] is None
+            listed = client.get("/api/research-runs").json()["items"]
+            assert len(listed) == 1
+            assert listed[0]["key_metrics"] == {
+                "annualized_excess_return": strategy_metrics[
+                    "annualized_excess_return"
+                ],
+                "sharpe": strategy_metrics["sharpe"],
+                "maximum_drawdown": strategy_metrics["maximum_drawdown"]["value"],
+            }
             terminal = result["terminal_strategy_state"]
             assert terminal["session"] == sessions[-1]
             assert terminal["last_daily_observation"]["session"] == sessions[-1]

@@ -9,7 +9,9 @@ import {
   ResearchRunHistory,
   TerminalStrategyStateView,
   UseAsDraftPanel,
+  formatResearchRunCreatedAt,
   isTerminalResearch,
+  sortResearchRuns,
   type TerminalStrategyState,
 } from "./ResearchRunsPage";
 
@@ -220,41 +222,90 @@ describe("ResearchResultView", () => {
 });
 
 describe("ResearchRunHistory", () => {
-  it("distinguishes duplicate names by identity, time, status, and Formula", () => {
-    const items = [
-      {
-        id: "run_aaaaaaaa",
-        status: "succeeded" as const,
-        name: "Mean",
-        folder_id: "folder_default",
-        created_at: "2026-08-13T01:02:03Z",
-        start_date: "2026-08-01",
-        end_date: "2026-08-05",
-        formula_summary: "ts_mean(close_adj, 20)",
-        research_kind: "factor_evaluation" as const,
+  const items = [
+    {
+      id: "run_aaaaaaaa",
+      status: "succeeded" as const,
+      name: "Mean",
+      folder_id: "folder_default",
+      created_at: "2026-08-13T01:02:03.987654Z",
+      start_date: "2026-08-01",
+      end_date: "2026-08-05",
+      formula_summary: "ts_mean(close_adj, 20)",
+      research_kind: "strategy_backtest" as const,
+      key_metrics: {
+        annualized_excess_return: 0.03,
+        sharpe: 1.2345,
+        maximum_drawdown: 0.12,
       },
-      {
-        id: "run_bbbbbbbb",
-        status: "queued" as const,
-        name: "Mean",
-        folder_id: "folder_default",
-        created_at: "2026-08-13T01:03:04Z",
-        start_date: "2026-08-01",
-        end_date: "2026-08-05",
-        formula_summary: "ts_mean(close_adj, 60)",
-        research_kind: "strategy_backtest" as const,
+    },
+    {
+      id: "run_bbbbbbbb",
+      status: "queued" as const,
+      name: "Mean",
+      folder_id: "folder_default",
+      created_at: "2026-08-13T01:03:04Z",
+      start_date: "2026-08-01",
+      end_date: "2026-08-05",
+      formula_summary: "ts_mean(close_adj, 60)",
+      research_kind: "factor_evaluation" as const,
+    },
+    {
+      id: "run_cccccccc",
+      status: "succeeded" as const,
+      name: "Quality",
+      folder_id: "folder_default",
+      created_at: "2026-08-13T01:01:02Z",
+      start_date: "2026-08-01",
+      end_date: "2026-08-05",
+      formula_summary: "cs_rank(close_adj)",
+      research_kind: "strategy_backtest" as const,
+      key_metrics: {
+        annualized_excess_return: 0.05,
+        sharpe: 0.8,
+        maximum_drawdown: 0.08,
       },
-    ];
+    },
+  ];
 
+  it("shows user-facing metrics without Run ID or Formula", () => {
     const markup = renderToStaticMarkup(<ResearchRunHistory items={items} />);
-    expect(markup).toContain("run_aaaaaaaa");
-    expect(markup).toContain("run_bbbbbbbb");
-    expect(markup).toContain("2026-08-13T01:02:03Z");
-    expect(markup).toContain("succeeded");
-    expect(markup).toContain("ts_mean(close_adj, 20)");
+
+    expect(markup).toContain(">Type</th>");
     expect(markup).toContain("Factor Evaluation");
     expect(markup).toContain("Strategy Backtest");
+    expect(markup).toContain("Created (UTC)");
+    expect(markup).toContain(">2026-08-13 01:02:03</time>");
+    expect(markup).toContain("Annualized excess");
+    expect(markup).toContain("+3.00%");
+    expect(markup).toContain("1.234");
+    expect(markup).toContain("12.00%");
+    expect(markup).not.toContain(">Run ID<");
+    expect(markup).not.toContain(">Formula<");
+    expect(markup).not.toContain("ts_mean(close_adj, 20)");
     expect(markup.match(/>Mean</g)).toHaveLength(2);
+  });
+
+  it("sorts metrics with unavailable values last", () => {
+    expect(sortResearchRuns(items, "sharpe", "descending").map((item) => item.id)).toEqual([
+      "run_aaaaaaaa",
+      "run_cccccccc",
+      "run_bbbbbbbb",
+    ]);
+    expect(
+      sortResearchRuns(items, "maximum_drawdown", "ascending").map((item) => item.id),
+    ).toEqual([
+      "run_cccccccc",
+      "run_aaaaaaaa",
+      "run_bbbbbbbb",
+    ]);
+  });
+
+  it("formats creation timestamps in UTC through whole seconds", () => {
+    expect(formatResearchRunCreatedAt("2026-08-13T09:02:03.987654+08:00")).toBe(
+      "2026-08-13 01:02:03",
+    );
+    expect(formatResearchRunCreatedAt("invalid")).toBe("Not available");
   });
 });
 

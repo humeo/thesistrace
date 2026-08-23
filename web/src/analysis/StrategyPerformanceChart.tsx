@@ -30,8 +30,8 @@ const RANGE_SESSIONS: Record<Exclude<VisibleRange, "All">, number> = {
   "5Y": 1260,
 };
 
-const STRATEGY_COLOR = "#b85c24";
-const BENCHMARK_COLOR = "#64748b";
+const STRATEGY_COLOR = "#828fff";
+const BENCHMARK_COLOR = "#777b84";
 
 export function strategyChartPoints(
   observations: StrategyChartObservation[],
@@ -87,23 +87,23 @@ export function StrategyPerformanceChart({
       height: container.clientWidth <= 768 ? 240 : 320,
       autoSize: false,
       layout: {
-        background: { type: ColorType.Solid, color: "#ffffff" },
-        textColor: "#686876",
-        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+        background: { type: ColorType.Solid, color: "#0f1011" },
+        textColor: "#8a8f98",
+        fontFamily: "Inter, -apple-system, BlinkMacSystemFont, sans-serif",
         fontSize: 11,
         attributionLogo: true,
       },
       grid: {
-        vertLines: { color: "#f1f1f3" },
-        horzLines: { color: "#e8e8ec" },
+        vertLines: { color: "#18191a" },
+        horzLines: { color: "#23252a" },
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: {
-        borderColor: "#d9d9de",
+        borderColor: "#34343a",
         scaleMargins: { top: 0.1, bottom: 0.12 },
       },
       timeScale: {
-        borderColor: "#d9d9de",
+        borderColor: "#34343a",
         rightOffset: 1,
         fixLeftEdge: true,
         fixRightEdge: true,
@@ -137,7 +137,7 @@ export function StrategyPerformanceChart({
     })));
     strategySeries.createPriceLine({
       price: 0,
-      color: "#bdbdc6",
+      color: "#62666d",
       lineWidth: 1,
       lineStyle: 2,
       axisLabelVisible: false,

@@ -1,163 +1,313 @@
 ---
 version: alpha
-name: OpenAI
-description: "A light interface extracted from OpenAI accented with #8e8ea0, with a 8px spacing system and a system-ui type stack."
-sourceUrl: "https://openai.com"
-catalogUrl: "https://www.designmd.co/d/openai"
-catalogUpdatedAt: "2026-07-23"
-pinnedAt: "2026-08-19"
+name: Linear Dashboard
+description: "A dense, dark product workbench built on Linear's near-black surface ladder, restrained lavender-blue accent, compact typography, hairline borders, and collapsible application sidebar."
+sourceUrl: "https://linear.app"
+catalogUrl: "https://www.designmd.co/d/linear.app"
+blockUrl: "https://www.designmd.co/blocks/catalog/linear-dashboard"
+pinnedAt: "2026-08-23"
 
 colors:
-  primary: "#8e8ea0"
+  primary: "#5e6ad2"
   on-primary: "#ffffff"
-  text: "#8e8ea0"
-  text-muted: "#000000"
+  primary-hover: "#828fff"
+  primary-focus: "#5e69d1"
+  ink: "#f7f8f8"
+  ink-muted: "#d0d6e0"
+  ink-subtle: "#8a8f98"
+  ink-tertiary: "#62666d"
+  canvas: "#010102"
+  surface-1: "#0f1011"
+  surface-2: "#141516"
+  surface-3: "#18191a"
+  surface-4: "#191a1b"
+  hairline: "#23252a"
+  hairline-strong: "#34343a"
+  hairline-tertiary: "#3e3e44"
+  semantic-success: "#27a644"
+  semantic-warning: "#c69026"
+  semantic-danger: "#d14d41"
+  semantic-overlay: "#000000"
 
 typography:
-  display:
-    fontFamily: "system-ui, sans-serif"
-    fontSize: 48px
-    fontWeight: 700
-    lineHeight: 1.5
-  heading:
-    fontFamily: "system-ui, sans-serif"
-    fontSize: 32px
+  page-title:
+    fontFamily: "Inter, SF Pro Display, -apple-system, BlinkMacSystemFont, system-ui, Segoe UI, sans-serif"
+    fontSize: 28px
     fontWeight: 600
-    lineHeight: 1.5
+    lineHeight: 1.2
+    letterSpacing: -0.6px
+  section-title:
+    fontFamily: "Inter, SF Pro Display, -apple-system, BlinkMacSystemFont, system-ui, Segoe UI, sans-serif"
+    fontSize: 20px
+    fontWeight: 500
+    lineHeight: 1.3
+    letterSpacing: -0.3px
   body:
-    fontFamily: "system-ui, sans-serif"
-    fontSize: 16px
+    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, system-ui, Segoe UI, sans-serif"
+    fontSize: 14px
     fontWeight: 400
     lineHeight: 1.5
+    letterSpacing: 0
+  body-small:
+    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, system-ui, Segoe UI, sans-serif"
+    fontSize: 13px
+    fontWeight: 400
+    lineHeight: 1.45
+    letterSpacing: 0
+  label:
+    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, system-ui, Segoe UI, sans-serif"
+    fontSize: 12px
+    fontWeight: 500
+    lineHeight: 1.4
+    letterSpacing: 0.2px
+  button:
+    fontFamily: "Inter, -apple-system, BlinkMacSystemFont, system-ui, Segoe UI, sans-serif"
+    fontSize: 13px
+    fontWeight: 500
+    lineHeight: 1.2
+    letterSpacing: 0
+  mono:
+    fontFamily: "Geist Mono, JetBrains Mono, SFMono-Regular, Consolas, Liberation Mono, monospace"
+    fontSize: 13px
+    fontWeight: 400
+    lineHeight: 1.55
+    letterSpacing: 0
 
 spacing:
-  base: 8px
-  scale: [8]
+  xxs: 4px
+  xs: 8px
+  sm: 12px
+  md: 16px
+  lg: 24px
+  xl: 32px
+  xxl: 48px
 
 radius:
-  sm: 5px
+  xs: 4px
+  sm: 6px
+  md: 8px
+  lg: 12px
+  pill: 9999px
 
 motion:
-  duration-fast: 400ms
-  duration-base: 400ms
-  duration-slow: 400ms
-  easing: "ease"
+  duration-fast: 120ms
+  duration-base: 180ms
+  duration-slow: 240ms
+  easing: "cubic-bezier(0.2, 0, 0, 1)"
 
-breakpoints: [768px]
+layout:
+  content-max: 1440px
+  sidebar-expanded: 224px
+  sidebar-collapsed: 56px
+  context-bar-height: 48px
+  desktop-breakpoint: 1024px
+  mobile-breakpoint: 768px
 ---
 
-> Pinned from [DesignMD's OpenAI design](https://www.designmd.co/d/openai). This is a third-party extracted design reference, not an official OpenAI specification.
+> Adapted from [DesignMD's Linear design analysis](https://www.designmd.co/d/linear.app) and [Linear Dashboard block](https://www.designmd.co/blocks/catalog/linear-dashboard). These are third-party design references, not an official Linear specification.
 
 ## Design Direction
 
-**Quiet Utility Minimalism（安静、工具化的极简主义）**
+**Linear Product Workbench（Linear 式产品工作台）**
 
-中性单色、内容优先、大量留白、低对比层级、圆润控件、极弱阴影。
+深色、紧凑、数据优先、层级克制。使用近黑画布和逐级抬升的炭灰表面组织复杂信息；薰衣草蓝只用于主操作、焦点和少量链接强调。界面应像长期使用的研究工具，而不是营销网站、通用管理后台或指标大屏。
 
-## Rationale
+This direction replaces the previous OpenAI light theme. Do not keep a legacy light palette, compatibility theme, fallback styling, or parallel component path. A light mode may only be introduced by a future explicit product requirement.
 
-OpenAI's design system reflects a product positioned at the intersection of advanced technology and human-centered interaction. The measured tokens reveal a deliberately restrained palette—a muted purple-gray primary (#8e8ea0) paired with stark black and white—that avoids the visual aggression typical of tech company branding. This choice suggests confidence: the interface doesn't need to shout. The typography stack defaults to system fonts (system-ui, sans-serif) rather than custom typefaces, prioritizing performance and immediate legibility over distinctive brand presence. Spacing and motion are minimal and consistent (8px base unit, uniform 400ms timing), creating a calm, predictable rhythm that supports focus during complex cognitive tasks like coding assistance. The absence of shadows and a single, modest border radius (5px) reinforces this minimalism—surfaces layer cleanly without depth effects that might add visual noise.
+## Product Principles
 
-The color palette's restraint is strategic for an AI coding agent. The muted primary color and black text avoid eye fatigue during extended use, while the light color mode keeps the interface approachable rather than austere. There are no secondary colors or accent hues in the measured tokens, suggesting either a highly focused single-purpose interface or a deliberately pared-down measurement set. The on-primary white (used for text atop the muted purple) provides sufficient contrast for readability while maintaining the overall soft aesthetic.
+1. **The research object is the protagonist.** Formulae, datasets, runs, results, and daily observations receive the strongest hierarchy; application chrome stays quiet.
+2. **Dense does not mean crowded.** Prefer compact rows, aligned columns, and clear grouping over oversized cards or excessive whitespace.
+3. **One accent is enough.** Lavender-blue indicates action or focus. Status meaning uses semantic colors sparingly and always includes text or an icon.
+4. **Hierarchy comes from surfaces and hairlines.** Do not use drop shadows, gradients, glass effects, or decorative glow.
+5. **The shell scales with the domain.** Navigation must support the current four resources without turning every page into an unrelated dashboard.
+6. **Behavior stays visible.** Loading, validation, saved state, execution state, retries, and failures must have explicit text—not color-only hints.
 
-Typography hierarchy is clear but not aggressive: a 3:2 ratio between heading (32px) and body (16px) scales comfortably, with generous 1.5 line height throughout supporting sustained reading. Display text (48px) is reserved for primary communication, but the consistent font weight progression (700 → 600 → 400) avoids jarring shifts. The system-ui default signals that this interface trusts the operating system's rendering—a choice that benefits developers and power users who expect native-like performance.
+## Application Shell
 
-## 1. Visual Theme & Atmosphere
+### Desktop
 
-OpenAI's measured design expresses **calculated simplicity**. The absence of decorative shadows, gradients, or rounded corners beyond 5px creates a flat, engineered aesthetic that aligns with the precision expected from an AI coding tool. This is not minimalism born of constraint but of conviction: every element serves function. The light mode with muted purples and blacks suggests a workspace rather than a consumer app—professional, sustained-use focused, and visually non-intrusive.
+- Use a persistent, collapsible left sidebar. It is 224px expanded and 56px collapsed.
+- Place the ThesisTrace wordmark at the top of the sidebar. It may use the product sans stack; do not introduce a decorative display face.
+- The primary resource order is fixed: **Data**, **Research**, **Research Runs**, **Daily Tracks**.
+- Use icons plus labels in the expanded state and icons with accessible tooltips in the collapsed state.
+- Keep a 48px context bar above page content for the current folder, canonical data state, data-through date, breadcrumbs, and page-level actions.
+- Do not duplicate the same navigation or context controls in both the sidebar and context bar.
+- The main canvas fills the remaining viewport. Apply a max width only to reading-heavy overview pages; editors, charts, and result tables may use the full available width.
 
-The single breakpoint (768px) indicates a design system optimized for tablet and desktop workflows, with mobile likely treated as a secondary concern or responsive fallback. This reinforces positioning as a development-focused tool where large screens and complexity are assumed.
+### Resource Structure
 
-## 2. Color System
+- **Data** is a dataset status and coverage surface, not a generic analytics homepage.
+- **Research** is a workbench. Research Folders form one nested level beneath Research; the editor remains the dominant surface.
+- **Research Runs** is an execution history and result-inspection surface.
+- **Daily Tracks** is a monitoring list and observation-detail surface.
+- Do not add generic items such as Overview, Analytics, Team, Settings, Inbox, or Quick Create unless the product actually gains those domains.
 
-**Primary color:** #8e8ea0 (muted purple-gray)
+### Research Workspace
 
-This is the dominant brand color, appearing in interactive elements and key affordances. It is distinctly desaturated—not a vibrant purple but a tone that sits between purple and gray, reducing chromatic stimulation over long sessions.
+- Default to the collapsed sidebar when horizontal space is needed by the formula editor or result inspection.
+- Keep Draft identity, validation state, saved state, dataset context, and Run action in a compact workbench header.
+- The formula editor uses `{colors.canvas}` or `{colors.surface-1}` with a single hairline boundary; it must not sit inside stacked ornamental cards.
+- Run parameters open in a focused panel or drawer with a clear title, close action, validation summary, and one primary Run action.
+- Preserve the one-level Folder model. Do not imply arbitrary project trees.
 
-**On-primary:** #ffffff
+### Mobile and Narrow Screens
 
-Text and icons placed atop primary backgrounds use pure white, creating sufficient contrast (estimated ~8:1) while maintaining visual softness.
+- Below 1024px, collapse the sidebar by default.
+- Below 768px, replace it with an off-canvas navigation drawer; do not leave a 56px rail consuming mobile width.
+- Context-bar metadata may wrap into a second row, but the page title and primary action remain visible.
+- Dense data rows may switch to labeled stacked rows. Preserve every field and its meaning; do not hide critical provenance.
 
-**Text:** #8e8ea0
+## Color and Surface Rules
 
-Body text uses the same muted purple as primary elements, creating visual unity but *not* maximum contrast. This suggests a preference for cohesion over maximum accessibility (see Accessibility section below).
+### Surface Ladder
 
-**Text-muted:** #000000
+| Level | Token | Use |
+|---|---|---|
+| 0 | `{colors.canvas}` | App background, editor canvas, uninterrupted reading areas |
+| 1 | `{colors.surface-1}` | Sidebar, context bar, cards, drawers |
+| 2 | `{colors.surface-2}` | Selected rows, hover states, nested panels |
+| 3 | `{colors.surface-3}` | Menus, popovers, elevated controls |
+| 4 | `{colors.surface-4}` | Rare nested emphasis; never a default page background |
 
-Pure black is reserved for secondary or de-emphasized information, providing clear hierarchy through contrast intensity rather than color.
+- Separate adjacent surfaces with 1px `{colors.hairline}` borders.
+- Use `{colors.hairline-strong}` for active boundaries and `{colors.hairline-tertiary}` only inside elevated overlays.
+- Avoid shadows. A modal may use `{colors.semantic-overlay}` as its scrim.
+- Do not use true black `#000000` as the default canvas; reserve it for overlays.
 
-**No secondary colors** are measured, indicating a highly unified, monochromatic system. Accent colors or status indicators (success, error, warning) likely use saturation or value shifts within this limited palette.
+### Accent and Semantics
 
-## 3. Typography
+- `{colors.primary}` is reserved for the primary action, focus ring, active navigation indicator, and intentional links.
+- Hover may move to `{colors.primary-hover}`; pressed or focused emphasis may use `{colors.primary-focus}`.
+- Success, warning, and danger colors are reserved for actual state. Never use them as decoration or category branding.
+- A selected navigation row primarily uses a surface lift and stronger text. Do not fill the whole sidebar with lavender.
 
-The system uses four pre-defined scales:
+## Typography
 
-- **Display (48px, weight 700, 1.5 line height):** Primary page headlines or hero messaging. Bold and spacious, designed for impact without aggression.
-- **Heading (32px, weight 600, 1.5 line height):** Section titles and major content divisions. Slightly lighter weight than display but still commanding.
-- **Body (16px, weight 400, 1.5 line height):** Standard reading text, interface labels, and code documentation. The 1.5 line height (24px total leading) is generous, supporting legibility during sustained reading and reducing eye fatigue.
+- Use the documented system fallback stack. Linear's proprietary fonts are not a project dependency.
+- Product pages do not use the 56–80px marketing display scale. Page titles are 28px; section titles are 20px.
+- Default interface text is 14px. Use 13px for dense metadata and 12px for labels, timestamps, and compact status text.
+- Use weight 600 sparingly for page titles and decisive values. Most interface text stays at 400 or 500.
+- Use negative letter spacing only on titles. Body and table text remain neutral.
+- Use the mono stack for formulae, IDs, dates, numeric metrics, logs, and machine-authored provenance—not for ordinary navigation.
 
-All scales use system-ui, sans-serif, deferring to the user's operating system default. This choice prioritizes rendering fidelity and native feel over brand distinctiveness. For a coding tool, this is appropriate—developers expect interfaces to feel "of the system," not branded.
+## Components
 
-No monospace font is specified in the measured tokens, though any code display likely uses the browser/OS monospace default or a loaded font managed separately.
+### Navigation
 
-## 4. Components & Patterns
+- Sidebar rows are 36–40px high on pointer devices and at least 44px on touch devices.
+- Active rows use `{colors.surface-2}`, `{colors.ink}`, and a restrained primary indicator.
+- Group labels use `{typography.label}` and `{colors.ink-subtle}`.
+- Collapsing the sidebar changes presentation, not the available destinations or current selection.
 
-### Buttons and Interactive Elements
+### Buttons
 
-Interactive elements likely use the primary color (#8e8ea0) with white text. The 5px border radius is applied universally, creating a subtle softness without whimsy. No shadows suggest flat affordances with reliance on color and proximity to signal interactivity.
+- Primary buttons: `{colors.primary}` background, white text, 8px radius, 8px × 14px padding.
+- Secondary buttons: `{colors.surface-2}` background, `{colors.ink}` text, 1px hairline border.
+- Tertiary buttons: transparent background and muted text; hover lifts to `{colors.surface-2}`.
+- Destructive actions use danger styling only at the decision point.
+- Do not use pill-shaped primary CTAs.
 
-### Form Inputs
+### Inputs and Selectors
 
-Likely use the 5px radius and muted color scheme. States (focus, hover, error) probably shift text-muted (#000000) or adjust opacity rather than introducing new colors.
+- Inputs use `{colors.surface-1}`, `{colors.ink}`, an 8px radius, and a 1px `{colors.hairline-strong}` border.
+- Focus uses a visible 2px `{colors.primary-focus}` outline with offset; hover alone is never the only affordance.
+- Labels remain visible. Placeholder text does not replace a label.
+- Validation messages sit next to the affected control and remain after focus changes.
 
-### Cards and Containers
+### Data Lists and Tables
 
-No shadows are specified, so content grouping relies on spacing (multiples of 8px), subtle borders, or background color shifts. This creates a clean, layered appearance without visual depth.
+- Prefer aligned list rows or tables over card grids for Research Runs and Daily Tracks.
+- Default row height is 44–52px. Use hairline separators and surface lift on hover/selection.
+- Keep the primary identifier or title leftmost, followed by status, dates, research kind, and provenance.
+- Numeric columns align right and use tabular or mono figures.
+- Row click targets and inline actions must be distinguishable; avoid hidden hover-only actions for essential tasks.
+- Empty, loading, error, and partial-result states occupy the same structural region as the eventual data.
 
-### Motion
+### Metrics and Status
 
-All motion uses the same 400ms duration with ease timing, creating a predictable, non-jarring experience. This uniform approach suggests micro-interactions (hover states, focus indicators, transitions) are present but understated.
+- Use compact metric strips or small surface-1 panels. Avoid oversized KPI cards.
+- A metric includes a label, value, unit or time window where relevant, and provenance when ambiguity is possible.
+- Status badges may use a pill radius because they are labels, not actions.
+- Status always includes text. Never encode `active`, `blocked`, `failed`, or `complete` by color alone.
 
-## 5. Spacing & Layout
+### Charts and Results
 
-The base unit is **8px**, with a single scale entry (8). This suggests a strict 8px grid system where all spacing is a multiple of 8 (8, 16, 24, 32, 40, 48, 56, 64px, etc.).
+- Charts sit directly on the page or on a single surface-1 panel; avoid nesting a chart inside multiple cards.
+- Use the lavender accent for the primary series and neutral grays for comparison/reference series.
+- Semantic red or green may communicate loss/gain only when accompanied by labels and accessible descriptions.
+- Tooltips use `{colors.surface-3}`, a strong hairline border, and mono/tabular figures.
 
-This is a hallmark of professional product design: it ensures consistency, simplifies responsive scaling, and makes layout math trivial. A developer-focused tool would benefit immensely from this predictability.
+### Drawers, Dialogs, and Menus
 
-The single breakpoint at **768px** likely represents the tablet/desktop threshold. Below 768px, the layout responds (possibly stacking sections, resizing typography proportionally). Above 768px, the full multi-column design is revealed. This suggests a mobile web presence but primary optimization for larger screens.
+- Drawers and dialogs use `{colors.surface-1}` over a black scrim. Menus use `{colors.surface-3}`.
+- Every overlay has a visible title, accessible close path, focus containment, Escape behavior, and focus restoration.
+- Use dialogs for short decisions and drawers/panels for parameter-heavy workflows.
 
-Generous line-height (1.5x across all type scales) and consistent 8px spacing units combine to create a spacious, breathing layout that feels less dense than many modern web products.
+## Page Mapping
 
-## 6. Motion & Interaction
+### Data
 
-All motion is standardized to **400ms (durationFastMs, durationBaseMs, durationSlowMs all equal 400ms)** with **ease** easing, creating a consistent, predictable feel.
+- Lead with dataset identity and readiness, then coverage ranges, freshness, and reconciliation.
+- Present market and financial coverage as aligned sections rather than unrelated cards.
+- Keep explanations secondary but visible; provenance and missing-value semantics are never hidden behind decoration.
 
-This uniform timing is intentional: a coding interface should not surprise the user with inconsistent delays or jarring transitions. The 400ms duration is perceptible but not leisurely—fast enough to feel responsive, slow enough to be followed by the eye.
+### Research
 
-**Easing = ease** is the CSS default (cubic-bezier(0.25, 0.1, 0.25, 1)), which begins slowly, accelerates, and decelerates at the end. This is natural and non-fatiguing for repeated interactions.
+- Prioritize editor height and width.
+- Keep Run available without making every secondary control equally prominent.
+- Validation, Draft persistence, and selected dataset context stay visible while editing.
 
-No spring or bounce easing is present, reinforcing the serious, professional tone. Motion supports task completion, not delight.
+### Research Runs
 
----
+- The list is dense and scannable. Result detail promotes the performance chart, key metrics, execution timing, and provenance in that order.
+- Tabs or segmented controls are appropriate only when the content is genuinely exclusive, not to conceal a long page.
+
+### Daily Tracks
+
+- The list emphasizes current status, origin session, strategy session, seed ResearchRun, and latest observation.
+- Detail pages distinguish immutable lineage from daily mutable observations.
 
 ## Accessibility
 
-### Contrast Ratios
+- Normal text must meet WCAG AA contrast. `{colors.ink-subtle}` is for secondary metadata, not long-form body text.
+- All focusable controls receive the 2px primary focus ring.
+- Touch targets are at least 44 × 44px; compact pointer-only controls may be 36px high when their touch presentation expands.
+- Sidebar collapse, drawers, menus, dialogs, tabs, tables, and editor controls must be fully keyboard operable.
+- Icons require accessible names when they stand alone.
+- Motion respects `prefers-reduced-motion`; state changes may not depend on animation.
 
-**Primary text (#8e8ea0) on a white background:** Estimated contrast ratio of ~3.5:1. This **fails WCAG AA** (4.5:1 minimum) and is borderline for WCAG AAA. This is a significant accessibility concern for a product intended for sustained reading and code review.
+## Motion
 
-**Black text (#000000) on white background:** Contrast ratio of 21:1, exceeding all WCAG thresholds. Using black for critical or sensitive information mitigates the muted color issue.
+- Use 120ms for hover/focus transitions, 180ms for menus and small state changes, and 240ms for sidebar or drawer movement.
+- Motion communicates continuity; it never delays a result or masks loading.
+- Avoid bounce, spring overshoot, parallax, animated gradients, and decorative ambient motion.
 
-**White text (#ffffff) on primary background (#8e8ea0):** Contrast ratio of ~8:1, exceeding all thresholds. Buttons and primary affordances are sufficiently accessible.
+## Do
 
-**Recommendation:** If large bodies of text appear in the muted purple (#8e8ea0), this should be audited and likely remapped to pure black (#000000) or darkened to improve contrast. The current palette favors aesthetic unity over strict accessibility compliance.
+- Use the near-black canvas as the anchor surface.
+- Let tables, editors, charts, and provenance carry the visual interest.
+- Use one surface step at a time and hairlines to clarify ownership.
+- Keep navigation compact and predictable.
+- Make the Research workspace feel purpose-built rather than assembled from generic cards.
+- Preserve full information and actions when the sidebar collapses or the viewport narrows.
 
-### Minimum Requirements
+## Don't
 
-- **Touch target:** 44×44px minimum. With an 8px base unit, this equates to 5.5 base units—achievable via button padding (16px horizontal + 8px vertical padding = ~48px height) and reasonable minimum widths.
-- **Focus indicator:** Should be a 2px outline (likely in the primary #8e8ea0 color or black for higher visibility) with 2px offset from the button edge. The 400ms ease transition should smoothly reveal focus states.
-- **Keyboard navigation:** The system-ui font and flat, predictable spacing should support standard keyboard focus flows. No information should be color-only; interactive elements must have shape and text labels.
+- Don't preserve or silently fall back to the previous OpenAI light theme.
+- Don't copy Linear's issue-tracker vocabulary, sample content, team switcher, or sprint cards into ThesisTrace.
+- Don't turn every page into a KPI dashboard.
+- Don't introduce gradients, glass, glow, thick shadows, or multiple bright accents.
+- Don't use marketing-scale typography inside the product.
+- Don't wrap every section in a rounded card.
+- Don't hide important state or provenance behind hover, color, or icon-only controls.
 
----
+## Implementation Order
 
-**Summary:** OpenAI's measured design is a masterclass in engineer-first aesthetics—minimal, consistent, performance-oriented. The trade-off is slightly reduced contrast in body text. Accessibility audits (especially automated contrast checks) should be performed before any public release.
+1. Replace the application shell and tokens as one coherent hard cut.
+2. Establish shared navigation, buttons, inputs, overlays, status, rows, and focus behavior.
+3. Adapt Data and the list pages to the new density and surface hierarchy.
+4. Adapt the Research workspace without sacrificing editor space.
+5. Adapt result detail charts, metrics, execution timing, and provenance.
+6. Verify desktop, collapsed-sidebar, tablet, and mobile behavior in a real browser.
+7. Run accessibility checks for contrast, keyboard navigation, focus, reduced motion, and touch targets.

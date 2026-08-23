@@ -135,11 +135,11 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function formatPercent(value: number | null) {
-  return value === null ? "—" : `${(value * 100).toFixed(2)}%`;
+  return value === null ? "Not available" : `${(value * 100).toFixed(2)}%`;
 }
 
 function formatDecimal(value: number | null) {
-  return value === null ? "—" : value.toFixed(3);
+  return value === null ? "Not available" : value.toFixed(3);
 }
 
 function formatCny(value: number) {

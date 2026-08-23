@@ -412,7 +412,7 @@ describe("browser Research Draft", () => {
     expect(markup).not.toContain("run-settings-link");
     expect(markup).not.toContain("Close run settings");
     expect(markup).not.toContain(">Cancel<");
-    expect(markup).toContain("Default Folder");
+    expect(markup).not.toContain("Saved in this browser");
     expect(markup).toContain("Financial fields");
     expect(markup).toContain("total_revenue_latest_fy");
     expect(markup).toContain("Latest visible full-year consolidated total revenue");

@@ -81,7 +81,7 @@ describe("TrackingProgressView", () => {
 
     expect(markup).toContain("Advance phase");
     expect(markup).toContain("calculating");
-    expect(markup).toContain("2026-08-06 – 2026-11-03");
+    expect(markup).toContain("2026-08-06 to 2026-11-03");
     expect(markup).toContain("63 sessions");
     expect(markup).not.toContain("completed");
   });

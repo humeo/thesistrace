@@ -190,7 +190,7 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
 
   if (error) {
     return (
-      <section aria-label="Daily Tracks">
+      <section aria-label="Daily Tracks" className="state-section">
         <h1>DailyTrack</h1>
         <p role="alert">DailyTrack unavailable</p>
         <button onClick={refresh}>Retry</button>
@@ -198,10 +198,10 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
     );
   }
   if (trackId && track === null) {
-    return <section aria-label="Daily Tracks"><p>Loading DailyTrack…</p></section>;
+    return <section aria-label="Daily Tracks" className="state-section"><p>Loading DailyTrack…</p></section>;
   }
   if (!trackId && items === null) {
-    return <section aria-label="Daily Tracks"><p>Loading DailyTracks…</p></section>;
+    return <section aria-label="Daily Tracks" className="state-section"><p>Loading DailyTracks…</p></section>;
   }
   if (track) {
     const analysis: DailyTrackAnalysis = {
@@ -215,28 +215,30 @@ export function DailyTracksPage({ trackId }: { trackId?: string }) {
             <p className="eyebrow">Persisted daily research</p>
             <h1>DailyTrack</h1>
           </div>
-          <button disabled={loadState !== null || deleting} onClick={refresh}>Reload</button>
-          {track.status === "blocked" ? (
-            <button
-              disabled={retryState === "submitting"}
-              onClick={() => void retryBlockedTrack()}
-            >
-              Retry blocked target
-            </button>
-          ) : null}
-          {track.status === "active" || track.status === "blocked" ? (
-            <button
-              disabled={stopState === "submitting"}
-              onClick={() => void stopTrack()}
-            >
-              Stop DailyTrack
-            </button>
-          ) : null}
-          {track.status === "stopped" ? (
-            <button disabled={deleting} onClick={() => void deleteTrack()}>
-              {deleting ? "Deleting…" : "Delete DailyTrack"}
-            </button>
-          ) : null}
+          <div className="page-header-actions">
+            <button disabled={loadState !== null || deleting} onClick={refresh}>Reload</button>
+            {track.status === "blocked" ? (
+              <button
+                disabled={retryState === "submitting"}
+                onClick={() => void retryBlockedTrack()}
+              >
+                Retry blocked target
+              </button>
+            ) : null}
+            {track.status === "active" || track.status === "blocked" ? (
+              <button
+                disabled={stopState === "submitting"}
+                onClick={() => void stopTrack()}
+              >
+                Stop DailyTrack
+              </button>
+            ) : null}
+            {track.status === "stopped" ? (
+              <button disabled={deleting} onClick={() => void deleteTrack()}>
+                {deleting ? "Deleting…" : "Delete DailyTrack"}
+              </button>
+            ) : null}
+          </div>
         </header>
         {track.status === "active" || track.status === "blocked" ? (
           <p>Stopping this DailyTrack is irreversible.</p>
@@ -317,7 +319,7 @@ export function TrackingProgressView({
       {progress.target_start_session && progress.target_end_session ? (
         <p>
           <strong>Frozen target</strong>{" "}
-          {progress.target_start_session} – {progress.target_end_session}{" "}
+          {progress.target_start_session} to {progress.target_end_session}{" "}
           ({progress.target_session_count} sessions)
         </p>
       ) : null}
@@ -338,8 +340,10 @@ export function TrackingOriginView({ origin }: { origin: DailyTrackDetail["origi
   return (
     <section className="research-result-section">
       <div className="section-heading">
-        <p className="eyebrow">Immutable starting account</p>
-        <h2>Tracking Origin</h2>
+        <div>
+          <p className="eyebrow">Immutable starting account</p>
+          <h2>Tracking Origin</h2>
+        </div>
       </div>
       <div className="research-run-facts">
         <p>

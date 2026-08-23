@@ -1,7 +1,6 @@
 import {
   CalendarBlank,
   CaretDown,
-  Desktop,
   FolderSimple,
   PencilSimple,
   Play,
@@ -410,11 +409,6 @@ export function ResearchDraftWorkspace({
           <Plus aria-hidden="true" size={17} weight="regular" />
           <span className="visually-hidden">New Research</span>
         </button>
-        <span className="browser-save-status">
-          <Desktop aria-hidden="true" size={19} weight="regular" />
-          <span className="visually-hidden">{folder.name} Folder. </span>
-          Saved in this browser
-        </span>
       </header>
 
       <section className="research-editor-panel" aria-label="Alpha authoring">

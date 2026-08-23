@@ -64,6 +64,7 @@ CREATE TABLE research_runs.runs (
     execution_fence integer DEFAULT 0 NOT NULL,
     result_manifest_sha256 text,
     result_provenance jsonb,
+    key_metrics jsonb,
     failure_reason text,
     CONSTRAINT runs_check CHECK ((requested_start_date <= requested_end_date)),
     CONSTRAINT runs_name_check CHECK (name = btrim(name) AND name <> ''),
@@ -92,6 +93,7 @@ CREATE TABLE research_runs.runs (
         )
     ),
     CONSTRAINT runs_result_provenance_check CHECK (((result_provenance IS NULL) OR (jsonb_typeof(result_provenance) = 'object'::text))),
+    CONSTRAINT runs_key_metrics_check CHECK (((key_metrics IS NULL) OR (jsonb_typeof(key_metrics) = 'object'::text))),
     CONSTRAINT runs_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'cancelling'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))
 );
 

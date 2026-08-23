@@ -8,6 +8,8 @@ from pydantic import (
     BeforeValidator,
     ConfigDict,
     Field,
+    StrictFloat,
+    StrictInt,
     field_validator,
     model_validator,
 )
@@ -210,6 +212,14 @@ class ImmutableRunInput(BaseModel):
         return value
 
 
+class ResearchRunKeyMetrics(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    annualized_excess_return: StrictFloat | StrictInt | None
+    sharpe: StrictFloat | StrictInt | None
+    maximum_drawdown: StrictFloat | StrictInt
+
+
 class ResearchRunSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -224,6 +234,10 @@ class ResearchRunSummary(BaseModel):
     end_date: date
     formula_summary: str
     research_kind: ResearchKind
+    key_metrics: ResearchRunKeyMetrics | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     failure_reason: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,

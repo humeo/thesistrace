@@ -41,11 +41,13 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("complete");
     expect(markup).toContain("Last financial refresh");
     expect(markup).toContain("Finance ready");
-    expect(markup).toContain("Coverage describes the dataset");
-    expect(markup).toContain("A company can have no eligible fact");
-    expect(markup).toContain("source-dated-and-first-observed-corrections");
-    expect(markup).toContain("latest-pre-start-annual-flow-and-balance-facts");
     expect(markup).toContain("Reload");
+    expect(markup).not.toContain("Current research data");
+    expect(markup).not.toContain("The current market and financial data available to research.");
+    expect(markup).not.toContain("Financial coverage explanation");
+    expect(markup).not.toContain("Revision coverage");
+    expect(markup).not.toContain("Seed policy");
+    expect(markup).not.toContain("Reconciled through");
     expect(markup).not.toMatch(/Update data|Release|Generation|history|operator/i);
   });
 
@@ -65,7 +67,7 @@ describe("DataOverviewView", () => {
 
     expect(markup).toContain("Market not ready");
     expect(markup).toContain("Finance not ready");
-    expect(markup.match(/<dd>—<\/dd>/g)).toHaveLength(11);
+    expect(markup.match(/<dd>Not available<\/dd>/g)).toHaveLength(8);
   });
 
   it("turns refresh failures into visible state and can recover", async () => {

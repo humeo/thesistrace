@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { CaretDown, CaretUp, CaretUpDown } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { StrategyPerformanceChart } from "../analysis/StrategyPerformanceChart";
 import {
@@ -147,6 +148,11 @@ export type ResearchRun = {
   end_date: string;
   formula_summary: string;
   research_kind: "factor_evaluation" | "strategy_backtest";
+  key_metrics?: {
+    annualized_excess_return: number | null;
+    sharpe: number | null;
+    maximum_drawdown: number;
+  };
   input?: FrozenResearchAuthorableInput;
   failure_reason?: string;
   result?: ResearchResult;
@@ -420,7 +426,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
 
   if (error) {
     return (
-      <section aria-label="Research Runs">
+      <section aria-label="Research Runs" className="state-section">
         <h1>ResearchRun</h1>
         <p role="alert">{error}</p>
         <button onClick={refresh}>Retry</button>
@@ -428,10 +434,10 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     );
   }
   if (runId && run === null) {
-    return <section aria-label="Research Runs"><p>Loading ResearchRun…</p></section>;
+    return <section aria-label="Research Runs" className="state-section"><p>Loading ResearchRun…</p></section>;
   }
   if (!runId && items === null) {
-    return <section aria-label="Research Runs"><p>Loading Research Runs…</p></section>;
+    return <section aria-label="Research Runs" className="state-section"><p>Loading Research Runs…</p></section>;
   }
   if (run) {
     const terminal = isTerminalResearch(run.status);
@@ -513,26 +519,34 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
     );
   }
   return (
-    <section aria-label="Research Runs">
-      <h1>Research Runs</h1>
-      {folderError !== null ? (
-        <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
-      ) : folders.length === 0 ? (
-        <p role="status">Loading Research Folders…</p>
-      ) : (
-        <label>Filter by Folder
-          <select
-            aria-label="Filter by Folder"
-            onChange={(event) => setFolderFilter(event.target.value)}
-            value={folderFilter}
-          >
-            <option value="">All Folders</option>
-            {folders.map((folder) => (
-              <option key={folder.id} value={folder.id}>{folder.name}</option>
-            ))}
-          </select>
-        </label>
-      )}
+    <section aria-label="Research Runs" className="research-runs-list-page">
+      <header className="page-header">
+        <div>
+          <p className="eyebrow">Research history</p>
+          <h1>Research Runs</h1>
+        </div>
+      </header>
+      <div className="research-run-list-toolbar">
+        {folderError !== null ? (
+          <ResearchFolderLoadFailure error={folderError} onRetry={refreshFolders} />
+        ) : folders.length === 0 ? (
+          <p role="status">Loading Research Folders…</p>
+        ) : (
+          <label>Filter by Folder
+            <select
+              aria-label="Filter by Folder"
+              onChange={(event) => setFolderFilter(event.target.value)}
+              value={folderFilter}
+            >
+              <option value="">All Folders</option>
+              {folders.map((folder) => (
+                <option key={folder.id} value={folder.id}>{folder.name}</option>
+              ))}
+            </select>
+          </label>
+        )}
+        <p>Sort by a metric heading to compare Runs.</p>
+      </div>
       {items?.length === 0 ? <p>No Research Runs yet.</p> : null}
       <ResearchRunHistory items={items ?? []} />
     </section>
@@ -618,9 +632,9 @@ export function formatDuration(seconds: number | null): string {
 }
 
 function ExecutionTimestamp({ value }: { value: string | null }) {
-  if (value === null) return <>—</>;
+  if (value === null) return <>Not available</>;
   const timestamp = new Date(value);
-  if (!Number.isFinite(timestamp.getTime())) return <>—</>;
+  if (!Number.isFinite(timestamp.getTime())) return <>Not available</>;
   const iso = timestamp.toISOString();
   return <time dateTime={value}>{iso.slice(0, 10)} {iso.slice(11, 19)} UTC</time>;
 }
@@ -778,23 +792,205 @@ export function ResearchOrganizationPanel({
   );
 }
 
+export type ResearchRunSortKey =
+  | "created_at"
+  | "annualized_excess_return"
+  | "sharpe"
+  | "maximum_drawdown";
+type ResearchRunSortDirection = "ascending" | "descending";
+type ResearchRunSort = {
+  key: ResearchRunSortKey;
+  direction: ResearchRunSortDirection;
+};
+
+const DEFAULT_RESEARCH_RUN_SORT: ResearchRunSort = {
+  key: "created_at",
+  direction: "descending",
+};
+
 export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
-  return (
-    <ol aria-label="Research Runs" className="research-run-history">
-      {items.map((item) => (
-        <li key={item.id}>
-          <a href={`/research-runs/${item.id}`}><strong>{item.name}</strong></a>
-          <dl>
-            <div><dt>Run ID</dt><dd><code>{item.id}</code></dd></div>
-            <div><dt>Created</dt><dd><time dateTime={item.created_at}>{item.created_at}</time></dd></div>
-            <div><dt>Status</dt><dd>{item.status}</dd></div>
-            <div><dt>Research type</dt><dd>{researchKindLabel(item.research_kind)}</dd></div>
-            <div><dt>Formula</dt><dd><code>{item.formula_summary}</code></dd></div>
-          </dl>
-        </li>
-      ))}
-    </ol>
+  const [sort, setSort] = useState<ResearchRunSort>(DEFAULT_RESEARCH_RUN_SORT);
+  const sortedItems = useMemo(
+    () => sortResearchRuns(items, sort.key, sort.direction),
+    [items, sort.direction, sort.key],
   );
+
+  function changeSort(key: ResearchRunSortKey) {
+    setSort((current) => {
+      if (current.key === key) {
+        return {
+          key,
+          direction: current.direction === "ascending" ? "descending" : "ascending",
+        };
+      }
+      return {
+        key,
+        direction: key === "maximum_drawdown" ? "ascending" : "descending",
+      };
+    });
+  }
+
+  function selectSort(key: ResearchRunSortKey) {
+    setSort({
+      key,
+      direction: key === "maximum_drawdown" ? "ascending" : "descending",
+    });
+  }
+
+  function toggleSortDirection() {
+    setSort((current) => ({
+      ...current,
+      direction: current.direction === "ascending" ? "descending" : "ascending",
+    }));
+  }
+
+  const MobileSortIcon = sort.direction === "ascending" ? CaretUp : CaretDown;
+
+  return (
+    <div className="research-run-history-container">
+      <div className="research-run-mobile-sort">
+        <label>Sort by
+          <select
+            aria-label="Sort Research Runs by"
+            onChange={(event) => selectSort(event.target.value as ResearchRunSortKey)}
+            value={sort.key}
+          >
+            <option value="created_at">Created</option>
+            <option value="annualized_excess_return">Annualized excess</option>
+            <option value="sharpe">Sharpe</option>
+            <option value="maximum_drawdown">Maximum drawdown</option>
+          </select>
+        </label>
+        <button
+          aria-label={`Sort ${sort.direction}`}
+          onClick={toggleSortDirection}
+          type="button"
+        >
+          <MobileSortIcon aria-hidden="true" size={14} weight="bold" />
+          {sort.direction === "ascending" ? "Ascending" : "Descending"}
+        </button>
+      </div>
+      <div className="research-run-history-scroll">
+      <table aria-label="Research Runs" className="research-run-history">
+        <thead>
+          <tr>
+            <th scope="col">Research</th>
+            <th scope="col">Type</th>
+            <SortableResearchRunHeading
+              direction={sort.direction}
+              isActive={sort.key === "created_at"}
+              label="Created (UTC)"
+              onSort={() => changeSort("created_at")}
+            />
+            <th scope="col">Status</th>
+            <SortableResearchRunHeading
+              direction={sort.direction}
+              isActive={sort.key === "annualized_excess_return"}
+              label="Annualized excess"
+              onSort={() => changeSort("annualized_excess_return")}
+            />
+            <SortableResearchRunHeading
+              direction={sort.direction}
+              isActive={sort.key === "sharpe"}
+              label="Sharpe"
+              onSort={() => changeSort("sharpe")}
+            />
+            <SortableResearchRunHeading
+              direction={sort.direction}
+              isActive={sort.key === "maximum_drawdown"}
+              label="Max drawdown"
+              onSort={() => changeSort("maximum_drawdown")}
+            />
+          </tr>
+        </thead>
+        <tbody>
+          {sortedItems.map((item) => (
+            <tr key={item.id}>
+              <th scope="row">
+                <a href={`/research-runs/${item.id}`}>{item.name}</a>
+              </th>
+              <td data-label="Type">{researchKindLabel(item.research_kind)}</td>
+              <td data-label="Created (UTC)">
+                <time dateTime={item.created_at}>{formatResearchRunCreatedAt(item.created_at)}</time>
+              </td>
+              <td data-label="Status"><span className={`run-status run-status-${item.status}`}>{item.status}</span></td>
+              <td className="research-run-metric" data-label="Annualized excess">
+                {formatSignedPercent(item.key_metrics?.annualized_excess_return ?? null)}
+              </td>
+              <td className="research-run-metric" data-label="Sharpe">
+                {formatDecimal(item.key_metrics?.sharpe ?? null)}
+              </td>
+              <td className="research-run-metric" data-label="Max drawdown">
+                {formatPercent(item.key_metrics?.maximum_drawdown ?? null)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      </div>
+    </div>
+  );
+}
+
+function SortableResearchRunHeading({
+  direction,
+  isActive,
+  label,
+  onSort,
+}: {
+  direction: ResearchRunSortDirection;
+  isActive: boolean;
+  label: string;
+  onSort: () => void;
+}) {
+  const Icon = isActive
+    ? direction === "ascending" ? CaretUp : CaretDown
+    : CaretUpDown;
+  return (
+    <th aria-sort={isActive ? direction : "none"} scope="col">
+      <button className="research-run-sort" onClick={onSort} type="button">
+        {label}
+        <Icon aria-hidden="true" size={12} weight="bold" />
+      </button>
+    </th>
+  );
+}
+
+export function formatResearchRunCreatedAt(value: string): string {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) return "Not available";
+  const iso = timestamp.toISOString();
+  return `${iso.slice(0, 10)} ${iso.slice(11, 19)}`;
+}
+
+export function sortResearchRuns(
+  items: ResearchRun[],
+  key: ResearchRunSortKey,
+  direction: ResearchRunSortDirection,
+): ResearchRun[] {
+  return [...items].sort((left, right) => {
+    const leftValue = researchRunSortValue(left, key);
+    const rightValue = researchRunSortValue(right, key);
+    if (leftValue === null && rightValue === null) return compareCreatedDescending(left, right);
+    if (leftValue === null) return 1;
+    if (rightValue === null) return -1;
+    const comparison = leftValue - rightValue;
+    if (comparison === 0) return compareCreatedDescending(left, right);
+    return direction === "ascending" ? comparison : -comparison;
+  });
+}
+
+function researchRunSortValue(item: ResearchRun, key: ResearchRunSortKey): number | null {
+  if (key === "created_at") {
+    const value = new Date(item.created_at).getTime();
+    return Number.isFinite(value) ? value : null;
+  }
+  return item.key_metrics?.[key] ?? null;
+}
+
+function compareCreatedDescending(left: ResearchRun, right: ResearchRun): number {
+  const comparison = new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+  return comparison === 0 ? left.id.localeCompare(right.id) : comparison;
 }
 
 export function ResearchResultView({ result }: { result: ResearchResult }) {
@@ -851,8 +1047,10 @@ export function TerminalStrategyStateView({ state }: { state: TerminalStrategySt
   return (
     <section className="research-result-section" aria-label="Terminal Strategy State">
       <div className="section-heading">
-        <p className="eyebrow">Retained account at the Research Period boundary</p>
-        <h2>Terminal Strategy State</h2>
+        <div>
+          <p className="eyebrow">Retained account at the Research Period boundary</p>
+          <h2>Terminal Strategy State</h2>
+        </div>
       </div>
       <div className="strategy-metrics">
         <Metric label="Session" value={state.session} />
@@ -921,11 +1119,17 @@ function Metric({ label, value }: { label: string; value: string }) {
 }
 
 function formatPercent(value: number | null) {
-  return value === null ? "—" : `${(value * 100).toFixed(2)}%`;
+  return value === null ? "Not available" : `${(value * 100).toFixed(2)}%`;
+}
+
+function formatSignedPercent(value: number | null) {
+  if (value === null) return "Not available";
+  const percent = value * 100;
+  return `${percent > 0 ? "+" : ""}${percent.toFixed(2)}%`;
 }
 
 function formatDecimal(value: number | null) {
-  return value === null ? "—" : value.toFixed(3);
+  return value === null ? "Not available" : value.toFixed(3);
 }
 
 function formatCny(value: number) {

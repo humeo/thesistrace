@@ -75,6 +75,7 @@ from thesistrace.research_run.models import (
     ResearchRunCancelCommand,
     ResearchRunDetail,
     ResearchRunExecutionTiming,
+    ResearchRunKeyMetrics,
     ResearchRunList,
     ResearchRunProgress,
     ResearchRunResult,
@@ -425,7 +426,7 @@ class ResearchRunService:
                         )
                         self._progress("checkpoint", claim.run_id)
                     if chunk["final"] is True:
-                        prepared, provenance = self._prepare_execution_result(
+                        prepared, provenance, key_metrics = self._prepare_execution_result(
                             claim,
                             chunk,
                         )
@@ -434,7 +435,12 @@ class ResearchRunService:
                         execution.acknowledge(
                             cancel_requested=lambda: self._cancellation_is_pending(claim)
                         )
-                        self._publish_success(claim, prepared, provenance)
+                        self._publish_success(
+                            claim,
+                            prepared,
+                            provenance,
+                            key_metrics,
+                        )
                         self._progress("succeeded", claim.run_id)
                         break
                     execution.advance(cancel_requested=lambda: self._cancellation_is_pending(claim))
@@ -489,7 +495,7 @@ class ResearchRunService:
                 """
                 SELECT id, name, folder_id, status, requested_start_date,
                        requested_end_date, created_at, immutable_input,
-                       failure_reason
+                       key_metrics, failure_reason
                 FROM research_runs.runs
                 WHERE (%s::text IS NULL OR folder_id = %s::text)
                   AND (
@@ -524,7 +530,7 @@ class ResearchRunService:
                 """
                 SELECT id, name, folder_id, status, requested_start_date,
                        requested_end_date, created_at, immutable_input,
-                       failure_reason
+                       key_metrics, failure_reason
                 FROM research_runs.runs
                 WHERE id = %s
                 """,
@@ -559,7 +565,7 @@ class ResearchRunService:
                 WHERE id = %s
                 RETURNING id, name, folder_id, status, requested_start_date,
                           requested_end_date, created_at, immutable_input,
-                          failure_reason
+                          key_metrics, failure_reason
                 """,
                 (
                     command.name is not None,
@@ -963,7 +969,7 @@ class ResearchRunService:
                        run.requested_start_date, run.requested_end_date,
                        run.created_at, run.immutable_input,
                        run.result_manifest_sha256, run.result_provenance,
-                       run.failure_reason,
+                       run.key_metrics, run.failure_reason,
                        progress.phase AS progress_phase,
                        progress.completed_warmup_sessions,
                        progress.total_warmup_sessions,
@@ -1576,11 +1582,16 @@ class ResearchRunService:
         self,
         claim: _ExecutionClaim,
         chunk: Mapping[str, object],
-    ) -> tuple[PreparedPublication, dict[str, object]]:
+    ) -> tuple[PreparedPublication, dict[str, object], ResearchRunKeyMetrics | None]:
         assert self._publication is not None
         final_values = chunk.get("final_values")
         if not isinstance(final_values, Mapping):
             raise ResearchResultError("Final Research Chunk has no Result values")
+        key_metrics = (
+            _result_key_metrics(final_values)
+            if claim.immutable_input.research_kind == "strategy_backtest"
+            else None
+        )
         provenance = _result_provenance(claim)
         with self._database.transaction() as transaction:
             rows = transaction.execute(
@@ -1626,7 +1637,7 @@ class ResearchRunService:
             prepared.exact_bytes,
             int(progress["completed_research_sessions"]),
         )
-        return prepared, provenance
+        return prepared, provenance, key_metrics
 
     def _commit_execution_chunk(
         self,
@@ -1924,6 +1935,7 @@ class ResearchRunService:
         claim: _ExecutionClaim,
         prepared: PreparedPublication,
         provenance: dict[str, object],
+        key_metrics: ResearchRunKeyMetrics | None,
     ) -> None:
         assert self._publication is not None
         assert self._dataset_lifecycle is not None
@@ -1957,13 +1969,16 @@ class ResearchRunService:
                 """
                 UPDATE research_runs.runs
                 SET status = 'succeeded', result_manifest_sha256 = %s,
-                    result_provenance = %s, failure_reason = NULL,
+                    result_provenance = %s, key_metrics = %s, failure_reason = NULL,
                     updated_at = now()
                 WHERE id = %s AND status = 'running' AND execution_fence = %s
                 """,
                 (
                     published.manifest_sha256,
                     Jsonb(provenance),
+                    None
+                    if key_metrics is None
+                    else Jsonb(key_metrics.model_dump(mode="json")),
                     claim.run_id,
                     claim.fence,
                 ),
@@ -2482,9 +2497,34 @@ def _summary(row: object) -> ResearchRunSummary:
             "end_date": row["requested_end_date"],
             "formula_summary": formula_summary,
             "research_kind": immutable_input.research_kind,
+            "key_metrics": row.get("key_metrics"),
             "failure_reason": row.get("failure_reason"),
         }
     )
+
+
+def _result_key_metrics(
+    final_values: Mapping[str, object],
+) -> ResearchRunKeyMetrics:
+    strategy_summary = final_values.get("strategy_summary")
+    if not isinstance(strategy_summary, Mapping):
+        raise ResearchResultError("Final Research values have no Strategy summary")
+    metrics = strategy_summary.get("metrics")
+    if not isinstance(metrics, Mapping):
+        raise ResearchResultError("Final Research values have no Strategy metrics")
+    maximum_drawdown = metrics.get("maximum_drawdown")
+    if not isinstance(maximum_drawdown, Mapping):
+        raise ResearchResultError("Final Research values have no Maximum Drawdown")
+    try:
+        return ResearchRunKeyMetrics.model_validate(
+            {
+                "annualized_excess_return": metrics.get("annualized_excess_return"),
+                "sharpe": metrics.get("sharpe"),
+                "maximum_drawdown": maximum_drawdown.get("value"),
+            }
+        )
+    except ValidationError as error:
+        raise ResearchResultError("Final Research key metrics are invalid") from error
 
 
 def _authorable_input(row: object) -> ResearchRunAuthorableInput:

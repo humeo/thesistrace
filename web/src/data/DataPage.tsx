@@ -48,9 +48,7 @@ export function DataOverviewView({
     <section aria-label="Data" className="page-section data-page">
       <header className="page-hero">
         <div>
-          <p className="eyebrow">Current research data</p>
           <h1>Data overview</h1>
-          <p className="hero-copy">The current market and financial data available to research.</p>
         </div>
         <div className="hero-actions">
           <button className="button button-quiet" onClick={onRefresh}>
@@ -66,19 +64,19 @@ export function DataOverviewView({
       <dl className="data-overview-stats" aria-label="Market data coverage">
         <div>
           <dt>Market coverage start</dt>
-          <dd>{marketCoverage?.start ?? "—"}</dd>
+          <dd>{marketCoverage?.start ?? "Not available"}</dd>
         </div>
         <div>
           <dt>Market coverage end</dt>
-          <dd>{marketCoverage?.end ?? "—"}</dd>
+          <dd>{marketCoverage?.end ?? "Not available"}</dd>
         </div>
         <div>
           <dt>Data through</dt>
-          <dd>{overview.data_through_session ?? "—"}</dd>
+          <dd>{overview.data_through_session ?? "Not available"}</dd>
         </div>
         <div>
           <dt>Last market refresh</dt>
-          <dd>{overview.last_market_refresh_at ?? "—"}</dd>
+          <dd>{overview.last_market_refresh_at ?? "Not available"}</dd>
         </div>
       </dl>
       <div className="signal-strip" aria-label="Financial data readiness">
@@ -88,45 +86,21 @@ export function DataOverviewView({
       <dl className="data-overview-stats" aria-label="Financial data coverage">
         <div>
           <dt>Financial coverage start</dt>
-          <dd>{financialCoverage?.start ?? "—"}</dd>
+          <dd>{financialCoverage?.start ?? "Not available"}</dd>
         </div>
         <div>
           <dt>Observed through</dt>
-          <dd>{financialCoverage?.observation_through_session ?? "—"}</dd>
+          <dd>{financialCoverage?.observation_through_session ?? "Not available"}</dd>
         </div>
         <div>
           <dt>Reconciliation</dt>
-          <dd>{financialCoverage?.reconciliation_status ?? "—"}</dd>
+          <dd>{financialCoverage?.reconciliation_status ?? "Not available"}</dd>
         </div>
         <div>
           <dt>Last financial refresh</dt>
-          <dd>{overview.last_financial_refresh_at ?? "—"}</dd>
+          <dd>{overview.last_financial_refresh_at ?? "Not available"}</dd>
         </div>
       </dl>
-      <div className="data-coverage-note" aria-label="Financial coverage explanation">
-        <p>
-          Coverage describes the dataset family available for research; it is not a property
-          created by an individual Run.
-        </p>
-        <p>
-          A company can have no eligible fact on a Research Session without making the Financial
-          Refresh incomplete. That value remains missing rather than becoming zero.
-        </p>
-        <dl className="data-overview-stats">
-          <div>
-            <dt>Revision coverage</dt>
-            <dd>{financialCoverage?.revision_coverage ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Seed policy</dt>
-            <dd>{financialCoverage?.seed_policy ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>Reconciled through</dt>
-            <dd>{financialCoverage?.historical_reconciliation_watermark ?? "—"}</dd>
-          </div>
-        </dl>
-      </div>
     </section>
   );
 }
