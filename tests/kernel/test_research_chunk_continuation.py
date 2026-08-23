@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
+from time import perf_counter
 
 import numpy as np
 import pytest
 
+import thesistrace.research_kernel.research_chunks as research_chunks_module
 from thesistrace.alpha_language import alpha_language
 from thesistrace.publication import VerifiedBundle, VerifiedPayload
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
@@ -17,10 +20,14 @@ from thesistrace.research_kernel.kernel_run import (
     StrategyRunInput,
     run_columnar_chunk,
 )
+from thesistrace.research_kernel.numeric import NUMERIC_CONTRACT_ID
 from thesistrace.research_kernel.research_chunks import (
+    AlphaFactorExecutionBinding,
     advance_factor_state,
+    empty_alpha_factor_continuation,
     empty_factor_state,
     empty_research_continuation,
+    execute_alpha_factor_chunk,
     execute_research_chunk,
     finalize_factor_state,
     validated_research_continuation,
@@ -189,6 +196,338 @@ class _ColumnarFixture:
         )
 
 
+def _minimal_alpha_factor_case() -> tuple[_ColumnarFixture, RunInput]:
+    sessions = tuple(f"s{index:02d}" for index in range(30))
+    instrument_ids = tuple(f"equity:{index:03d}.SH" for index in range(40))
+    instruments = {
+        instrument_id: InstrumentProfile(board="main", listed_to="")
+        for instrument_id in instrument_ids
+    }
+    execution_prices = {
+        (session, instrument_id): ExecutionPrice(
+            raw_open=str(10 + instrument_index + session_index / 10),
+            adjusted_open=str(10 + instrument_index + session_index / 10),
+        )
+        for session_index, session in enumerate(sessions)
+        for instrument_index, instrument_id in enumerate(instrument_ids)
+    }
+    fixture = _ColumnarFixture(
+        sessions=sessions,
+        instruments=instruments,
+        universe_members={session: instrument_ids for session in sessions},
+        industries={
+            (session, instrument_id): f"industry:{instrument_index % 5}"
+            for session in sessions
+            for instrument_index, instrument_id in enumerate(instrument_ids)
+        },
+        execution_prices=execution_prices,
+        trading_states={},
+        price_limits={
+            coordinate: PriceLimit(upper="100000", lower="0.01")
+            for coordinate in execution_prices
+        },
+        matrices={
+            "price.close.adjusted": np.asarray(
+                [
+                    [
+                        10 + instrument_index + session_index / 10
+                        for session_index in range(len(sessions))
+                    ]
+                    for instrument_index in range(len(instrument_ids))
+                ],
+                dtype=np.float64,
+            )
+        },
+    )
+    compiled = alpha_language.compile("rank(close)")
+    run_input = RunInput(
+        research_data=fixture,
+        alpha_expression=compiled.expression,
+        field_bindings={
+            field_id: identifier
+            for identifier, field_id in compiled.field_ids_by_identifier.items()
+        },
+        effective_alpha_lookback=compiled.effective_lookback,
+        universe="top300",
+        neutralization="industry",
+        research_kind="factor_evaluation",
+        strategy=None,
+        research_start_session=sessions[0],
+        research_end_session=sessions[-1],
+    )
+    return fixture, run_input
+
+
+def _alpha_factor_binding(
+    run_input: RunInput,
+    *,
+    data_generation_id: str = "e" * 64,
+) -> AlphaFactorExecutionBinding:
+    return AlphaFactorExecutionBinding.from_run_input(
+        run_input,
+        data_generation_id=data_generation_id,
+        numeric_execution_contract=NUMERIC_CONTRACT_ID,
+        semantic_versions={
+            "factor": "factor-v1",
+            "strategy": "strategy-v1",
+            "kernel": "kernel-v4",
+        },
+    )
+
+
+def test_alpha_factor_chunk_outcome_is_bound_immutable_and_chunk_equivalent() -> None:
+    fixture, factor_input = _minimal_alpha_factor_case()
+    binding = _alpha_factor_binding(factor_input)
+    research_sessions = fixture.sessions
+
+    uninterrupted = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture,
+        research_sessions=research_sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    first = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture.slice_sessions(research_sessions[:15]),
+        research_sessions=research_sessions[:15],
+        final_chunk=False,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    second = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture,
+        research_sessions=research_sessions[15:],
+        final_chunk=True,
+        continuation=first.continuation_snapshot(),
+        cancellation_check=lambda: None,
+    )
+
+    assert second.factor_summary_snapshot() == uninterrupted.factor_summary_snapshot()
+    assert second.binding_snapshot() == binding.value_snapshot()
+    assert second.binding_snapshot()["label_horizons"] == [1, 5, 20]
+    assert second.binding_checksum == binding.checksum
+    assert second.continuation_snapshot()["binding_checksum"] == binding.checksum
+    assert second.completed_research_session_count == len(research_sessions)
+    assert first.factor_summary_snapshot() is None
+
+    exposed_matrix = second.alpha_matrix_snapshot()
+    exposed_continuation = second.continuation_snapshot()
+    exposed_matrix["sessions"] = []
+    exposed_continuation["completed_research_session_count"] = 0
+    assert second.alpha_matrix_snapshot()["sessions"]
+    assert second.completed_research_session_count == len(research_sessions)
+
+    strategy_input = RunInput(
+        research_data=fixture,
+        alpha_expression=factor_input.alpha_expression_snapshot(),
+        field_bindings=factor_input.field_bindings_snapshot(),
+        effective_alpha_lookback=factor_input.alpha_execution_plan().effective_lookback,
+        universe=factor_input.universe,
+        neutralization=factor_input.neutralization,
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=5,
+            rebalance_interval=5,
+            initial_cash_cny="10000000",
+            commission_rate_all_in="0.0003",
+            commission_min_cny="5",
+            stamp_duty_sell_rate="0.0005",
+            transfer_fee_rate="0.00001",
+        ),
+        research_start_session=research_sessions[0],
+        research_end_session=research_sessions[-1],
+    )
+    assert _alpha_factor_binding(strategy_input).checksum == binding.checksum
+
+
+def test_alpha_factor_chunk_rejects_contract_mismatch_and_non_finite_state() -> None:
+    fixture, run_input = _minimal_alpha_factor_case()
+    binding = _alpha_factor_binding(run_input)
+    outcome = execute_alpha_factor_chunk(
+        run_input=run_input,
+        binding=binding,
+        research_data=fixture,
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+
+    with pytest.raises(ValueError, match="binding does not match"):
+        outcome.require_binding(
+            _alpha_factor_binding(run_input, data_generation_id="f" * 64)
+        )
+
+    changed = alpha_language.compile("-close")
+    changed_input = RunInput(
+        research_data=fixture,
+        alpha_expression=changed.expression,
+        field_bindings={
+            field_id: identifier
+            for identifier, field_id in changed.field_ids_by_identifier.items()
+        },
+        effective_alpha_lookback=changed.effective_lookback,
+        universe=run_input.universe,
+        neutralization=run_input.neutralization,
+        research_kind="factor_evaluation",
+        strategy=None,
+        research_start_session=fixture.sessions[0],
+        research_end_session=fixture.sessions[-1],
+    )
+    with pytest.raises(ValueError, match="binding does not match"):
+        execute_alpha_factor_chunk(
+            run_input=changed_input,
+            binding=binding,
+            research_data=fixture,
+            research_sessions=fixture.sessions,
+            final_chunk=True,
+            continuation=empty_alpha_factor_continuation(),
+            cancellation_check=lambda: None,
+        )
+
+    invalid = empty_alpha_factor_continuation()
+    invalid["factor_state"]["horizons"]["1"]["statistics"]["ic"][
+        "fsum_partials"
+    ] = [float("inf")]
+    with pytest.raises(ValueError, match="Alpha-and-Factor continuation is invalid"):
+        execute_alpha_factor_chunk(
+            run_input=run_input,
+            binding=binding,
+            research_data=fixture,
+            research_sessions=fixture.sessions,
+            final_chunk=True,
+            continuation=invalid,
+            cancellation_check=lambda: None,
+        )
+
+    invalid_research = empty_research_continuation("factor_evaluation")
+    invalid_research["factor_state"]["horizons"]["1"]["statistics"]["ic"][
+        "fsum_partials"
+    ] = [float("inf")]
+    with pytest.raises(ValueError, match="Research Chunk continuation is invalid"):
+        execute_research_chunk(
+            run_input=run_input,
+            binding=binding,
+            research_data=fixture,
+            research_sessions=fixture.sessions,
+            final_chunk=True,
+            continuation=invalid_research,
+            cancellation_check=lambda: None,
+        )
+
+
+def test_alpha_factor_continuation_cannot_resume_under_another_binding() -> None:
+    fixture, run_input = _minimal_alpha_factor_case()
+    first_binding = _alpha_factor_binding(run_input)
+    first = execute_alpha_factor_chunk(
+        run_input=run_input,
+        binding=first_binding,
+        research_data=fixture.slice_sessions(fixture.sessions[:15]),
+        research_sessions=fixture.sessions[:15],
+        final_chunk=False,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="continuation binding does not match execution",
+    ):
+        execute_alpha_factor_chunk(
+            run_input=run_input,
+            binding=_alpha_factor_binding(run_input, data_generation_id="f" * 64),
+            research_data=fixture,
+            research_sessions=fixture.sessions[15:],
+            final_chunk=True,
+            continuation=first.continuation_snapshot(),
+            cancellation_check=lambda: None,
+        )
+
+
+def test_alpha_factor_outcome_rejects_factor_summary_contract_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture, run_input = _minimal_alpha_factor_case()
+    original_finalize = research_chunks_module.finalize_factor_state
+
+    def invalid_finalize(
+        state: Mapping[str, object],
+        *,
+        alpha_checksum: str,
+    ) -> dict[str, object]:
+        summary = original_finalize(state, alpha_checksum=alpha_checksum)
+        summary["horizons"]["5"]["alpha_checksum"] = "f" * 64
+        return summary
+
+    monkeypatch.setattr(
+        research_chunks_module,
+        "finalize_factor_state",
+        invalid_finalize,
+    )
+    with pytest.raises(ValueError, match="Factor Summary is invalid"):
+        execute_alpha_factor_chunk(
+            run_input=run_input,
+            binding=_alpha_factor_binding(run_input),
+            research_data=fixture,
+            research_sessions=fixture.sessions,
+            final_chunk=True,
+            continuation=empty_alpha_factor_continuation(),
+            cancellation_check=lambda: None,
+        )
+
+
+def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture, run_input = _minimal_alpha_factor_case()
+    original_serialize = research_chunks_module.canonical_json_bytes
+    research_continuation_serializations = 0
+
+    def reject_full_matrix_serialization(value: object) -> bytes:
+        nonlocal research_continuation_serializations
+        if isinstance(value, Mapping) and value.get("schema_version") == (
+            "research-chunk-continuation-v2"
+        ):
+            research_continuation_serializations += 1
+        if (
+            isinstance(value, Mapping)
+            and set(value)
+            == {
+                "expression",
+                "effective_lookback",
+                "neutralization",
+                "sessions",
+                "checksum",
+            }
+        ):
+            raise AssertionError("Alpha Matrix was serialized on the in-process hot path")
+        return original_serialize(value)
+
+    monkeypatch.setattr(
+        research_chunks_module,
+        "canonical_json_bytes",
+        reject_full_matrix_serialization,
+    )
+    started = perf_counter()
+    execute_research_chunk(
+        run_input=run_input,
+        binding=_alpha_factor_binding(run_input),
+        research_data=fixture,
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_research_continuation("factor_evaluation"),
+        cancellation_check=lambda: None,
+    )
+    assert perf_counter() - started < 1.0
+    assert research_continuation_serializations == 1
+
+
 def test_chunked_composite_research_is_canonically_equal_across_real_boundaries() -> None:
     sessions = tuple(f"s{index:02d}" for index in range(80))
     instruments = tuple(f"equity:{index:03d}.SH" for index in range(40))
@@ -284,6 +623,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
 
     uninterrupted = execute_research_chunk(
         run_input=run_input,
+        binding=_alpha_factor_binding(run_input),
         research_data=fixture,
         research_sessions=research_sessions,
         final_chunk=True,
@@ -306,6 +646,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         for ordinal, (start, end) in enumerate(boundaries, start=1):
             calculation = execute_research_chunk(
                 run_input=run_input,
+                binding=_alpha_factor_binding(run_input),
                 research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
                 research_sessions=sessions[start:end],
                 final_chunk=ordinal == len(boundaries),
@@ -356,6 +697,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
     )
     factor_uninterrupted = execute_research_chunk(
         run_input=factor_run_input,
+        binding=_alpha_factor_binding(factor_run_input),
         research_data=fixture,
         research_sessions=research_sessions,
         final_chunk=True,
@@ -372,6 +714,7 @@ def test_chunked_composite_research_is_canonically_equal_across_real_boundaries(
         for ordinal, (start, end) in enumerate(boundaries, start=1):
             calculation = execute_research_chunk(
                 run_input=factor_run_input,
+                binding=_alpha_factor_binding(factor_run_input),
                 research_data=fixture.slice_sessions(sessions[max(0, start - 21) : end]),
                 research_sessions=sessions[start:end],
                 final_chunk=ordinal == len(boundaries),

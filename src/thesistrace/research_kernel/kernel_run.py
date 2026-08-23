@@ -132,6 +132,38 @@ class RunInput:
     def alpha_execution_plan(self) -> SeriesExecutionPlan:
         return build_series_execution_plan(self.compiled_alpha_snapshot())
 
+    def alpha_factor_contract_snapshot(self) -> dict[str, object]:
+        """Return the Run-owned inputs that define Alpha-and-Factor computation."""
+        if self.research_start_session is None or self.research_end_session is None:
+            raise KernelRunError("Alpha-and-Factor Research Period is incomplete")
+        plan = self.alpha_execution_plan()
+        return {
+            "alpha": {
+                "expression": self.alpha_expression_snapshot(),
+                "field_bindings": self.field_bindings_snapshot(),
+                "execution_plan": {
+                    "nodes": [
+                        {
+                            "kind": node.kind,
+                            "identifier": node.identifier,
+                            "inputs": list(node.inputs),
+                            "value": node.value,
+                        }
+                        for node in plan.nodes
+                    ],
+                    "root": plan.root,
+                    "field_names": list(plan.field_names),
+                    "effective_lookback": plan.effective_lookback,
+                },
+            },
+            "research_period": {
+                "first_session": self.research_start_session,
+                "last_session": self.research_end_session,
+            },
+            "universe": self.universe,
+            "neutralization": self.neutralization,
+        }
+
     def with_research_data(
         self,
         research_data: AlignedResearchData | ColumnarResearchSeries,

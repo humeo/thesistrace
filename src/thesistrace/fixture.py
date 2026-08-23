@@ -73,13 +73,13 @@ def build_minimal_canonical_fixture(*, price_offset: int = 0) -> dict[str, objec
                 "sw2021_l3": "Bank",
             }
         ],
-    "field_catalog": [
-        next(
-            row
-            for row in field_catalog(session)
-            if row["name"] == "close"
-        )
-    ],
+        "field_catalog": [
+            next(
+                row
+                for row in field_catalog(session)
+                if row["name"] == "close" and row["alpha_authorable"] is True
+            )
+        ],
     }
 
 

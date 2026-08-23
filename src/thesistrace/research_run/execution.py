@@ -19,6 +19,7 @@ from thesistrace.research_kernel.kernel_run import (
     StrategyRunInput,
 )
 from thesistrace.research_kernel.research_chunks import (
+    AlphaFactorExecutionBinding,
     empty_research_continuation,
     execute_research_chunk,
 )
@@ -489,6 +490,7 @@ def _calculate_chunks(
         else dict(resume_from.continuation)
     )
     completed_ordinal = 0 if resume_from is None else resume_from.completed_chunk_ordinal
+    alpha_factor_binding: AlphaFactorExecutionBinding | None = None
     if completed_ordinal == len(plan.chunks):
         assert resume_from is not None and resume_from.final_values is not None
         yield {
@@ -572,9 +574,19 @@ def _calculate_chunks(
                 research_start_session=start_session,
                 research_end_session=end_session,
             )
+            if alpha_factor_binding is None:
+                alpha_factor_binding = AlphaFactorExecutionBinding.from_run_input(
+                    run_input,
+                    data_generation_id=generation_id,
+                    numeric_execution_contract=(
+                        immutable_input.numeric_execution_contract
+                    ),
+                    semantic_versions=immutable_input.semantic_versions,
+                )
             input_seconds = monotonic() - input_started
             calculation = execute_research_chunk(
                 run_input=run_input,
+                binding=alpha_factor_binding,
                 research_data=research_data,
                 research_sessions=research_sessions,
                 final_chunk=final_chunk,
