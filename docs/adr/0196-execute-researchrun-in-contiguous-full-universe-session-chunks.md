@@ -5,10 +5,11 @@ status: accepted
 # Execute ResearchRun in contiguous full-Universe session chunks
 
 ResearchRun admission deterministically divides the ordered Calculation
-Warm-up and Research Period into contiguous Research Session chunks whose size
-fits the Estimated Peak Execution Footprint. The selected chunk boundaries are
-frozen with the execution plan so every infrastructure Attempt for the Run uses
-the same boundaries.
+Warm-up and Research Period into contiguous Research Session chunks. It selects
+the largest fixed session count allowed by the Research Worker memory budget,
+time-sizing target, and configured maximum, while inability to fit one complete
+session rejects admission. Capacity facts and chunk boundaries are frozen with
+the execution plan, so a retry never replans accepted work.
 
 Each session inside a chunk contains the complete eligible selected Universe.
 Cross-sectional operators such as `rank` therefore execute against one
@@ -22,7 +23,5 @@ chunk under ADR-0195. Chunk boundaries cannot change Alpha, Factor, Strategy,
 or Result values; ADR-0102 and ADR-0108's exact Batch-Incremental Equivalence
 remains mandatory.
 
-This refines ADR-0164's execution slice into one bounded ResearchRun Execution
-Chunk rather than one whole-Research-Period materialization. It uses the same
-Alpha planner and Builtin definitions rather than introducing a second engine
-or versioned execution path.
+This is the bounded ResearchRun execution slice used by ADR-0164's Alpha planner
+and Builtin definitions, not a second engine or versioned execution path.

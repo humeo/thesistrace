@@ -5,8 +5,7 @@ status: accepted
 # Standardize all eleven V1 Tushare daily fields
 
 The Data Operator always requests and retains the eleven long-history fields
-in the Tushare `daily` contract. A Research Definition does not select source
-fields.
+in the Tushare `daily` contract. A Browser Draft does not select source fields.
 
 The accepted source response preserves the original field names, values, and
 source units. The Data module then maps each source field into the
@@ -80,5 +79,5 @@ and Canonical schema it contains.
 
 Field Catalog exposes the complete Canonical inventory, including definitions,
 units, coverage, and current Head availability. Catalog presence does not by
-itself make a field available to Alpha Expression; ADR-0072 fixes the V1
-Alpha-authorable subset.
+itself make a field available to Alpha Expression; ADR-0169 requires an explicit
+Data-owned Alpha Field Capability.

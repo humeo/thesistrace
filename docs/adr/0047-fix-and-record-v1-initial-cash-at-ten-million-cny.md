@@ -6,9 +6,9 @@ status: accepted
 
 Every V1 Strategy Backtest starts with CNY 10,000,000 in cash before its first
 execution open. Run admission injects `initial_cash_cny: 10000000` into the
-ResearchRun's immutable input even though V1 fixes the value. It is not editable
-Research Definition content, and a ResearchRun never depends on an unrecorded
-runtime default.
+ResearchRun's immutable input even though the value is not editable in a
+Browser Draft, so the calculation never depends on an unrecorded runtime
+default.
 
 The runtime records this amount as both Gross NAV and Net NAV at the first
 Research Period open, with no Actual Holdings. The first deployment occurs at

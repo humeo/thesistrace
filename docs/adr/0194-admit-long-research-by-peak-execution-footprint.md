@@ -19,6 +19,6 @@ structurally valid and its minimum legal execution slice fits the peak safety
 limit; it may take longer or wait behind earlier admitted work without becoming
 an invalid research question.
 
-This supersedes ADR-0165's hard rejection by total estimated execution work.
 Worker memory and time limits remain final containment controls rather than the
-normal path for rejecting long Research.
+normal path for rejecting long Research; total estimated work never becomes an
+admission rejection.

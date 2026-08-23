@@ -31,17 +31,14 @@ no Adjustment Anchor, latest-factor reference, or per-row reference factor.
 The adjusted coordinate is not a quoted execution price and does not force the
 latest adjusted row to equal the latest Raw Market Price.
 
-## Why the latest-session denominator is rejected
+## Why not use a latest-session denominator
 
-The previous implementation replaced a fixed first-valid post-listing anchor
-with Tushare's documented qfq convention: divide every retained factor by the
-factor at the Data Generation's latest retained session. It was chosen because
-it removed the expensive per-instrument anchor search, made the latest adjusted
-quote equal the latest raw quote, and left within-instrument return ratios
-unchanged.
-
-That qfq reference is a future, instrument-specific scaling constant for every
-earlier signal. It cancels from return ratios, but it does not cancel from
+Tushare's documented qfq convention divides every retained factor by the factor
+at the Data Generation's latest retained session. That avoids an anchor search,
+makes the latest adjusted quote equal the latest raw quote, and leaves
+within-instrument return ratios unchanged, but the denominator is a future,
+instrument-specific scaling constant for every earlier signal. It cancels from
+return ratios but not from
 absolute-price expressions such as `delta(adjusted_price, 1)`. Extending a Data
 Generation could therefore change historical Alpha ranks, selections, and
 backtests. The sole Canonical contract rejects that trade-off and keeps the
@@ -63,5 +60,4 @@ After source-unit normalization, `volume_shares` and `turnover_amount_cny` are
 never adjustment-rescaled. Strategy Backtest accrues holding returns from
 Adjusted Research Prices without consuming separate company-action events. Its
 resulting positions are synthetic research positions rather than broker share
-balances. Strategy rebalance frequency remains a separate Research Definition
-decision.
+balances. Rebalance Interval remains a separate Strategy Backtest input.

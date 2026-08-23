@@ -16,6 +16,6 @@ multi-provider framework; Tushare remains the only real source.
 
 The Data module retains the accepted source responses, validates and translates
 them into Canonical Market Data, and records their provenance in each Data
-Generation. Research Definition and ResearchRun never call Tushare or
+Generation. Browser Draft and ResearchRun never call Tushare or
 depend on its field names. This boundary stabilizes the research contract; it
 is not a multi-source framework.

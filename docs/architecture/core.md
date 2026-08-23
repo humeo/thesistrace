@@ -205,18 +205,19 @@ one selected Folder's browser-local Draft and creates no server state. A later
 ordinary Run creates an independent ResearchRun. Mutable Research name and
 Folder membership stay outside immutable execution input.
 
-A succeeded Run exposes one immutable Result containing bounded Factor
-summaries, Strategy metrics and daily observations, benchmark results, terminal
-Strategy state, and provenance. Publication failure cannot expose a partial
-Result or mark the Run succeeded. Cancel fences publication immediately and
-enters `cancelling`; it reaches terminal `cancelled` only after execution has
-stopped and the Generation pin is released.
+A succeeded Run exposes one immutable Result discriminated by Research Kind.
+Factor Evaluation publishes `factor` and provenance; Strategy Backtest adds
+`strategy` and `terminal_strategy_state`. Publication failure cannot expose a
+partial Result or mark the Run succeeded. Cancel fences publication immediately
+and enters `cancelling`; it reaches terminal `cancelled` only after execution
+has stopped and the Generation pin is released.
 
 ## DailyTracks
 
-A succeeded ResearchRun can activate at most one DailyTrack. Activation freezes
-the complete Tracking Origin and initial Strategy state. The current product
-permits at most ten non-stopped Tracks; terminally stopped Tracks do not count.
+A succeeded Strategy Backtest ResearchRun can activate at most one DailyTrack;
+Factor Evaluation cannot. Activation freezes the complete Tracking Origin and
+initial Strategy state. The current product permits at most ten non-stopped
+Tracks; terminally stopped Tracks do not count.
 
 ```text
 active | blocked | stopping | stopped
@@ -391,5 +392,6 @@ are not Production readiness.
   Rerun endpoints and compatibility paths.
 
 The current domain vocabulary is defined in [`CONTEXT.md`](../../CONTEXT.md).
+Current accepted decisions are grouped in the [ADR index](../adr/README.md).
 Operator commands are documented in the
 [Data Operator runbook](../runbook/data-operator.md).

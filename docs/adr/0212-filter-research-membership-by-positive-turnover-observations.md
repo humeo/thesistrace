@@ -32,10 +32,9 @@ the ordinary valuation, execution, scheduled-rebalance, suspension, and
 terminal-delisting rules. A member can re-enter the Effective Universe on a
 later signal session after a complete positive-turnover observation appears.
 
-This result-changing correction hard-cuts the active calculation identity to
-`kernel-v3` under ADR-0211. Development Product State accepted under the prior
-identity is reset without erasing the mounted Canonical Data Store or Dataset
-Head.
+This rule is part of the single active calculation identity under ADR-0211;
+Product State accepted under different semantics is reset without erasing the
+mounted Canonical Data Store or Dataset Head.
 
 This decision refines ADR-0022, ADR-0039, ADR-0046, ADR-0053, and ADR-0074 by
 placing signal-session calculation eligibility before their downstream

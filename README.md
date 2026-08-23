@@ -5,6 +5,8 @@ factor research, strategy backtesting, and daily tracking.
 
 The active implementation is the module-first Core described in
 [`docs/architecture/core.md`](docs/architecture/core.md).
+Current product language is defined in [`CONTEXT.md`](CONTEXT.md), and accepted
+decisions are grouped in the [ADR index](docs/adr/README.md).
 
 ## Local development
 

@@ -8,7 +8,7 @@ The Data module automatically builds each point-in-time Universe Base Pool
 from Tushare source evidence. V1 uses `stock_basic` for instrument reference
 and listing dates, `bak_basic(trade_date)` for the historical daily stock list,
 `daily` for observed market bars, and `suspend_d` for dated suspension
-evidence. Users and Research Definitions do not select or maintain these source
+evidence. Users and Browser Drafts do not select or maintain these source
 interfaces.
 
 The source rows are filtered to the ordinary-A-share scope fixed by ADR-0075.

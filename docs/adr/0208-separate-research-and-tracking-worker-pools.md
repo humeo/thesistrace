@@ -52,16 +52,11 @@ and publication modules. This is one engine and one deployment artifact, not a
 V2 executor or two implementations. The split isolates scheduling and capacity;
 it does not duplicate business rules.
 
-Development runs one Research Worker and one Tracking Worker by default. Each
-has 2 vCPU and 2 GiB, so running both default replicas requires approximately
-4 vCPU and 4 GiB before the API, web, PostgreSQL, and RustFS overhead. Production
-may size and scale the two pools independently as deployment configuration.
+Each pool has its own homogeneous deployment-declared CPU, hard-memory, and
+thread capacity. Startup fails when a Worker's actual cgroup limits are below
+its role declaration, and Research Chunk or Tracking Advance planning never
+silently adapts already-frozen work to a smaller Worker.
 
 ADR-0210 applies the same confirmed-child-exit invariant to Tracking Stop. A
 Tracking supervisor never releases an Attempt Pin or exposes terminal `stopped`
 while its child may still be running.
-
-This replaces the combined Worker loop that gives ResearchRun work priority
-and then polls DailyTrack work. It also supersedes only ADR-0202's clause that
-excluded queue-specific Worker classes; ADR-0202's ResearchRun FIFO semantics
-remain accepted.

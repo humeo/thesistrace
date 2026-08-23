@@ -7,7 +7,7 @@ status: accepted
 V1 defines a Research Session as a date on which both the Shanghai Stock
 Exchange and Shenzhen Stock Exchange are open according to their Tushare
 exchange calendars. The Research Calendar is the ordered intersection of those
-open dates and is not configurable in a Research Definition.
+open dates and is not configurable in a Browser Draft.
 
 Every session-counted V1 rule uses this one calendar, including Research Period,
 Calculation Warm-up, Effective Alpha Lookback, Liquidity Observation

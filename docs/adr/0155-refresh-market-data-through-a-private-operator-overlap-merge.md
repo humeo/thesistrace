@@ -30,8 +30,7 @@ notifies users that an overlap value changed.
 A failed or incomplete candidate leaves the current Head unchanged, and a
 later operator refresh may append several missed sessions in one Generation.
 
-Financial data remains outside the implemented V1 Dataset Scope; its accepted
-Point-in-Time semantics are unchanged and no financial refresh window is added
-by this decision. There is no user-facing Data Update, Dataset Publication
-entrypoint, correction log, or immutable Release chain. Independent
-source-normalization, adjustment, trading-state, and validation rules remain.
+Financial Refresh is a separate private action under the same Dataset Head and
+does not use this market overlap window. There is no user-facing Data Update,
+correction log, or immutable Release chain; source normalization, adjustment,
+trading-state, and validation rules remain Data-owned.

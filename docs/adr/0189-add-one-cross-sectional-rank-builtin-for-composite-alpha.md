@@ -14,11 +14,9 @@ denominator. `rank` preserves its child's Effective Alpha Lookback; lower-is-
 better inputs must be negated explicitly, and configured Industry
 Neutralization remains a post-expression step.
 
-This is an additive Alpha Language extension under ADR-0159 and supersedes only
-ADR-0028's exclusion of cross-sectional rank. Cross-sectional standardization,
-correlation, covariance, regression, implicit factor normalization, and a
-separate multi-factor model or factor-list resource remain excluded. A
-Composite Alpha expresses its fields, transformations, ranks, signs, and
-literal weights in one frozen Alpha Formula. The Alpha Execution Plan evaluates
-each child once and ranks complete session cross-sections; ResearchRun and
-DailyTrack use the same Builtin Definition and exact numeric contract.
+Cross-sectional standardization, correlation, covariance, regression, implicit
+factor normalization, and a separate multi-factor model or factor-list resource
+remain outside the current Alpha Language. A Composite Alpha expresses its
+fields, transformations, ranks, signs, and literal weights in one frozen Alpha
+Formula; ResearchRun and DailyTrack use the same Builtin Definition and exact
+numeric contract.

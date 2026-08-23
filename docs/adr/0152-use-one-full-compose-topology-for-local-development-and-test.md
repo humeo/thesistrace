@@ -4,46 +4,20 @@ status: accepted
 
 # Use one full Compose topology for local Development and Test
 
-The active local lifecycle uses one base Compose topology. The topology owns
-Web, API, Worker, PostgreSQL, RustFS, and one-shot schema initialization.
-Persistent local Development and disposable local Test select different
-overlays, project identities, ports, and data lifecycles without selecting
-different product runtimes.
+Local Development and Test use the same complete Compose service graph.
+Web, API, Worker, PostgreSQL, RustFS, mounted Canonical Data, and
+one-shot schema initialization all belong to it; Worker runs as fixed-role Research and
+Tracking pools. Persistent Development and
+disposable Test use different overlays, project identities, ports, credentials,
+volumes, and data lifecycles without selecting different product runtimes.
 
-This replaces the former hybrid arrangement in which infrastructure ran in
-Compose while Web, API, and Worker ran as unrelated host processes. One service
-graph makes schema initialization ordering, readiness, networking, state
-ownership, and failure diagnostics observable at the same boundary in both
-environments.
+Fast checks and the host test runners address only the isolated dependencies
+and Web origin created for that run. Each Test project is uniquely named and
+deterministically torn down with evidence captured before cleanup; Development
+preserves state across stop/start, while `dev:reset` removes only Product State
+and `dev:erase` is the explicit operation that also removes Canonical Data.
 
-Fast checks and the integration and browser host test runners remain on the
-host under mise, pnpm, and uv. Integration runners address only their newly
-created PostgreSQL and RustFS project; Playwright addresses only the Web origin
-of its newly created full topology. This keeps feedback direct without creating
-a second application topology.
-
-## Consequences
-
-- Development preserves named volumes across stop/start and deletes them only
-  through an identity-checked reset.
-- Every Test run receives a unique project, random host ports, isolated volumes
-  and bucket, evidence-before-cleanup behavior, and deterministic teardown.
-- Compose Watch owns source synchronization and service-appropriate reload,
-  restart, or rebuild behavior.
-- Container dependency directories remain separate from host dependency
-  directories.
-- Image builds and the complete gate cost more than the former hybrid startup;
-  consistent runtime boundaries and reproducible evidence are worth that cost.
-- The decision defines only local Development and Test.
-  Its evidence is not Production readiness and creates no remote environment
-  contract.
-
-## Superseded clause
-
-ADR-0207 narrows ordinary `pnpm dev:reset` to PostgreSQL Product State and
-RustFS Research artifacts while preserving the canonical-data volume. Explicit
-`pnpm dev:erase` now owns complete Development volume deletion.
-
-ADR-0208 replaces the single mixed-role Worker service with independently
-scaled fixed-role Research and Tracking Worker pools built from the same
-Production Image. The one-Compose-topology decision remains accepted.
+One service graph is chosen over a hybrid host/container topology because it
+makes readiness, networking, state ownership, worker roles, and failure
+diagnostics observable at the same boundary. This is a local lifecycle
+contract, not Production readiness.

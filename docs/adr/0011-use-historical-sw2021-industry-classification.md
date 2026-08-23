@@ -15,9 +15,9 @@ right-open effective-date interval and rejects overlaps.
 Industry neutralization defaults to SW2021 L1 because it provides useful sector
 control without unnecessarily fragmenting the daily cross-section. V1 fixes
 `industry` neutralization to SW2021 L1; L2 and L3 remain published canonical
-data but are not Research Definition choices.
+data but are not authoring choices.
 
-Neutralization is one option in a Research Definition: `none` or `industry`.
+Neutralization is one immutable ResearchRun input: `none` or `industry`.
 Both choices use the same ResearchRun lifecycle and produce one set of Alpha
 Values. With `none`, those values are the Alpha's scores directly; with
 `industry`, they are the industry-neutralized scores. The option does not

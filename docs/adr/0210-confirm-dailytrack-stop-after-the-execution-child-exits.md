@@ -32,6 +32,5 @@ authoritative Tracking Head and Checkpoints remain until explicit DailyTrack
 Deletion.
 
 This applies ADR-0198's confirmed supervisor/child termination invariant to the
-different DailyTrack lifecycle without adding Tracking checkpoints or recovery
-state. It supersedes the former immediate Stop behavior that exposed `stopped`
-and released the Generation Pin while old calculation could still be running.
+DailyTrack lifecycle without adding Tracking checkpoints or cross-Attempt
+recovery state.

@@ -20,5 +20,5 @@ Evaluation publishes only `factor_summary`; Strategy Backtest additionally
 publishes its Strategy summary, daily observations, and terminal state, without
 empty placeholders. Identical frozen Factor inputs and Data Generation must
 produce an identical `factor_summary` in both kinds. Moving from Factor
-Evaluation to Strategy Backtest uses the existing Use as Draft action rather
-than a new derived-Run action.
+Evaluation to Strategy Backtest uses Create draft followed by ordinary Run,
+rather than a derived-Run action.

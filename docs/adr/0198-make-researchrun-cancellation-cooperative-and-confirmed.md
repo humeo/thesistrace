@@ -41,8 +41,5 @@ fence remain, the child exits on supervisor-connection loss, and recovery waits
 until the old lease and ownership can no longer be live. This recovery path may
 exceed five seconds rather than releasing protected input without proof.
 
-This supersedes ADR-0095's direct `running -> cancelled` transition for
-ResearchRun while retaining queued cancellation, fencing, terminal cancellation,
-and the rule that later user execution creates a new ResearchRun. The UI exposes
-`cancelling` as real non-terminal progress rather than optimistically displaying
-`cancelled` while work continues.
+The UI exposes `cancelling` as real non-terminal progress rather than displaying
+`cancelled` while work may still publish or retain a Data Generation Pin.

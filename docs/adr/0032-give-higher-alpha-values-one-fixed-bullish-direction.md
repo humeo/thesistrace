@@ -13,4 +13,4 @@ The runtime never reverses an Alpha because its historical IC or backtest result
 is negative. An author who intends a lower raw quantity to express a stronger
 bullish view must negate it explicitly in the Alpha Expression, for example
 `-pct_change(close, 20)`. The explicit sign remains part of the frozen
-Research Definition.
+ResearchRun input.

@@ -27,6 +27,11 @@ Execution Footprint must fit that one envelope, and Arrow or NumPy parallelism
 is bounded by the threads assigned to the Worker process. ThesisTrace does not
 coordinate several concurrent Runs through one process-level memory pool.
 
+Every Research Worker replica in a pool uses the same deployment-declared CPU,
+hard-memory, and thread capacity. Startup fails when actual cgroup limits are
+below that declaration, and a capacity change never silently replans an
+already-admitted Run.
+
 System ResearchRun concurrency is the number of horizontally replicated
 Research Workers. PostgreSQL claim locking and execution fencing ensure that
 separate Workers own different Runs, while a Worker-loss retry may resume the

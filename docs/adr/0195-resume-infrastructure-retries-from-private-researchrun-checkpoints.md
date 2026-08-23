@@ -15,7 +15,7 @@ after verifying the Run input, Data Generation, compiler and calculation
 contracts, completed-boundary chain, and every referenced payload checksum.
 Any mismatch is an explicit integrity failure rather than a silent restart or
 best-effort merge. A stale Attempt cannot advance the checkpoint. A user action
-that creates another ResearchRun, including Run after Use as Draft, never
+that creates another ResearchRun, including Run after Create draft, never
 inherits it.
 
 The Research Worker supervisor exclusively owns the Attempt claim, lease,
@@ -39,7 +39,6 @@ Bundle under ADR-0099. Success, terminal failure, cancellation, or Research
 Deletion ends checkpoint ownership and makes its private objects collectible;
 therefore cancellation cannot later resume hidden work.
 
-This decision refines ADR-0095's infrastructure Attempt retry and preserves its
-one user-visible ResearchRun identity, terminal state machine, fencing, and
-bounded retry. It does not create another execution-engine version or relax the
-single Result publication boundary.
+Private checkpoints refine infrastructure retry without creating another
+user-visible ResearchRun, execution-engine version, or partial Result
+publication boundary.

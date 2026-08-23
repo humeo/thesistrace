@@ -13,5 +13,5 @@ Series and a Number broadcasts the Number explicitly, while each Builtin
 declares its complete argument and result types. Run admission rejects every
 Formula whose types do not match or whose root does not produce a Numeric
 Series. Boolean, categorical, date, table, and differently grained values are
-excluded until a concrete Alpha requirement justifies adding a new type to the
-single append-only language.
+excluded until a concrete Alpha requirement justifies changing the single
+current language.

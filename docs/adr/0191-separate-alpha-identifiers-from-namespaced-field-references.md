@@ -4,9 +4,9 @@ status: accepted
 
 # Separate Alpha identifiers from namespaced Field References
 
-Alpha Formulae keep stable lowercase `snake_case` Alpha Identifiers, while
-compiled Alpha Expressions and Data Generations use namespaced stable
-`field_id` references. The initial financial references use
+Alpha Formulae use the current lowercase `snake_case` Alpha Identifiers, while
+compiled Alpha Expressions and Data Generations use stable namespaced
+`field_id` references. Financial references use
 `financial.<statement>.<meaning>.<projection>` rather than reusing their Formula
 identifiers, matching the existing separation between market Formula names and
 Canonical market references. This keeps authoring concise without making a

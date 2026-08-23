@@ -23,8 +23,9 @@ that session complete and disappears with its Attempt. The UI distinguishes
 committed progress from in-flight work and does not infer progress from elapsed
 wall time.
 
-After at least two Chunks complete, ThesisTrace may estimate remaining duration
-from observed per-Run throughput and remaining Estimated Total Research Work.
+After enough Chunks complete to establish observed throughput, ThesisTrace may
+estimate remaining duration from that throughput and remaining Estimated Total
+Research Work.
 The value is labelled as an estimate, may be revised as later Chunks complete,
 and is never a completion guarantee or admission boundary.
 

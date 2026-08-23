@@ -221,7 +221,7 @@ equity.daily_valuation
 Family，不放进三大报表表中。
 
 三大报表的所有 `report_type` 都保留，但按照
-[ADR-0178](../adr/0178-build-initial-financial-fields-only-from-latest-consolidated-statements.md)，
+[ADR-0178](../adr/0178-use-consolidated-statements-for-the-six-financial-fields.md)，
 首批六个 Session-Aligned Financial Field 只读取 `report_type=1` 的最新
 合并口径。单季、调整、调整前和母公司口径不作为缺失时的替代输入；以后若
 开放，使用新的稳定 Field Identifier。
@@ -365,7 +365,7 @@ Universe 内把异质量纲的子因子变成 0–1 横截面百分位。例如�
 
 ```text
 0.6 * rank(pct_change(close, 20))
-+ 0.4 * rank(net_profit_parent_latest_fy / total_assets_latest_reported)
++ 0.4 * rank(net_profit / assets)
 ```
 
 并列值取平均 rank，单一有效值为 0.5，missing 不进入分母并继续保持 missing。
@@ -378,7 +378,7 @@ Universe 内把异质量纲的子因子变成 0–1 横截面百分位。例如�
 [ADR-0176](../adr/0176-ingest-all-financial-company-types-but-author-fields-with-explicit-applicability.md)，
 四种 `comp_type` 的来源字段全部采集，但 Alpha Field 必须声明可比较的公司
 类型。按照
-[ADR-0186](../adr/0186-apply-the-initial-six-financial-fields-to-all-company-types.md)，
+[ADR-0186](../adr/0186-apply-the-six-financial-fields-to-all-company-types.md)，
 首批六个字段的 `applicable_company_types` 明确为 `{1, 2, 3, 4}`；这表示字段
 合同适用，不保证来源非空，也不代表跨行业直接排名一定是合理策略。来源空值
 仍产生 missing，不回退到其他报表口径、行业专属字段或零，也不隐式改变
@@ -434,10 +434,10 @@ Zipline 在缺少 timestamp 时允许复制 as-of date。对财务数据这会�
 ### Phase 2：可执行切片与首次发布
 
 - 引入 caller-prepared `AlphaInputMatrix`，移除 Kernel 的 prices-only 输入假设。
-- 按 [ADR-0179](../adr/0179-defer-ttm-and-start-flow-fields-from-latest-annual-reports.md)
-  首先开放 `total_revenue_latest_fy`、`net_profit_parent_latest_fy`、
-  `operating_cash_flow_latest_fy`、`total_assets_latest_reported`、
-  `total_liabilities_latest_reported` 和 `equity_parent_latest_reported`；
+- 按 [ADR-0179](../adr/0179-use-latest-annual-flow-fields-and-latest-reported-stock-fields.md)
+  首先开放 `revenue`、`net_profit`、
+  `operating_cash_flow`、`assets`、
+  `liabilities` 和 `equity`；
   第一阶段不构造 TTM，其余完整保留的 Financial Facts 暂不自动获得
   Alpha Field Capability。
 - 同一 resolver 接入 ResearchRun 与 DailyTrack。
@@ -445,12 +445,12 @@ Zipline 在缺少 timestamp 时允许复制 as-of date。对财务数据这会�
   Alpha 证明 ResearchRun 与 DailyTrack 一致。
 - cold benchmark 达标后才决定是否需要 derived checkpoints。
 - 按
-  [ADR-0187](../adr/0187-publish-the-first-financial-generation-only-as-an-executable-slice.md)
+  [ADR-0185](../adr/0185-rebuild-the-complete-financial-family-on-every-v1-refresh.md)
   通过 ingestion、PIT、ResearchRun、DailyTrack 和性能 acceptance 后，才首次
   发布包含财务 family 的 Dataset Head，并将 Financial Research Readiness
   置为 ready；不存在 ingestion-only 的中间 Head。
 - 按
-  [ADR-0188](../adr/0188-expose-the-initial-financial-product-only-through-alpha-authoring-and-data-readiness.md)
+  [ADR-0188](../adr/0188-expose-financial-data-only-through-alpha-authoring-and-data-readiness.md)
   在 Alpha Editor 暴露六个字段，并在 Data Overview 展示 Financial Coverage
   与 Financial Research Readiness；首版不建设公司财报、raw batch 或任意
   Canonical 字段浏览器。

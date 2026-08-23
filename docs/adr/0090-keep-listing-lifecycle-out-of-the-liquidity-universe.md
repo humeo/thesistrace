@@ -19,7 +19,7 @@ ADR-0076 requires the complete liquidity observation history. A normal
 full-session trading suspension does not remove an otherwise in-scope
 instrument from the Base Pool. How the Data module internally represents
 listing evidence is an adapter and storage concern, not part of the Universe
-contract or Research Definition.
+contract or ResearchRun input.
 
 ADR-0097 fixes the Tushare evidence used by that adapter and requires
 Publication to fail rather than guess when the daily membership cannot be

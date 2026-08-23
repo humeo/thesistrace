@@ -15,9 +15,15 @@ longer includes them. Newly returned versions and observed corrections append;
 source absence never acts as deletion. No candidate financial family is
 published until every expected shard passes permission, schema, truncation,
 Coverage, and cross-family validation. This accepts a multi-hour refresh and
-roughly 16,623 logical source shards at the current 5,541 instrument scope,
-plus the fixed balance-sheet pages specified by
+the complete current logical shard set, plus the fixed balance-sheet pages
+specified by
 [ADR-0192](0192-paginate-the-ordinary-balance-sheet-inside-one-logical-shard.md),
 in exchange for detecting every source-visible historical change with one
 completeness rule. Market Refresh remains independently publishable under the
 one Dataset Head.
+
+Financial Research Readiness becomes visible only when that complete family,
+its Coverage, point-in-time Series readers, and the six Alpha Field Capabilities
+execute successfully through both ResearchRun and DailyTrack. Candidate raw
+objects and Canonical tables may exist beside the Head during collection, but an
+ingestion-only or partially authorable financial Generation is never published.

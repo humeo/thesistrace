@@ -24,5 +24,13 @@ The observation window is the 20 completed market sessions ending on
 full-session suspension contributes zero turnover amount; a partial suspension
 with a valid bar contributes its observed amount. An unexplained missing
 observation remains invalid and is not silently filled with zero. An instrument
-with fewer than 20 post-listing sessions does not receive a rank. ADR-0074
-defines these mutually exclusive trading states.
+listed after Dataset Coverage Start receives no rank until it has 20 governed
+observations.
+
+Only while the first 20 sessions of the entire Dataset Coverage are forming, an
+instrument already listed at Coverage Start uses the expanding available
+window. A later listing and a Data Refresh never create another expansion
+period. This permits research at a deliberately bounded Coverage start without
+treating every new listing's first-day turnover as a mature liquidity measure.
+ADR-0074 defines the governing trading states and ADR-0076 defines deterministic
+ranking ties.

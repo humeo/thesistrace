@@ -13,10 +13,10 @@ contract terms remain in their respective Dataset Families.
 as `equity:600000.SH`. ThesisTrace retains the source `ts_code` separately but
 does not generate a random UUID or maintain a surrogate-ID mapping table.
 
-V1 creates identities only for Shanghai and Shenzhen A-shares. Future futures,
-options, and convertible-bond families reuse the identity boundary but add
-their own contract metadata and lifecycle events. V1 does not implement those
-future families in advance.
+The current product creates identities only for Shanghai and Shenzhen A-shares.
+Unsupported futures, options, and convertible bonds are not pre-modeled inside
+the equity contract; any such asset family must own its contract metadata and
+lifecycle events while referencing the same minimal identity boundary.
 
 Tushare is the sole source namespace. The identity model therefore does not
 include a general provider registry or multi-provider mapping framework.

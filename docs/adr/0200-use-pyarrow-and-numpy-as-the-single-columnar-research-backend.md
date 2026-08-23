@@ -30,7 +30,6 @@ serialization remain explicit parts of the Numeric Execution Contract. A
 zero-copy view is used where valid, but correctness and stable missingness take
 priority over avoiding a required bounded copy.
 
-This operationalizes ADR-0131's bounded-memory columnar requirement and
-ADR-0164's series execution plan. ThesisTrace does not add Polars, DuckDB, a SQL
-execution route, or a versioned replacement engine; the existing Research path
-is replaced in place by this one backend.
+This implements ADR-0131's bounded-memory columnar requirement and ADR-0164's
+series execution plan. ThesisTrace has no Polars, DuckDB, SQL execution route,
+or versioned alternate engine.

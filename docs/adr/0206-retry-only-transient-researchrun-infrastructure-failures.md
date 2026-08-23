@@ -24,11 +24,5 @@ Data Generation, changes calculation contracts, or discards a valid completed
 boundary. A publication retry reuses validated continuation and staged result
 state rather than recomputing completed Chunks.
 
-This supersedes ADR-0132's one additional resource-exhaustion retry for
-ResearchRun only. It preserves bounded retry and no-partial-publication behavior
-for other module lifecycles and preserves ADR-0095's one user-visible Run across
-infrastructure Attempts.
-
-ADR-0209 later supersedes that retained resource-exhaustion retry for Tracking
-Advance: Tracking capacity failure blocks on its first occurrence. Other
-module-owned lifecycles remain under ADR-0132 until separately changed.
+Every failed Attempt publishes no partial Result, and bounded retry remains
+under the same user-visible ResearchRun identity.

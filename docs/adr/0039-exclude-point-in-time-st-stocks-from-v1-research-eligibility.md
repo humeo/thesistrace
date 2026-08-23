@@ -13,7 +13,7 @@ mean.
 
 The exclusion does not alter Liquidity Universe ranking or Universe Membership.
 Factor Evaluation reports the excluded instrument count as a distinct coverage
-reason. V1 does not expose ST inclusion as a Research Definition option.
+reason. Browser Draft does not expose an ST-inclusion option.
 
 An existing position is not sold immediately when its instrument becomes ST.
 ADR-0046 defines its behavior at the next scheduled Rebalance.
