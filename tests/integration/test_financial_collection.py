@@ -621,7 +621,7 @@ def test_refresh_rebuild_retains_absent_versions_and_reports_progress(
             manifest,
             idempotency_key="initial-financial-family",
         )
-        progress: list[dict[str, object]] = []
+        lifecycle_events: list[dict[str, object]] = []
         refresh_source = ValueSource(11)
         refresh_service = FinancialRefreshService(
             database,
@@ -629,7 +629,7 @@ def test_refresh_rebuild_retains_absent_versions_and_reports_progress(
             refresh_source,
             clock=lambda: COLLECTED_AT + timedelta(days=1),
             monotonic=lambda: 2.0,
-            progress=progress.append,
+            lifecycle_event=lifecycle_events.append,
         )
         refreshed = refresh_service.rebuild(
             idempotency_key="refresh-financial-family",
@@ -650,12 +650,12 @@ def test_refresh_rebuild_retains_absent_versions_and_reports_progress(
             next(row for row in income if row["revenue"] == "11")["revision_basis"]
             == "observed_correction"
         )
-        assert progress[-1]["phase"] == "candidate"
-        assert progress[-1]["status"] == "completed"
-        assert progress[-1]["target_count"] == progress[-1]["completed_count"] == 6
-        assert progress[-1]["failed_count"] == progress[-1]["resumed_count"] == 0
-        assert progress[-1]["duration_seconds"] == 0.0
-        assert all("token" not in repr(event).lower() for event in progress)
+        assert [event["phase"] for event in lifecycle_events] == [
+            "financial",
+            "validation",
+        ]
+        assert all(event["duration_ms"] == 0 for event in lifecycle_events)
+        assert all("token" not in repr(event).lower() for event in lifecycle_events)
         assert not (tmp_path / "HEAD.json").exists()
         assert (
             refresh_service.rebuild(
@@ -709,11 +709,26 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
             operation_id="financial-publish-source",
             expected=market,
         )
+        lifecycle_events: list[dict[str, object]] = []
+        published_heads: list[str] = []
+
+        def lossy_lifecycle(event: dict[str, object]) -> None:
+            lifecycle_events.append(event)
+            if event.get("phase") == "publication":
+                pointer = MountedDatasetHeadStore(tmp_path).current_pointer()
+                assert pointer is not None
+                published_heads.append(pointer.generation_manifest_sha256)
+            if event.get("phase") in {"financial", "publication"}:
+                raise RuntimeError(
+                    "simulated financial telemetry loss canary-secret /private/financial"
+                )
+
         service = FinancialRefreshService(
             database,
             tmp_path,
             ExecutableStatementSource(),
             clock=lambda: COLLECTED_AT + timedelta(days=1),
+            lifecycle_event=lossy_lifecycle,
         )
 
         published = service.publish(
@@ -759,6 +774,25 @@ def test_financial_refresh_publishes_executable_family_under_the_one_dataset_hea
         }
         assert overview.last_financial_refresh_at == COLLECTED_AT + timedelta(days=1)
         assert overview.financial_research_readiness is True
+        assert [event["event"] for event in lifecycle_events] == [
+            "data_refresh_started",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_succeeded",
+        ]
+        assert [
+            event["phase"]
+            for event in lifecycle_events
+            if event["event"] == "data_refresh_phase_completed"
+        ] == ["financial", "validation", "publication"]
+        assert {event["operation_id"] for event in lifecycle_events} == {
+            lifecycle_events[0]["operation_id"]
+        }
+        assert str(lifecycle_events[0]["operation_id"]).startswith("financial-refresh:")
+        assert published_heads == [published.generation_manifest_sha256]
+        assert "canary-secret" not in json.dumps(lifecycle_events)
+        assert "/private/financial" not in json.dumps(lifecycle_events)
         monkeypatch.undo()
         assert service.publish(
             idempotency_key="financial-publish",
@@ -789,7 +823,13 @@ def test_financial_refresh_rejects_prior_identity_mismatch_before_collection(
         )
         financial = _financial_generation(tmp_path, market, prior)
         source = ExecutableStatementSource()
-        service = FinancialRefreshService(database, tmp_path, source)
+        lifecycle_events: list[dict[str, object]] = []
+        service = FinancialRefreshService(
+            database,
+            tmp_path,
+            source,
+            lifecycle_event=lifecycle_events.append,
+        )
 
         for generation, supplied_prior in (
             (market, prior.manifest_sha256),
@@ -809,6 +849,18 @@ def test_financial_refresh_rejects_prior_identity_mismatch_before_collection(
                 )
 
         assert source.requests == []
+        failures = [
+            event for event in lifecycle_events if event["event"] == "data_refresh_failed"
+        ]
+        assert len(failures) == 3
+        assert all(event["level"] == "ERROR" for event in failures)
+        assert all(
+            event["failure_code"] == "FINANCIAL_PRIOR_CANDIDATE_MISMATCH"
+            for event in failures
+        )
+        assert not [
+            event for event in lifecycle_events if event["event"] == "data_refresh_succeeded"
+        ]
         with database.transaction() as transaction:
             assert transaction.execute(
                 "SELECT 1 FROM data.financial_refresh_operations"
@@ -861,9 +913,8 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
             nonlocal moved
             if (
                 not moved
-                and event.get("event") == "financial_refresh"
-                and event.get("phase") == "candidate"
-                and event.get("status") == "completed"
+                and event.get("event") == "data_refresh_phase_completed"
+                and event.get("phase") == "validation"
             ):
                 moved = True
                 _establish_head(
@@ -879,7 +930,7 @@ def test_financial_publication_recomposes_against_a_newer_market_head(
             tmp_path,
             ExecutableStatementSource(),
             clock=lambda: COLLECTED_AT + timedelta(days=1),
-            progress=move_market_head,
+            lifecycle_event=move_market_head,
         ).publish(
             idempotency_key="financial-rebase",
             generation_manifest_sha256=source_generation,
@@ -1214,11 +1265,13 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
             operation_id="financial-receipt-source",
             expected=market,
         )
+        lifecycle_events: list[dict[str, object]] = []
         service = FinancialRefreshService(
             database,
             tmp_path,
             ExecutableStatementSource(),
             clock=lambda: COLLECTED_AT + timedelta(days=1),
+            lifecycle_event=lifecycle_events.append,
         )
         prior_refresh_at = DatasetOverviewService(
             database, tmp_path
@@ -1252,6 +1305,14 @@ def test_financial_publication_recovers_head_move_before_receipt_commit(
                 prior_candidate_manifest_sha256=prior.manifest_sha256,
                 observation_through_session="2026-08-13",
             )
+
+        failure_event = next(
+            event for event in lifecycle_events if event["event"] == "data_refresh_failed"
+        )
+        assert failure_event["level"] == "ERROR"
+        assert failure_event["failure_code"] == (
+            "FINANCIAL_PUBLICATION_COMPLETION_PENDING"
+        )
 
         moved = MountedDatasetHeadStore(tmp_path).current_pointer()
         assert moved is not None and moved.generation_manifest_sha256 != source_generation
@@ -1404,9 +1465,8 @@ def test_stale_financial_target_cannot_overwrite_a_newer_financial_family(
             nonlocal moved
             if (
                 not moved
-                and event.get("event") == "financial_refresh"
-                and event.get("phase") == "candidate"
-                and event.get("status") == "completed"
+                and event.get("event") == "data_refresh_phase_completed"
+                and event.get("phase") == "validation"
             ):
                 moved = True
                 other = FinancialRefreshService(
@@ -1428,7 +1488,7 @@ def test_stale_financial_target_cannot_overwrite_a_newer_financial_family(
             tmp_path,
             ExecutableStatementSource(),
             clock=lambda: COLLECTED_AT + timedelta(days=1),
-            progress=publish_other_financial_target,
+            lifecycle_event=publish_other_financial_target,
         )
         with pytest.raises(FinancialRefreshError, match="FINANCIAL_TARGET_CHANGED"):
             stale.publish(
@@ -1578,14 +1638,12 @@ def test_refresh_resumes_durable_completed_shards(
             idempotency_key="resume-prior",
         )
         source = StatementSource(interrupt_after=2)
-        progress: list[dict[str, object]] = []
         service = FinancialRefreshService(
             database,
             tmp_path,
             source,
             clock=lambda: COLLECTED_AT,
             monotonic=lambda: 3.0,
-            progress=progress.append,
         )
 
         with pytest.raises(KeyboardInterrupt):
@@ -1606,8 +1664,6 @@ def test_refresh_resumes_durable_completed_shards(
 
         assert outcome.completed_shard_count == outcome.expected_shard_count == 6
         assert outcome.resumed_shard_count == 2
-        resumed = [event for event in progress if event.get("resumed_count") == 2]
-        assert resumed
         assert len(source.requests) == 6
     finally:
         database.close()
@@ -1698,13 +1754,11 @@ def test_checkpoint_conflict_marks_collection_and_refresh_failed(
                     )
                 return super().query_raw(endpoint, params=params, fields=fields)
 
-        progress: list[dict[str, object]] = []
         service = FinancialRefreshService(
             database,
             tmp_path,
             DeleteClaimedShardSource(),
             clock=lambda: COLLECTED_AT,
-            progress=progress.append,
         )
 
         with pytest.raises(FinancialCollectionError, match="SHARD_CHECKPOINT_CONFLICT"):
@@ -1737,8 +1791,6 @@ def test_checkpoint_conflict_marks_collection_and_refresh_failed(
             collection["failure_code"] == refresh["failure_code"] == ("SHARD_CHECKPOINT_CONFLICT")
         )
         assert refresh["candidate_manifest_sha256"] is None
-        failed = [event for event in progress if event.get("status") == "failed"]
-        assert failed[-1]["failed_count"] == 1
     finally:
         database.close()
 
@@ -1758,13 +1810,11 @@ def test_invalid_market_generation_marks_refresh_failed(
             idempotency_key="invalid-market-prior",
         )
         source = StatementSource()
-        progress: list[dict[str, object]] = []
         service = FinancialRefreshService(
             database,
             tmp_path,
             source,
             clock=lambda: COLLECTED_AT,
-            progress=progress.append,
         )
 
         with pytest.raises(FinancialRefreshError, match="FINANCIAL_MARKET_GENERATION_INVALID"):
@@ -1789,8 +1839,6 @@ def test_invalid_market_generation_marks_refresh_failed(
         assert refresh["failure_code"] == "FINANCIAL_MARKET_GENERATION_INVALID"
         assert refresh["candidate_manifest_sha256"] is None
         assert source.requests == []
-        assert progress[-1]["phase"] == "collection"
-        assert progress[-1]["status"] == "failed"
     finally:
         database.close()
 
@@ -1932,7 +1980,7 @@ def test_raw_batch_write_failure_marks_collection_and_refresh_failed(
         database.close()
 
 
-def test_refresh_failure_progress_preserves_durable_collection_counts(
+def test_refresh_failure_preserves_durable_collection_counts(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
@@ -1959,13 +2007,11 @@ def test_refresh_failure_progress_preserves_durable_collection_counts(
                     raise TushareSourceError("UPSTREAM_RATE_LIMITED", source_code=40203)
                 return super().query_raw(endpoint, params=params, fields=fields)
 
-        progress: list[dict[str, object]] = []
         service = FinancialRefreshService(
             database,
             tmp_path,
             FailAfterThreeSource(),
             clock=lambda: COLLECTED_AT,
-            progress=progress.append,
         )
 
         with pytest.raises(FinancialCollectionError, match="UPSTREAM_RATE_LIMITED"):
@@ -1977,15 +2023,27 @@ def test_refresh_failure_progress_preserves_durable_collection_counts(
                 observation_through_session="2026-08-13",
             )
 
-        refresh_failure = [
-            event
-            for event in progress
-            if event.get("event") == "financial_refresh" and event.get("status") == "failed"
-        ][-1]
-        assert refresh_failure["target_count"] == 6
-        assert refresh_failure["completed_count"] == 3
-        assert refresh_failure["failed_count"] == 1
-        assert refresh_failure["resumed_count"] == 0
+        collection_service = FinancialCollectionService(
+            database,
+            tmp_path,
+            StatementSource(),
+        )
+        collection = collection_service.inspect_outcome("partial-failure-refresh")
+        assert collection is not None
+        assert collection.target_count == 6
+        assert collection.completed_count == 3
+        with database.transaction() as transaction:
+            refresh = transaction.execute(
+                """
+                SELECT status, failure_code
+                FROM data.financial_refresh_operations
+                WHERE idempotency_key = 'partial-failure-refresh'
+                """
+            ).fetchone()
+        assert refresh == {
+            "status": "failed",
+            "failure_code": "UPSTREAM_RATE_LIMITED",
+        }
     finally:
         database.close()
 

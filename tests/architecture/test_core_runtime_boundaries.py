@@ -62,7 +62,13 @@ def test_internal_import_graph_is_layered_and_acyclic() -> None:
         "publication": {"_postgres"},
         "research_series": set(),
         "research_kernel": {"research_series"},
-        "data": {"_postgres", "product_state", "publication", "research_series"},
+        "data": {
+            "_postgres",
+            "operational_events",
+            "product_state",
+            "publication",
+            "research_series",
+        },
         "product_state": {"_postgres"},
         "research_folder": {"_postgres"},
         "daily_track": {

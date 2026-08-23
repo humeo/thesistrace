@@ -6,7 +6,7 @@ import logging
 import os
 import stat
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from pathlib import Path
 from typing import NoReturn
@@ -43,12 +43,21 @@ from thesistrace.data import (
     probe_financial_capability,
 )
 from thesistrace.entrypoints.schema import verify_core_schema
+from thesistrace.operational_events import (
+    emit_operational_event_data,
+    non_blocking_operational_event_sink,
+)
 
 logger = logging.getLogger(__name__)
+_emit_data_operator_event = non_blocking_operational_event_sink(
+    emit_operational_event_data,
+    component="data_operator",
+)
 
 
 def main(arguments: list[str] | None = None) -> None:
     logging.getLogger("psycopg.pool").disabled = True
+    command = _selected_command(arguments)
     try:
         outcome = _run(arguments)
     except (
@@ -56,13 +65,17 @@ def main(arguments: list[str] | None = None) -> None:
         DataOperatorError,
         DataRefreshError,
     ) as error:
-        _failure(error.code, diagnostic=_failure_diagnostic(error))
+        _failure(
+            error.code,
+            diagnostic=_failure_diagnostic(error),
+            command=command,
+        )
     except FinancialCollectionError as error:
-        _failure(error.code, diagnostic=error.diagnostic())
+        _failure(error.code, diagnostic=error.diagnostic(), command=command)
     except (FinancialCandidateError, FinancialRefreshError) as error:
-        _failure(str(error))
+        _failure(str(error), command=command)
     except Exception:
-        _failure("OPERATOR_FAILURE")
+        _failure("OPERATOR_FAILURE", command=command)
     payload = outcome if isinstance(outcome, dict) else outcome.__dict__
     print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
@@ -122,6 +135,7 @@ def _run(
             transport, live_provider = _create_live_tushare_provider(
                 rate_limit_events=rate_limit_events,
                 bootstrap_checkpoint=None,
+                operational_progress=_progress,
             )
             report = probe_financial_capability(
                 TushareFinancialSource(live_provider),
@@ -162,6 +176,11 @@ def _run(
                     if parsed.command == "bootstrap"
                     else None
                 ),
+                operational_progress=(
+                    None
+                    if parsed.command in {"work-refresh", "refresh-financial"}
+                    else _progress
+                ),
             )
             provider = live_provider
             financial_source = TushareFinancialSource(live_provider)
@@ -185,7 +204,7 @@ def _run(
                 database,
                 mount_root,
                 financial_source,
-                progress=_progress,
+                lifecycle_event=_progress,
             ).publish(
                 idempotency_key=parsed.idempotency_key,
                 generation_manifest_sha256=parsed.generation_manifest_sha256,
@@ -202,7 +221,10 @@ def _run(
                 "completed_shard_count": outcome.completed_shard_count,
                 "resumed_shard_count": outcome.resumed_shard_count,
             }
-        source = TushareDataSource(provider=provider, progress=_progress)
+        source = TushareDataSource(
+            provider=provider,
+            progress=_progress if parsed.command == "bootstrap" else None,
+        )
         if parsed.command == "bootstrap":
             outcome = DataOperator(
                 database,
@@ -234,7 +256,7 @@ def _run(
         processed = DataRefreshService(
             database,
             mount_root,
-            progress=_progress,
+            lifecycle_event=_progress,
         ).process_next(source)
         return {"status": "processed" if processed else "idle"}
     finally:
@@ -244,29 +266,37 @@ def _run(
             transport.close()
 
 
-def _failure(code: str, *, diagnostic: Mapping[str, object] | None = None) -> NoReturn:
+def _failure(
+    code: str,
+    *,
+    diagnostic: Mapping[str, object] | None = None,
+    command: str | None = None,
+) -> NoReturn:
     payload: dict[str, object] = {"status": "failed", "code": code}
-    if diagnostic is not None:
+    refresh_command = command in {"work-refresh", "refresh-financial"}
+    if diagnostic is not None and not refresh_command:
         payload["error"] = diagnostic
     print(
         json.dumps(payload, sort_keys=True),
-        file=sys.stderr,
+        file=sys.stdout if refresh_command else sys.stderr,
     )
     raise SystemExit(2) from None
 
 
+def _selected_command(arguments: list[str] | None) -> str | None:
+    selected = sys.argv[1:] if arguments is None else arguments
+    return selected[0] if selected else None
+
+
 def _progress(event: dict[str, object]) -> None:
-    print(
-        json.dumps(event, sort_keys=True, separators=(",", ":")),
-        file=sys.stderr,
-        flush=True,
-    )
+    _emit_data_operator_event(event)
 
 
 def _create_live_tushare_provider(
     *,
     rate_limit_events: dict[str, list[float]],
     bootstrap_checkpoint: Path | None,
+    operational_progress: Callable[[dict[str, object]], None] | None,
 ) -> tuple[HttpTushareTransport, TushareAdapter]:
     transport = HttpTushareTransport(
         endpoint=os.environ.get("THESISTRACE_TUSHARE_ENDPOINT", "https://api.tushare.pro")
@@ -278,7 +308,8 @@ def _create_live_tushare_provider(
             retry_seconds = event.get("retry_in_seconds")
             if isinstance(retry_seconds, (int, float)):
                 rate_limit_events.setdefault(api_name, []).append(float(retry_seconds))
-        _progress(event)
+        if operational_progress is not None:
+            operational_progress(event)
 
     try:
         provider = TushareAdapter(

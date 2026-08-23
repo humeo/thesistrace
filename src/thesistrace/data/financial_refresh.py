@@ -18,7 +18,6 @@ from thesistrace.data.financial_candidate import (
 from thesistrace.data.financial_collection import (
     FinancialCollectionContract,
     FinancialCollectionError,
-    FinancialCollectionOutcome,
     FinancialCollectionService,
     FinancialRawSource,
 )
@@ -29,6 +28,7 @@ from thesistrace.data.lifecycle import (
     DatasetLifecycle,
     mounted_data_mutation_lock,
 )
+from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication.serialization import canonical_json_bytes
 
 
@@ -57,25 +57,89 @@ class FinancialRefreshService:
         *,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] | None = None,
-        progress: Callable[[dict[str, object]], None] | None = None,
+        lifecycle_event: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._database = database
         self._monotonic = monotonic or time.monotonic
-        self._progress = progress or (lambda _event: None)
+        self._lifecycle_event = non_blocking_operational_event_sink(
+            lifecycle_event or (lambda _event: None),
+            component="data_operator",
+        )
         self._collection = FinancialCollectionService(
             database,
             mount_root,
             source,
             clock=self._clock,
             monotonic=self._monotonic,
-            progress=self._progress,
         )
         self._candidates = FinancialCandidateStore(mount_root)
         self._generations = MountedGenerationStore(mount_root)
         self._lifecycle = DatasetLifecycle(database, mount_root)
 
     def publish(
+        self,
+        *,
+        idempotency_key: str,
+        generation_manifest_sha256: str,
+        contract: FinancialCollectionContract,
+        prior_candidate_manifest_sha256: str | None,
+        observation_through_session: str,
+    ) -> FinancialRefreshOutcome:
+        fingerprint = _fingerprint(
+            idempotency_key,
+            generation_manifest_sha256,
+            contract,
+            prior_candidate_manifest_sha256,
+            observation_through_session,
+        )
+        published = self._published_outcome(idempotency_key, fingerprint)
+        if published is not None:
+            return published
+        operation_id = _financial_refresh_operation_id(idempotency_key)
+        started = self._monotonic()
+        self._lifecycle_event(
+            _financial_refresh_event(
+                "data_refresh_started",
+                operation_id=operation_id,
+                status="running",
+            )
+        )
+        try:
+            outcome = self._publish(
+                idempotency_key=idempotency_key,
+                generation_manifest_sha256=generation_manifest_sha256,
+                contract=contract,
+                prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
+                observation_through_session=observation_through_session,
+            )
+        except Exception as error:
+            code = _financial_failure_code(error)
+            self._lifecycle_event(
+                _financial_refresh_event(
+                    "data_refresh_failed",
+                    level=_financial_failure_level(code),
+                    operation_id=operation_id,
+                    status="failed",
+                    outcome="failed",
+                    duration_ms=_duration_ms(self._monotonic() - started),
+                    failure_code=code,
+                    exception_type=type(error).__name__,
+                )
+            )
+            raise
+        self._lifecycle_event(
+            _financial_refresh_event(
+                "data_refresh_succeeded",
+                operation_id=operation_id,
+                status="succeeded",
+                outcome="published",
+                duration_ms=_duration_ms(self._monotonic() - started),
+            )
+        )
+        return outcome
+
+    def _publish(
         self,
         *,
         idempotency_key: str,
@@ -106,6 +170,8 @@ class FinancialRefreshService:
             prior_candidate_manifest_sha256=prior_candidate_manifest_sha256,
             observation_through_session=observation_through_session,
         )
+        lifecycle_operation_id = _financial_refresh_operation_id(idempotency_key)
+        publication_started = self._monotonic()
         with self._database.session_advisory_lock("financial-publication"):
             self._reconcile_inherited_publication()
             source_financial = self._generations.inspect_root(
@@ -113,10 +179,18 @@ class FinancialRefreshService:
             ).financial_candidate_manifest_sha256
             published = self._published_outcome(idempotency_key, fingerprint)
             if published is not None:
-                return published
+                return self._publication_completed(
+                    published,
+                    operation_id=lifecycle_operation_id,
+                    started=publication_started,
+                )
             reconciled = self._reconcile_publication(idempotency_key, outcome)
             if reconciled is not None:
-                return reconciled
+                return self._publication_completed(
+                    reconciled,
+                    operation_id=lifecycle_operation_id,
+                    started=publication_started,
+                )
             for attempt in range(4):
                 current = self._lifecycle.current_pointer()
                 if current is None:
@@ -176,22 +250,34 @@ class FinancialRefreshService:
                     generation_manifest_sha256=moved.generation_manifest_sha256,
                     completed_at=prepared_at,
                 )
-                self._progress(
-                    {
-                        "event": "financial_refresh",
-                        "phase": "publication",
-                        "status": "completed",
-                        "idempotency_key": idempotency_key,
-                        "candidate_manifest_sha256": financial.manifest_sha256,
-                        "generation_manifest_sha256": moved.generation_manifest_sha256,
-                    }
-                )
-                return replace(
-                    outcome,
-                    candidate=financial,
-                    generation_manifest_sha256=moved.generation_manifest_sha256,
+                return self._publication_completed(
+                    replace(
+                        outcome,
+                        candidate=financial,
+                        generation_manifest_sha256=moved.generation_manifest_sha256,
+                    ),
+                    operation_id=lifecycle_operation_id,
+                    started=publication_started,
                 )
         raise FinancialRefreshError("FINANCIAL_HEAD_CHANGED_REPEATEDLY")
+
+    def _publication_completed(
+        self,
+        outcome: FinancialRefreshOutcome,
+        *,
+        operation_id: str,
+        started: float,
+    ) -> FinancialRefreshOutcome:
+        self._lifecycle_event(
+            _financial_refresh_event(
+                "data_refresh_phase_completed",
+                operation_id=operation_id,
+                phase="publication",
+                outcome="completed",
+                duration_ms=_duration_ms(self._monotonic() - started),
+            )
+        )
+        return outcome
 
     def _reconcile_publication(
         self,
@@ -411,6 +497,8 @@ class FinancialRefreshService:
                 return existing
             before = self._collection.inspect(idempotency_key)
             resumed_count = sum(checkpoint.status == "completed" for checkpoint in before)
+            operation_id = _financial_refresh_operation_id(idempotency_key)
+            financial_started = self._monotonic()
             try:
                 if prior_candidate_manifest_sha256 is not None:
                     self._candidates.preflight_rebuild(
@@ -426,11 +514,6 @@ class FinancialRefreshService:
                     else str(error)
                 )
                 self._fail(idempotency_key, code)
-                self._collection_failed_progress(
-                    idempotency_key,
-                    resumed_count,
-                    code,
-                )
                 if code != str(error):
                     raise FinancialRefreshError(code) from error
                 raise
@@ -441,33 +524,25 @@ class FinancialRefreshService:
                     contract=contract,
                 )
                 snapshot = self._collection.completed_snapshot(idempotency_key)
+                self._lifecycle_event(
+                    _financial_refresh_event(
+                        "data_refresh_phase_completed",
+                        operation_id=operation_id,
+                        phase="financial",
+                        outcome="completed",
+                        duration_ms=_duration_ms(
+                            self._monotonic() - financial_started
+                        ),
+                    )
+                )
             except FinancialCollectionError as error:
                 self._fail(idempotency_key, error.code)
-                self._collection_failed_progress(
-                    idempotency_key,
-                    resumed_count,
-                    error.code,
-                    self._collection.inspect_outcome(idempotency_key),
-                )
                 raise
             except GenerationStoreError as error:
                 code = "FINANCIAL_MARKET_GENERATION_INVALID"
                 self._fail(idempotency_key, code)
-                self._collection_failed_progress(idempotency_key, resumed_count, code)
                 raise FinancialRefreshError(code) from error
             candidate_started = self._monotonic()
-            self._progress(
-                {
-                    "event": "financial_refresh",
-                    "phase": "candidate",
-                    "status": "started",
-                    "idempotency_key": idempotency_key,
-                    "target_count": collection.target_count,
-                    "completed_count": collection.completed_count,
-                    "failed_count": 0,
-                    "resumed_count": resumed_count,
-                }
-            )
             try:
                 candidate = (
                     self._candidates.materialize(
@@ -483,19 +558,6 @@ class FinancialRefreshService:
                 )
             except FinancialCandidateError as error:
                 self._fail(idempotency_key, str(error))
-                self._progress(
-                    {
-                        "event": "financial_refresh",
-                        "phase": "candidate",
-                        "status": "failed",
-                        "idempotency_key": idempotency_key,
-                        "target_count": collection.target_count,
-                        "completed_count": collection.completed_count,
-                        "failed_count": 1,
-                        "resumed_count": resumed_count,
-                        "duration_seconds": _duration(candidate_started, self._monotonic()),
-                    }
-                )
                 raise
             outcome = FinancialRefreshOutcome(
                 idempotency_key=idempotency_key,
@@ -505,19 +567,14 @@ class FinancialRefreshService:
                 resumed_shard_count=resumed_count,
             )
             self._complete(outcome)
-            self._progress(
-                {
-                    "event": "financial_refresh",
-                    "phase": "candidate",
-                    "status": "completed",
-                    "idempotency_key": idempotency_key,
-                    "target_count": collection.target_count,
-                    "completed_count": collection.completed_count,
-                    "failed_count": 0,
-                    "resumed_count": resumed_count,
-                    "duration_seconds": _duration(candidate_started, self._monotonic()),
-                    "candidate_manifest_sha256": candidate.manifest_sha256,
-                }
+            self._lifecycle_event(
+                _financial_refresh_event(
+                    "data_refresh_phase_completed",
+                    operation_id=operation_id,
+                    phase="validation",
+                    outcome="completed",
+                    duration_ms=_duration_ms(self._monotonic() - candidate_started),
+                )
             )
             return outcome
 
@@ -795,32 +852,48 @@ class FinancialRefreshService:
                 (code, failed_at, failed_at, idempotency_key),
             )
 
-    def _collection_failed_progress(
-        self,
-        idempotency_key: str,
-        resumed_count: int,
-        failure_code: str,
-        collection: FinancialCollectionOutcome | None = None,
-    ) -> None:
-        self._progress(
-            {
-                "event": "financial_refresh",
-                "phase": "collection",
-                "status": "failed",
-                "idempotency_key": idempotency_key,
-                "target_count": 0 if collection is None else collection.target_count,
-                "completed_count": (
-                    resumed_count if collection is None else collection.completed_count
-                ),
-                "failed_count": 1,
-                "resumed_count": resumed_count,
-                "failure_code": failure_code,
-            }
+def _duration_ms(elapsed_seconds: float) -> int:
+    return min(max(round(elapsed_seconds * 1000), 0), 2_147_483_647)
+
+
+def _financial_refresh_event(
+    event: str,
+    *,
+    level: str = "INFO",
+    **context: object,
+) -> dict[str, object]:
+    return {"event": event, "level": level, **context}
+
+
+def _financial_refresh_operation_id(idempotency_key: str) -> str:
+    identity = hashlib.sha256(idempotency_key.encode()).hexdigest()[:32]
+    return f"financial-refresh:{identity}"
+
+
+def _financial_failure_code(error: Exception) -> str:
+    if isinstance(error, FinancialRefreshError):
+        return error.code
+    if isinstance(error, FinancialCollectionError):
+        return error.code
+    if isinstance(error, FinancialCandidateError):
+        return str(error)
+    return "FINANCIAL_REFRESH_FAILURE"
+
+
+def _financial_failure_level(code: str) -> str:
+    if code == "FINANCIAL_PUBLICATION_COMPLETION_PENDING":
+        return "ERROR"
+    if any(
+        marker in code
+        for marker in (
+            "UNAVAILABLE",
+            "RATE_LIMITED",
+            "HEAD_CHANGED",
+            "TARGET_CHANGED",
         )
-
-
-def _duration(started: float, finished: float) -> float:
-    return round(max(0.0, finished - started), 6)
+    ):
+        return "WARNING"
+    return "ERROR"
 
 
 def _publication_operation_id(idempotency_key: str, attempt: int) -> str:

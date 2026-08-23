@@ -64,7 +64,9 @@ class RecordingRefreshSource:
 
 class UnavailableRefreshSource:
     def collect(self, plan: CollectionPlan) -> CanonicalSourceBatch:
-        raise DataSourceError("unavailable", detail_code="UPSTREAM_UNAVAILABLE")
+        error = DataSourceError("unavailable", detail_code="UPSTREAM_UNAVAILABLE")
+        error.args = ("canary-secret dependency at /private/data-source",)
+        raise error
 
 
 class ReplayRefreshProvider:
@@ -92,10 +94,25 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         _append_session(candidate)
         source = RecordingRefreshSource(candidate)
         operator_times = iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT))
+        lifecycle_events: list[dict[str, object]] = []
+        published_sessions: list[str] = []
+
+        def lossy_lifecycle(event: dict[str, object]) -> None:
+            lifecycle_events.append(event)
+            if event.get("phase") == "publication":
+                pointer = DatasetLifecycle(database, tmp_path).current_pointer()
+                assert pointer is not None
+                published_sessions.append(pointer.data_through_session)
+            if event.get("phase") in {"market", "publication"}:
+                raise RuntimeError(
+                    "simulated telemetry loss with canary-secret at /private/source"
+                )
+
         refresh = DataRefreshService(
             database,
             tmp_path,
             clock=lambda: next(operator_times),
+            lifecycle_event=lossy_lifecycle,
         )
 
         accepted = _operator_command(
@@ -136,11 +153,44 @@ def test_private_refresh_is_async_moves_head_and_records_successful_freshness(
         overview = DatasetOverviewService(database, tmp_path).overview()
         assert overview.last_market_refresh_at == FIRST_REFRESH_AT
         assert overview.data_through_session.isoformat() == candidate["research_calendar"][-1]
+        assert [event["event"] for event in lifecycle_events] == [
+            "data_refresh_started",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_succeeded",
+        ]
+        operation_ids = {str(event["operation_id"]) for event in lifecycle_events}
+        assert len(operation_ids) == 1
+        assert next(iter(operation_ids)).startswith("refresh:")
+        assert [
+            event["phase"]
+            for event in lifecycle_events
+            if event["event"] == "data_refresh_phase_completed"
+        ] == [
+            "current_head",
+            "market",
+            "validation",
+            "materialization",
+            "candidate_validation",
+            "publication",
+        ]
+        assert all(
+            isinstance(event["duration_ms"], int) and event["duration_ms"] >= 0
+            for event in lifecycle_events
+            if event["event"] == "data_refresh_phase_completed"
+        )
+        assert published_sessions == [candidate["research_calendar"][-1]]
+        assert "canary-secret" not in json.dumps(lifecycle_events)
+        assert "/private/source" not in json.dumps(lifecycle_events)
     finally:
         database.close()
 
 
-def test_refresh_reports_private_phase_timings(
+def test_refresh_reports_only_canonical_phase_timings(
     core_settings: CoreSettings,
     tmp_path: Path,
 ) -> None:
@@ -150,36 +200,34 @@ def test_refresh_reports_private_phase_timings(
         _establish_head(database, tmp_path, current)
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        progress: list[dict[str, object]] = []
-        timestamps = iter(float(value) for value in range(10))
+        lifecycle_events: list[dict[str, object]] = []
+        timestamps = iter(float(value) for value in range(14))
         operator_times = iter((FIRST_PREPARED_AT, FIRST_REFRESH_AT))
         refresh = DataRefreshService(
             database,
             tmp_path,
             clock=lambda: next(operator_times),
-            progress=progress.append,
+            lifecycle_event=lifecycle_events.append,
             monotonic=lambda: next(timestamps),
         )
         refresh.submit(idempotency_key="timed-refresh", as_of=AS_OF)
 
         assert refresh.process_next(RecordingRefreshSource(candidate)) is True
 
-        phase_events = [event for event in progress if event["event"] == "refresh_timing"]
-        assert [(event["phase"], event["status"]) for event in phase_events] == [
-            ("current_head", "started"),
-            ("current_head", "completed"),
-            ("validation", "started"),
-            ("validation", "completed"),
-            ("materialization", "started"),
-            ("materialization", "completed"),
-            ("candidate_validation", "started"),
-            ("candidate_validation", "completed"),
-            ("publication", "started"),
-            ("publication", "completed"),
+        phase_events = [
+            event
+            for event in lifecycle_events
+            if event["event"] == "data_refresh_phase_completed"
         ]
-        assert [
-            event["elapsed_seconds"] for event in phase_events if event["status"] == "completed"
-        ] == [1.0] * 5
+        assert [event["phase"] for event in phase_events] == [
+            "current_head",
+            "market",
+            "validation",
+            "materialization",
+            "candidate_validation",
+            "publication",
+        ]
+        assert [event["duration_ms"] for event in phase_events] == [1000] * 6
     finally:
         database.close()
 
@@ -252,10 +300,12 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         current = _twenty_session_canonical()
         manifest = _establish_head(database, tmp_path, current)
         source = RecordingRefreshSource(current)
+        lifecycle_events: list[dict[str, object]] = []
         refresh = DataRefreshService(
             database,
             tmp_path,
             clock=lambda: SECOND_REFRESH_AT,
+            lifecycle_event=lifecycle_events.append,
         )
 
         first = refresh.submit(idempotency_key="no-change", as_of=AS_OF)
@@ -273,6 +323,13 @@ def test_identical_refresh_keeps_generation_and_advances_last_refresh_time(
         assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             SECOND_REFRESH_AT
         )
+        assert [
+            event.get("phase")
+            for event in lifecycle_events
+            if event["event"] == "data_refresh_phase_completed"
+        ] == ["current_head", "market", "validation"]
+        assert lifecycle_events[-1]["event"] == "data_refresh_succeeded"
+        assert lifecycle_events[-1]["outcome"] == "no_change"
     finally:
         database.close()
 
@@ -317,7 +374,13 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         )
         invalid = copy.deepcopy(current)
         invalid["prices"] = []
-        refresh = DataRefreshService(database, tmp_path, clock=lambda: FIRST_REFRESH_AT)
+        lifecycle_events: list[dict[str, object]] = []
+        refresh = DataRefreshService(
+            database,
+            tmp_path,
+            clock=lambda: FIRST_REFRESH_AT,
+            lifecycle_event=lifecycle_events.append,
+        )
         refresh.submit(idempotency_key="invalid-candidate", as_of=AS_OF)
 
         with pytest.raises(DataRefreshError) as failure:
@@ -333,6 +396,15 @@ def test_invalid_refresh_candidate_leaves_the_current_head_and_freshness_unchang
         assert head.generation_manifest_sha256 == manifest
         overview = DatasetOverviewService(database, tmp_path).overview()
         assert overview.last_market_refresh_at == prior_refresh_at
+        failure_event = next(
+            event for event in lifecycle_events if event["event"] == "data_refresh_failed"
+        )
+        assert failure_event["level"] == "ERROR"
+        assert failure_event["phase"] == "validation"
+        assert failure_event["failure_code"] == "INVALID_CANONICAL_DATA"
+        assert not [
+            event for event in lifecycle_events if event["event"] == "data_refresh_succeeded"
+        ]
     finally:
         database.close()
 
@@ -371,13 +443,22 @@ def test_refresh_worker_command_processes_a_deterministic_replay(
             ],
         )
 
-        processed = _operator_command(
+        processed, operator_events = _operator_command_with_events(
             core_settings,
             tmp_path,
             ["work-refresh", "--replay", os.fspath(refresh_replay)],
         )
 
         assert processed == {"status": "processed"}
+        assert [event["event"] for event in operator_events] == [
+            "data_refresh_started",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_phase_completed",
+            "data_refresh_succeeded",
+        ]
+        assert all(event["component"] == "data_operator" for event in operator_events)
+        assert len({event["operation_id"] for event in operator_events}) == 1
         terminal = _operator_command(
             core_settings,
             tmp_path,
@@ -492,7 +573,13 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         prior_refresh_at = (
             DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at
         )
-        refresh = DataRefreshService(database, tmp_path, max_attempts=2)
+        lifecycle_events: list[dict[str, object]] = []
+        refresh = DataRefreshService(
+            database,
+            tmp_path,
+            max_attempts=2,
+            lifecycle_event=lifecycle_events.append,
+        )
         refresh.submit(idempotency_key="bounded-retry", as_of=AS_OF)
 
         with pytest.raises(DataRefreshError) as first:
@@ -518,6 +605,19 @@ def test_unavailable_refresh_retries_are_bounded_and_sanitized(
         assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
+        failures = [
+            event for event in lifecycle_events if event["event"] == "data_refresh_failed"
+        ]
+        assert [(event["level"], event["failure_code"], event["status"]) for event in failures] == [
+            ("WARNING", "SOURCE_UNAVAILABLE", "accepted"),
+            ("ERROR", "RETRY_EXHAUSTED", "failed"),
+        ]
+        assert all(event["phase"] == "market" for event in failures)
+        assert not [
+            event for event in lifecycle_events if event["event"] == "data_refresh_succeeded"
+        ]
+        assert "canary-secret" not in json.dumps(lifecycle_events)
+        assert "/private/data-source" not in json.dumps(lifecycle_events)
     finally:
         database.close()
 
@@ -823,7 +923,12 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
         )
         manifests_before = tuple((tmp_path / "manifests" / "sha256").glob("*/*.json"))
 
-        reopened = DataRefreshService(database, tmp_path)
+        recovery_events: list[dict[str, object]] = []
+        reopened = DataRefreshService(
+            database,
+            tmp_path,
+            lifecycle_event=recovery_events.append,
+        )
         assert reopened.process_next(RecordingRefreshSource(candidate)) is True
 
         terminal = reopened.inspect("ambiguous-cas")
@@ -832,6 +937,16 @@ def test_head_replacement_with_rolled_back_lifecycle_commit_is_reconciled(
         assert terminal.attempt_count == 1
         assert terminal.last_failure_code is None
         assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == manifests_before
+        assert [event["event"] for event in recovery_events] == [
+            "data_refresh_phase_completed",
+            "data_refresh_succeeded",
+        ]
+        assert recovery_events[0]["phase"] == "publication"
+        assert recovery_events[0]["outcome"] == "recovered"
+        assert recovery_events[1]["outcome"] == "published"
+        recovery_operation_ids = {event["operation_id"] for event in recovery_events}
+        assert len(recovery_operation_ids) == 1
+        assert str(next(iter(recovery_operation_ids))).startswith("refresh:")
     finally:
         database.close()
 
@@ -849,7 +964,12 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         )
         candidate = copy.deepcopy(current)
         _append_session(candidate)
-        refresh = DataRefreshService(database, tmp_path)
+        lifecycle_events: list[dict[str, object]] = []
+        refresh = DataRefreshService(
+            database,
+            tmp_path,
+            lifecycle_event=lifecycle_events.append,
+        )
         refresh.submit(idempotency_key="completion-crash", as_of=AS_OF)
         with database.transaction() as transaction:
             transaction.execute(
@@ -888,6 +1008,21 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         assert moved.generation_manifest_sha256 != original
         assert open_complete_refresh_basis(MountedGenerationStore(tmp_path), original) == current
         assert refresh.inspect("completion-crash").status == "running"
+        failure_event = next(
+            event for event in lifecycle_events if event["event"] == "data_refresh_failed"
+        )
+        assert failure_event["level"] == "ERROR"
+        assert failure_event["phase"] == "publication"
+        assert failure_event["failure_code"] == "REFRESH_COMPLETION_PENDING"
+        assert not [
+            event
+            for event in lifecycle_events
+            if event["event"] == "data_refresh_phase_completed"
+            and event.get("phase") == "publication"
+        ]
+        assert not [
+            event for event in lifecycle_events if event["event"] == "data_refresh_succeeded"
+        ]
         assert DatasetOverviewService(database, tmp_path).overview().last_market_refresh_at == (
             prior_refresh_at
         )
@@ -907,6 +1042,53 @@ def test_post_cas_completion_failure_reconciles_without_rebuilding_generation(
         assert tuple((tmp_path / "manifests" / "sha256").glob("*/*.json")) == manifests_before
     finally:
         database.close()
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["work-refresh"],
+        [
+            "refresh-financial",
+            "--idempotency-key",
+            "financial-failure-boundary",
+            "--generation-manifest-sha256",
+            "a" * 64,
+            "--capability-report",
+            "unused-capability-report.json",
+            "--observation-through-session",
+            "2026-08-13",
+        ],
+    ],
+    ids=("market", "financial"),
+)
+def test_refresh_command_failure_before_operation_start_keeps_one_stdout_result(
+    tmp_path: Path,
+    arguments: list[str],
+) -> None:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key != "THESISTRACE_DATABASE_URL"
+    }
+    environment["THESISTRACE_DATA_MOUNT"] = os.fspath(tmp_path)
+    environment["THESISTRACE_TUSHARE_TOKEN"] = "diagnostic-canary-secret"
+    completed = subprocess.run(
+        [sys.executable, "-m", "thesistrace.entrypoints.data_operator", *arguments],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+        timeout=10,
+    )
+
+    assert completed.returncode == 2
+    assert json.loads(completed.stdout) == {
+        "status": "failed",
+        "code": "OPERATOR_FAILURE",
+    }
+    assert completed.stderr == ""
+    assert "diagnostic-canary-secret" not in completed.stdout + completed.stderr
 
 
 def _twenty_session_canonical() -> dict[str, object]:
@@ -1042,6 +1224,15 @@ def _operator_command(
     mount_root: Path,
     arguments: list[str],
 ) -> dict[str, object]:
+    value, _events = _operator_command_with_events(settings, mount_root, arguments)
+    return value
+
+
+def _operator_command_with_events(
+    settings: CoreSettings,
+    mount_root: Path,
+    arguments: list[str],
+) -> tuple[dict[str, object], list[dict[str, object]]]:
     environment = {
         **os.environ,
         "THESISTRACE_DATABASE_URL": settings.database_url,
@@ -1055,6 +1246,13 @@ def _operator_command(
         text=True,
         timeout=30,
     )
-    value = json.loads(completed.stdout)
+    stdout_lines = [line for line in completed.stdout.splitlines() if line]
+    assert len(stdout_lines) == 1
+    value = json.loads(stdout_lines[0])
     assert isinstance(value, dict)
-    return value
+    events = [json.loads(line) for line in completed.stderr.splitlines() if line]
+    assert all(
+        {"timestamp", "level", "component", "event"} <= set(event)
+        for event in events
+    )
+    return value, events

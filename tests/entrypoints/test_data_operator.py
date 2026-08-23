@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from thesistrace.adapters.tushare_provider import TushareSourceError
-from thesistrace.data import DataOperatorError, DataSourceError, FinancialCollectionError
+from thesistrace.data import (
+    DataOperatorError,
+    DataSourceError,
+    FinancialCollectionError,
+)
 from thesistrace.entrypoints import data_operator
 
 

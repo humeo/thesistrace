@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import secrets
 import time
 from collections.abc import Callable, Iterator
@@ -30,12 +29,12 @@ from thesistrace.data.lifecycle import (
 )
 from thesistrace.data.source import DataSource, DataSourceError, refresh_collection_plan
 from thesistrace.data.validation import validate_release_batch
+from thesistrace.operational_events import non_blocking_operational_event_sink
 from thesistrace.publication.serialization import canonical_json_bytes
 
 _REFRESH_LEASE_SECONDS = 900
 _REFRESH_HEARTBEAT_SECONDS = 30
 _REFRESH_MAX_ATTEMPTS = 3
-logger = logging.getLogger(__name__)
 
 
 class DataRefreshError(RuntimeError):
@@ -76,6 +75,12 @@ class _RefreshHeartbeat:
             raise _RefreshFenced("Refresh operation lost its renewable claim")
 
 
+@dataclass(frozen=True)
+class _RefreshFailure:
+    code: str
+    retry: bool
+
+
 class DataRefreshService:
     """Private fenced Worker lifecycle for the mounted current Dataset."""
 
@@ -88,7 +93,7 @@ class DataRefreshService:
         lease_seconds: float = _REFRESH_LEASE_SECONDS,
         heartbeat_seconds: float = _REFRESH_HEARTBEAT_SECONDS,
         max_attempts: int = _REFRESH_MAX_ATTEMPTS,
-        progress: Callable[[dict[str, object]], None] | None = None,
+        lifecycle_event: Callable[[dict[str, object]], None] | None = None,
         monotonic: Callable[[], float] = time.perf_counter,
     ) -> None:
         if (
@@ -103,37 +108,28 @@ class DataRefreshService:
         self._lease_seconds = lease_seconds
         self._heartbeat_seconds = heartbeat_seconds
         self._max_attempts = max_attempts
-        self._progress = progress or (lambda _event: None)
+        self._lifecycle_event = non_blocking_operational_event_sink(
+            lifecycle_event or (lambda _event: None),
+            component="data_operator",
+        )
         self._monotonic = monotonic
         self._lifecycle = DatasetLifecycle(database, mount_root)
         self._heads = MountedDatasetHeadStore(mount_root)
         self._generations = MountedGenerationStore(mount_root)
 
     @contextmanager
-    def _timed_phase(self, phase: str) -> Iterator[None]:
-        self._progress(
-            {"event": "refresh_timing", "phase": phase, "status": "started"}
-        )
+    def _timed_phase(self, operation_id: str, phase: str) -> Iterator[None]:
         started_at = self._monotonic()
-        try:
-            yield
-        except Exception:
-            self._progress(
-                {
-                    "event": "refresh_timing",
-                    "phase": phase,
-                    "status": "failed",
-                    "elapsed_seconds": round(self._monotonic() - started_at, 3),
-                }
+        yield
+        elapsed = self._monotonic() - started_at
+        self._lifecycle_event(
+            _data_refresh_event(
+                "data_refresh_phase_completed",
+                operation_id=operation_id,
+                phase=phase,
+                outcome="completed",
+                duration_ms=_duration_ms(elapsed),
             )
-            raise
-        self._progress(
-            {
-                "event": "refresh_timing",
-                "phase": phase,
-                "status": "completed",
-                "elapsed_seconds": round(self._monotonic() - started_at, 3),
-            }
         )
 
     def submit(self, *, idempotency_key: str, as_of: datetime) -> RefreshOutcome:
@@ -207,10 +203,22 @@ class DataRefreshService:
             return reconciled or recovered
         head_moved = False
         operation_id = _operation_id(claim.key, claim.owner_token)
+        operation_started = self._monotonic()
+        phase = "claim"
+        successful_outcome: str | None = None
+        self._lifecycle_event(
+            _data_refresh_event(
+                "data_refresh_started",
+                operation_id=operation_id,
+                attempt_number=claim.attempt_count,
+                status="running",
+            )
+        )
         candidate_scope = ExitStack()
         try:
             with self._maintain_claim(claim) as heartbeat:
-                with self._timed_phase("current_head"):
+                phase = "current_head"
+                with self._timed_phase(operation_id, phase):
                     head = self._lifecycle.current_pointer()
                     refresh_base = (
                         None
@@ -225,9 +233,12 @@ class DataRefreshService:
                 self._record_expected_head(claim, expected_manifest)
                 plan = refresh_collection_plan(self._as_of(claim), refresh_base.canonical)
                 assert plan.overlap_start_session is not None
-                batch = source.collect(plan)
+                phase = "market"
+                with self._timed_phase(operation_id, phase):
+                    batch = source.collect(plan)
                 heartbeat.assert_owned()
-                with self._timed_phase("validation"):
+                phase = "validation"
+                with self._timed_phase(operation_id, phase):
                     validate_release_batch(batch, predecessor_session=head.data_through_session)
                     candidate_canonical = batch.canonical
                     unchanged = candidate_canonical == refresh_base.canonical
@@ -239,69 +250,125 @@ class DataRefreshService:
                         data_through_session=head.data_through_session,
                         completed_at=completed_at,
                     )
-                    return True
-                prepared_at = self._operator_time()
-                with self._timed_phase("materialization"):
-                    generation = self._generations.materialize_refresh(
-                        predecessor_manifest_sha256=expected_manifest,
-                        replacement_canonical=candidate_canonical,
-                        replace_from_session=plan.overlap_start_session,
-                        prepared_at=prepared_at,
-                        source_name=batch.source_name,
-                        source_lineage=batch.source_lineage,
-                    )
-                heartbeat.assert_owned()
-                with self._timed_phase("candidate_validation"):
-                    protected_candidate = candidate_scope.enter_context(
-                        self._lifecycle.protected_refresh_candidate(
-                            operation_id=operation_id,
-                            generation_manifest_sha256=generation.manifest_sha256,
-                            lease_seconds=self._lease_seconds,
-                        )
-                    )
-                self._record_candidate(
-                    claim,
-                    expected_manifest=expected_manifest,
-                    candidate_manifest=generation.manifest_sha256,
-                    prepared_at=prepared_at,
-                )
-                heartbeat.assert_owned()
-                try:
-                    with self._timed_phase("publication"):
-                        moved = self._lifecycle.compare_and_swap_refresh_head(
-                            expected_generation_manifest_sha256=expected_manifest,
-                            candidate=protected_candidate,
+                    successful_outcome = "no_change"
+                else:
+                    prepared_at = self._operator_time()
+                    phase = "materialization"
+                    with self._timed_phase(operation_id, phase):
+                        generation = self._generations.materialize_refresh(
+                            predecessor_manifest_sha256=expected_manifest,
+                            replacement_canonical=candidate_canonical,
+                            replace_from_session=plan.overlap_start_session,
                             prepared_at=prepared_at,
+                            source_name=batch.source_name,
+                            source_lineage=batch.source_lineage,
                         )
-                except Exception:
-                    if self._post_cas_head_state(generation.manifest_sha256) is not False:
-                        head_moved = True
-                    raise
-                head_moved = True
-                completed_at = self._operator_time()
-                self._complete_published(claim, moved, completed_at)
+                    heartbeat.assert_owned()
+                    phase = "candidate_validation"
+                    with self._timed_phase(operation_id, phase):
+                        protected_candidate = candidate_scope.enter_context(
+                            self._lifecycle.protected_refresh_candidate(
+                                operation_id=operation_id,
+                                generation_manifest_sha256=generation.manifest_sha256,
+                                lease_seconds=self._lease_seconds,
+                            )
+                        )
+                    self._record_candidate(
+                        claim,
+                        expected_manifest=expected_manifest,
+                        candidate_manifest=generation.manifest_sha256,
+                        prepared_at=prepared_at,
+                    )
+                    heartbeat.assert_owned()
+                    phase = "publication"
+                    try:
+                        with self._timed_phase(operation_id, phase):
+                            moved = self._lifecycle.compare_and_swap_refresh_head(
+                                expected_generation_manifest_sha256=expected_manifest,
+                                candidate=protected_candidate,
+                                prepared_at=prepared_at,
+                            )
+                            head_moved = True
+                            completed_at = self._operator_time()
+                            self._complete_published(claim, moved, completed_at)
+                    except Exception:
+                        if self._post_cas_head_state(generation.manifest_sha256) is not False:
+                            head_moved = True
+                        raise
+                    successful_outcome = "published"
         except _RefreshFenced:
-            logger.info("Refresh result rejected by execution fence")
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_fenced",
+                    level="WARNING",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    phase=phase,
+                    outcome="fenced",
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                )
+            )
         except Exception as error:
             if head_moved:
-                logger.error(
-                    "Refresh Head moved with completion pending",
-                    extra={"error_type": type(error).__name__},
+                self._lifecycle_event(
+                    _data_refresh_event(
+                        "data_refresh_failed",
+                        level="ERROR",
+                        operation_id=operation_id,
+                        attempt_number=claim.attempt_count,
+                        phase=phase,
+                        status="running",
+                        outcome="completion_pending",
+                        duration_ms=_duration_ms(self._monotonic() - operation_started),
+                        failure_code="REFRESH_COMPLETION_PENDING",
+                        exception_type=type(error).__name__,
+                    )
                 )
                 raise DataRefreshError("REFRESH_COMPLETION_PENDING") from error
             code, retryable = _failure_policy(error)
             try:
-                self._record_failure(claim, code=code, retryable=retryable)
+                failure = self._record_failure(claim, code=code, retryable=retryable)
             except _RefreshFenced:
-                logger.info("Refresh failure rejected by execution fence")
+                self._lifecycle_event(
+                    _data_refresh_event(
+                        "data_refresh_fenced",
+                        level="WARNING",
+                        operation_id=operation_id,
+                        attempt_number=claim.attempt_count,
+                        phase=phase,
+                        outcome="fenced",
+                        duration_ms=_duration_ms(self._monotonic() - operation_started),
+                    )
+                )
                 return True
-            logger.error(
-                "Refresh attempt failed",
-                extra={"failure_code": code, "error_type": type(error).__name__},
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_failed",
+                    level="WARNING" if failure.retry else "ERROR",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    phase=phase,
+                    status="accepted" if failure.retry else "failed",
+                    outcome="retry_scheduled" if failure.retry else "failed",
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                    failure_code=failure.code,
+                    exception_type=type(error).__name__,
+                )
             )
             raise DataRefreshError(code) from error
         finally:
             candidate_scope.close()
+        if successful_outcome is not None:
+            self._lifecycle_event(
+                _data_refresh_event(
+                    "data_refresh_succeeded",
+                    operation_id=operation_id,
+                    attempt_number=claim.attempt_count,
+                    status="succeeded",
+                    outcome=successful_outcome,
+                    duration_ms=_duration_ms(self._monotonic() - operation_started),
+                )
+            )
         return True
 
     def _claim(self) -> _RefreshClaim | None:
@@ -392,9 +459,15 @@ class DataRefreshService:
                         ),
                     )
             except Exception as error:
-                logger.error(
-                    "Refresh heartbeat failed",
-                    extra={"error_type": type(error).__name__},
+                self._lifecycle_event(
+                    _data_refresh_event(
+                        "data_refresh_heartbeat_failed",
+                        level="WARNING",
+                        operation_id=_operation_id(claim.key, claim.owner_token),
+                        attempt_number=claim.attempt_count,
+                        failure_code="REFRESH_INFRASTRUCTURE_FAILURE",
+                        exception_type=type(error).__name__,
+                    )
                 )
                 failed.set()
                 return
@@ -493,11 +566,7 @@ class DataRefreshService:
             with self._database.transaction() as transaction:
                 lock_data_lifecycle(transaction)
                 pointer = self._heads.current_pointer()
-        except Exception as error:
-            logger.error(
-                "Refresh post-CAS Head inspection failed",
-                extra={"error_type": type(error).__name__},
-            )
+        except Exception:
             return None
         return (
             pointer is not None and pointer.generation_manifest_sha256 == generation_manifest_sha256
@@ -526,7 +595,13 @@ class DataRefreshService:
                 completed_at=completed_at,
             )
 
-    def _record_failure(self, claim: _RefreshClaim, *, code: str, retryable: bool) -> None:
+    def _record_failure(
+        self,
+        claim: _RefreshClaim,
+        *,
+        code: str,
+        retryable: bool,
+    ) -> _RefreshFailure:
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
             release_generation_candidate(
@@ -561,9 +636,14 @@ class DataRefreshService:
                 )
             if updated.rowcount != 1:
                 raise _RefreshFenced("Refresh failure belongs to a stale owner")
+        return _RefreshFailure(
+            code=code if retry else ("RETRY_EXHAUSTED" if retryable else code),
+            retry=retry,
+        )
 
     def _reconcile_pending_completion(self) -> bool:
         reconciled = False
+        lifecycle_events: list[dict[str, object]] = []
         with self._database.transaction() as transaction:
             lock_data_lifecycle(transaction)
             pointer = self._heads.current_pointer()
@@ -578,19 +658,44 @@ class DataRefreshService:
                 (pointer.generation_manifest_sha256,),
             ).fetchall()
             for row in rows:
+                operation_id = _operation_id(
+                    str(row["idempotency_key"]), str(row["owner_token"])
+                )
                 release_generation_candidate(
                     transaction,
-                    operation_id=_operation_id(
-                        str(row["idempotency_key"]), str(row["owner_token"])
-                    ),
+                    operation_id=operation_id,
                 )
+                completed_at = self._operator_time()
                 _complete_reconciled_operation(
                     transaction,
                     row,
                     data_through_session=pointer.data_through_session,
-                    completed_at=self._operator_time(),
+                    completed_at=completed_at,
+                )
+                duration_ms = _persisted_duration_ms(row.get("started_at"), completed_at)
+                lifecycle_events.extend(
+                    (
+                        _data_refresh_event(
+                            "data_refresh_phase_completed",
+                            operation_id=operation_id,
+                            attempt_number=int(row["attempt_count"]),
+                            phase="publication",
+                            outcome="recovered",
+                            duration_ms=duration_ms,
+                        ),
+                        _data_refresh_event(
+                            "data_refresh_succeeded",
+                            operation_id=operation_id,
+                            attempt_number=int(row["attempt_count"]),
+                            status="succeeded",
+                            outcome="published",
+                            duration_ms=duration_ms,
+                        ),
+                    )
                 )
                 reconciled = True
+        for event in lifecycle_events:
+            self._lifecycle_event(event)
         return reconciled
 
     def _recover_expired_claims(self) -> bool:
@@ -731,6 +836,25 @@ def _failure_policy(error: Exception) -> tuple[str, bool]:
     if isinstance(error, (GenerationStoreError, DataLifecycleError, OSError, RuntimeError)):
         return "REFRESH_INFRASTRUCTURE_FAILURE", True
     return "REFRESH_INFRASTRUCTURE_FAILURE", True
+
+
+def _data_refresh_event(
+    event: str,
+    *,
+    level: str = "INFO",
+    **context: object,
+) -> dict[str, object]:
+    return {"event": event, "level": level, **context}
+
+
+def _duration_ms(elapsed_seconds: float) -> int:
+    return min(max(round(elapsed_seconds * 1000), 0), 2_147_483_647)
+
+
+def _persisted_duration_ms(started_at: object, completed_at: datetime) -> int:
+    if not isinstance(started_at, datetime):
+        return 0
+    return _duration_ms((completed_at - started_at).total_seconds())
 
 
 def _operation_id(idempotency_key: str, owner_token: str) -> str:
