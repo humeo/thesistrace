@@ -49,6 +49,17 @@ class StrategyRunInput:
     stamp_duty_sell_rate: str
     transfer_fee_rate: str
 
+    def contract_snapshot(self) -> dict[str, object]:
+        return {
+            "holdings_count": self.holdings_count,
+            "rebalance_interval": self.rebalance_interval,
+            "initial_cash_cny": self.initial_cash_cny,
+            "commission_rate_all_in": self.commission_rate_all_in,
+            "commission_min_cny": self.commission_min_cny,
+            "stamp_duty_sell_rate": self.stamp_duty_sell_rate,
+            "transfer_fee_rate": self.transfer_fee_rate,
+        }
+
 
 @dataclass(frozen=True, init=False)
 class RunInput:
@@ -163,6 +174,11 @@ class RunInput:
             "universe": self.universe,
             "neutralization": self.neutralization,
         }
+
+    def strategy_contract_snapshot(self) -> dict[str, object]:
+        if self.research_kind != "strategy_backtest" or self.strategy is None:
+            raise KernelRunError("Strategy Backtest input is incomplete")
+        return self.strategy.contract_snapshot()
 
     def with_research_data(
         self,

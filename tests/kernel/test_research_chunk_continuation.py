@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import thesistrace.research_kernel.research_chunks as research_chunks_module
+import thesistrace.research_kernel.strategy as strategy_module
 from thesistrace.alpha_language import alpha_language
 from thesistrace.publication import VerifiedBundle, VerifiedPayload
 from thesistrace.publication.serialization import canonical_json_bytes, parquet_bytes
@@ -27,8 +28,10 @@ from thesistrace.research_kernel.research_chunks import (
     empty_alpha_factor_continuation,
     empty_factor_state,
     empty_research_continuation,
+    empty_strategy_continuation,
     execute_alpha_factor_chunk,
     execute_research_chunk,
+    execute_strategy_chunk_from_alpha_factor_outcome,
     finalize_factor_state,
     validated_research_continuation,
 )
@@ -196,8 +199,11 @@ class _ColumnarFixture:
         )
 
 
-def _minimal_alpha_factor_case() -> tuple[_ColumnarFixture, RunInput]:
-    sessions = tuple(f"s{index:02d}" for index in range(30))
+def _minimal_alpha_factor_case(
+    *,
+    session_count: int = 30,
+) -> tuple[_ColumnarFixture, RunInput]:
+    sessions = tuple(f"s{index:02d}" for index in range(session_count))
     instrument_ids = tuple(f"equity:{index:03d}.SH" for index in range(40))
     instruments = {
         instrument_id: InstrumentProfile(board="main", listed_to="")
@@ -262,6 +268,7 @@ def _alpha_factor_binding(
     run_input: RunInput,
     *,
     data_generation_id: str = "e" * 64,
+    kernel_semantic_version: str = "kernel-v4",
 ) -> AlphaFactorExecutionBinding:
     return AlphaFactorExecutionBinding.from_run_input(
         run_input,
@@ -270,8 +277,36 @@ def _alpha_factor_binding(
         semantic_versions={
             "factor": "factor-v1",
             "strategy": "strategy-v1",
-            "kernel": "kernel-v4",
+            "kernel": kernel_semantic_version,
         },
+    )
+
+
+def _strategy_input(
+    factor_input: RunInput,
+    *,
+    holdings_count: int,
+    rebalance_interval: int,
+) -> RunInput:
+    return RunInput(
+        research_data=factor_input.research_data_snapshot(),
+        alpha_expression=factor_input.alpha_expression_snapshot(),
+        field_bindings=factor_input.field_bindings_snapshot(),
+        effective_alpha_lookback=factor_input.alpha_execution_plan().effective_lookback,
+        universe=factor_input.universe,
+        neutralization=factor_input.neutralization,
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=holdings_count,
+            rebalance_interval=rebalance_interval,
+            initial_cash_cny="10000000",
+            commission_rate_all_in="0.0003",
+            commission_min_cny="5",
+            stamp_duty_sell_rate="0.0005",
+            transfer_fee_rate="0.00001",
+        ),
+        research_start_session=factor_input.research_start_session,
+        research_end_session=factor_input.research_end_session,
     )
 
 
@@ -526,6 +561,306 @@ def test_alpha_factor_outcome_hot_path_has_a_performance_regression_gate(
     )
     assert perf_counter() - started < 1.0
     assert research_continuation_serializations == 1
+
+
+def test_one_alpha_factor_outcome_produces_independent_strategy_outcomes() -> None:
+    fixture, factor_input = _minimal_alpha_factor_case()
+    binding = _alpha_factor_binding(factor_input)
+    shared = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture,
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    factor_before = shared.factor_summary_snapshot()
+    continuation_before = shared.continuation_snapshot()
+
+    concentrated = execute_strategy_chunk_from_alpha_factor_outcome(
+        run_input=_strategy_input(
+            factor_input,
+            holdings_count=3,
+            rebalance_interval=2,
+        ),
+        binding=binding,
+        alpha_factor_outcome=shared,
+        research_data=fixture,
+        final_chunk=True,
+        continuation=empty_strategy_continuation(),
+        cancellation_check=lambda: None,
+    )
+    diversified = execute_strategy_chunk_from_alpha_factor_outcome(
+        run_input=_strategy_input(
+            factor_input,
+            holdings_count=12,
+            rebalance_interval=7,
+        ),
+        binding=binding,
+        alpha_factor_outcome=shared,
+        research_data=fixture,
+        final_chunk=True,
+        continuation=empty_strategy_continuation(),
+        cancellation_check=lambda: None,
+    )
+
+    assert shared.factor_summary_snapshot() == factor_before
+    assert shared.continuation_snapshot() == continuation_before
+    assert concentrated.final_values_snapshot()["factor_summary"] == factor_before
+    assert diversified.final_values_snapshot()["factor_summary"] == factor_before
+    assert concentrated.final_values_snapshot()["strategy_summary"] != (
+        diversified.final_values_snapshot()["strategy_summary"]
+    )
+    assert concentrated.daily_observations_snapshot() != (
+        diversified.daily_observations_snapshot()
+    )
+    with pytest.raises(ValueError, match="does not match Strategy input"):
+        concentrated.require_strategy_input(
+            _strategy_input(
+                factor_input,
+                holdings_count=12,
+                rebalance_interval=7,
+            )
+        )
+
+    exposed = concentrated.final_values_snapshot()
+    exposed["factor_summary"]["horizons"] = {}
+    assert concentrated.final_values_snapshot()["factor_summary"] == factor_before
+
+
+def test_strategy_consumer_rejects_incompatible_shared_outcome_binding() -> None:
+    fixture, factor_input = _minimal_alpha_factor_case()
+    binding = _alpha_factor_binding(factor_input)
+    shared = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture,
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    strategy_input = _strategy_input(
+        factor_input,
+        holdings_count=5,
+        rebalance_interval=5,
+    )
+
+    with pytest.raises(ValueError, match="binding does not match expected contract"):
+        execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=strategy_input,
+            binding=_alpha_factor_binding(
+                factor_input,
+                data_generation_id="f" * 64,
+            ),
+            alpha_factor_outcome=shared,
+            research_data=fixture,
+            final_chunk=True,
+            continuation=empty_strategy_continuation(),
+            cancellation_check=lambda: None,
+        )
+
+    with pytest.raises(ValueError, match="binding does not match expected contract"):
+        execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=strategy_input,
+            binding=_alpha_factor_binding(
+                factor_input,
+                kernel_semantic_version="kernel-drift",
+            ),
+            alpha_factor_outcome=shared,
+            research_data=fixture,
+            final_chunk=True,
+            continuation=empty_strategy_continuation(),
+            cancellation_check=lambda: None,
+        )
+
+    with pytest.raises(
+        ArithmeticError,
+        match="Numeric Execution Contract does not match this runtime",
+    ):
+        AlphaFactorExecutionBinding.from_run_input(
+            factor_input,
+            data_generation_id="e" * 64,
+            numeric_execution_contract="numeric-drift",
+            semantic_versions={"kernel": "kernel-v4"},
+        )
+
+    changed = alpha_language.compile("-close")
+    changed_input = RunInput(
+        research_data=fixture,
+        alpha_expression=changed.expression,
+        field_bindings={
+            field_id: identifier
+            for identifier, field_id in changed.field_ids_by_identifier.items()
+        },
+        effective_alpha_lookback=changed.effective_lookback,
+        universe=factor_input.universe,
+        neutralization=factor_input.neutralization,
+        research_kind="strategy_backtest",
+        strategy=strategy_input.strategy,
+        research_start_session=fixture.sessions[0],
+        research_end_session=fixture.sessions[-1],
+    )
+    with pytest.raises(ValueError, match="binding does not match Research input"):
+        execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=changed_input,
+            binding=binding,
+            alpha_factor_outcome=shared,
+            research_data=fixture,
+            final_chunk=True,
+            continuation=empty_strategy_continuation(),
+            cancellation_check=lambda: None,
+        )
+
+    first_strategy = execute_strategy_chunk_from_alpha_factor_outcome(
+        run_input=strategy_input,
+        binding=binding,
+        alpha_factor_outcome=shared,
+        research_data=fixture,
+        final_chunk=False,
+        continuation=empty_strategy_continuation(),
+        cancellation_check=lambda: None,
+    )
+    strategy_continuation = first_strategy.continuation_snapshot()
+    with pytest.raises(
+        ValueError,
+        match="Strategy continuation does not match execution input",
+    ):
+        execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=_strategy_input(
+                factor_input,
+                holdings_count=12,
+                rebalance_interval=7,
+            ),
+            binding=binding,
+            alpha_factor_outcome=shared,
+            research_data=fixture,
+            final_chunk=True,
+            continuation=strategy_continuation,
+            cancellation_check=lambda: None,
+        )
+
+    next_binding = _alpha_factor_binding(
+        factor_input,
+        data_generation_id="f" * 64,
+    )
+    next_shared = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=next_binding,
+        research_data=fixture,
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    with pytest.raises(
+        ValueError,
+        match="Strategy continuation does not match execution input",
+    ):
+        execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=strategy_input,
+            binding=next_binding,
+            alpha_factor_outcome=next_shared,
+            research_data=fixture,
+            final_chunk=True,
+            continuation=strategy_continuation,
+            cancellation_check=lambda: None,
+        )
+
+    malformed = first_strategy.continuation_snapshot()
+    malformed["strategy_state"]["metric_state"]["last_session"] = "wrong-session"
+    with pytest.raises(ValueError, match="Strategy continuation is invalid"):
+        execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=strategy_input,
+            binding=binding,
+            alpha_factor_outcome=shared,
+            research_data=fixture,
+            final_chunk=True,
+            continuation=malformed,
+            cancellation_check=lambda: None,
+        )
+
+
+def test_repeated_strategy_consumption_has_a_shared_stage_performance_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture, factor_input = _minimal_alpha_factor_case(session_count=80)
+    binding = _alpha_factor_binding(factor_input)
+    shared = execute_alpha_factor_chunk(
+        run_input=factor_input,
+        binding=binding,
+        research_data=fixture,
+        research_sessions=fixture.sessions,
+        final_chunk=True,
+        continuation=empty_alpha_factor_continuation(),
+        cancellation_check=lambda: None,
+    )
+    original_serialize = research_chunks_module.canonical_json_bytes
+    original_strategy_serialize = strategy_module.canonical_json_bytes
+    strategy_serialization_sizes: list[int] = []
+
+    def reject_shared_recalculation(*args: object, **kwargs: object) -> object:
+        raise AssertionError("Strategy consumer recomputed the shared Alpha/Factor stage")
+
+    def reject_shared_serialization(value: object) -> bytes:
+        if isinstance(value, Mapping) and (
+            set(value)
+            == {
+                "expression",
+                "effective_lookback",
+                "neutralization",
+                "sessions",
+                "checksum",
+            }
+            or set(value) == {"horizons"}
+        ):
+            raise AssertionError("Strategy consumer serialized a shared calculation payload")
+        return original_serialize(value)
+
+    def record_strategy_serialization(value: object) -> bytes:
+        encoded = original_strategy_serialize(value)
+        strategy_serialization_sizes.append(len(encoded))
+        return encoded
+
+    monkeypatch.setattr(
+        research_chunks_module,
+        "evaluate_columnar_alpha_sessions",
+        reject_shared_recalculation,
+    )
+    monkeypatch.setattr(
+        research_chunks_module,
+        "columnar_forward_factor_days_by_horizon",
+        reject_shared_recalculation,
+    )
+    monkeypatch.setattr(
+        research_chunks_module,
+        "canonical_json_bytes",
+        reject_shared_serialization,
+    )
+    monkeypatch.setattr(
+        strategy_module,
+        "canonical_json_bytes",
+        record_strategy_serialization,
+    )
+    started = perf_counter()
+    for holdings_count, rebalance_interval in ((3, 2), (12, 7)):
+        execute_strategy_chunk_from_alpha_factor_outcome(
+            run_input=_strategy_input(
+                factor_input,
+                holdings_count=holdings_count,
+                rebalance_interval=rebalance_interval,
+            ),
+            binding=binding,
+            alpha_factor_outcome=shared,
+            research_data=fixture,
+            final_chunk=True,
+            continuation=empty_strategy_continuation(),
+            cancellation_check=lambda: None,
+        )
+    assert perf_counter() - started < 1.0
+    assert len(strategy_serialization_sizes) == 2
+    assert all(size > 10_000 for size in strategy_serialization_sizes)
 
 
 def test_chunked_composite_research_is_canonically_equal_across_real_boundaries() -> None:

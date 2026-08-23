@@ -25,8 +25,7 @@ from thesistrace.research_kernel.numeric import (
 )
 from thesistrace.research_kernel.serialization import canonical_json_bytes
 from thesistrace.research_kernel.strategy import (
-    advance_strategy_metric_state,
-    run_strategy,
+    run_strategy_with_metric_state,
     strategy_metrics_from_state,
 )
 from thesistrace.research_series import ColumnarResearchSeries
@@ -49,6 +48,12 @@ _ALPHA_FACTOR_CONTINUATION_KEYS = {
     "pending_alpha",
     "alpha_checksum",
     "factor_state",
+}
+_STRATEGY_CONTINUATION_KEYS = {
+    "alpha_factor_binding_checksum",
+    "strategy_input_checksum",
+    "strategy_state",
+    "strategy_checksum",
 }
 
 
@@ -180,6 +185,78 @@ class AlphaFactorChunkOutcome:
             raise ValueError("Alpha-and-Factor binding does not match expected contract")
 
 
+@dataclass(frozen=True, init=False)
+class StrategyChunkOutcome:
+    _continuation: dict[str, object]
+    _daily_observations: tuple[dict[str, object], ...]
+    _final_values: dict[str, object] | None
+    _phase_seconds: tuple[tuple[str, float], ...]
+    binding_checksum: str
+    strategy_input_checksum: str
+
+    @classmethod
+    def _from_validated(
+        cls,
+        *,
+        binding: AlphaFactorExecutionBinding,
+        run_input: RunInput,
+        continuation: dict[str, object],
+        daily_observations: list[dict[str, object]],
+        final_values: dict[str, object] | None,
+        phase_seconds: Mapping[str, float],
+    ) -> StrategyChunkOutcome:
+        expected_phases = {"strategy", "finalize"}
+        if set(phase_seconds) != expected_phases or any(
+            not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0
+            for value in phase_seconds.values()
+        ):
+            raise ValueError("Strategy phase timing is invalid")
+        instance = object.__new__(cls)
+        object.__setattr__(instance, "_continuation", continuation)
+        object.__setattr__(instance, "_daily_observations", tuple(daily_observations))
+        object.__setattr__(instance, "_final_values", final_values)
+        object.__setattr__(instance, "binding_checksum", binding.checksum)
+        object.__setattr__(
+            instance,
+            "strategy_input_checksum",
+            _strategy_input_checksum(run_input),
+        )
+        object.__setattr__(
+            instance,
+            "_phase_seconds",
+            tuple((name, float(phase_seconds[name])) for name in sorted(expected_phases)),
+        )
+        return instance
+
+    def continuation_snapshot(self) -> dict[str, object]:
+        return deepcopy(self._continuation)
+
+    def daily_observations_snapshot(self) -> list[dict[str, object]]:
+        return deepcopy(list(self._daily_observations))
+
+    def final_values_snapshot(self) -> dict[str, object] | None:
+        return deepcopy(self._final_values)
+
+    @property
+    def phase_seconds(self) -> dict[str, float]:
+        return dict(self._phase_seconds)
+
+    def require_strategy_input(self, run_input: RunInput) -> None:
+        if self.strategy_input_checksum != _strategy_input_checksum(run_input):
+            raise ValueError("Strategy outcome does not match Strategy input")
+
+    def _continuation_for_current_process(self) -> dict[str, object]:
+        return self._continuation
+
+    def _daily_observations_for_current_process(self) -> tuple[dict[str, object], ...]:
+        return self._daily_observations
+
+    def _final_values_for_current_process(self) -> dict[str, object] | None:
+        return self._final_values
+
+
 @dataclass(frozen=True)
 class ResearchChunkCalculation:
     continuation: dict[str, object]
@@ -199,6 +276,15 @@ def empty_alpha_factor_continuation() -> dict[str, object]:
     }
 
 
+def empty_strategy_continuation() -> dict[str, object]:
+    return {
+        "alpha_factor_binding_checksum": None,
+        "strategy_input_checksum": None,
+        "strategy_state": None,
+        "strategy_checksum": None,
+    }
+
+
 def empty_research_continuation(
     research_kind: str,
 ) -> dict[str, object]:
@@ -210,12 +296,7 @@ def empty_research_continuation(
         **empty_alpha_factor_continuation(),
     }
     if research_kind == "strategy_backtest":
-        continuation.update(
-            {
-                "strategy_state": None,
-                "strategy_checksum": None,
-            }
-        )
+        continuation.update(empty_strategy_continuation())
     return continuation
 
 
@@ -257,8 +338,6 @@ def execute_research_chunk(
         cancellation_check=cancellation_check,
     )
     state.update(alpha_factor._continuation_for_current_process())
-    matrix = alpha_factor._alpha_matrix_for_current_process()
-    completed_count = alpha_factor.completed_research_session_count
     alpha_and_pending_seconds = alpha_factor.phase_seconds["alpha_and_pending"]
     factor_seconds = alpha_factor.phase_seconds["factor"]
     factor_finalize_seconds = alpha_factor.phase_seconds["finalize"]
@@ -280,11 +359,84 @@ def execute_research_chunk(
             },
         )
 
-    strategy_settings = run_input.strategy
-    if strategy_settings is None:
+    strategy_outcome = _execute_strategy_chunk_from_validated_alpha_factor(
+        run_input=run_input,
+        binding=binding,
+        alpha_factor_outcome=alpha_factor,
+        research_data=research_data,
+        final_chunk=final_chunk,
+        continuation={name: state[name] for name in _STRATEGY_CONTINUATION_KEYS},
+        cancellation_check=cancellation_check,
+    )
+    state.update(strategy_outcome._continuation_for_current_process())
+    return ResearchChunkCalculation(
+        continuation=state,
+        strategy_daily_observations=(
+            strategy_outcome._daily_observations_for_current_process()
+        ),
+        final_values=strategy_outcome._final_values_for_current_process(),
+        phase_seconds={
+            "alpha_and_pending": alpha_and_pending_seconds,
+            "factor": factor_seconds,
+            "strategy": strategy_outcome.phase_seconds["strategy"],
+            "finalize": (
+                factor_finalize_seconds + strategy_outcome.phase_seconds["finalize"]
+            ),
+        },
+    )
+
+
+def execute_strategy_chunk_from_alpha_factor_outcome(
+    *,
+    run_input: RunInput,
+    binding: AlphaFactorExecutionBinding,
+    alpha_factor_outcome: AlphaFactorChunkOutcome,
+    research_data: ColumnarResearchSeries,
+    final_chunk: bool,
+    continuation: Mapping[str, object],
+    cancellation_check: Callable[[], None],
+) -> StrategyChunkOutcome:
+    state = validated_strategy_continuation(continuation)
+    if run_input.research_kind != "strategy_backtest" or run_input.strategy is None:
         raise ValueError("Strategy Backtest input is incomplete")
+    binding.require_run_input(run_input)
+    alpha_factor_outcome.require_binding(binding)
+    return _execute_strategy_chunk_from_validated_alpha_factor(
+        run_input=run_input,
+        binding=binding,
+        alpha_factor_outcome=alpha_factor_outcome,
+        research_data=research_data,
+        final_chunk=final_chunk,
+        continuation=state,
+        cancellation_check=cancellation_check,
+    )
+
+
+def _execute_strategy_chunk_from_validated_alpha_factor(
+    *,
+    run_input: RunInput,
+    binding: AlphaFactorExecutionBinding,
+    alpha_factor_outcome: AlphaFactorChunkOutcome,
+    research_data: ColumnarResearchSeries,
+    final_chunk: bool,
+    continuation: dict[str, object],
+    cancellation_check: Callable[[], None],
+) -> StrategyChunkOutcome:
+    strategy_settings = run_input.strategy
+    assert strategy_settings is not None
+    expected_strategy_input_checksum = _strategy_input_checksum(run_input)
+    prior_binding_checksum = continuation["alpha_factor_binding_checksum"]
+    prior_strategy_input_checksum = continuation["strategy_input_checksum"]
+    if prior_binding_checksum is None and prior_strategy_input_checksum is None:
+        continuation["alpha_factor_binding_checksum"] = binding.checksum
+        continuation["strategy_input_checksum"] = expected_strategy_input_checksum
+    elif (
+        prior_binding_checksum != binding.checksum
+        or prior_strategy_input_checksum != expected_strategy_input_checksum
+    ):
+        raise ValueError("Strategy continuation does not match execution input")
     strategy_started = monotonic()
-    prior_strategy = state.get("strategy_state")
+    prior_strategy = continuation.get("strategy_state")
     prior_cost = Decimal(0)
     prior_daily_count = 0
     if prior_strategy is not None:
@@ -296,9 +448,9 @@ def execute_research_chunk(
         prior_daily_count = 1
     else:
         strategy_continuation = None
-    strategy = run_strategy(
+    strategy = run_strategy_with_metric_state(
         research_data,
-        matrix,
+        alpha_factor_outcome._alpha_matrix_for_current_process(),
         calculation_definition(run_input),
         origin_session=str(run_input.research_start_session),
         terminal_cutoff=final_chunk,
@@ -313,29 +465,20 @@ def execute_research_chunk(
         prior_cumulative_cost=prior_cost,
     )
     for observation in observations:
-        state["strategy_checksum"] = _advance_checksum(
-            state.get("strategy_checksum"), observation
+        continuation["strategy_checksum"] = _advance_checksum(
+            continuation.get("strategy_checksum"), observation
         )
     metric_state = strategy.get("metric_state")
     if not isinstance(metric_state, Mapping):
-        turnover = _mapping(
-            _mapping(strategy["metrics"], "Strategy metrics")["turnover"],
-            "Strategy turnover",
-        )
-        metric_state = advance_strategy_metric_state(
-            None,
-            daily=new_daily,
-            turnover_events=[dict(value) for value in turnover["events"]],
-            cumulative_cost=Decimal(str(strategy["daily"][-1]["cumulative_transaction_cost"])),
-            rejections=new_rejections,
-        )
+        raise ValueError("Strategy calculation metric state is invalid")
     metric_state = dict(metric_state)
     metric_state["cumulative_cost"] = str(
         Decimal(str(metric_state["cumulative_cost"])).normalize()
     )
     strategy_seconds = monotonic() - strategy_started
     finalize_started = monotonic()
-    state["strategy_state"] = {
+    completed_count = alpha_factor_outcome.completed_research_session_count
+    continuation["strategy_state"] = {
         "daily": [dict(strategy["daily"][-1])],
         "positions": [dict(value) for value in strategy["positions"]],
         "orders": [],
@@ -361,15 +504,19 @@ def execute_research_chunk(
             if isinstance(metric, dict):
                 metric.pop(history_name, None)
         terminal = dict(strategy["daily"][-1])
-        factor_summary = alpha_factor._factor_summary_for_current_process()
+        factor_summary = alpha_factor_outcome._factor_summary_for_current_process()
         if factor_summary is None:
             raise ValueError("Final Alpha-and-Factor outcome is incomplete")
         final_values = {
             "factor_summary": factor_summary,
             "strategy_summary": {
-                "alpha_checksum": str(state["alpha_checksum"]),
+                "alpha_checksum": str(
+                    alpha_factor_outcome._continuation_for_current_process()[
+                        "alpha_checksum"
+                    ]
+                ),
                 "initial_cash_cny": str(strategy["initial_cash_cny"]),
-                "source_checksum": str(state["strategy_checksum"]),
+                "source_checksum": str(continuation["strategy_checksum"]),
                 "benchmark": {
                     "universe": run_input.universe,
                     "methodology": "selected_universe_equal_weight",
@@ -403,15 +550,15 @@ def execute_research_chunk(
                 "metric_state": metric_state,
             },
         }
-    return ResearchChunkCalculation(
-        continuation=state,
-        strategy_daily_observations=tuple(observations),
+    return StrategyChunkOutcome._from_validated(
+        binding=binding,
+        run_input=run_input,
+        continuation=continuation,
+        daily_observations=observations,
         final_values=final_values,
         phase_seconds={
-            "alpha_and_pending": alpha_and_pending_seconds,
-            "factor": factor_seconds,
             "strategy": strategy_seconds,
-            "finalize": factor_finalize_seconds + monotonic() - finalize_started,
+            "finalize": monotonic() - finalize_started,
         },
     )
 
@@ -913,7 +1060,7 @@ def validated_research_continuation(
         "factor_state",
     }
     expected_keys = (
-        common_keys | {"strategy_state", "strategy_checksum"}
+        common_keys | _STRATEGY_CONTINUATION_KEYS
         if research_kind == "strategy_backtest"
         else common_keys
     )
@@ -929,6 +1076,11 @@ def validated_research_continuation(
         {name: copied[name] for name in _ALPHA_FACTOR_CONTINUATION_KEYS}
     )
     copied.update(common)
+    if research_kind == "strategy_backtest":
+        strategy = _validated_strategy_continuation_mapping(
+            {name: copied[name] for name in _STRATEGY_CONTINUATION_KEYS}
+        )
+        copied.update(strategy)
     return copied
 
 
@@ -943,6 +1095,128 @@ def validated_alpha_factor_continuation(
         return _validated_alpha_factor_continuation_mapping(copied)
     except (TypeError, ValueError):
         raise ValueError("Alpha-and-Factor continuation is invalid") from None
+
+
+def validated_strategy_continuation(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    try:
+        copied = _json_mapping(
+            canonical_json_bytes(value),
+            "Strategy continuation",
+        )
+        return _validated_strategy_continuation_mapping(copied)
+    except (TypeError, ValueError):
+        raise ValueError("Strategy continuation is invalid") from None
+
+
+def _validated_strategy_continuation_mapping(
+    copied: dict[str, object],
+) -> dict[str, object]:
+    if set(copied) != _STRATEGY_CONTINUATION_KEYS:
+        raise ValueError("Strategy continuation is invalid")
+    state = copied.get("strategy_state")
+    checksum = copied.get("strategy_checksum")
+    binding_checksum = copied.get("alpha_factor_binding_checksum")
+    strategy_input_checksum = copied.get("strategy_input_checksum")
+    if (
+        (state is not None and not isinstance(state, dict))
+        or (checksum is not None and not _is_sha256(checksum))
+        or (binding_checksum is not None and not _is_sha256(binding_checksum))
+        or (strategy_input_checksum is not None and not _is_sha256(strategy_input_checksum))
+        or ((state is None) != (checksum is None))
+        or ((binding_checksum is None) != (strategy_input_checksum is None))
+        or ((state is None) != (binding_checksum is None))
+    ):
+        raise ValueError("Strategy continuation is invalid")
+    if state is not None:
+        copied["strategy_state"] = _validated_bounded_strategy_state(state)
+    return copied
+
+
+def _validated_bounded_strategy_state(state: dict[str, object]) -> dict[str, object]:
+    expected_keys = {
+        "daily",
+        "positions",
+        "orders",
+        "child_orders",
+        "fills",
+        "rebalance_events",
+        "rejections",
+        "diagnostics",
+        "report_session_count",
+        "metric_state",
+    }
+    daily = state.get("daily")
+    positions = state.get("positions")
+    report_session_count = state.get("report_session_count")
+    metric_state = state.get("metric_state")
+    if (
+        set(state) != expected_keys
+        or not isinstance(daily, list)
+        or len(daily) != 1
+        or not isinstance(daily[0], dict)
+        or not isinstance(positions, list)
+        or any(not isinstance(position, dict) for position in positions)
+        or isinstance(report_session_count, bool)
+        or not isinstance(report_session_count, int)
+        or report_session_count < 1
+        or not isinstance(metric_state, dict)
+        or any(state[name] != [] for name in (
+            "orders",
+            "child_orders",
+            "fills",
+            "rebalance_events",
+            "rejections",
+            "diagnostics",
+        ))
+    ):
+        raise ValueError("Strategy continuation is invalid")
+    last_daily = daily[0]
+    required_daily = {
+        "session",
+        "gross_nav",
+        "net_nav",
+        "gross_cash",
+        "net_cash",
+        "benchmark_nav",
+        "cumulative_transaction_cost",
+    }
+    if not required_daily <= set(last_daily) or not isinstance(
+        last_daily["session"], str
+    ):
+        raise ValueError("Strategy continuation is invalid")
+    try:
+        for name in required_daily - {"session"}:
+            if not Decimal(str(last_daily[name])).is_finite():
+                raise ValueError("Strategy continuation is invalid")
+        for position in positions:
+            if set(position) != {
+                "instrument_id",
+                "execution_shares",
+                "adjusted_units",
+                "last_adjusted_price",
+            }:
+                raise ValueError("Strategy continuation is invalid")
+            if (
+                not isinstance(position["instrument_id"], str)
+                or isinstance(position["execution_shares"], bool)
+                or not isinstance(position["execution_shares"], int)
+                or position["execution_shares"] < 0
+                or not Decimal(str(position["adjusted_units"])).is_finite()
+                or not Decimal(str(position["last_adjusted_price"])).is_finite()
+            ):
+                raise ValueError("Strategy continuation is invalid")
+        if (
+            metric_state.get("contract") != "strategy-metric-state-v1"
+            or metric_state.get("session_count") != report_session_count
+            or metric_state.get("last_session") != last_daily["session"]
+        ):
+            raise ValueError("Strategy continuation is invalid")
+        canonical_json_bytes(strategy_metrics_from_state(dict(metric_state)))
+    except (ArithmeticError, KeyError, TypeError, ValueError):
+        raise ValueError("Strategy continuation is invalid") from None
+    return state
 
 
 def _validated_alpha_factor_continuation_mapping(
@@ -1076,6 +1350,11 @@ def _is_sha256(value: object) -> bool:
         and len(value) == 64
         and all(character in "0123456789abcdef" for character in value)
     )
+
+
+def _strategy_input_checksum(run_input: RunInput) -> str:
+    encoded = canonical_json_bytes(run_input.strategy_contract_snapshot())
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _json_mapping(value: bytes, name: str) -> dict[str, object]:
