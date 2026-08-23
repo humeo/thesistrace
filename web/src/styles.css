@@ -736,11 +736,11 @@ select { color-scheme: dark; }
 .research-number-stepper button:last-child { border-left: 1px solid var(--line); }
 .research-number-stepper button:hover:not(:disabled) { color: var(--ink); background: var(--surface-2); }
 .research-number-stepper button:active:not(:disabled) { transform: none; }
-.run-configuration-grid input, .run-configuration-grid select, .run-configuration-grid textarea { height: 40px; min-height: 40px; line-height: 1.4; }
+.run-configuration-grid input, .run-configuration-grid select { height: 40px; min-height: 40px; line-height: 1.4; }
 .run-configuration-grid .research-number-stepper input { height: 44px; min-height: 44px; }
 .research-date-control input { padding-right: 44px; cursor: pointer; }
 .research-notes { display: grid; grid-column: span 10; gap: 7px; min-width: 0; }
-.research-notes textarea { overflow-y: hidden; resize: none; }
+.research-notes textarea { min-height: 80px; line-height: 1.4; overflow-y: auto; }
 .research-run-settings footer { display: flex; grid-column: span 2; align-self: end; }
 .research-run-settings footer .button-primary { width: 100%; min-width: 0; min-height: 40px; }
 

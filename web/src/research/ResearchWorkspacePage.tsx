@@ -616,6 +616,7 @@ export function ResearchDraftWorkspace({
                 id="research-notes"
                 onChange={(event) => updateDraft((current) => ({ ...current, hypothesis: event.target.value }))}
                 placeholder="Optional context for this research"
+                rows={3}
                 value={draft.hypothesis}
               />
             </div>

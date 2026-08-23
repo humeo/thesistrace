@@ -1,6 +1,23 @@
 import { expect, test, type Page, type Route, type TestInfo } from "@playwright/test";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 
+test("Notes keeps multiline research context visible", async ({ page }) => {
+  await page.setViewportSize({ width: 956, height: 958 });
+  await page.goto("/research");
+
+  const notes = page.getByLabel("Notes");
+  await notes.fill(
+    "Long turnover-amount leaders in Top 300; 20 holdings, rebalance every 5 sessions.",
+  );
+  const layout = await notes.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+
+  expect(layout.clientHeight).toBeGreaterThanOrEqual(72);
+  expect(layout.scrollHeight).toBeLessThanOrEqual(layout.clientHeight);
+});
+
 test("Default Folder retains one local Research Draft with authoritative Formula diagnostics", async ({ page }, testInfo) => {
   test.setTimeout(90_000);
   const responses: string[] = [];
