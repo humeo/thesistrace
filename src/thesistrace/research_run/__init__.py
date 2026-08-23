@@ -1,3 +1,7 @@
+from thesistrace.research_run.diagnostics import (
+    ResearchRunDiagnosticNotFound,
+    ResearchRunDiagnostics,
+)
 from thesistrace.research_run.models import (
     FactorEvaluationResearchRunKeyMetrics,
     ImmutableRunInput,
@@ -39,6 +43,8 @@ __all__ = [
     "ResearchRunAdmissionRejection",
     "ResearchRunCancelCommand",
     "ResearchRunCancelConflict",
+    "ResearchRunDiagnosticNotFound",
+    "ResearchRunDiagnostics",
     "ResearchRunDeleteConflict",
     "ResearchRunDetail",
     "ResearchRunKeyMetrics",

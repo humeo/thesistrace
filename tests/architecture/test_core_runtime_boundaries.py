@@ -196,10 +196,22 @@ def test_default_backend_commands_resolve_only_to_canonical_entrypoints() -> Non
 
     assert scripts == {
         "thesistrace-core-api": "thesistrace.entrypoints.http:main",
+        "thesistrace-core-diagnose": "thesistrace.entrypoints.diagnose:main",
         "thesistrace-core-worker": "thesistrace.entrypoints.worker:main",
         "thesistrace-initialize": "thesistrace.entrypoints.initialize:main",
         "thesistrace-data-operator": "thesistrace.entrypoints.data_operator:main",
     }
+
+
+def test_research_run_diagnostic_entrypoint_is_postgresql_only() -> None:
+    source = (ROOT / "src/thesistrace/entrypoints/diagnose.py").read_text()
+
+    assert "PostgresDatabase" in source
+    assert "open_core_runtime" not in source
+    assert "Publication" not in source
+    assert "DatasetLifecycle" not in source
+    assert "MountedGenerationStore" not in source
+    assert "boto" not in source
 
 
 def test_long_running_runtime_verifies_but_does_not_initialize_schema() -> None:
@@ -614,6 +626,9 @@ def test_start_tracking_receipts_are_owned_only_by_research_runs() -> None:
 
 def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     run_source = (ROOT / "src" / "thesistrace" / "research_run" / "service.py").read_text()
+    failure_policy_source = (
+        ROOT / "src" / "thesistrace" / "research_run" / "failure_policy.py"
+    ).read_text()
     run_schema = (ROOT / "src" / "thesistrace" / "research_run" / "schema.sql").read_text()
     worker_source = (ROOT / "src" / "thesistrace" / "entrypoints" / "worker.py").read_text()
 
@@ -624,7 +639,8 @@ def test_research_run_processor_owns_claims_and_uses_module_seams() -> None:
     assert "lease_expires_at <= now()" in run_source
     assert "def _maintain_claim(" in run_source
     assert "def _heartbeat_claim(" in run_source
-    assert "MAX_RESEARCH_RUN_ATTEMPTS = 3" in run_source
+    assert "MAX_RESEARCH_RUN_ATTEMPTS = 3" in failure_policy_source
+    assert "attempt_retry_eligible" in run_source
     assert "def _failure_policy(" in run_source
     assert "PublicationUnavailableError" in run_source
     assert "failure_reason text" in run_schema

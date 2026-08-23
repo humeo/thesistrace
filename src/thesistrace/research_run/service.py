@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 import math
-import re
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
 from collections.abc import Callable, Iterator, Mapping
@@ -65,6 +64,11 @@ from thesistrace.research_run.execution import (
     SupervisedResearchExecution,
     SupervisedResearchExecutor,
 )
+from thesistrace.research_run.failure_policy import (
+    RETRYABLE_ATTEMPT_FAILURES,
+    attempt_failure_code,
+    attempt_retry_eligible,
+)
 from thesistrace.research_run.models import (
     AlphaAdmissionFacts,
     DataAdmissionFacts,
@@ -105,7 +109,6 @@ from thesistrace.research_run.result import (
 logger = logging.getLogger(__name__)
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
-MAX_RESEARCH_RUN_ATTEMPTS = 3
 INFRASTRUCTURE_FAILURE = "InfrastructureUnavailable"
 RESOURCE_EXHAUSTED_FAILURE = "ResourceExhausted"
 WORKER_LOST_FAILURE = "WorkerLost"
@@ -123,10 +126,6 @@ INSUFFICIENT_WARMUP_PUBLIC_REASON = (
     "Selected data does not contain the complete Calculation Warm-up."
 )
 SELECTED_DATA_INVALID_PUBLIC_REASON = "Current data cannot execute the requested Research Period."
-RETRYABLE_FAILURES = (
-    INFRASTRUCTURE_FAILURE,
-    WORKER_LOST_FAILURE,
-)
 Progress = Callable[[str, str], None]
 CompileFormula = Callable[[str], CompiledAlpha]
 CurrentDataset = Callable[[], DatasetAdmissionSnapshot | None]
@@ -228,8 +227,6 @@ class _ExecutionClaim:
 class _FailurePolicy:
     attempt_reason: str
     public_reason: str
-    max_attempts: int
-    retryable: bool
 
 
 @dataclass(frozen=True)
@@ -457,7 +454,8 @@ class ResearchRunService:
                     attempt_id=recovery.attempt_id,
                     attempt_number=recovery.attempt_number,
                     status="failed",
-                    failure_code=_failure_code(WORKER_LOST_FAILURE),
+                    failure_code=attempt_failure_code(WORKER_LOST_FAILURE)
+                    or "UNCLASSIFIED_FAILURE",
                 )
             )
             emit(
@@ -468,7 +466,8 @@ class ResearchRunService:
                     attempt_id=recovery.attempt_id,
                     attempt_number=recovery.attempt_number,
                     status="running" if recovery.retry else "failed",
-                    failure_code=_failure_code(WORKER_LOST_FAILURE),
+                    failure_code=attempt_failure_code(WORKER_LOST_FAILURE)
+                    or "UNCLASSIFIED_FAILURE",
                 )
             )
         claim = claim_result.claim
@@ -1351,7 +1350,7 @@ class ResearchRunService:
                 FOR UPDATE OF run SKIP LOCKED
                 LIMIT 1
                 """,
-                (list(RETRYABLE_FAILURES),),
+                (list(RETRYABLE_ATTEMPT_FAILURES),),
             ).fetchone()
             if row is None:
                 return _ClaimResult(claim=None)
@@ -1377,7 +1376,7 @@ class ResearchRunService:
                     owner_id=str(row["latest_attempt_id"]),
                 )
                 attempt_number = int(row["latest_attempt_ordinal"])
-                retry = attempt_number < MAX_RESEARCH_RUN_ATTEMPTS
+                retry = attempt_retry_eligible(WORKER_LOST_FAILURE, attempt_number)
                 worker_loss = _WorkerLossRecovery(
                     run_id=run_id,
                     attempt_id=str(row["latest_attempt_id"]),
@@ -2255,7 +2254,7 @@ class ResearchRunService:
             if attempt is None or attempt["status"] != "running":
                 return None
             attempt_number = int(attempt["attempt_count"])
-            retry = policy.retryable and attempt_number < policy.max_attempts
+            retry = attempt_retry_eligible(policy.attempt_reason, attempt_number)
             failed_attempt = transaction.execute(
                 """
                 UPDATE research_runs.attempts
@@ -2304,7 +2303,8 @@ class ResearchRunService:
         return _RecordedFailure(
             retry=retry,
             attempt_number=attempt_number,
-            failure_code=_failure_code(policy.attempt_reason),
+            failure_code=attempt_failure_code(policy.attempt_reason)
+            or "UNCLASSIFIED_FAILURE",
         )
 
     def _release_execution_checkpoints(
@@ -2638,24 +2638,16 @@ def _chunk_completes_phase(
     return next_phase != chunk["phase"]
 
 
-def _failure_code(attempt_reason: str) -> str:
-    return re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", attempt_reason).upper()
-
-
 def _failure_policy(error: Exception) -> _FailurePolicy:
     if isinstance(error, ResearchRunInsufficientWarmup):
         return _FailurePolicy(
             attempt_reason="InsufficientCalculationWarmup",
             public_reason=INSUFFICIENT_WARMUP_PUBLIC_REASON,
-            max_attempts=1,
-            retryable=False,
         )
     if isinstance(error, ResearchRunInputInvalid):
         return _FailurePolicy(
             attempt_reason="SelectedDataInvalid",
             public_reason=SELECTED_DATA_INVALID_PUBLIC_REASON,
-            max_attempts=1,
-            retryable=False,
         )
     if isinstance(
         error,
@@ -2664,15 +2656,11 @@ def _failure_policy(error: Exception) -> _FailurePolicy:
         return _FailurePolicy(
             attempt_reason=RESOURCE_EXHAUSTED_FAILURE,
             public_reason=RESOURCE_EXHAUSTED_PUBLIC_REASON,
-            max_attempts=1,
-            retryable=False,
         )
     if isinstance(error, PublicationUnavailableError):
         return _FailurePolicy(
             attempt_reason=INFRASTRUCTURE_FAILURE,
             public_reason=INFRASTRUCTURE_PUBLIC_REASON,
-            max_attempts=MAX_RESEARCH_RUN_ATTEMPTS,
-            retryable=True,
         )
     if isinstance(
         error,
@@ -2681,15 +2669,11 @@ def _failure_policy(error: Exception) -> _FailurePolicy:
         return _FailurePolicy(
             attempt_reason=CHECKPOINT_INTEGRITY_FAILURE,
             public_reason=CHECKPOINT_INTEGRITY_PUBLIC_REASON,
-            max_attempts=1,
-            retryable=False,
         )
     if isinstance(error, (ResearchRunContractMismatch, NumericContractError)):
         return _FailurePolicy(
             attempt_reason=CONTRACT_MISMATCH_FAILURE,
             public_reason=CONTRACT_MISMATCH_PUBLIC_REASON,
-            max_attempts=1,
-            retryable=False,
         )
     if isinstance(
         error,
@@ -2698,8 +2682,6 @@ def _failure_policy(error: Exception) -> _FailurePolicy:
         return _FailurePolicy(
             attempt_reason=CALCULATION_FAILURE,
             public_reason=CALCULATION_PUBLIC_REASON,
-            max_attempts=1,
-            retryable=False,
         )
     if isinstance(
         error,
@@ -2713,14 +2695,10 @@ def _failure_policy(error: Exception) -> _FailurePolicy:
         return _FailurePolicy(
             attempt_reason=INFRASTRUCTURE_FAILURE,
             public_reason=INFRASTRUCTURE_PUBLIC_REASON,
-            max_attempts=MAX_RESEARCH_RUN_ATTEMPTS,
-            retryable=True,
         )
     return _FailurePolicy(
         attempt_reason="PermanentExecutionFailure",
         public_reason=PERMANENT_FAILURE_PUBLIC_REASON,
-        max_attempts=1,
-        retryable=False,
     )
 
 
