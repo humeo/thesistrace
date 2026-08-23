@@ -149,6 +149,13 @@ def lock_publication_mutation(transaction: PostgresTransaction) -> None:
     )
 
 
+def s3_storage_is_available(s3: BaseClient) -> bool:
+    try:
+        return s3.list_buckets()["ResponseMetadata"]["HTTPStatusCode"] == 200
+    except (ClientError, *TRANSIENT_S3_ERRORS):
+        return False
+
+
 class Publication:
     def __init__(
         self,
@@ -165,10 +172,7 @@ class Publication:
         self._bucket_ready = False
 
     def storage_is_available(self) -> bool:
-        try:
-            return self._s3.list_buckets()["ResponseMetadata"]["HTTPStatusCode"] == 200
-        except ClientError:
-            return False
+        return s3_storage_is_available(self._s3)
 
     def prepare(
         self,

@@ -15,6 +15,7 @@ if TYPE_CHECKING:
         VerifiedBundle,
         VerifiedPayload,
         lock_publication_mutation,
+        s3_storage_is_available,
     )
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "StagedPayload",
     "VerifiedBundle",
     "VerifiedPayload",
+    "s3_storage_is_available",
 ]
 
 

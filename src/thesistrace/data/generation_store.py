@@ -136,6 +136,17 @@ class MountedGenerationStore:
     def root(self) -> Path:
         return self._root
 
+    def storage_is_available(self) -> bool:
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
+            return True
+        except OSError:
+            return False
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
     def materialize(
         self,
         canonical: Mapping[str, object],

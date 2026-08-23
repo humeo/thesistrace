@@ -30,11 +30,29 @@ class PostgresDatabase:
             kwargs={"row_factory": dict_row},
         )
 
-    def open(self) -> None:
-        self._pool.open(wait=True, timeout=10)
+    def open(self, *, timeout_seconds: float = 10) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("PostgreSQL open timeout must be positive")
+        self._pool.open(wait=True, timeout=timeout_seconds)
 
     def close(self) -> None:
         self._pool.close()
+
+    def storage_is_available(self, *, timeout_seconds: float = 1.0) -> bool:
+        if timeout_seconds <= 0:
+            raise ValueError("PostgreSQL readiness timeout must be positive")
+        statement_timeout_ms = max(1, int(timeout_seconds * 1000))
+        try:
+            with self._pool.connection(timeout=timeout_seconds) as connection:
+                with connection.transaction():
+                    connection.execute(
+                        "SELECT set_config('statement_timeout', %s, true)",
+                        (str(statement_timeout_ms),),
+                    )
+                    row = connection.execute("SELECT 1 AS ready").fetchone()
+            return row == {"ready": 1}
+        except Exception:
+            return False
 
     @contextmanager
     def session_advisory_lock(self, name: str) -> Iterator[None]:

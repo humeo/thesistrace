@@ -146,6 +146,18 @@ def create_app(
     def liveness() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/health/ready", include_in_schema=False)
+    def readiness(request: Request) -> JSONResponse:
+        snapshot = _runtime(request).readiness.snapshot()
+        return JSONResponse(
+            status_code=(
+                status.HTTP_200_OK
+                if snapshot["status"] == "ready"
+                else status.HTTP_503_SERVICE_UNAVAILABLE
+            ),
+            content=snapshot,
+        )
+
     @app.get("/api/data", response_model=DataOverview)
     def data_overview(request: Request) -> DataOverview:
         return _runtime(request).data_overview.overview()

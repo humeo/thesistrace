@@ -6,6 +6,7 @@ import sys
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from io import StringIO
+from types import SimpleNamespace
 from uuid import UUID
 
 from fastapi import Body, FastAPI, HTTPException
@@ -280,10 +281,11 @@ def test_http_expected_client_errors_emit_completion_without_stack() -> None:
 def test_http_health_requests_emit_no_operational_event() -> None:
     output = StringIO()
     app = _test_app(output, request_ids=[], ticks=[])
-
-    @app.get("/health/ready")
-    def readiness_probe() -> dict[str, str]:
-        return {"status": "ready"}
+    app.state.core_runtime = SimpleNamespace(
+        readiness=SimpleNamespace(
+            snapshot=lambda: {"status": "ready", "dependencies": {}}
+        )
+    )
 
     client = TestClient(app)
 

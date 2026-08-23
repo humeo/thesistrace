@@ -21,6 +21,7 @@ from thesistrace.data import (
     DatasetOverviewService,
     MountedGenerationStore,
 )
+from thesistrace.entrypoints.readiness import CoreReadiness
 from thesistrace.entrypoints.schema import verify_core_schema
 from thesistrace.operational_events import emit_operational_event_data
 from thesistrace.publication import Publication
@@ -128,6 +129,7 @@ class CoreRuntime:
     daily_tracks: DailyTrackService
     daily_track_sessions: SessionCoordinateRepository
     publication: Publication
+    readiness: CoreReadiness
 
 
 @contextmanager
@@ -195,6 +197,15 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             daily_tracks=daily_tracks,
             daily_track_sessions=SessionCoordinateRepository(database),
             publication=publication,
+            readiness=CoreReadiness(
+                database_url=settings.database_url,
+                s3_endpoint_url=settings.s3_endpoint_url,
+                s3_access_key_id=settings.s3_access_key_id,
+                s3_secret_access_key=settings.s3_secret_access_key,
+                s3_bucket=settings.s3_bucket,
+                s3_region=settings.s3_region,
+                data_mount=settings.data_mount,
+            ),
         )
     finally:
         database.close()
