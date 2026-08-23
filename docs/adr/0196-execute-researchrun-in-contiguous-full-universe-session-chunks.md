@@ -11,7 +11,7 @@ frozen with the execution plan so every infrastructure Attempt for the Run uses
 the same boundaries.
 
 Each session inside a chunk contains the complete eligible selected Universe.
-Cross-sectional operators such as `cs_rank` therefore execute against one
+Cross-sectional operators such as `rank` therefore execute against one
 complete session cross-section and cannot use an instrument shard as a semantic
 or checkpoint boundary. An implementation may parallelize work inside that
 boundary only when the published numeric semantics remain exact.

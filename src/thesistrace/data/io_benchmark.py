@@ -20,7 +20,7 @@ EXACT_IO_BUDGET_METRICS = (
     "raw_financial_batch_opens",
     "rows_scanned",
 )
-LONG_RESEARCH_FORMULA = "cs_rank(pct_change(close, 20))"
+LONG_RESEARCH_FORMULA = "rank(pct_change(close, 20))"
 LONG_RESEARCH_START_DATE = "2010-01-04"
 LONG_RESEARCH_END_DATE = "2026-08-13"
 LONG_RESEARCH_UNIVERSE = "top3000"

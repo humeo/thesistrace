@@ -110,6 +110,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.keyboard.type("ts_mean(close, 2)");
     await validDiagnosis;
     await expect(editor).toHaveText("ts_mean(close, 2)");
+    await expect(page.locator(".cm-alpha-field").first()).toHaveCSS("color", "rgb(139, 213, 202)");
     await expect(page.getByRole("list", { name: "Formula diagnostics" })).toHaveCount(0);
     await page.getByLabel("Notes").fill("Short rolling mean retains signal.");
     await page.getByLabel("Research start date").fill("2026-08-03");
@@ -241,7 +242,7 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     await page.goto("/research?new");
     await fillCompleteDraft(page, {
       name: "Composite financial browser run",
-      formula: "cs_rank(close) + cs_rank(total_revenue_latest_fy)",
+      formula: "rank(close) + rank(total_revenue_latest_fy)",
     });
     let captureRun: ((value: { id: string; status: number }) => void) | undefined;
     const runCapture = new Promise<{ id: string; status: number }>((resolve) => {

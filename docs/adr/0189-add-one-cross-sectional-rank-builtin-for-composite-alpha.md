@@ -4,13 +4,13 @@ status: accepted
 
 # Add one cross-sectional rank Builtin for Composite Alpha
 
-The initial executable financial slice adds `cs_rank(x)` as one stable Alpha
+The initial executable financial slice adds `rank(x)` as one stable Alpha
 Builtin with signature `Numeric Series -> Numeric Series`. For each Research
 Session it considers only finite child values inside the ResearchRun's selected
 Liquidity Universe, assigns ties their average ordinal rank, maps ranks linearly
 to the inclusive range 0 through 1, and returns 0.5 when exactly one value is
 valid. Missing Alpha Values remain missing and are excluded from the rank
-denominator. `cs_rank` preserves its child's Effective Alpha Lookback; lower-is-
+denominator. `rank` preserves its child's Effective Alpha Lookback; lower-is-
 better inputs must be negated explicitly, and configured Industry
 Neutralization remains a post-expression step.
 

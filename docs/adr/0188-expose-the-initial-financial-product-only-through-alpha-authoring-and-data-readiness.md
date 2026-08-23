@@ -7,7 +7,7 @@ status: accepted
 The initial financial user surface adds the six accepted Session-Aligned
 Financial Fields to the Alpha Authoring Catalog and adds Financial Coverage and
 Financial Research Readiness to Data Overview. The same catalog exposes
-`cs_rank` for explicit Composite Alpha Formulae; there is no separate
+`rank` for explicit Composite Alpha Formulae; there is no separate
 multi-factor editor. It does not add a company
 financial-statement explorer, Raw Financial Batch viewer, arbitrary Canonical
 field query, or second financial authoring interface. Complete Tushare statement

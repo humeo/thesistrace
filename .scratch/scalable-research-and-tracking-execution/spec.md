@@ -484,7 +484,7 @@ is actually intended.
 ### Performance acceptance
 
 - The Reference Long Research Workload is
-  `cs_rank(pct_change(close_adj, 20))` over the Top 3000 Liquidity Universe from
+  `rank(pct_change(close_adj, 20))` over the Top 3000 Liquidity Universe from
   2010-01-04 through 2026-08-13 against one frozen representative Data
   Generation.
 - It exercises admission and planning, selective columnar reads, Alpha,

@@ -14,10 +14,10 @@ from thesistrace.research_kernel.alpha_expression import AlphaValidationError
 from thesistrace.research_series import AlignedResearchData, InstrumentProfile
 
 
-def test_cs_rank_preserves_child_lookback_and_ranks_complete_cross_sections() -> None:
+def test_rank_preserves_child_lookback_and_ranks_complete_cross_sections() -> None:
     parsed = validate_alpha(
         operation(
-            "cs_rank",
+            "rank",
             operation("ts_mean", field("price.close.adjusted"), literal(20)),
         ),
         field_bindings=FIELD_BINDINGS,
@@ -49,7 +49,7 @@ def test_cs_rank_preserves_child_lookback_and_ranks_complete_cross_sections() ->
     ranked = evaluate_alpha_matrix(
         data,
         compiled_alpha=validate_alpha(
-            operation("cs_rank", field("financial.test")),
+            operation("rank", field("financial.test")),
             field_bindings={"financial.test": "financial_test"},
         ),
         neutralization="none",
@@ -274,7 +274,7 @@ def test_rolling_and_cross_sectional_operators_normalize_non_finite_inputs_to_mi
         data,
         compiled_alpha=validate_alpha(
             operation(
-                "cs_rank",
+                "rank",
                 operation("ts_mean", field("price.close.adjusted"), literal(2)),
             ),
             field_bindings=FIELD_BINDINGS,

@@ -346,7 +346,7 @@ describe("ResearchRunHistory", () => {
       created_at: "2026-08-13T01:01:02Z",
       start_date: "2026-08-01",
       end_date: "2026-08-05",
-      formula_summary: "cs_rank(close)",
+      formula_summary: "rank(close)",
       research_kind: "strategy_backtest" as const,
       key_metrics: {
         research_kind: "strategy_backtest" as const,

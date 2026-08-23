@@ -161,7 +161,7 @@ def evaluate_series_execution_matrix(
 ) -> dict[str, list[float | None]]:
     instruments = tuple(instrument_ids)
     inputs = {instrument_id: inputs_for_instrument(instrument_id) for instrument_id in instruments}
-    if not any(node.kind == "builtin" and node.identifier == "cs_rank" for node in plan.nodes):
+    if not any(node.kind == "builtin" and node.identifier == "rank" for node in plan.nodes):
         return {
             instrument_id: evaluate_series_execution_plan(
                 plan, inputs[instrument_id], length=length
@@ -169,7 +169,7 @@ def evaluate_series_execution_matrix(
             for instrument_id in instruments
         }
     if sessions is None or len(sessions) != length or universe_members is None:
-        raise ValueError("cs_rank execution requires aligned Research Sessions and Universe")
+        raise ValueError("rank execution requires aligned Research Sessions and Universe")
     values: list[PlanValue | dict[str, PlanValue]] = []
     builtins = {definition.identifier: definition for definition in BUILTIN_DEFINITIONS}
     for node in plan.nodes:
@@ -199,7 +199,7 @@ def evaluate_series_execution_matrix(
                     for instrument_id in instruments
                 }
             )
-        elif node.identifier == "cs_rank":
+        elif node.identifier == "rank":
             child = values[node.inputs[0]]
             ranked = {instrument_id: [None] * length for instrument_id in instruments}
             for index, session in enumerate(sessions):
@@ -281,7 +281,7 @@ def evaluate_columnar_execution_matrix(
             }[node.identifier]
             with np.errstate(all="ignore"):
                 operation(left, right, out=value, where=valid)
-        elif node.identifier == "cs_rank":
+        elif node.identifier == "rank":
             child = _columnar_array(values[node.inputs[0]], shape)
             value = _columnar_cross_section_rank(
                 child,

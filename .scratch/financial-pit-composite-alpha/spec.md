@@ -61,7 +61,7 @@ retain source missingness, and never fall back to another reporting scope.
 Trailing-twelve-month values are not constructed in this first slice.
 
 Extend the Alpha Authoring Catalog with those six fields and one
-cross-sectional builtin, cs_rank. A Composite Alpha remains one Alpha Formula;
+cross-sectional builtin, rank. A Composite Alpha remains one Alpha Formula;
 there is no separate factor-list or multi-factor-model resource. The existing
 Alpha Execution Plan evaluates market and financial children once, ranks each
 complete selected-universe cross-section, and passes the resulting Numeric
@@ -98,7 +98,7 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
 4. As a researcher, I want to apply arithmetic and existing Alpha Builtins to
    financial fields, so that financial and market inputs remain fully
    composable.
-5. As a researcher, I want cs_rank to normalize child factors within each
+5. As a researcher, I want rank to normalize child factors within each
    selected-universe session, so that factors with different units can be
    weighted explicitly.
 6. As a researcher, I want lower-is-better factors to require explicit
@@ -149,7 +149,7 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
 22. As a researcher, I want market-only ResearchRuns to depend only on Market
     Coverage, so that a slow or failed Financial Refresh does not block market
     research.
-23. As a researcher, I want the same Formula, field semantics, and cs_rank
+23. As a researcher, I want the same Formula, field semantics, and rank
     behavior in ResearchRun and DailyTrack, so that forward tracking does not
     drift from the backtest.
 24. As a DailyTrack owner, I want a financial Track to advance through every
@@ -473,7 +473,7 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
   Numeric Series with explicit arithmetic, Builtins, signs, and literal
   weights. There is no persisted factor-list, factor-weight table, or separate
   multi-factor model.
-- cs_rank accepts one Numeric Series and returns one Numeric Series. It
+- rank accepts one Numeric Series and returns one Numeric Series. It
   evaluates independently for each Research Session inside the selected
   Liquidity Universe.
 - Only finite child values participate. Missing and non-finite child values are
@@ -483,7 +483,7 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
   Ties receive their average rank. A cross-section with exactly one valid value
   returns 0.5 for that value. A cross-section with no valid values remains all
   missing.
-- cs_rank preserves its child's Effective Alpha Lookback. It does not add a
+- rank preserves its child's Effective Alpha Lookback. It does not add a
   time-series window.
 - Lower-is-better semantics are expressed by explicit negation in the Formula.
   Industry Neutralization remains a configured post-expression operation over
@@ -523,7 +523,7 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
 
 - The Alpha Authoring Catalog exposes the six initial financial fields with
   descriptions, units, time semantics, applicability, and examples, and exposes
-  cs_rank from the Builtin Catalog.
+  rank from the Builtin Catalog.
 - Data Overview exposes current Market Coverage, Financial Coverage Start,
   financial observation-through cutoff, reconciliation and revision-coverage
   limitations, last successful refresh times, and Financial Research
@@ -576,9 +576,9 @@ Worker, and browser:
    Financial Coverage beginning in 2010.
 2. Data Overview displays both family declarations and Financial Research
    Readiness without opening Parquet for the overview request.
-3. The Formula editor discovers all six fields and cs_rank from the catalog.
+3. The Formula editor discovers all six fields and rank from the catalog.
 4. A user submits one Composite Alpha containing at least one market field, one
-   financial field, and cs_rank.
+   financial field, and rank.
 5. The ResearchRun is claimed, pins one Generation, succeeds, and records the
    expected provenance and deterministic results.
 6. The user starts a DailyTrack from that result.
@@ -626,7 +626,7 @@ but live TuShare is never a CI dependency.
 
 ### Pure semantic seam
 
-Field Catalog, point-in-time Series reading, Alpha compilation, cs_rank, and
+Field Catalog, point-in-time Series reading, Alpha compilation, rank, and
 batch/incremental execution receive exhaustive deterministic contract tests.
 Cases include:
 
@@ -644,7 +644,7 @@ Cases include:
   source values;
 - all six field definitions across company types 1 through 4;
 - stable missingness when a selected instrument has no fact;
-- cs_rank ascending order, ties, singleton cross-sections, all-missing
+- rank ascending order, ties, singleton cross-sections, all-missing
   cross-sections, non-finite values, changing Liquidity Universes, explicit
   negation, and post-expression Industry Neutralization;
 - mixed market-financial Formulae and exact equality between reference batch

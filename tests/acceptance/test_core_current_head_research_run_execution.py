@@ -95,12 +95,12 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
     with TestClient(create_app(settings)) as client:
         runtime = client.app.state.core_runtime
         catalog = client.get("/api/alpha/catalog").json()
-        assert "cs_rank" in {item["identifier"] for item in catalog["builtins"]}
+        assert "rank" in {item["identifier"] for item in catalog["builtins"]}
         accepted = client.post(
             "/api/research-runs",
             json=_run_command(
                 "composite-formula",
-                formula="cs_rank(close) + cs_rank(total_revenue_latest_fy)",
+                formula="rank(close) + rank(total_revenue_latest_fy)",
             ),
         )
         assert accepted.status_code == 202
@@ -182,7 +182,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "/api/research-runs",
             json=_run_command(
                 "composite-factor-evaluation",
-                formula="cs_rank(close) + cs_rank(total_revenue_latest_fy)",
+                formula="rank(close) + rank(total_revenue_latest_fy)",
                 research_kind="factor_evaluation",
             ),
         )
@@ -293,7 +293,7 @@ def test_research_kinds_publish_identical_factor_evidence_when_strategy_changes(
         operation_id="factor-scientific-equivalence",
     )
     common = {
-        "formula": "cs_rank(pct_change(close, 20))",
+        "formula": "rank(pct_change(close, 20))",
         "start_date": sessions[20],
         "end_date": sessions[-1],
     }
@@ -414,7 +414,7 @@ def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chun
             (
                 "close",
                 "total_revenue_latest_fy",
-                "cs_rank(close) + cs_rank(total_revenue_latest_fy)",
+                "rank(close) + rank(total_revenue_latest_fy)",
             )
         ):
             execution_events: list[dict[str, object]] = []
@@ -535,7 +535,7 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         "2026-08-05",
     )
     seed_head = _publish_composite_head(settings, sessions=seed_sessions)
-    formula = "cs_rank(close) + cs_rank(total_revenue_latest_fy)"
+    formula = "rank(close) + rank(total_revenue_latest_fy)"
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",

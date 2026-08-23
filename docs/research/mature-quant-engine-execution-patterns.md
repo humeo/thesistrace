@@ -138,7 +138,7 @@ checkpoint contract of its own.
 Derive `effective_lookback` from the formula DAG before loading data. Read only
 the requested chunk plus that finite left overlap. Calculate a cross-sectional
 operator only after all valid members for one session are present. Do not split
-one day's `cs_rank` into unrelated security shards.
+one day's `rank` into unrelated security shards.
 
 ## 2. QuantConnect LEAN
 
@@ -362,7 +362,7 @@ cross-sectional, or stateful.
 For:
 
 ```text
-cs_rank(pct_change(close, 20))
+rank(pct_change(close, 20))
 ```
 
 the planner should:
@@ -373,7 +373,7 @@ the planner should:
 3. Read a bounded date chunk plus the 20 preceding sessions. Securities may
    need pre-admission price history to obtain a valid first in-universe value.
 4. Calculate `pct_change` once per admitted instrument/session series.
-5. For each official research session, apply `cs_rank` to the complete valid
+5. For each official research session, apply `rank` to the complete valid
    Top 3000 membership for that session.
 6. Feed Alpha observations and matured forward labels into online Factor
    accumulators rather than retaining a second full matrix.
@@ -489,7 +489,7 @@ Implement the replacement in this order, stopping to measure after every step:
 
 Required equivalence and performance gates:
 
-- `cs_rank(pct_change(close, 20))`, Top 3000, 2010-to-latest completes
+- `rank(pct_change(close, 20))`, Top 3000, 2010-to-latest completes
   without OOM.
 - Peak resident memory is bounded by configured chunk size and does not grow
   linearly with additional years.

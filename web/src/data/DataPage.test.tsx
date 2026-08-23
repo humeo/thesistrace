@@ -36,7 +36,7 @@ const catalog: AlphaCatalog = {
       report_period_selection: "research-session",
       applicable_company_types: [],
       missingness: "missing_when_no_valid_session_bar",
-      example: "cs_rank(close)",
+      example: "rank(close)",
     },
     {
       identifier: "total_revenue_latest_fy",
@@ -49,7 +49,7 @@ const catalog: AlphaCatalog = {
       report_period_selection: "latest_visible_full_year",
       applicable_company_types: ["1", "2", "3", "4"],
       missingness: "missing_when_no_visible_eligible_fact",
-      example: "cs_rank(total_revenue_latest_fy)",
+      example: "rank(total_revenue_latest_fy)",
     },
   ],
   builtins: [],
@@ -86,7 +86,7 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("Latest full year visible on each Research Session");
     expect(markup).toContain("Company types 1, 2, 3, 4");
     expect(markup).toContain("Missing when no visible eligible fact");
-    expect(markup).toContain("cs_rank(total_revenue_latest_fy)");
+    expect(markup).toContain("rank(total_revenue_latest_fy)");
     expect(markup).toContain("Reload");
     expect(markup).not.toContain("Current research data");
     expect(markup).not.toContain("Canonical data");

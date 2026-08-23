@@ -1,12 +1,12 @@
 # 08 — Advance, block, and resume financial DailyTracks
 
 **What to build:** Continue a successful Composite Alpha ResearchRun through
-DailyTrack using exactly the same financial Series semantics, cs_rank behavior,
+DailyTrack using exactly the same financial Series semantics, rank behavior,
 and Numeric Execution Contract. The Track must advance only through covered
 sessions, explain and preserve a financial-readiness block, and resume after a
 later complete financial Generation without rewriting prior checkpoints.
 
-**Blocked by:** 07 — Run a cs_rank Composite Alpha ResearchRun.
+**Blocked by:** 07 — Run a rank Composite Alpha ResearchRun.
 
 **Status:** complete
 

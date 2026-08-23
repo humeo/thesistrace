@@ -115,7 +115,7 @@ def _long_research_evidence() -> dict[str, object]:
             "slot_count": 1,
         },
         "workload": {
-            "formula": "cs_rank(pct_change(close, 20))",
+            "formula": "rank(pct_change(close, 20))",
             "universe": "top3000",
             "start_date": "2010-01-04",
             "end_date": "2026-08-13",
@@ -342,7 +342,7 @@ def test_long_research_profile_is_the_fixed_top3000_release_fixture() -> None:
         "ordinary_a_share_instrument_count": 5541,
         "execution_universe_size": 3000,
         "market_dense_session_count": 4354,
-        "formula": "cs_rank(pct_change(close, 20))",
+        "formula": "rank(pct_change(close, 20))",
         "universe": "top3000",
         "repetitions_per_phase": 5,
     }

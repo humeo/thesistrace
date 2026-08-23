@@ -96,7 +96,7 @@ _Avoid_: Dynamically typed value, arbitrary object, physical column type
 **Alpha Operator Set**:
 The platform-maintained Alpha Expression operation set: arithmetic; `abs`, `log`,
 and `sign`; `lag`, `delta`, and `pct_change`; and `ts_mean`, `ts_sum`, `ts_std`,
-`ts_min`, and `ts_max`, plus `cs_rank`; every time-series or rolling `n` is
+`ts_min`, and `ts_max`, plus `rank`; every time-series or rolling `n` is
 restricted to an integer literal from 1 through 252. Industry Neutralization
 follows expression evaluation rather than acting as an operator. Platform
 maintainers may extend the set additively but never change an existing
@@ -105,7 +105,7 @@ operators or executable kernels at runtime.
 _Avoid_: Runtime-defined operator, user-defined function, strategy rule
 
 **Cross-Sectional Rank**:
-The `cs_rank(x)` Alpha Builtin that ranks finite values of one Numeric Series
+The `rank(x)` Alpha Builtin that ranks finite values of one Numeric Series
 inside the selected Liquidity Universe independently for each Research Session.
 Ascending average ordinal rank maps linearly to the inclusive range 0 through 1;
 ties receive their average rank, one valid value receives 0.5, and Missing Alpha

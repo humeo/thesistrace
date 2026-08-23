@@ -87,7 +87,7 @@ def test_alpha_catalog_exposes_financial_fields_and_cross_sectional_rank() -> No
         for field in financial.values()
     )
     assert all(field["example"] for field in financial.values())
-    assert "cs_rank" in {builtin["identifier"] for builtin in catalog["builtins"]}
+    assert "rank" in {builtin["identifier"] for builtin in catalog["builtins"]}
 
 
 def test_alpha_catalog_hides_financial_fields_until_the_current_head_is_ready() -> None:
@@ -95,7 +95,7 @@ def test_alpha_catalog_hides_financial_fields_until_the_current_head_is_ready() 
         catalog = client.get("/api/alpha/catalog").json()
 
     assert {field["family_id"] for field in catalog["fields"]} == {"equity.eod_price"}
-    assert "cs_rank" in {builtin["identifier"] for builtin in catalog["builtins"]}
+    assert "rank" in {builtin["identifier"] for builtin in catalog["builtins"]}
 
 
 def test_alpha_diagnostics_is_non_mutating_for_valid_and_invalid_formulae() -> None:

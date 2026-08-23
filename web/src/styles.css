@@ -576,7 +576,7 @@ select { color-scheme: dark; }
 .alpha-formula-editor .cm-selectionBackground,
 .alpha-formula-editor .cm-focused .cm-selectionBackground { background: rgb(94 106 210 / .28) !important; }
 .alpha-formula-editor .cm-alpha-function { color: #aab3ff; font-weight: 500; }
-.alpha-formula-editor .cm-alpha-field { color: var(--ink); font-weight: 500; }
+.alpha-formula-editor .cm-alpha-field { color: #8bd5ca; font-weight: 500; }
 .alpha-formula-editor .cm-alpha-number { color: #7cc4ff; }
 .alpha-formula-editor .cm-alpha-operator { color: var(--ink-soft); }
 .alpha-formula-editor .cm-tooltip { color: var(--ink-muted); background: var(--surface-3); border-color: var(--line-strong); }

@@ -13,7 +13,7 @@ financial fields. Both ResearchRun and DailyTrack must resolve and execute those
 fields through the same semantics over Market Coverage beginning at the first
 Research Session of 2010 before publication. Acceptance includes one Composite
 Alpha that combines at least one market field and one financial field through
-`cs_rank` in both execution paths. Development may create and test raw objects,
+`rank` in both execution paths. Development may create and test raw objects,
 Canonical tables, and candidate Manifests in stages beside
 the active store, but those artifacts remain unpublished and undiscoverable to
 ordinary authoring until the complete slice passes acceptance and performance

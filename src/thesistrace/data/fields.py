@@ -149,7 +149,7 @@ def _financial_field(
         report_period_selection=period_selection,
         source_lineage=f"tushare.{endpoint}.{column}",
         applicable_company_types=("1", "2", "3", "4"),
-        authoring_example=f"cs_rank({identifier})",
+        authoring_example=f"rank({identifier})",
         source_endpoint=endpoint,
         source_column=column,
     )

@@ -360,18 +360,18 @@ ResearchRun admission 先从表达式得到 requested field IDs；Execution 用�
 行情与财务以同一个 Numeric Series grain 进入 Formula，因此可以形成
 Composite Alpha，而不需要独立“多因子模型”资源。按照
 [ADR-0189](../adr/0189-add-one-cross-sectional-rank-builtin-for-composite-alpha.md)，
-首个财务切片同时加入显式 `cs_rank(x)`，用于在每个 session 的已选 Liquidity
+首个财务切片同时加入显式 `rank(x)`，用于在每个 session 的已选 Liquidity
 Universe 内把异质量纲的子因子变成 0–1 横截面百分位。例如：
 
 ```text
-0.6 * cs_rank(pct_change(close, 20))
-+ 0.4 * cs_rank(net_profit_parent_latest_fy / total_assets_latest_reported)
+0.6 * rank(pct_change(close, 20))
++ 0.4 * rank(net_profit_parent_latest_fy / total_assets_latest_reported)
 ```
 
 并列值取平均 rank，单一有效值为 0.5，missing 不进入分母并继续保持 missing。
 需要“越低越好”的子因子时由 Formula 显式取负；Industry Neutralization 仍在
 完整 Composite Alpha 之后执行。ResearchRun 与 DailyTrack 使用同一个
-`cs_rank` Builtin Definition，不允许两套横截面口径。
+`rank` Builtin Definition，不允许两套横截面口径。
 
 字段目录至少增加 `family`、`time_semantics`、`unit`、`source_endpoint`、
 `authorable` 和 `applicable_company_types`。按照
@@ -441,7 +441,7 @@ Zipline 在缺少 timestamp 时允许复制 as-of date。对财务数据这会�
   第一阶段不构造 TTM，其余完整保留的 Financial Facts 暂不自动获得
   Alpha Field Capability。
 - 同一 resolver 接入 ResearchRun 与 DailyTrack。
-- 实现 `cs_rank` 的完整 cross-section plan node，并用一个行情 + 财务 Composite
+- 实现 `rank` 的完整 cross-section plan node，并用一个行情 + 财务 Composite
   Alpha 证明 ResearchRun 与 DailyTrack 一致。
 - cold benchmark 达标后才决定是否需要 derived checkpoints。
 - 按
@@ -476,7 +476,7 @@ Zipline 在缺少 timestamp 时允许复制 as-of date。对财务数据这会�
 - Phase 1 candidate 即使包含完整财务表，也不能移动 Dataset Head 或出现在
   Alpha Authoring Catalog；首次发布必须让六个字段同时通过 ResearchRun 与
   DailyTrack 端到端执行。
-- `cs_rank` 覆盖升序、并列、全 missing、单一有效值、变化 Universe 和
+- `rank` 覆盖升序、并列、全 missing、单一有效值、变化 Universe 和
   mixed market-financial Formula；同一输入的 ResearchRun 与 DailyTrack
   产生完全相同的横截面值。
 - cold benchmark 覆盖全市场、多字段、长研究区间；断言没有逐 cell/逐股票文件扫描，并记录 P50/P95、读取 object 数、bytes、峰值内存。

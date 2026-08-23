@@ -44,7 +44,7 @@ def test_catalog_composes_only_capable_fields_and_public_builtins() -> None:
         "abs",
         "log",
         "sign",
-        "cs_rank",
+        "rank",
         "lag",
         "delta",
         "pct_change",
@@ -233,7 +233,7 @@ def test_market_identifiers_map_without_legacy_storage_aliases() -> None:
 
 def test_compile_maps_financial_identifier_to_namespaced_field_reference() -> None:
     compiled = alpha_language.compile(
-        "cs_rank(close) + cs_rank(total_revenue_latest_fy)"
+        "rank(close) + rank(total_revenue_latest_fy)"
     )
 
     assert compiled.field_ids_by_identifier == {
@@ -245,12 +245,12 @@ def test_compile_maps_financial_identifier_to_namespaced_field_reference() -> No
         "operator": "add",
         "left": {
             "kind": "call",
-            "identifier": "cs_rank",
+            "identifier": "rank",
             "arguments": [{"kind": "field", "field_id": "price.close.adjusted"}],
         },
         "right": {
             "kind": "call",
-            "identifier": "cs_rank",
+            "identifier": "rank",
             "arguments": [
                 {
                     "kind": "field",
@@ -289,8 +289,8 @@ def test_builtin_evaluators_strictly_propagate_non_finite_values() -> None:
     assert builtins["sign"].evaluator((invalid,)) == (None, None, None, 1.0)
     assert builtins["lag"].evaluator((invalid, 1)) == (None, None, None, None)
     with pytest.raises(TypeError, match="complete cross-section"):
-        builtins["cs_rank"].evaluator((invalid,))
-    for builtin in (item for name, item in builtins.items() if name != "cs_rank"):
+        builtins["rank"].evaluator((invalid,))
+    for builtin in (item for name, item in builtins.items() if name != "rank"):
         arguments = (invalid,) if len(builtin.parameters) == 1 else (invalid, 1)
         result = builtin.evaluator(arguments)
         assert isinstance(result, tuple)
@@ -388,6 +388,7 @@ def test_one_pass_rolling_matches_fixed_binary64_window_references() -> None:
 @pytest.mark.parametrize(
     ("source", "code"),
     [
+        ("cs_rank(close)", "UNKNOWN_IDENTIFIER"),
         ("value = close", "SYNTAX_ERROR"),
         ("close; volume", "SYNTAX_ERROR"),
         ("close.real", "UNSUPPORTED_SYNTAX"),

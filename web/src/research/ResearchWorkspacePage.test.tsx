@@ -47,7 +47,7 @@ const catalog = {
       report_period_selection: "research-session",
       applicable_company_types: [],
       missingness: "missing_when_no_valid_session_bar",
-      example: "cs_rank(close)",
+      example: "rank(close)",
     },
     {
       identifier: "total_revenue_latest_fy",
@@ -60,7 +60,7 @@ const catalog = {
       report_period_selection: "latest_visible_full_year",
       applicable_company_types: ["1", "2", "3", "4"],
       missingness: "missing_when_no_visible_eligible_fact",
-      example: "cs_rank(total_revenue_latest_fy)",
+      example: "rank(total_revenue_latest_fy)",
     },
   ],
   builtins: [{
@@ -161,7 +161,7 @@ describe("browser Research Draft", () => {
   });
 
   it("parses formula structure for language-driven syntax highlighting", () => {
-    const formula = "cs_rank(pct_change(close, 20)) + 1 * 2";
+    const formula = "rank(pct_change(close, 20)) + 1 * 2";
     const tree = alphaLanguage.parser.parse(formula);
 
     expect(tree.toString()).toBe(
@@ -172,7 +172,7 @@ describe("browser Research Draft", () => {
       highlights.push([formula.slice(from, to), classes]);
     });
     expect(highlights).toEqual([
-      ["cs_rank", "cm-alpha-function"],
+      ["rank", "cm-alpha-function"],
       ["pct_change", "cm-alpha-function"],
       ["close", "cm-alpha-field"],
       ["20", "cm-alpha-number"],
@@ -242,7 +242,7 @@ describe("browser Research Draft", () => {
     });
 
     expect(useResearchAsDraft(storage, folder.id, {
-      formula: "cs_rank(close)",
+      formula: "rank(close)",
       hypothesis: null,
       start_date: "2026-08-03",
       end_date: "2026-08-05",
@@ -252,7 +252,7 @@ describe("browser Research Draft", () => {
     }, () => true)).toBe(true);
     expect(loadResearchDraft(storage, folder.id)).toMatchObject({
       researchKind: "factor_evaluation",
-      formula: "cs_rank(close)",
+      formula: "rank(close)",
       holdingsCount: "",
       rebalanceEverySessions: "",
       pendingAdmission: null,

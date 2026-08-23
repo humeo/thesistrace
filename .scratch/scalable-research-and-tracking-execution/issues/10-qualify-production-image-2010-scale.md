@@ -10,7 +10,7 @@ obsolete or partial execution paths.
 
 **Status:** complete
 
-- [x] The Reference Long Research Workload evaluates `cs_rank(pct_change(close_adj, 20))` over the Top 3000 Liquidity Universe from 2010-01-04 through 2026-08-13 against one frozen representative Data Generation.
+- [x] The Reference Long Research Workload evaluates `rank(pct_change(close_adj, 20))` over the Top 3000 Liquidity Universe from 2010-01-04 through 2026-08-13 against one frozen representative Data Generation.
 - [x] The benchmark uses the complete path: admission and frozen plan, selective reads, Alpha, 1-, 5-, and 20-session Factor Evaluation, Strategy Backtest, Chunk Checkpoints, finalization, and atomic Result publication.
 - [x] The final Production Image runs one single-slot Research Worker with 2 vCPU, 2 GiB hard memory, 1.5 GiB execution budget, and at most two calculation threads.
 - [x] Five measured cold samples and five measured warm samples use fresh ResearchRuns and exclude queue waiting time.

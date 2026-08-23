@@ -94,7 +94,7 @@ def _sign(arguments: tuple[BuiltinArgument, ...]) -> NumericValue:
 
 
 def _cross_section_only(_arguments: tuple[BuiltinArgument, ...]) -> NumericValue:
-    raise TypeError("cs_rank requires a complete cross-section")
+    raise TypeError("rank requires a complete cross-section")
 
 
 def _series_window(arguments: tuple[BuiltinArgument, ...]) -> tuple[NumericSeries, int]:
@@ -415,11 +415,11 @@ BUILTIN_DEFINITIONS = (
         evaluator=_sign,
     ),
     BuiltinDefinition(
-        identifier="cs_rank",
+        identifier="rank",
         parameters=(BuiltinParameterDefinition("series", "numeric_series"),),
         result_rule="numeric_series",
         description="Ascending cross-sectional rank within the selected Universe.",
-        examples=("cs_rank(close)",),
+        examples=("rank(close)",),
         lookback_rule="identity",
         missing_value_behavior=(
             "Missing and non-finite values stay missing and do not enter the denominator."

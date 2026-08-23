@@ -8,7 +8,7 @@ ResearchRun admission keeps deterministic structural limits for Alpha source
 length, expression node count, nesting depth, and Effective Alpha Lookback. It
 also rejects a Run when the smallest semantics-preserving bounded execution
 slice cannot fit the configured Worker safety envelope. Cross-sectional
-operations such as `cs_rank` therefore require one complete eligible Universe
+operations such as `rank` therefore require one complete eligible Universe
 for one Research Session inside that minimum slice.
 
 Estimated Total Research Work is retained for progress, duration guidance, and

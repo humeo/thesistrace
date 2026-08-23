@@ -16,7 +16,7 @@ responses, or an unrelated financial-statement product.
 - [x] The UI explains that family Coverage is a dataset property and that a
   missing fact for one company is not the same as an incomplete Financial
   Refresh.
-- [x] The Formula editor discovers the six financial identifiers and cs_rank
+- [x] The Formula editor discovers the six financial identifiers and rank
   from the authoritative catalog without a frontend-maintained allowlist.
 - [x] Field help exposes stable meaning, unit, latest-full-year or
   latest-reported time semantics, company-type applicability, and missingness.

@@ -129,7 +129,7 @@ def test_compiled_expression_builds_a_canonical_field_plan() -> None:
 
 def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section() -> None:
     compiled = alpha_language.compile(
-        "cs_rank(pct_change(close, 1)) + ts_mean(volume, 2)"
+        "rank(pct_change(close, 1)) + ts_mean(volume, 2)"
     )
     plan = build_series_execution_plan(compiled)
     instruments = ("instrument_a", "instrument_b")
@@ -172,7 +172,7 @@ def test_columnar_plan_is_exactly_equivalent_for_time_series_and_cross_section()
 
 def test_columnar_plan_checks_cancellation_between_bounded_operator_stages() -> None:
     plan = build_series_execution_plan(
-        alpha_language.compile("cs_rank(pct_change(close, 1))")
+        alpha_language.compile("rank(pct_change(close, 1))")
     )
     sessions = tuple(f"2026-08-{day:02d}" for day in range(1, 11))
     calls = 0

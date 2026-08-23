@@ -474,7 +474,7 @@ def _assemble(samples_path: Path, image_revision: str) -> dict[str, object]:
             "slot_count": 1,
         },
         "workload": {
-            "formula": "cs_rank(pct_change(close, 20))",
+            "formula": "rank(pct_change(close, 20))",
             "universe": "top3000",
             "start_date": "2010-01-04",
             "end_date": "2026-08-13",

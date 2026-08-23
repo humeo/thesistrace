@@ -17,7 +17,7 @@ provenance claims hold together.
 - [x] The resulting Dataset Head contains complete Market and Financial family
   declarations and reports Financial Research Readiness.
 - [x] The browser confirms Data Overview, discovery of all six fields and
-  cs_rank, submission of one mixed Composite Alpha, Worker execution, result
+  rank, submission of one mixed Composite Alpha, Worker execution, result
   publication, and DailyTrack start.
 - [x] Publishing a later deterministic Generation advances the financial
   DailyTrack with exact batch-incremental equality.
