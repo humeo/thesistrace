@@ -10,9 +10,11 @@ import {
   beginResearchRun,
   finishResearchRun,
   hasUnexecutedChanges,
+  isCompleteResearchInputs,
   loadResearchDraft,
   persistResearchDraft,
   researchDraftKey,
+  selectResearchKind,
   useResearchAsDraft,
 } from "./draft";
 import { ResearchDraftWorkspace } from "./ResearchWorkspacePage";
@@ -79,6 +81,82 @@ const data = {
 };
 
 describe("browser Research Draft", () => {
+  it("defaults new work to Factor Evaluation and submits only its authorable contract", () => {
+    const draft = {
+      ...emptyResearchDraft(),
+      formula: "close_adj",
+      startDate: "2026-08-03",
+      endDate: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+    };
+
+    expect(draft.researchKind).toBe("factor_evaluation");
+    expect(isCompleteResearchInputs(draft)).toBe(true);
+    const begun = beginResearchRun(draft, folder.id, () => "factor-request");
+    expect(begun.command).toEqual({
+      request_id: "factor-request",
+      folder_id: folder.id,
+      name: null,
+      formula: "close_adj",
+      hypothesis: null,
+      start_date: "2026-08-03",
+      end_date: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+      research_kind: "factor_evaluation",
+    });
+    expect(begun.command).not.toHaveProperty("holdings_count");
+    expect(begun.command).not.toHaveProperty("rebalance_every_sessions");
+  });
+
+  it("clears Strategy-only values when Factor Evaluation is selected", () => {
+    const strategy = {
+      ...emptyResearchDraft(),
+      researchKind: "strategy_backtest" as const,
+      holdingsCount: "25",
+      rebalanceEverySessions: "5",
+    };
+
+    expect(selectResearchKind(strategy, "factor_evaluation")).toMatchObject({
+      researchKind: "factor_evaluation",
+      holdingsCount: "",
+      rebalanceEverySessions: "",
+    });
+    expect(selectResearchKind(emptyResearchDraft(), "strategy_backtest")).toMatchObject({
+      researchKind: "strategy_backtest",
+      holdingsCount: "",
+      rebalanceEverySessions: "",
+    });
+  });
+
+  it("requires valid Strategy inputs and changes pending identity when Research Kind changes", () => {
+    const common = {
+      ...emptyResearchDraft(),
+      formula: "close_adj",
+      startDate: "2026-08-03",
+      endDate: "2026-08-05",
+      universe: "top300",
+      neutralization: "none",
+    };
+    const factor = beginResearchRun(common, folder.id, () => "factor-request");
+    const incompleteStrategy = selectResearchKind(factor.draft, "strategy_backtest");
+    expect(isCompleteResearchInputs(incompleteStrategy)).toBe(false);
+    const strategy = {
+      ...incompleteStrategy,
+      holdingsCount: "10",
+      rebalanceEverySessions: "2",
+    };
+    expect(isCompleteResearchInputs(strategy)).toBe(true);
+    const begun = beginResearchRun(strategy, folder.id, () => "strategy-request");
+    expect(begun.command).toMatchObject({
+      request_id: "strategy-request",
+      research_kind: "strategy_backtest",
+      holdings_count: 10,
+      rebalance_every_sessions: 2,
+    });
+  });
+
   it("parses formula structure for language-driven syntax highlighting", () => {
     const formula = "cs_rank(pct_change(close_adj, 20)) + 1 * 2";
     const tree = alphaLanguage.parser.parse(formula);
@@ -128,6 +206,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top1000",
       neutralization: "industry",
+      research_kind: "strategy_backtest",
       holdings_count: 25,
       rebalance_every_sessions: 5,
     }, confirmDiscard);
@@ -150,6 +229,33 @@ describe("browser Research Draft", () => {
     expect(storage.getItem(researchDraftKey("folder_other"))).toBe(otherBefore);
   });
 
+  it("reuses Factor Evaluation without retaining Strategy-only values", () => {
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, folder.id, {
+      ...emptyResearchDraft(),
+      researchKind: "strategy_backtest",
+      holdingsCount: "25",
+      rebalanceEverySessions: "5",
+    });
+
+    expect(useResearchAsDraft(storage, folder.id, {
+      formula: "cs_rank(close_adj)",
+      hypothesis: null,
+      start_date: "2026-08-03",
+      end_date: "2026-08-05",
+      universe: "top300",
+      neutralization: "industry",
+      research_kind: "factor_evaluation",
+    }, () => true)).toBe(true);
+    expect(loadResearchDraft(storage, folder.id)).toMatchObject({
+      researchKind: "factor_evaluation",
+      formula: "cs_rank(close_adj)",
+      holdingsCount: "",
+      rebalanceEverySessions: "",
+      pendingAdmission: null,
+    });
+  });
+
   it("requires confirmation only before overwriting unexecuted local values", () => {
     const storage = new MemoryStorage();
     const target = {
@@ -166,6 +272,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top300",
       neutralization: "none",
+      research_kind: "strategy_backtest",
       holdings_count: 10,
       rebalance_every_sessions: 2,
     }, confirmDiscard);
@@ -184,6 +291,7 @@ describe("browser Research Draft", () => {
       endDate: "2026-08-05",
       universe: "top300",
       neutralization: "none",
+      researchKind: "strategy_backtest" as const,
       holdingsCount: "10",
       rebalanceEverySessions: "2",
     };
@@ -200,6 +308,7 @@ describe("browser Research Draft", () => {
       end_date: "2026-08-05",
       universe: "top300",
       neutralization: "none",
+      research_kind: "strategy_backtest",
       holdings_count: 10,
       rebalance_every_sessions: 2,
     });
@@ -277,7 +386,7 @@ describe("browser Research Draft", () => {
     expect(hasUnexecutedChanges({ ...emptyResearchDraft(), formula: "close_adj" })).toBe(true);
     const admitted = { ...emptyResearchDraft(), formula: "close_adj" };
     expect(hasUnexecutedChanges({ ...admitted, lastAdmittedBaseline: {
-      name: "", formula: "close_adj", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", holdingsCount: "", rebalanceEverySessions: "",
+      researchKind: "factor_evaluation", name: "", formula: "close_adj", hypothesis: "", startDate: "", endDate: "", universe: "", neutralization: "", holdingsCount: "", rebalanceEverySessions: "",
     } })).toBe(false);
   });
 
@@ -288,6 +397,13 @@ describe("browser Research Draft", () => {
     expect(markup).toContain('disabled="" type="button"><svg');
     expect(markup).toContain("Run research");
     expect(markup).toContain("Research parameters");
+    expect(markup).toContain("<legend>Research type</legend>");
+    expect(markup).toContain('name="research-kind"');
+    expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="factor_evaluation"/);
+    expect(markup).toContain("Factor Evaluation");
+    expect(markup).toContain("Strategy Backtest");
+    expect(markup).not.toContain("Holdings count");
+    expect(markup).not.toContain("Rebalance sessions");
     expect(markup).toContain('aria-label="Open start date calendar"');
     expect(markup).toContain('aria-label="Open end date calendar"');
     expect(markup).toContain('for="research-notes">Notes</label>');
@@ -305,6 +421,24 @@ describe("browser Research Draft", () => {
     expect(markup).toContain("cs_rank(total_revenue_latest_fy)");
     expect(markup).toContain("Missing when no visible eligible fact");
     for (const removed of ["Save Research", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
+  });
+
+  it("renders required bounded Strategy inputs only for Strategy Backtest", () => {
+    const storage = new MemoryStorage();
+    persistResearchDraft(storage, folder.id, {
+      ...emptyResearchDraft(),
+      researchKind: "strategy_backtest",
+    });
+
+    const markup = renderToStaticMarkup(
+      <ResearchDraftWorkspace catalog={catalog} data={data} folder={folder} storage={storage} />,
+    );
+    expect(markup).toMatch(/<input[^>]*checked=""[^>]*value="strategy_backtest"/);
+    expect(markup).toContain("Holdings count");
+    expect(markup).toContain("Rebalance sessions");
+    expect(markup.match(/required="" type="number"/g)).toHaveLength(2);
+    expect(markup).toMatch(/<input[^>]*max="100"[^>]*min="1"[^>]*required=""[^>]*type="number"/);
+    expect(markup).toMatch(/<input[^>]*max="20"[^>]*min="1"[^>]*required=""[^>]*type="number"/);
   });
 
   it("enables Run for one complete retained Draft", () => {

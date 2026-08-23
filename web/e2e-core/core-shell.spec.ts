@@ -31,6 +31,25 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.locator(".cm-content")).toHaveText("");
     await expectRemovedAuthoringControlsToBeAbsent(page);
 
+    const factorEvaluation = page.getByRole("radio", { name: /Factor Evaluation/ });
+    const strategyBacktest = page.getByRole("radio", { name: /Strategy Backtest/ });
+    await expect(page.getByRole("group", { name: "Research type" })).toBeVisible();
+    await expect(factorEvaluation).toBeChecked();
+    await expect(strategyBacktest).not.toBeChecked();
+    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
+    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+    await page.setViewportSize({ width: 480, height: 900 });
+    await expect(factorEvaluation).toBeVisible();
+    await expect(strategyBacktest).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    await factorEvaluation.focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(strategyBacktest).toBeChecked();
+    await expect(page.getByLabel("Holdings count")).toBeVisible();
+    await expect(page.getByLabel("Rebalance sessions")).toBeVisible();
+
     await page.getByLabel("Research name").fill("Browser Mean Research");
     const editor = page.locator(".cm-content");
     await editor.click();
@@ -45,7 +64,13 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await expect(page.getByRole("list", { name: "Formula diagnostics" })).toBeVisible();
     await expect(page.locator(".cm-lintRange-error")).toHaveCount(1);
     await page.keyboard.press(process.platform === "darwin" ? "Meta+A" : "Control+A");
+    const validDiagnosis = page.waitForResponse((response) => (
+      response.url().includes("/api/alpha/diagnostics") &&
+      response.request().method() === "POST" &&
+      response.ok()
+    ));
     await page.keyboard.type("ts_mean(close_adj, 2)");
+    await validDiagnosis;
     await expect(editor).toHaveText("ts_mean(close_adj, 2)");
     await expect(page.getByRole("list", { name: "Formula diagnostics" })).toHaveCount(0);
     await page.getByLabel("Notes").fill("Short rolling mean retains signal.");
@@ -53,6 +78,15 @@ test("Default Folder retains one local Research Draft with authoritative Formula
     await page.getByLabel("Research end date").fill("2026-08-05");
     await page.getByLabel("Universe").selectOption("top300");
     await page.getByLabel("Neutralization").selectOption("none");
+    await page.getByLabel("Holdings count").fill("10");
+    await page.getByLabel("Rebalance sessions").fill("2");
+
+    await strategyBacktest.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(factorEvaluation).toBeChecked();
+    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
+    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+    await strategyBacktest.check();
     await page.getByLabel("Holdings count").fill("10");
     await page.getByLabel("Rebalance sessions").fill("2");
 
@@ -66,6 +100,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
       formula: "ts_mean(close_adj, 2)",
       universe: "top300",
       neutralization: "none",
+      researchKind: "strategy_backtest",
       holdingsCount: "10",
       rebalanceEverySessions: "2",
       lastAdmittedBaseline: null,
@@ -89,7 +124,7 @@ test("Default Folder retains one local Research Draft with authoritative Formula
 
     await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
-    await page.getByRole("button", { name: "Create" }).click();
+    await page.getByRole("button", { name: "Create Folder" }).click();
     await expect(page).toHaveURL(/\/research\?folder=folder_[a-f0-9]+$/);
     const customFolderId = new URL(page.url()).searchParams.get("folder");
     expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
@@ -442,6 +477,11 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     expect(commands).toHaveLength(2);
     expect(commands[1].request_id).toBe(commands[0].request_id);
     expect(commands[1].formula).toBe("ts_mean(close_adj, 2)");
+    expect(commands[1]).toMatchObject({
+      research_kind: "strategy_backtest",
+      holdings_count: 10,
+      rebalance_every_sessions: 2,
+    });
     await expect(
       page.locator(".research-workspace-header").getByRole("button", { name: "New Research" }),
     ).toBeDisabled();
@@ -458,6 +498,8 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByText(/2 \/ 2\s+Research/)).toBeVisible();
     await expect(page.locator("body")).not.toContainText(/checkpoint|staged payload/i);
     await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Terminal Strategy State" })).toBeVisible();
+    await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
     await expect(page.getByRole("button", { name: "Refresh" })).toHaveCount(0);
 
     const retainedAfterRun = await page.evaluate(() => JSON.parse(
@@ -488,20 +530,82 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
 
     await openResearchFolderMenu(page);
     await page.getByLabel("New Folder").fill("Signals");
-    await page.getByRole("button", { name: "Create" }).click();
+    await page.getByRole("button", { name: "Create Folder" }).click();
     await expect(page).toHaveURL(/\/research\?folder=folder_[a-f0-9]+$/);
     const customFolderId = new URL(page.url()).searchParams.get("folder");
     expect(customFolderId).toMatch(/^folder_[a-f0-9]+$/);
     if (customFolderId === null) throw new Error("Custom Folder route is missing folder id");
-    await fillCompleteDraft(page, { name: "Duplicate Name", formula: "close_adj" });
+    await fillCompleteDraft(page, {
+      name: "Duplicate Name",
+      formula: "close_adj",
+      researchKind: "factor_evaluation",
+    });
     await page.getByRole("button", { name: "Run research", exact: true }).click();
     await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
     const customRunId = page.url().split("/").at(-1);
     if (customRunId === undefined) throw new Error("Custom Research route is missing run id");
     await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.locator(".research-run-facts")).toContainText("Research type Factor Evaluation");
     await expect(page.getByRole("heading", { name: "Factor Summary" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Daily Observations" })).toHaveCount(0);
+    await expect(page.getByRole("heading", { name: "Terminal Strategy State" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Start Tracking" })).toHaveCount(0);
+    for (const horizon of [1, 5, 20]) {
+      const section = page.getByRole("region", { name: `${horizon}-session Factor` });
+      await expect(section.getByText("Rank IC", { exact: true })).toBeVisible();
+      await expect(section.getByText("Rank ICIR", { exact: true })).toBeVisible();
+      await expect(section.getByText("IC", { exact: true })).toBeVisible();
+      await expect(section.getByText("ICIR", { exact: true })).toBeVisible();
+      await expect(section.getByText(/Rank IC coverage/)).toBeVisible();
+      await expect(section.getByText(/^IC coverage/)).toBeVisible();
+    }
     const customDetail = await page.request.get(`/api/research-runs/${customRunId}`);
-    expect((await customDetail.json()).folder_id).toBe(customFolderId);
+    expect(await customDetail.json()).toMatchObject({
+      folder_id: customFolderId,
+      research_kind: "factor_evaluation",
+      result: { provenance: { research_kind: "factor_evaluation" } },
+    });
+
+    const factorHistoryBeforeReuse = await page.request.get("/api/research-runs");
+    const factorHistoryCount = ((await factorHistoryBeforeReuse.json()).items as unknown[]).length;
+    await page.getByLabel("Target Folder").selectOption("folder_default");
+    page.once("dialog", async (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Use as Draft" }).click();
+    await expect(page).toHaveURL(/\/research$/);
+    await expect(page.getByRole("radio", { name: /Factor Evaluation/ })).toBeChecked();
+    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
+    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+    const factorHistoryAfterReuse = await page.request.get("/api/research-runs");
+    expect(((await factorHistoryAfterReuse.json()).items as unknown[])).toHaveLength(factorHistoryCount);
+
+    await page.getByRole("radio", { name: /Strategy Backtest/ }).check();
+    await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeDisabled();
+    await page.getByLabel("Research name").fill("Converted Factor Strategy");
+    await page.getByLabel("Holdings count").fill("10");
+    await page.getByLabel("Rebalance sessions").fill("2");
+    await page.getByRole("button", { name: "Run research", exact: true }).click();
+    await expect(page).toHaveURL(/\/research-runs\/run_[a-f0-9]+$/);
+    const convertedRunId = page.url().split("/").at(-1);
+    expect(convertedRunId).not.toBe(customRunId);
+    if (convertedRunId === undefined) throw new Error("Converted Research route is missing run id");
+    await expect(page.locator(".research-run-facts").getByText(/Status\s+succeeded/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.locator(".research-run-facts")).toContainText("Research type Strategy Backtest");
+    await expect(page.getByRole("heading", { name: "Strategy Summary" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Daily Observations" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Terminal Strategy State" })).toBeVisible();
+    const convertedDetail = await page.request.get(`/api/research-runs/${convertedRunId}`);
+    expect(await convertedDetail.json()).toMatchObject({
+      id: convertedRunId,
+      folder_id: "folder_default",
+      research_kind: "strategy_backtest",
+      input: {
+        research_kind: "strategy_backtest",
+        holdings_count: 10,
+        rebalance_every_sessions: 2,
+      },
+    });
+    await page.goto(`/research-runs/${customRunId}`);
 
     const draftsBeforeOrganization = await page.evaluate(() => Object.fromEntries(
       Object.entries(localStorage).filter(([key]) => key.startsWith("thesistrace.research-draft.")),
@@ -544,7 +648,9 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByText(defaultRunId ?? "missing-default-run-id", { exact: true })).toBeVisible();
     await expect(page.getByText(customRunId, { exact: true })).toBeVisible();
     await expect(page.getByText("ts_mean(close_adj, 2)", { exact: true })).toBeVisible();
-    await expect(page.getByText("close_adj", { exact: true })).toBeVisible();
+    await expect(page.getByText("close_adj", { exact: true })).toHaveCount(2);
+    await expect(page.getByText("Factor Evaluation", { exact: true })).toHaveCount(1);
+    await expect(page.getByText("Strategy Backtest", { exact: true })).toHaveCount(2);
     await page.getByLabel("Filter by Folder").selectOption(customFolderId);
     await expect(page.getByText("No Research Runs yet.")).toBeVisible();
     await page.getByLabel("Filter by Folder").selectOption("folder_default");
@@ -586,6 +692,7 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
     await expect(page.getByLabel("Research end date")).toHaveValue("2026-08-05");
     await expect(page.getByLabel("Universe")).toHaveValue("top300");
     await expect(page.getByLabel("Neutralization")).toHaveValue("none");
+    await expect(page.getByRole("radio", { name: /Strategy Backtest/ })).toBeChecked();
     await expect(page.getByLabel("Holdings count")).toHaveValue("10");
     await expect(page.getByLabel("Rebalance sessions")).toHaveValue("2");
     const historyAfterCopy = await page.request.get("/api/research-runs");
@@ -672,8 +779,16 @@ test("Default and custom Folder Drafts run once, retain edits, reject safely, an
 
 async function fillCompleteDraft(
   page: Page,
-  values: { name: string; formula: string },
+  values: {
+    name: string;
+    formula: string;
+    researchKind?: "factor_evaluation" | "strategy_backtest";
+  },
 ): Promise<void> {
+  const researchKind = values.researchKind ?? "strategy_backtest";
+  await page.getByRole("radio", {
+    name: researchKind === "factor_evaluation" ? /Factor Evaluation/ : /Strategy Backtest/,
+  }).check();
   await page.getByLabel("Research name").fill(values.name);
   await replaceFormula(page, values.formula);
   await page.getByLabel("Notes").fill("Browser Run acceptance.");
@@ -681,8 +796,13 @@ async function fillCompleteDraft(
   await page.getByLabel("Research end date").fill("2026-08-05");
   await page.getByLabel("Universe").selectOption("top300");
   await page.getByLabel("Neutralization").selectOption("none");
-  await page.getByLabel("Holdings count").fill("10");
-  await page.getByLabel("Rebalance sessions").fill("2");
+  if (researchKind === "strategy_backtest") {
+    await page.getByLabel("Holdings count").fill("10");
+    await page.getByLabel("Rebalance sessions").fill("2");
+  } else {
+    await expect(page.getByLabel("Holdings count")).toHaveCount(0);
+    await expect(page.getByLabel("Rebalance sessions")).toHaveCount(0);
+  }
   await expect(page.getByRole("button", { name: "Run research", exact: true })).toBeEnabled();
 }
 

@@ -48,12 +48,13 @@ from thesistrace.data.financial_collection import (
 )
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
-from thesistrace.fixture import build_minimal_canonical_fixture
+from thesistrace.fixture import build_fixture, build_minimal_canonical_fixture
 from thesistrace.publication import Publication, PublishedRef
 from thesistrace.publication.serialization import canonical_json_bytes
 from thesistrace.research_kernel import (
     AdvanceInput,
     RunInput,
+    StrategyRunInput,
     advance,
     advance_continuation,
     empty_continuation,
@@ -128,6 +129,14 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "research_execution_child_acknowledged",
             "research_execution_child_exited",
         ]
+        for event in execution_events:
+            assert event["resource_type"] == "ResearchRun"
+            assert event["resource_id"] == run_id
+            assert event["attempt_id"].startswith("attempt_")
+            assert event["research_kind"] == "strategy_backtest"
+        started = execution_events[0]
+        assert started["resumed_from_checkpoint"] is False
+        assert started["resumed_from_chunk_ordinal"] is None
         received = execution_events[1]
         assert float(received["child_data_read_seconds"]) >= 0
         assert float(received["child_calculation_seconds"]) >= 0
@@ -148,6 +157,8 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         assert sum(float(value) for value in phase_seconds.values()) <= float(
             received["child_calculation_seconds"]
         )
+        assert received["strategy_continuation_present"] is True
+        assert int(received["strategy_observation_count"]) == 3
         assert attempt_status_at_child_exit == ["running"]
         detail = client.get(f"/api/research-runs/{run_id}").json()
         assert detail["status"] == "succeeded"
@@ -160,11 +171,74 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
                     kind="research.result",
                     provenance=stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind="strategy_backtest",
         )
         assert canonical_json_bytes(actual) == canonical_json_bytes(
             _reference_result(settings, generation_id, runtime.database, run_id)
         )
+
+        factor_accepted = client.post(
+            "/api/research-runs",
+            json=_run_command(
+                "composite-factor-evaluation",
+                formula="cs_rank(close_adj) + cs_rank(total_revenue_latest_fy)",
+                research_kind="factor_evaluation",
+            ),
+        )
+        assert factor_accepted.status_code == 202, factor_accepted.text
+        factor_run_id = str(factor_accepted.json()["id"])
+        assert factor_accepted.json()["research_kind"] == "factor_evaluation"
+        factor_execution_events: list[dict[str, object]] = []
+        assert (
+            runtime.research_runs.process_next(
+                on_execution_event=factor_execution_events.append
+            )
+            is True
+        )
+        factor_received = next(
+            event
+            for event in factor_execution_events
+            if event["event"] == "research_execution_chunk_received"
+        )
+        assert factor_received["strategy_continuation_present"] is False
+        assert factor_received["strategy_observation_count"] == 0
+        assert factor_received["child_calculation_phase_seconds"]["strategy"] == 0
+        factor_detail = client.get(f"/api/research-runs/{factor_run_id}").json()
+        assert factor_detail["status"] == "succeeded"
+        assert factor_detail["research_kind"] == "factor_evaluation"
+        assert factor_detail["progress"]["completed_research_sessions"] == 3
+        assert factor_detail["progress"]["last_completed_research_session"] == (
+            "2026-08-05"
+        )
+        assert set(factor_detail["result"]) == {"factor", "provenance"}
+        assert factor_detail["result"]["provenance"]["research_kind"] == (
+            "factor_evaluation"
+        )
+        factor_stored = _stored_execution(settings, factor_run_id)
+        factor_bundle = runtime.publication.read(
+            PublishedRef(
+                manifest_sha256=str(factor_stored["result_manifest_sha256"]),
+                kind="research.result",
+                provenance=factor_stored["result_provenance"],
+            )
+        )
+        assert set(factor_bundle.payloads) == {"factor_summary"}
+        factor_result = read_result_bundle(
+            factor_bundle,
+            research_kind="factor_evaluation",
+        )
+        assert canonical_json_bytes(factor_result["factor_summary"]) == (
+            canonical_json_bytes(actual["factor_summary"])
+        )
+        factor_track = client.post(
+            f"/api/research-runs/{factor_run_id}/daily-tracks",
+            json={"request_id": "factor-evaluation-track"},
+        )
+        assert factor_track.status_code == 409
+        assert factor_track.json() == {
+            "detail": "Start Tracking requires a Strategy Backtest Result"
+        }
 
         financial_only = client.post(
             "/api/research-runs",
@@ -182,7 +256,8 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
                     kind="research.result",
                     provenance=financial_stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind="strategy_backtest",
         )
         assert canonical_json_bytes(financial_actual) == canonical_json_bytes(
             _reference_result(
@@ -198,6 +273,121 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
         )
         assert started.status_code == 201
         assert started.json()["status"] == "active"
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
+)
+def test_research_kinds_publish_identical_factor_evidence_when_strategy_changes(
+    tmp_path: Path,
+) -> None:
+    settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
+    drop_product_schemas(settings)
+    initialize_core(settings.database_url)
+    _, canonical = build_fixture(session_count=130)
+    sessions = tuple(str(session) for session in canonical["research_calendar"])
+    generation_id = _publish_canonical_head(
+        settings,
+        canonical,
+        operation_id="factor-scientific-equivalence",
+    )
+    common = {
+        "formula": "cs_rank(pct_change(close_adj, 20))",
+        "start_date": sessions[20],
+        "end_date": sessions[-1],
+    }
+    commands = (
+        _run_command(
+            "factor-scientific-equivalence",
+            research_kind="factor_evaluation",
+            **common,
+        ),
+        _run_command(
+            "strategy-scientific-equivalence-a",
+            holdings_count=3,
+            rebalance_every_sessions=2,
+            **common,
+        ),
+        _run_command(
+            "strategy-scientific-equivalence-b",
+            holdings_count=12,
+            rebalance_every_sessions=7,
+            **common,
+        ),
+    )
+
+    with TestClient(create_app(settings)) as client:
+        runtime = client.app.state.core_runtime
+        run_ids: list[str] = []
+        for command in commands:
+            accepted = client.post("/api/research-runs", json=command)
+            assert accepted.status_code == 202, accepted.text
+            run_ids.append(str(accepted.json()["id"]))
+        assert len(set(run_ids)) == 3
+
+        for _run_id in run_ids:
+            assert runtime.research_runs.process_next() is True
+        assert runtime.research_runs.process_next() is False
+
+        factor_payloads: list[bytes] = []
+        public_factors: list[dict[str, object]] = []
+        strategy_payloads: list[bytes] = []
+        for index, run_id in enumerate(run_ids):
+            stored = _stored_execution(settings, run_id)
+            assert stored["attempt_data_generation_id"] == generation_id
+            bundle = runtime.publication.read(
+                PublishedRef(
+                    manifest_sha256=str(stored["result_manifest_sha256"]),
+                    kind="research.result",
+                    provenance=stored["result_provenance"],
+                )
+            )
+            factor_payloads.append(bundle.payloads["factor_summary"].content)
+            detail = client.get(f"/api/research-runs/{run_id}").json()
+            assert detail["status"] == "succeeded"
+            public_factors.append(detail["result"]["factor"])
+            if index == 0:
+                assert set(bundle.payloads) == {"factor_summary"}
+                assert detail["research_kind"] == "factor_evaluation"
+                assert set(detail["result"]) == {"factor", "provenance"}
+            else:
+                assert detail["research_kind"] == "strategy_backtest"
+                strategy_payloads.append(bundle.payloads["strategy_summary"].content)
+
+        assert factor_payloads[0] == factor_payloads[1] == factor_payloads[2]
+        assert canonical_json_bytes(public_factors[0]) == canonical_json_bytes(
+            public_factors[1]
+        ) == canonical_json_bytes(public_factors[2])
+        assert strategy_payloads[0] != strategy_payloads[1]
+
+        factor_summary = json.loads(factor_payloads[0])
+        assert set(factor_summary["horizons"]) == {"1", "5", "20"}
+        for horizon_name, expected_horizon in (("1", 1), ("5", 5), ("20", 20)):
+            horizon = factor_summary["horizons"][horizon_name]
+            assert horizon["horizon"] == expected_horizon
+            assert set(horizon["summary"]) == {
+                "ic",
+                "quantile_returns",
+                "rank_ic",
+                "top_bottom_return",
+            }
+            assert set(horizon["summary"]["quantile_returns"]) == {
+                "q1",
+                "q2",
+                "q3",
+                "q4",
+                "q5",
+            }
+            assert horizon["coverage"]["ic_valid_session_count"] > 0
+            assert horizon["coverage"]["rank_ic_valid_session_count"] > 0
+            assert horizon["coverage"]["quantile_valid_session_count"] > 0
+            assert len(horizon["alpha_checksum"]) == 64
+            assert len(horizon["label_checksum"]) == 64
+            assert len(horizon["source_checksum"]) == 64
+        serialized = factor_payloads[0].lower()
+        for forbidden in (b'"daily"', b'"alpha_values"', b'"forward_labels"', b'"samples"'):
+            assert forbidden not in serialized
 
 
 @pytest.mark.skipif(
@@ -1406,6 +1596,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
             "start_date",
             "end_date",
             "formula_summary",
+            "research_kind",
             "input",
             "progress",
             "execution_timing",
@@ -1424,6 +1615,7 @@ def test_attempt_uses_the_generation_frozen_when_run_is_admitted(tmp_path: Path)
         assert set(public_run["result"]["provenance"]) == {
             "schema_version",
             "research_run_id",
+            "research_kind",
             "immutable_input_sha256",
             "calculation_contracts",
             "semantic_versions",
@@ -2934,10 +3126,12 @@ def test_attempt_keeps_its_pinned_generation_when_head_moves(tmp_path: Path) -> 
                     kind="research.result",
                     provenance=stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind="strategy_backtest",
         )
         expected = build_result_payload(
             run(_kernel_input(canonical_a, sessions=sessions)),
+            research_kind="strategy_backtest",
             rebalance_interval=1,
             universe="top300",
         )
@@ -3301,6 +3495,11 @@ def test_insufficient_warmup_is_rejected_before_run_creation(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize("session_count", [1, 2])
+@pytest.mark.parametrize(
+    "research_kind",
+    ("factor_evaluation", "strategy_backtest"),
+    ids=("factor-evaluation", "strategy-backtest"),
+)
 @pytest.mark.skipif(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
@@ -3308,6 +3507,7 @@ def test_insufficient_warmup_is_rejected_before_run_creation(tmp_path: Path) -> 
 def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
     tmp_path: Path,
     session_count: int,
+    research_kind: str,
 ) -> None:
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
@@ -3319,9 +3519,10 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
         accepted = client.post(
             "/api/research-runs",
             json=_run_command(
-                f"attempt-short-{session_count}",
+                f"attempt-short-{research_kind}-{session_count}",
                 start_date=sessions[0],
                 end_date=sessions[-1],
+                research_kind=research_kind,
             ),
         )
         run_id = accepted.json()["id"]
@@ -3337,24 +3538,48 @@ def test_short_attempt_publishes_exact_period_and_complete_terminal_state(
                     kind="research.result",
                     provenance=stored["result_provenance"],
                 )
-            )
+            ),
+            research_kind=research_kind,
         )
-        observations = result["strategy_daily_observations"]
-        assert [row["session"] for row in observations] == list(sessions)
+        expected_result_names = (
+            {"factor_summary"}
+            if research_kind == "factor_evaluation"
+            else {
+                "factor_summary",
+                "strategy_summary",
+                "strategy_daily_observations",
+                "terminal_strategy_state",
+            }
+        )
+        assert set(result) == expected_result_names
         for horizon in result["factor_summary"]["horizons"].values():
             assert horizon["summary"]["ic"]["mean"] is None
+            assert horizon["summary"]["ic"]["icir"] is None
             assert horizon["summary"]["rank_ic"]["mean"] is None
+            assert horizon["summary"]["rank_ic"]["icir"] is None
+            assert horizon["summary"]["quantile_returns"] == {
+                "q1": None,
+                "q2": None,
+                "q3": None,
+                "q4": None,
+                "q5": None,
+            }
+            assert horizon["summary"]["top_bottom_return"] is None
             assert horizon["coverage"]["ic_valid_session_count"] == 0
             assert horizon["coverage"]["rank_ic_valid_session_count"] == 0
-        strategy_metrics = result["strategy_summary"]["metrics"]
-        assert strategy_metrics["annualized_volatility"] is None
-        assert strategy_metrics["sharpe"] is None
-        terminal = result["terminal_strategy_state"]
-        assert terminal["session"] == sessions[-1]
-        assert terminal["last_daily_observation"]["session"] == sessions[-1]
-        assert terminal["rebalance_phase"]["report_session_count"] == session_count
-        assert terminal["metric_state"]["session_count"] == session_count
-        assert isinstance(terminal["positions"], list)
+            assert horizon["coverage"]["quantile_valid_session_count"] == 0
+        if research_kind == "strategy_backtest":
+            observations = result["strategy_daily_observations"]
+            assert [row["session"] for row in observations] == list(sessions)
+            strategy_metrics = result["strategy_summary"]["metrics"]
+            assert strategy_metrics["annualized_volatility"] is None
+            assert strategy_metrics["sharpe"] is None
+            terminal = result["terminal_strategy_state"]
+            assert terminal["session"] == sessions[-1]
+            assert terminal["last_daily_observation"]["session"] == sessions[-1]
+            assert terminal["rebalance_phase"]["report_session_count"] == session_count
+            assert terminal["metric_state"]["session_count"] == session_count
+            assert isinstance(terminal["positions"], list)
         assert stored["active_pin_count"] == 0
 
 
@@ -3573,8 +3798,11 @@ def _run_command(
     formula: str = "close_adj",
     start_date: str = "2026-08-03",
     end_date: str = "2026-08-05",
+    research_kind: str = "strategy_backtest",
+    holdings_count: int = 1,
+    rebalance_every_sessions: int = 1,
 ) -> dict[str, object]:
-    return {
+    command: dict[str, object] = {
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": "Attempt-scoped current data",
@@ -3583,9 +3811,16 @@ def _run_command(
         "formula": formula,
         "universe": "top300",
         "neutralization": "none",
-        "holdings_count": 1,
-        "rebalance_every_sessions": 1,
+        "research_kind": research_kind,
     }
+    if research_kind == "strategy_backtest":
+        command.update(
+            {
+                "holdings_count": holdings_count,
+                "rebalance_every_sessions": rebalance_every_sessions,
+            }
+        )
+    return command
 
 
 def _canonical(
@@ -4130,13 +4365,16 @@ def _kernel_input(
         effective_alpha_lookback=0,
         universe="top300",
         neutralization="none",
-        holdings_count=1,
-        rebalance_interval=1,
-        initial_cash_cny="10000000",
-        commission_rate_all_in="0.0003",
-        commission_min_cny="5",
-        stamp_duty_sell_rate="0.0005",
-        transfer_fee_rate="0.00001",
+        research_kind="strategy_backtest",
+        strategy=StrategyRunInput(
+            holdings_count=1,
+            rebalance_interval=1,
+            initial_cash_cny="10000000",
+            commission_rate_all_in="0.0003",
+            commission_min_cny="5",
+            stamp_duty_sell_rate="0.0005",
+            transfer_fee_rate="0.00001",
+        ),
         research_start_session=sessions[0],
         research_end_session=sessions[-1],
     )
@@ -4190,17 +4428,21 @@ def _reference_result(
                 effective_alpha_lookback=immutable.alpha_admission.effective_lookback,
                 universe=immutable.universe,
                 neutralization=immutable.neutralization,
-                holdings_count=int(strategy["holdings_count"]),
-                rebalance_interval=int(strategy["rebalance_every_sessions"]),
-                initial_cash_cny=str(strategy["initial_cash_cny"]),
-                commission_rate_all_in=str(costs["commission_rate_all_in"]),
-                commission_min_cny=str(costs["commission_min_cny"]),
-                stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-                transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                research_kind="strategy_backtest",
+                strategy=StrategyRunInput(
+                    holdings_count=int(strategy["holdings_count"]),
+                    rebalance_interval=int(strategy["rebalance_every_sessions"]),
+                    initial_cash_cny=str(strategy["initial_cash_cny"]),
+                    commission_rate_all_in=str(costs["commission_rate_all_in"]),
+                    commission_min_cny=str(costs["commission_min_cny"]),
+                    stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+                    transfer_fee_rate=str(costs["transfer_fee_rate"]),
+                ),
                 research_start_session=selected[0],
                 research_end_session=selected[-1],
             )
         ),
+        research_kind="strategy_backtest",
         rebalance_interval=int(strategy["rebalance_every_sessions"]),
         universe=immutable.universe,
     )

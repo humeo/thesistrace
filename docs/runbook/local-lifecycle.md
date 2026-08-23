@@ -143,8 +143,9 @@ Before a release, run every local seam, including the final image qualification:
 mise exec -- pnpm check:release
 ```
 
-`pnpm check:release` runs `pnpm check` once and then `pnpm test:image-smoke`.
-It does not repeat the standard gate.
+`pnpm check:release` runs `pnpm check` once, then `pnpm test:image-smoke`, then
+the dual-kind `pnpm test:benchmark` final-image qualification. It does not
+repeat the standard gate.
 
 ## Evidence, cleanup, and interactive diagnosis
 

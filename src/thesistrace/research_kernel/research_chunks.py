@@ -48,17 +48,28 @@ class ResearchChunkCalculation:
     phase_seconds: dict[str, float]
 
 
-def empty_research_continuation() -> dict[str, object]:
-    return {
+def empty_research_continuation(
+    research_kind: str,
+) -> dict[str, object]:
+    if research_kind not in {"factor_evaluation", "strategy_backtest"}:
+        raise ValueError("Research Kind is invalid")
+    continuation: dict[str, object] = {
         "schema_version": "research-chunk-continuation-v2",
+        "research_kind": research_kind,
         "completed_research_session_count": 0,
         "rolling_tail_sessions": [],
         "pending_alpha": [],
         "alpha_checksum": None,
         "factor_state": empty_factor_state(),
-        "strategy_state": None,
-        "strategy_checksum": None,
     }
+    if research_kind == "strategy_backtest":
+        continuation.update(
+            {
+                "strategy_state": None,
+                "strategy_checksum": None,
+            }
+        )
+    return continuation
 
 
 def execute_research_chunk(
@@ -71,7 +82,10 @@ def execute_research_chunk(
     cancellation_check: Callable[[], None],
 ) -> ResearchChunkCalculation:
     alpha_started = monotonic()
-    state = _copy_research_continuation(continuation)
+    state = validated_research_continuation(
+        continuation,
+        research_kind=run_input.research_kind,
+    )
     if not research_sessions:
         return ResearchChunkCalculation(
             continuation=state,
@@ -159,6 +173,39 @@ def execute_research_chunk(
         raise ValueError("Pending Alpha continuation exceeded its bound")
 
     factor_seconds = monotonic() - factor_started
+    completed_count = int(state["completed_research_session_count"]) + len(
+        research_sessions
+    )
+    state["completed_research_session_count"] = completed_count
+    lookback = max(run_input.alpha_execution_plan().effective_lookback, 2)
+    state["rolling_tail_sessions"] = list(calendar[-lookback:])
+    if run_input.research_kind == "factor_evaluation":
+        finalize_started = monotonic()
+        final_values: dict[str, object] | None = None
+        if final_chunk:
+            if state["pending_alpha"]:
+                raise ValueError("Final Research Chunk has unresolved Alpha Labels")
+            final_values = {
+                "factor_summary": finalize_factor_state(
+                    _mapping(state["factor_state"], "Factor state"),
+                    alpha_checksum=str(state["alpha_checksum"]),
+                )
+            }
+        return ResearchChunkCalculation(
+            continuation=state,
+            strategy_daily_observations=(),
+            final_values=final_values,
+            phase_seconds={
+                "alpha_and_pending": alpha_and_pending_seconds,
+                "factor": factor_seconds,
+                "strategy": 0.0,
+                "finalize": monotonic() - finalize_started,
+            },
+        )
+
+    strategy_settings = run_input.strategy
+    if strategy_settings is None:
+        raise ValueError("Strategy Backtest input is incomplete")
     strategy_started = monotonic()
     prior_strategy = state.get("strategy_state")
     prior_cost = Decimal(0)
@@ -207,8 +254,6 @@ def execute_research_chunk(
     metric_state["cumulative_cost"] = str(Decimal(str(metric_state["cumulative_cost"])).normalize())
     strategy_seconds = monotonic() - strategy_started
     finalize_started = monotonic()
-    completed_count = int(state["completed_research_session_count"]) + len(research_sessions)
-    state["completed_research_session_count"] = completed_count
     state["strategy_state"] = {
         "daily": [dict(strategy["daily"][-1])],
         "positions": [dict(value) for value in strategy["positions"]],
@@ -221,9 +266,6 @@ def execute_research_chunk(
         "report_session_count": completed_count,
         "metric_state": metric_state,
     }
-    lookback = max(run_input.alpha_execution_plan().effective_lookback, 2)
-    state["rolling_tail_sessions"] = list(calendar[-lookback:])
-
     final_values: dict[str, object] | None = None
     if final_chunk:
         if state["pending_alpha"]:
@@ -267,7 +309,7 @@ def execute_research_chunk(
                 "rebalance_phase": {
                     "origin_session": str(run_input.research_start_session),
                     "report_session_count": completed_count,
-                    "rebalance_interval": run_input.rebalance_interval,
+                    "rebalance_interval": strategy_settings.rebalance_interval,
                     "completed_intervals": completed_count - 1,
                 },
                 "pending_signal": (
@@ -275,7 +317,7 @@ def execute_research_chunk(
                         "signal_session": str(terminal["session"]),
                         "execution": "next_research_session_open",
                     }
-                    if (completed_count - 1) % run_input.rebalance_interval == 0
+                    if (completed_count - 1) % strategy_settings.rebalance_interval == 0
                     else None
                 ),
                 "last_daily_observation": terminal,
@@ -618,13 +660,34 @@ def _strategy_observations(
     return observations
 
 
-def _copy_research_continuation(value: Mapping[str, object]) -> dict[str, object]:
+def validated_research_continuation(
+    value: Mapping[str, object],
+    *,
+    research_kind: str,
+) -> dict[str, object]:
     import json
 
     copied = json.loads(canonical_json_bytes(value))
+    common_keys = {
+        "schema_version",
+        "research_kind",
+        "completed_research_session_count",
+        "rolling_tail_sessions",
+        "pending_alpha",
+        "alpha_checksum",
+        "factor_state",
+    }
+    expected_keys = (
+        common_keys | {"strategy_state", "strategy_checksum"}
+        if research_kind == "strategy_backtest"
+        else common_keys
+    )
     if (
         not isinstance(copied, dict)
         or copied.get("schema_version") != "research-chunk-continuation-v2"
+        or copied.get("research_kind") != research_kind
+        or research_kind not in {"factor_evaluation", "strategy_backtest"}
+        or set(copied) != expected_keys
     ):
         raise ValueError("Research Chunk continuation is invalid")
     return copied

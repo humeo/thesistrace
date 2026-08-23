@@ -313,6 +313,32 @@ textarea { resize: vertical; }
 .run-configuration-grid fieldset { display: grid; grid-column: span 4; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .run-configuration-grid fieldset legend { grid-column: 1 / -1; margin-bottom: 8px; color: #27272f; font-size: 13px; font-weight: 520; }
 .run-configuration-grid fieldset > p { display: none; }
+.run-configuration-grid .research-kind-control { grid-column: 1 / -1; gap: 16px; }
+.research-kind-option {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px;
+  min-height: 72px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  cursor: pointer;
+}
+.research-kind-option:has(input:checked) { background: #fff; border-color: var(--primary-strong); }
+.research-kind-option:has(input:focus-visible) { outline: 2px solid var(--primary-strong); outline-offset: 2px; }
+.run-configuration-grid .research-kind-option input {
+  width: 18px;
+  min-height: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--primary-strong);
+}
+.research-kind-option span { display: grid; gap: 8px; }
+.research-kind-option strong { color: var(--ink); font-size: 13px; font-weight: 620; }
+.research-kind-option small { color: var(--ink-soft); font-size: 11px; line-height: 1.45; }
 .research-date-field { display: grid; gap: 8px; min-width: 0; }
 .research-date-control { position: relative; }
 .research-date-control input::-webkit-calendar-picker-indicator { display: none; }
@@ -473,6 +499,7 @@ textarea { resize: vertical; }
   .research-new, .browser-save-status { display: none; }
   .run-configuration-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 16px; }
   .run-configuration-grid fieldset { grid-column: span 3; }
+  .run-configuration-grid .research-kind-control { grid-column: 1 / -1; }
   .run-configuration-grid > label { grid-column: span 2; }
   .run-configuration-grid > label:first-of-type { grid-column: span 3; }
   .research-notes { grid-column: span 4; }
@@ -516,6 +543,7 @@ textarea { resize: vertical; }
   .research-workspace-header { grid-template-columns: 1fr auto; }
   .run-configuration-grid { grid-template-columns: 1fr; }
   .run-configuration-grid fieldset { grid-column: auto; grid-template-columns: 1fr; }
+  .run-configuration-grid .research-kind-control { grid-column: auto; }
   .run-configuration-grid > label, .run-configuration-grid > label:first-of-type, .research-notes, .research-run-settings footer { grid-column: auto; }
   .research-run-settings footer .button-primary { width: 100%; }
   .alpha-field-reference-list { grid-template-columns: 1fr; }

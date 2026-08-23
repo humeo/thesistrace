@@ -20,6 +20,7 @@ ResearchName = Annotated[str, Field(strict=True, max_length=200)]
 Formula = Annotated[str, Field(strict=True)]
 HoldingsCount = Annotated[int, Field(strict=True, ge=1, le=100)]
 RebalanceInterval = Annotated[int, Field(strict=True, ge=1, le=20)]
+type ResearchKind = Literal["factor_evaluation", "strategy_backtest"]
 
 
 def _natural_date(value: object) -> date:
@@ -39,7 +40,7 @@ def _natural_date(value: object) -> date:
 NaturalDate = Annotated[date, BeforeValidator(_natural_date)]
 
 
-class ResearchRunAdmissionCommand(BaseModel):
+class _ResearchRunAdmissionBase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     request_id: RequestId
@@ -51,14 +52,28 @@ class ResearchRunAdmissionCommand(BaseModel):
     end_date: NaturalDate
     universe: Literal["top300", "top1000", "top2000", "top3000"]
     neutralization: Literal["none", "industry"]
-    holdings_count: HoldingsCount
-    rebalance_every_sessions: RebalanceInterval
 
     @model_validator(mode="after")
-    def validate_research_period(self) -> ResearchRunAdmissionCommand:
+    def validate_research_period(self) -> _ResearchRunAdmissionBase:
         if self.start_date > self.end_date:
             raise ValueError("Research end date must not precede start date")
         return self
+
+
+class FactorEvaluationAdmissionCommand(_ResearchRunAdmissionBase):
+    research_kind: Literal["factor_evaluation"]
+
+
+class StrategyBacktestAdmissionCommand(_ResearchRunAdmissionBase):
+    research_kind: Literal["strategy_backtest"]
+    holdings_count: HoldingsCount
+    rebalance_every_sessions: RebalanceInterval
+
+
+type ResearchRunAdmissionCommand = Annotated[
+    FactorEvaluationAdmissionCommand | StrategyBacktestAdmissionCommand,
+    Field(discriminator="research_kind"),
+]
 
 
 class ResearchRunAdmissionIssue(BaseModel):
@@ -164,14 +179,35 @@ class ImmutableRunInput(BaseModel):
     field_bindings: dict[str, str]
     universe: Literal["top300", "top1000", "top2000", "top3000"]
     neutralization: Literal["none", "industry"]
-    strategy: dict[str, object]
-    costs: dict[str, str]
-    risk_free_rate: str
+    research_kind: ResearchKind
+    strategy: dict[str, object] | None = None
+    costs: dict[str, str] | None = None
+    risk_free_rate: str | None = None
     numeric_execution_contract: str
     semantic_versions: dict[str, str]
     alpha_admission: AlphaAdmissionFacts
     data_admission: DataAdmissionFacts
     execution_plan: ResearchExecutionPlan
+
+    @model_validator(mode="after")
+    def validate_research_kind_contract(self) -> ImmutableRunInput:
+        strategy_values = (self.strategy, self.costs, self.risk_free_rate)
+        if self.research_kind == "factor_evaluation" and any(
+            value is not None for value in strategy_values
+        ):
+            raise ValueError("Factor Evaluation immutable input cannot contain Strategy values")
+        if self.research_kind == "strategy_backtest" and any(
+            value is None for value in strategy_values
+        ):
+            raise ValueError("Strategy Backtest immutable input requires Strategy values")
+        return self
+
+    def canonical_value(self) -> dict[str, object]:
+        value = self.model_dump(mode="json")
+        if self.research_kind == "factor_evaluation":
+            for name in ("strategy", "costs", "risk_free_rate"):
+                value.pop(name)
+        return value
 
 
 class ResearchRunSummary(BaseModel):
@@ -187,6 +223,7 @@ class ResearchRunSummary(BaseModel):
     start_date: date
     end_date: date
     formula_summary: str
+    research_kind: ResearchKind
     failure_reason: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
@@ -202,8 +239,25 @@ class ResearchRunAuthorableInput(BaseModel):
     end_date: date
     universe: Literal["top300", "top1000", "top2000", "top3000"]
     neutralization: Literal["none", "industry"]
-    holdings_count: int
-    rebalance_every_sessions: int
+    research_kind: ResearchKind
+    holdings_count: int | None = Field(default=None, exclude_if=lambda value: value is None)
+    rebalance_every_sessions: int | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+
+    @model_validator(mode="after")
+    def validate_research_kind_contract(self) -> ResearchRunAuthorableInput:
+        strategy_values = (self.holdings_count, self.rebalance_every_sessions)
+        if self.research_kind == "factor_evaluation" and any(
+            value is not None for value in strategy_values
+        ):
+            raise ValueError("Factor Evaluation authorable input cannot contain Strategy values")
+        if self.research_kind == "strategy_backtest" and any(
+            value is None for value in strategy_values
+        ):
+            raise ValueError("Strategy Backtest authorable input requires Strategy values")
+        return self
 
 
 class ResearchRunCancelCommand(BaseModel):
@@ -350,7 +404,7 @@ class TerminalStrategyStateView(BaseModel):
     pending_signal: TerminalPendingSignal | None
 
 
-class ResultProvenance(BaseModel):
+class _ResultProvenanceBase(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: str
@@ -360,13 +414,33 @@ class ResultProvenance(BaseModel):
     semantic_versions: dict[str, str]
 
 
-class ResearchRunResult(BaseModel):
+class FactorEvaluationResultProvenance(_ResultProvenanceBase):
+    research_kind: Literal["factor_evaluation"]
+
+
+class StrategyBacktestResultProvenance(_ResultProvenanceBase):
+    research_kind: Literal["strategy_backtest"]
+
+
+class FactorEvaluationResearchRunResult(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    factor: FactorResult
+    provenance: FactorEvaluationResultProvenance
+
+
+class StrategyBacktestResearchRunResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     factor: FactorResult
     strategy: StrategyResult
     terminal_strategy_state: TerminalStrategyStateView
-    provenance: ResultProvenance
+    provenance: StrategyBacktestResultProvenance
+
+
+type ResearchRunResult = (
+    FactorEvaluationResearchRunResult | StrategyBacktestResearchRunResult
+)
 
 
 class ResearchRunProgress(BaseModel):

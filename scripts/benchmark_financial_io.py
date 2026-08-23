@@ -234,12 +234,13 @@ def _tracking_advance_benchmark(
 
 def _activate_benchmark_track(runtime: object, sessions: tuple[str, ...], suffix: str) -> str:
     from thesistrace.research_run.models import (
-        ResearchRunAdmissionCommand,
         StartTrackingCommand,
+        StrategyBacktestAdmissionCommand,
     )
 
     outcome = runtime.research_runs.admit(
-        ResearchRunAdmissionCommand(
+        StrategyBacktestAdmissionCommand(
+            research_kind="strategy_backtest",
             request_id=f"financial-io-benchmark-run-{suffix}",
             folder_id="folder_default",
             name=f"Financial I/O benchmark {suffix}",

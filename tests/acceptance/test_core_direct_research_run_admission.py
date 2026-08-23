@@ -12,6 +12,9 @@ import pytest
 from core_runtime import create_initialized_test_app as create_app
 from core_runtime import drop_product_schemas
 from fastapi.testclient import TestClient
+from psycopg.errors import CheckViolation
+from psycopg.types.json import Jsonb
+from pydantic import TypeAdapter
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
@@ -34,6 +37,19 @@ SESSIONS = (
     "2026-08-10",
     "2026-08-11",
 )
+
+
+def _weekday_sessions(start: date, count: int) -> tuple[str, ...]:
+    sessions: list[str] = []
+    cursor = start
+    while len(sessions) < count:
+        if cursor.weekday() < 5:
+            sessions.append(cursor.isoformat())
+        cursor += timedelta(days=1)
+    return tuple(sessions)
+
+
+LONG_FACTOR_SESSIONS = _weekday_sessions(date(2025, 1, 2), 140)
 
 
 @pytest.mark.skipif(
@@ -128,6 +144,66 @@ def test_every_data_or_folder_rejection_leaves_no_durable_admission_state(
     not core_environment_is_configured(),
     reason="the isolated Core PostgreSQL runtime is not configured",
 )
+def test_current_schema_rejects_missing_null_or_malformed_research_kind_contract() -> None:
+    settings = CoreSettings.from_environment()
+    drop_product_schemas(settings)
+
+    with TestClient(create_app(settings)):
+        malformed_inputs = (
+            {},
+            {"research_kind": None},
+            {"research_kind": 1},
+            {
+                "research_kind": "factor_evaluation",
+                "strategy": None,
+            },
+            {
+                "research_kind": "strategy_backtest",
+                "strategy": None,
+                "costs": {},
+                "risk_free_rate": "0",
+            },
+            {
+                "research_kind": "strategy_backtest",
+                "strategy": {},
+                "costs": None,
+                "risk_free_rate": "0",
+            },
+            {
+                "research_kind": "strategy_backtest",
+                "strategy": {},
+                "costs": {},
+                "risk_free_rate": None,
+            },
+        )
+        database = PostgresDatabase(settings.database_url)
+        database.open()
+        try:
+            for index, immutable_input in enumerate(malformed_inputs):
+                with pytest.raises(CheckViolation):
+                    with database.transaction() as transaction:
+                        transaction.execute(
+                            """
+                            INSERT INTO research_runs.runs (
+                                id, folder_id, name, requested_start_date,
+                                requested_end_date, status, immutable_input
+                            ) VALUES (%s, 'folder_default', 'Malformed', %s, %s, 'queued', %s)
+                            """,
+                            (
+                                f"run_malformed_{index}",
+                                date(2026, 8, 3),
+                                date(2026, 8, 4),
+                                Jsonb(immutable_input),
+                            ),
+                        )
+        finally:
+            database.close()
+
+
+@pytest.mark.skipif(
+    not core_environment_is_configured(),
+    reason="the isolated Core PostgreSQL runtime is not configured",
+)
 def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan() -> None:
     settings = CoreSettings.from_environment()
     drop_product_schemas(settings)
@@ -141,7 +217,7 @@ def test_long_research_is_admitted_by_peak_capacity_and_freezes_its_chunk_plan()
         available_field_ids=frozenset({"price.close.adjusted"}),
         maximum_universe_cardinality=lambda _universe, _start, _end: 3000,
     )
-    command = ResearchRunAdmissionCommand.model_validate(
+    command = TypeAdapter(ResearchRunAdmissionCommand).validate_python(
         {
             **_valid_command("direct-over-budget"),
             "formula": "ts_mean(close_adj, 252)",
@@ -210,6 +286,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "start_date": "2026-08-03",
             "end_date": "2026-08-04",
             "formula_summary": "close_adj",
+            "research_kind": "strategy_backtest",
         }
         queued_detail = client.get(f"/api/research-runs/{queued['id']}").json()
         assert queued_detail["execution_timing"] == {
@@ -246,6 +323,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "field_bindings": {"price.close.adjusted": "close_adj"},
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "strategy": {
                 "kind": "long_only_top_n_equal_weight",
                 "holdings_count": 1,
@@ -326,6 +404,7 @@ def test_direct_admission_is_atomic_idempotent_and_executes_the_frozen_expressio
             "end_date": "2026-08-04",
             "universe": "top300",
             "neutralization": "none",
+            "research_kind": "strategy_backtest",
             "holdings_count": 1,
             "rebalance_every_sessions": 1,
         }
@@ -443,7 +522,7 @@ def test_research_organization_updates_compose_concurrently_and_cursor_is_stable
     reason="the isolated Core PostgreSQL/RustFS runtime is not configured",
 )
 @pytest.mark.database_restart
-def test_direct_admission_reopens_and_replays_after_database_restart(
+def test_research_kinds_and_factor_checkpoint_resume_after_database_restart(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -451,13 +530,42 @@ def test_direct_admission_reopens_and_replays_after_database_restart(
         pytest.skip("database restart acceptance runs in its isolated final phase")
     settings = replace(CoreSettings.from_environment(), data_mount=tmp_path)
     drop_product_schemas(settings)
-    command = _valid_command("direct-restart")
+    factor_command = {
+        **_valid_command(
+            "factor-checkpoint-database-restart",
+            research_kind="factor_evaluation",
+        ),
+        "start_date": LONG_FACTOR_SESSIONS[0],
+        "end_date": LONG_FACTOR_SESSIONS[-1],
+    }
+    strategy_command = {
+        **_valid_command("strategy-admission-database-restart"),
+        "start_date": LONG_FACTOR_SESSIONS[0],
+        "end_date": LONG_FACTOR_SESSIONS[1],
+    }
 
     with TestClient(create_app(settings)) as client:
-        _publish_current_data(settings)
-        accepted = client.post("/api/research-runs", json=command)
-        assert accepted.status_code == 202
-        expected = accepted.json()
+        _publish_current_data(settings, sessions=LONG_FACTOR_SESSIONS)
+        factor_accepted = client.post("/api/research-runs", json=factor_command)
+        assert factor_accepted.status_code == 202, factor_accepted.text
+        run_id = str(factor_accepted.json()["id"])
+        _install_transient_result_failure(settings)
+        try:
+            assert client.app.state.core_runtime.research_runs.process_next() is True
+        finally:
+            _remove_transient_result_failure(settings)
+        retry_wait = client.get(f"/api/research-runs/{run_id}").json()
+        assert retry_wait["status"] == "running"
+        before_restart = _factor_resume_storage(settings, run_id)
+        assert before_restart["attempt_count"] == 1
+        assert before_restart["latest_failure_reason"] == "InfrastructureUnavailable"
+        assert before_restart["checkpoint_count"] == len(
+            before_restart["immutable_input"]["execution_plan"]["chunks"]
+        )
+        frozen_input = before_restart["immutable_input"]
+        strategy_accepted = client.post("/api/research-runs", json=strategy_command)
+        assert strategy_accepted.status_code == 202, strategy_accepted.text
+        expected_strategy = strategy_accepted.json()
 
     restarted_port = _restart_isolated_postgres()
     restarted_settings = replace(
@@ -469,15 +577,36 @@ def test_direct_admission_reopens_and_replays_after_database_restart(
     monkeypatch.setenv("THESISTRACE_DATABASE_URL", restarted_settings.database_url)
 
     with TestClient(create_app(restarted_settings)) as restarted:
-        assert restarted.get(f"/api/research-runs/{expected['id']}").status_code == 200
-        replay = restarted.post("/api/research-runs", json=command)
-        assert replay.status_code == 202
-        assert replay.json() == expected
-    assert _admission_counts(restarted_settings) == {"requests": 1, "runs": 1}
+        assert restarted.get(f"/api/research-runs/{run_id}").json()["status"] == "running"
+        strategy_replay = restarted.post("/api/research-runs", json=strategy_command)
+        assert strategy_replay.status_code == 202
+        assert strategy_replay.json() == expected_strategy
+        assert restarted.app.state.core_runtime.research_runs.process_next() is True
+        detail = restarted.get(f"/api/research-runs/{run_id}").json()
+        assert detail["status"] == "succeeded"
+        assert detail["research_kind"] == "factor_evaluation"
+        assert set(detail["result"]) == {"factor", "provenance"}
+        after_restart = _factor_resume_storage(restarted_settings, run_id)
+        assert after_restart["immutable_input"] == frozen_input
+        assert after_restart["attempt_count"] == 2
+        assert after_restart["succeeded_attempt_count"] == 1
+        assert after_restart["checkpoint_count"] == 0
+        assert after_restart["active_pin_count"] == 0
+        assert after_restart["result_manifest_sha256"] is not None
+        factor_replay = restarted.post("/api/research-runs", json=factor_command)
+        assert factor_replay.status_code == 202
+        assert factor_replay.json()["id"] == run_id
+        assert factor_replay.json()["research_kind"] == "factor_evaluation"
+        assert factor_replay.json()["status"] == "succeeded"
+    assert _admission_counts(restarted_settings) == {"requests": 2, "runs": 2}
 
 
-def _valid_command(request_id: str) -> dict[str, object]:
-    return {
+def _valid_command(
+    request_id: str,
+    *,
+    research_kind: str = "strategy_backtest",
+) -> dict[str, object]:
+    command: dict[str, object] = {
         "request_id": request_id,
         "folder_id": "folder_default",
         "name": "Direct Research",
@@ -487,9 +616,16 @@ def _valid_command(request_id: str) -> dict[str, object]:
         "end_date": "2026-08-04",
         "universe": "top300",
         "neutralization": "none",
-        "holdings_count": 1,
-        "rebalance_every_sessions": 1,
+        "research_kind": research_kind,
     }
+    if research_kind == "strategy_backtest":
+        command.update(
+            {
+                "holdings_count": 1,
+                "rebalance_every_sessions": 1,
+            }
+        )
+    return command
 
 
 def _only_issue_code(response: object) -> str:
@@ -572,7 +708,11 @@ def _assert_obsolete_schema_is_absent(settings: CoreSettings) -> None:
         database.close()
 
 
-def _publish_current_data(settings: CoreSettings) -> None:
+def _publish_current_data(
+    settings: CoreSettings,
+    *,
+    sessions: tuple[str, ...] = SESSIONS,
+) -> None:
     s3 = boto3.client(
         "s3",
         endpoint_url=settings.s3_endpoint_url,
@@ -595,15 +735,15 @@ def _publish_current_data(settings: CoreSettings) -> None:
     universe = {"instrument_ids": [instrument_id], "status": "available"}
     canonical = {
         **template,
-        "research_calendar": list(SESSIONS),
-        "prices": [{**price, "session": session} for session in SESSIONS],
-        "trading_states": [{**state, "session": session} for session in SESSIONS],
-        "price_limits": [{**limit, "session": session} for session in SESSIONS],
+        "research_calendar": list(sessions),
+        "prices": [{**price, "session": session} for session in sessions],
+        "trading_states": [{**state, "session": session} for session in sessions],
+        "price_limits": [{**limit, "session": session} for session in sessions],
         "base_pool": [
-            {"session": session, "instrument_ids": [instrument_id]} for session in SESSIONS
+            {"session": session, "instrument_ids": [instrument_id]} for session in sessions
         ],
         "liquidity_universes": {
-            name: [{"session": session, **universe} for session in SESSIONS]
+            name: [{"session": session, **universe} for session in sessions]
             for name in ("top300", "top1000", "top2000", "top3000")
         },
     }
@@ -627,6 +767,83 @@ def _publish_current_data(settings: CoreSettings) -> None:
             candidate_generation_manifest_sha256=generation.manifest_sha256,
             operation_id="direct-admission-head",
         )
+    finally:
+        database.close()
+
+
+def _install_transient_result_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                CREATE FUNCTION publication.reject_ticket03_result_transiently()
+                RETURNS trigger
+                LANGUAGE plpgsql AS $$
+                BEGIN
+                    IF NEW.kind = 'research.result' THEN
+                        RAISE EXCEPTION 'injected transient Result publication failure'
+                            USING ERRCODE = '08006';
+                    END IF;
+                    RETURN NEW;
+                END
+                $$;
+                CREATE TRIGGER reject_ticket03_result_transiently
+                BEFORE INSERT ON publication.manifests
+                FOR EACH ROW
+                EXECUTE FUNCTION publication.reject_ticket03_result_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _remove_transient_result_failure(settings: CoreSettings) -> None:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            transaction.execute(
+                """
+                DROP TRIGGER reject_ticket03_result_transiently ON publication.manifests;
+                DROP FUNCTION publication.reject_ticket03_result_transiently();
+                """
+            )
+    finally:
+        database.close()
+
+
+def _factor_resume_storage(settings: CoreSettings, run_id: str) -> dict[str, object]:
+    database = PostgresDatabase(settings.database_url)
+    database.open()
+    try:
+        with database.transaction() as transaction:
+            row = transaction.execute(
+                """
+                SELECT run.immutable_input, run.result_manifest_sha256,
+                       (SELECT count(*) FROM research_runs.attempts AS attempt
+                        WHERE attempt.run_id = run.id) AS attempt_count,
+                       (SELECT count(*) FROM research_runs.attempts AS attempt
+                        WHERE attempt.run_id = run.id
+                          AND attempt.status = 'succeeded') AS succeeded_attempt_count,
+                       (SELECT attempt.failure_reason
+                        FROM research_runs.attempts AS attempt
+                        WHERE attempt.run_id = run.id
+                        ORDER BY attempt.ordinal DESC
+                        LIMIT 1) AS latest_failure_reason,
+                       (SELECT count(*)
+                        FROM research_runs.execution_checkpoints AS checkpoint
+                        WHERE checkpoint.run_id = run.id) AS checkpoint_count,
+                       (SELECT count(*) FROM data.generation_pins
+                        WHERE status = 'active') AS active_pin_count
+                FROM research_runs.runs AS run
+                WHERE run.id = %s
+                """,
+                (run_id,),
+            ).fetchone()
+        assert row is not None
+        return dict(row)
     finally:
         database.close()
 

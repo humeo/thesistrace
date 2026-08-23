@@ -13,7 +13,11 @@ from pathlib import Path
 from time import monotonic
 
 from thesistrace.data import GenerationStoreError, MountedGenerationStore
-from thesistrace.research_kernel.kernel_run import KernelRunError, RunInput
+from thesistrace.research_kernel.kernel_run import (
+    KernelRunError,
+    RunInput,
+    StrategyRunInput,
+)
 from thesistrace.research_kernel.research_chunks import (
     empty_research_continuation,
     execute_research_chunk,
@@ -130,6 +134,7 @@ class SupervisedResearchExecution:
                 ),
                 "child_calculation_phase_seconds": _calculation_phase_seconds(response),
                 "data_io": _data_io(response),
+                **_strategy_chunk_evidence(self.chunk),
             }
         )
 
@@ -233,6 +238,7 @@ class SupervisedResearchExecution:
             "resource_type": "ResearchRun",
             "resource_id": self._request.run_id,
             "attempt_id": self._request.attempt_id,
+            "research_kind": self._request.immutable_input.research_kind,
             "child_pid": self._process.pid,
         }
 
@@ -279,7 +285,14 @@ class SupervisedResearchExecutor:
                     "resource_type": "ResearchRun",
                     "resource_id": request.run_id,
                     "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
                     "child_pid": process.pid,
+                    "resumed_from_checkpoint": request.resume_from is not None,
+                    "resumed_from_chunk_ordinal": (
+                        None
+                        if request.resume_from is None
+                        else request.resume_from.completed_chunk_ordinal
+                    ),
                 }
             )
             assert process.stdin is not None
@@ -289,7 +302,7 @@ class SupervisedResearchExecutor:
                         "schema_version": "research-child-request-v1",
                         "data_mount": str(self._data_mount),
                         "data_generation_id": request.data_generation_id,
-                        "immutable_input": request.immutable_input.model_dump(mode="json"),
+                        "immutable_input": request.immutable_input.canonical_value(),
                         "resume_from": (
                             None
                             if request.resume_from is None
@@ -346,6 +359,7 @@ class SupervisedResearchExecutor:
                     "resource_type": "ResearchRun",
                     "resource_id": request.run_id,
                     "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
                     "child_pid": process.pid,
                     "chunk_ordinal": chunk["ordinal"],
                     "boundary_session": chunk["boundary_session"],
@@ -360,6 +374,7 @@ class SupervisedResearchExecutor:
                     ),
                     "child_calculation_phase_seconds": _calculation_phase_seconds(response),
                     "data_io": _data_io(response),
+                    **_strategy_chunk_evidence(chunk),
                 }
             )
             return SupervisedResearchExecution(
@@ -386,6 +401,7 @@ class SupervisedResearchExecutor:
                     "resource_type": "ResearchRun",
                     "resource_id": request.run_id,
                     "attempt_id": request.attempt_id,
+                    "research_kind": request.immutable_input.research_kind,
                     "child_pid": process.pid,
                     "exit_code": process.returncode,
                     "acknowledged": False,
@@ -468,7 +484,9 @@ def _calculate_chunks(
             "frozen Research Chunk plan does not match selected Data Generation"
         )
     continuation = (
-        empty_research_continuation() if resume_from is None else dict(resume_from.continuation)
+        empty_research_continuation(immutable_input.research_kind)
+        if resume_from is None
+        else dict(resume_from.continuation)
     )
     completed_ordinal = 0 if resume_from is None else resume_from.completed_chunk_ordinal
     if completed_ordinal == len(plan.chunks):
@@ -619,6 +637,17 @@ def _continuation_instrument_ids(
     )
 
 
+def _strategy_chunk_evidence(chunk: Mapping[str, object]) -> dict[str, object]:
+    continuation = chunk.get("continuation")
+    observations = chunk.get("strategy_daily_observations")
+    if not isinstance(continuation, Mapping) or not isinstance(observations, list):
+        raise ResearchExecutionError("Research Chunk strategy evidence is invalid")
+    return {
+        "strategy_continuation_present": "strategy_state" in continuation,
+        "strategy_observation_count": len(observations),
+    }
+
+
 def _resume_from_request(
     value: object,
     immutable_input: ImmutableRunInput,
@@ -689,6 +718,19 @@ def _kernel_input(
 ) -> RunInput:
     strategy = immutable_input.strategy
     costs = immutable_input.costs
+    strategy_input = None
+    if immutable_input.research_kind == "strategy_backtest":
+        if strategy is None or costs is None:
+            raise ResearchExecutionInputInvalid("Strategy Backtest input is incomplete")
+        strategy_input = StrategyRunInput(
+            holdings_count=int(strategy["holdings_count"]),
+            rebalance_interval=int(strategy["rebalance_every_sessions"]),
+            initial_cash_cny=str(strategy["initial_cash_cny"]),
+            commission_rate_all_in=str(costs["commission_rate_all_in"]),
+            commission_min_cny=str(costs["commission_min_cny"]),
+            stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
+            transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        )
     return RunInput(
         research_data=research_data,
         alpha_expression=immutable_input.alpha_expression,
@@ -696,13 +738,8 @@ def _kernel_input(
         effective_alpha_lookback=immutable_input.alpha_admission.effective_lookback,
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
-        holdings_count=int(strategy["holdings_count"]),
-        rebalance_interval=int(strategy["rebalance_every_sessions"]),
-        initial_cash_cny=str(strategy["initial_cash_cny"]),
-        commission_rate_all_in=str(costs["commission_rate_all_in"]),
-        commission_min_cny=str(costs["commission_min_cny"]),
-        stamp_duty_sell_rate=str(costs["stamp_duty_sell_rate"]),
-        transfer_fee_rate=str(costs["transfer_fee_rate"]),
+        research_kind=immutable_input.research_kind,
+        strategy=strategy_input,
         research_start_session=research_start_session,
         research_end_session=research_end_session,
     )
@@ -751,6 +788,7 @@ def _read_message(
                         "resource_type": "ResearchRun",
                         "resource_id": request.run_id,
                         "attempt_id": request.attempt_id,
+                        "research_kind": request.immutable_input.research_kind,
                         "child_pid": process.pid,
                     }
                 )
@@ -765,6 +803,7 @@ def _read_message(
                             "resource_type": "ResearchRun",
                             "resource_id": request.run_id,
                             "attempt_id": request.attempt_id,
+                            "research_kind": request.immutable_input.research_kind,
                             "child_pid": process.pid,
                         }
                     ),

@@ -622,12 +622,12 @@ _Avoid_: Research Definition, executable study, nested directory, Run snapshot
 The one browser-local authoring state for one Research Folder, persisted only
 through browser storage and including the prospective Research name, Alpha
 Formula, Investment Hypothesis, Requested Research Dates, Universe,
-neutralization, Strategy parameters, and editor state. It has no server
-identity, Revision, or audit authority. Run does not clear it. When absent, the
-editor starts empty and never restores a prior ResearchRun automatically; `Use
-as Draft` is the only action that copies a selected Run's frozen input into it.
-`New` and `Use as Draft` require confirmation before overwriting unexecuted
-local changes.
+neutralization, Research Kind, applicable Strategy parameters, and editor
+state. It has no server identity, Revision, or audit authority. Run does not
+clear it. When absent, the editor starts empty and never restores a prior
+ResearchRun automatically; `Use as Draft` is the only action that copies a
+selected Run's frozen input into it. `New` and `Use as Draft` require
+confirmation before overwriting unexecuted local changes.
 _Avoid_: ResearchRun, server Draft, latest Run, autosaved Definition
 
 **Run Action**:
@@ -638,16 +638,22 @@ the submitted input and selected Data Generation frozen. The Browser Draft
 remains local; the backend chooses data rather than the user.
 _Avoid_: Save, Refresh, Use as Draft, execution Attempt
 
+**Research Kind**:
+The frozen choice between `factor_evaluation`, which ends after Alpha and Factor
+Evaluation, and `strategy_backtest`, which continues through Strategy Backtest.
+Only `strategy_backtest` accepts Strategy parameters and may seed a DailyTrack.
+_Avoid_: Separate execution engine, Worker role, optional Strategy flag
+
 **ResearchRun**:
 The durable resource shown to the user as one Research in exactly one Research
 Folder; there is no separate Research container above it. Its optional Research
 Name and Folder membership are mutable organization metadata. It separately
 freezes the submitted Formula, compiled Alpha Expression, Investment
 Hypothesis, Requested Research Dates, field bindings, Universe,
-neutralization, Strategy parameters, calculation contracts, and selected Data
-Generation identity and Coverage. Its successful
-Attempt produces Factor Evaluation and Strategy Backtest conclusions and may
-seed a DailyTrack only after publishing a complete Result Bundle.
+neutralization, Research Kind, applicable Strategy parameters, calculation
+contracts, and selected Data Generation identity and Coverage. Its successful
+Attempt publishes the complete Result Bundle for that Research Kind; only a
+successful `strategy_backtest` may seed a DailyTrack.
 _Avoid_: Research Folder, Browser Draft, factor evaluation, backtest
 
 **ResearchRun State**:
@@ -686,10 +692,11 @@ _Avoid_: Cancel, Folder removal, cascading DailyTrack deletion
 
 **Use as Draft**:
 The sole action for reusing a ResearchRun's authorable values. It explicitly
-copies them into that Research Folder's Browser Draft after any required
-overwrite confirmation, creates no backend resource, and performs no execution.
-Running the copied values unchanged or after editing follows the ordinary Run
-Action and creates a new ResearchRun; there is no separate Rerun action.
+copies them, including Research Kind and applicable Strategy parameters, into
+that Research Folder's Browser Draft after any required overwrite confirmation,
+creates no backend resource, and performs no execution. Running the copied
+values unchanged or after editing follows the ordinary Run Action and creates a
+new ResearchRun; there is no separate Rerun or Factor-to-Strategy action.
 _Avoid_: Rerun, retry, automatic latest-Run restore
 
 **ResearchRun Attempt**:
@@ -737,12 +744,14 @@ _Avoid_: Full historical matrix, approximate chunk summary, Result Bundle,
 Tracking state
 
 **Result Bundle**:
-The immutable, minimal authoritative result of one successful ResearchRun. It
-retains exactly `factor_summary`, `strategy_summary`,
-`strategy_daily_observations`, and `terminal_strategy_state`. Its byte budget is
-`ceil(research_period_session_count / 504) * 1 MiB`; Alpha Values, stock-level
-Labels, daily Factor observations, orders, fills, and position history remain
-excluded.
+The immutable, minimal authoritative result of one successful ResearchRun,
+discriminated by Research Kind. A `factor_evaluation` Result retains exactly
+`factor_summary`; a `strategy_backtest` Result retains exactly
+`factor_summary`, `strategy_summary`, `strategy_daily_observations`, and
+`terminal_strategy_state`. It never publishes empty Strategy placeholders. Its
+byte budget is `ceil(research_period_session_count / 504) * 1 MiB`; Alpha
+Values, stock-level Labels, daily Factor observations, orders, fills, and
+position history remain excluded.
 _Avoid_: Alpha store, UI cache, partial report, mutable result, attempt
 diagnostics
 
@@ -757,10 +766,15 @@ _Avoid_: Data Generation manifest, HTML report, job log
 The Research-Period-bounded summary that assesses whether an Alpha has
 predictive and ranking value independently of a Strategy's realized portfolio
 outcome. V1 evaluates the same transient Alpha Values at fixed 1-, 5-, and
-20-market-session horizons and retains summary statistics and coverage counts,
-but no daily Factor observations, Alpha Values, or Forward Return Labels. A
-short valid period may produce `null` summary metrics and zero valid-session
-counts without failing the ResearchRun or fabricating a numeric zero.
+20-market-session horizons. Its primary user-visible metrics are mean Rank IC,
+Rank ICIR, mean IC, and ICIR with valid-session Coverage for each horizon.
+Five-Quantile Return and Top-Bottom Return remain retained Factor diagnostics
+but are not primary metrics. It retains no daily Factor observations, Alpha
+Values, or Forward Return Labels. A short valid period may produce `null`
+summary metrics and zero valid-session counts without failing the ResearchRun
+or fabricating a numeric zero. Factor Evaluation and Strategy Backtest must
+publish exactly the same Factor Summary when their frozen Factor inputs and Data
+Generation are identical.
 _Avoid_: Factor curve, Alpha Matrix, Strategy Backtest, factor return
 
 **Label Maturation**:

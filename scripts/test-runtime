@@ -134,10 +134,6 @@ capture_evidence() {
 capture_worker_log_evidence() {
   worker_log="$evidence_dir/worker-events.jsonl"
   compose logs --no-color research-worker tracking-worker >"$worker_log"
-  grep -F '"event":"worker_started"' "$worker_log" >/dev/null
-  grep -F '"event":"worker_claim"' "$worker_log" >/dev/null
-  grep -F '"role":"research"' "$worker_log" >/dev/null
-  grep -F '"role":"tracking"' "$worker_log" >/dev/null
 }
 
 verify_worker_capacity_rejection() {
@@ -215,7 +211,11 @@ child = subprocess.Popen(
 events = []
 execution = SupervisedResearchExecution(
     child,
-    SimpleNamespace(run_id="image-smoke-oom", attempt_id="attempt-1"),
+    SimpleNamespace(
+        run_id="image-smoke-oom",
+        attempt_id="attempt-1",
+        immutable_input=SimpleNamespace(research_kind="factor_evaluation"),
+    ),
     {"final": False},
     events.append,
     1536 * 1024 * 1024,
@@ -445,40 +445,58 @@ case "$command" in
     run_phase benchmark-prepare compose run --rm --no-deps -T initialize \
       python /qualification/long_research_qualification.py prepare \
       --output /smoke-evidence/long-research/preparation.json
-    run_phase benchmark-api compose up --detach --no-build \
-      --wait --wait-timeout 120 api
-    sample_index=0
-    while [ "$sample_index" -lt 5 ]; do
-      run_phase "benchmark-cold-$sample_index" compose run --rm --no-deps -T \
-        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-        research-worker python /qualification/long_research_qualification.py sample \
-        --phase cold --index "$sample_index" \
-        --log "/qualification-evidence/long-research/cold-$sample_index.log" \
-        --output "/qualification-evidence/long-research/cold-$sample_index.json"
-      sample_index=$((sample_index + 1))
+    for research_kind in factor_evaluation strategy_backtest; do
+      sample_index=0
+      while [ "$sample_index" -lt 5 ]; do
+        run_phase "benchmark-$research_kind-cold-$sample_index-product-state-reset" \
+          reset_product_state
+        run_phase "benchmark-$research_kind-cold-$sample_index-api" \
+          compose up --detach --no-build --wait --wait-timeout 120 api
+        run_phase "benchmark-$research_kind-cold-$sample_index" \
+          compose run --rm --no-deps -T \
+          -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+          research-worker python /qualification/long_research_qualification.py sample \
+          --research-kind "$research_kind" \
+          --phase cold --index "$sample_index" --require-fresh-product-state \
+          --log "/qualification-evidence/long-research/$research_kind-cold-$sample_index.log" \
+          --output "/qualification-evidence/long-research/$research_kind-cold-$sample_index.json"
+        sample_index=$((sample_index + 1))
+      done
     done
+    run_phase benchmark-warm-preload-product-state-reset reset_product_state
     run_phase benchmark-warm-preload compose run --rm --no-deps -T \
       research-worker python /qualification/long_research_qualification.py preload \
       --output /qualification-evidence/long-research/preload.json
-    sample_index=0
-    while [ "$sample_index" -lt 5 ]; do
-      run_phase "benchmark-warm-$sample_index-product-state-reset" reset_product_state
-      run_phase "benchmark-warm-$sample_index-api" compose up --detach --no-build \
-        --wait --wait-timeout 120 api
-      run_phase "benchmark-warm-$sample_index" compose run --rm --no-deps -T \
-        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-        research-worker python /qualification/long_research_qualification.py sample \
-        --phase warm --index "$sample_index" \
-        --require-fresh-product-state \
-        --log "/qualification-evidence/long-research/warm-$sample_index.log" \
-        --output "/qualification-evidence/long-research/warm-$sample_index.json"
-      sample_index=$((sample_index + 1))
+    for research_kind in factor_evaluation strategy_backtest; do
+      sample_index=0
+      while [ "$sample_index" -lt 5 ]; do
+        run_phase "benchmark-$research_kind-warm-$sample_index-product-state-reset" \
+          reset_product_state
+        run_phase "benchmark-$research_kind-warm-$sample_index-api" \
+          compose up --detach --no-build --wait --wait-timeout 120 api
+        run_phase "benchmark-$research_kind-warm-$sample_index" \
+          compose run --rm --no-deps -T \
+          -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+          research-worker python /qualification/long_research_qualification.py sample \
+          --research-kind "$research_kind" \
+          --phase warm --index "$sample_index" --require-fresh-product-state \
+          --log "/qualification-evidence/long-research/$research_kind-warm-$sample_index.log" \
+          --output "/qualification-evidence/long-research/$research_kind-warm-$sample_index.json"
+        sample_index=$((sample_index + 1))
+      done
     done
-    run_phase benchmark-cancellation compose run --rm --no-deps -T \
-      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
-      research-worker python /qualification/long_research_qualification.py cancel \
-      --log /qualification-evidence/long-research/cancellation.log \
-      --output /qualification-evidence/long-research/cancellation.json
+    for research_kind in factor_evaluation strategy_backtest; do
+      run_phase "benchmark-$research_kind-cancellation-product-state-reset" \
+        reset_product_state
+      run_phase "benchmark-$research_kind-cancellation-api" \
+        compose up --detach --no-build --wait --wait-timeout 120 api
+      run_phase "benchmark-$research_kind-cancellation" compose run --rm --no-deps -T \
+        -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+        research-worker python /qualification/long_research_qualification.py cancel \
+        --research-kind "$research_kind" \
+        --log "/qualification-evidence/long-research/$research_kind-cancellation.log" \
+        --output "/qualification-evidence/long-research/$research_kind-cancellation.json"
+    done
     backend_image=$(runtime_image_name initialize)
     image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
     run_phase benchmark-qualification compose run --rm --no-deps -T initialize \
@@ -558,11 +576,14 @@ case "$command" in
     test "$network_internal" = true
     printf 'internal=%s\n' "$network_internal" >"$evidence_dir/network.txt"
     compose images --format json >"$evidence_dir/images.jsonl"
+    backend_image=$(runtime_image_name initialize)
+    image_revision=$(docker image inspect "$backend_image" --format '{{.Id}}')
     compose ps --all >"$evidence_dir/compose-ps-before-restart.txt"
     run_phase image-smoke-before compose run --rm --no-deps -T \
       -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
       -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
       -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      -e THESISTRACE_TEST_IMAGE_ID="$image_revision" \
       initialize python /smoke/production_image_smoke.py before \
       >"$evidence_dir/smoke-before.json" \
       2>"$evidence_dir/smoke-before.stderr.log"
@@ -574,6 +595,20 @@ case "$command" in
       initialize python /smoke/production_image_smoke.py expire-worker-loss \
       >"$evidence_dir/smoke-expire-worker-loss.json" \
       2>"$evidence_dir/smoke-expire-worker-loss.stderr.log"
+    run_phase image-smoke-checkpointed-application-restart \
+      compose restart api tracking-worker
+    run_phase image-smoke-checkpointed-database-restart compose restart postgres
+    run_phase image-smoke-checkpointed-post-database-restart \
+      compose restart api tracking-worker
+    run_phase image-smoke-checkpointed-reopen compose up --detach --no-build \
+      --wait --wait-timeout 120 api tracking-worker
+    run_phase image-smoke-checkpointed compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py checkpointed \
+      >"$evidence_dir/smoke-checkpointed.json" \
+      2>"$evidence_dir/smoke-checkpointed.stderr.log"
     run_phase image-smoke-worker-reopen compose up --detach --no-build \
       --wait --wait-timeout 120 research-worker
     run_phase image-smoke-recovered compose run --rm --no-deps -T \
@@ -618,7 +653,23 @@ case "$command" in
       initialize python /smoke/production_image_smoke.py after \
       >"$evidence_dir/smoke-after.json" \
       2>"$evidence_dir/smoke-after.stderr.log"
+    run_phase image-smoke-reset-worker-stop compose stop research-worker
+    run_phase image-smoke-reset-ready compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      initialize python /smoke/production_image_smoke.py reset-ready \
+      >"$evidence_dir/smoke-reset-ready.json" \
+      2>"$evidence_dir/smoke-reset-ready.stderr.log"
     run_phase image-smoke-worker-logs capture_worker_log_evidence
+    run_phase image-smoke-worker-event-contract compose run --rm --no-deps -T \
+      -e THESISTRACE_TEST_API_ORIGIN=http://api:8100 \
+      -e THESISTRACE_TEST_WEB_ORIGIN=http://web:5173 \
+      -e THESISTRACE_TEST_SMOKE_STATE="$smoke_state" \
+      -e THESISTRACE_TEST_WORKER_EVENTS=/smoke-evidence/worker-events.jsonl \
+      initialize python /smoke/production_image_smoke.py worker-events \
+      >"$evidence_dir/smoke-worker-events.json" \
+      2>"$evidence_dir/smoke-worker-events.stderr.log"
     run_phase image-smoke-product-state-reset reset_product_state
     run_phase image-smoke-reset-api compose up --detach --no-build \
       --wait --wait-timeout 120 api

@@ -4,6 +4,7 @@ import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -159,7 +160,10 @@ def open_core_runtime(settings: CoreSettings) -> Iterator[CoreRuntime]:
             publication=publication,
             dataset_lifecycle=dataset_lifecycle,
             generation_store=generation_store,
-            read_result_bundle=read_result_bundle,
+            read_result_bundle=partial(
+                read_result_bundle,
+                research_kind="strategy_backtest",
+            ),
             working_cache_root=Path(working_cache.name) / "daily-tracks",
             seed_research_exists=research_run_exists,
             research_references_result=research_result_manifest_is_referenced,

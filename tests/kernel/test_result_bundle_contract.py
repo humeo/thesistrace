@@ -48,8 +48,8 @@ def test_result_bundle_budget_rejects_non_positive_session_counts(
 
 def test_four_value_result_codec_is_deterministic_and_reopens_parquet_rows() -> None:
     result = _legal_result()
-    first = result_publication_payloads(result)
-    second = result_publication_payloads(result)
+    first = result_publication_payloads(result, research_kind="strategy_backtest")
+    second = result_publication_payloads(result, research_kind="strategy_backtest")
     part_name = f"{RESULT_DAILY_PARTITION_PREFIX}000000"
     first_daily = first[part_name]
     second_daily = second[part_name]
@@ -81,7 +81,45 @@ def test_four_value_result_codec_is_deterministic_and_reopens_parquet_rows() -> 
         },
     )
 
-    assert read_result_bundle(bundle) == result
+    assert read_result_bundle(bundle, research_kind="strategy_backtest") == result
+
+
+def test_factor_evaluation_result_codec_requires_exactly_factor_summary() -> None:
+    factor_result = {"factor_summary": _legal_result()["factor_summary"]}
+    payloads = result_publication_payloads(
+        factor_result,
+        research_kind="factor_evaluation",
+    )
+
+    assert set(payloads) == {"factor_summary"}
+    assert (
+        read_result_bundle(
+            _verified_bundle(payloads),
+            research_kind="factor_evaluation",
+        )
+        == factor_result
+    )
+
+    with pytest.raises(ResearchResultError, match="only Factor Summary"):
+        result_publication_payloads(
+            _legal_result(),
+            research_kind="factor_evaluation",
+        )
+
+    verified = _verified_bundle(payloads)
+    with pytest.raises(ResearchResultError, match="only Factor Summary"):
+        read_result_bundle(
+            VerifiedBundle(
+                kind=verified.kind,
+                manifest_sha256=verified.manifest_sha256,
+                provenance=verified.provenance,
+                payloads={
+                    **verified.payloads,
+                    "strategy_summary": _json_payload({}),
+                },
+            ),
+            research_kind="factor_evaluation",
+        )
 
 
 @pytest.mark.parametrize(
@@ -105,7 +143,7 @@ def test_four_value_result_codec_rejects_nested_transient_values(
     result["strategy_summary"][forbidden_key] = []
 
     with pytest.raises(ResearchResultError, match="durable schema"):
-        result_publication_payloads(result)
+        result_publication_payloads(result, research_kind="strategy_backtest")
 
 
 @pytest.mark.parametrize(
@@ -131,7 +169,7 @@ def test_scalar_fields_cannot_hide_nested_execution_evidence(
     cursor[path[-1]] = hidden_value
 
     with pytest.raises(ResearchResultError, match="invalid durable type"):
-        result_publication_payloads(result)
+        result_publication_payloads(result, research_kind="strategy_backtest")
 
 
 def test_daily_observations_are_partitioned_at_stable_504_session_boundaries() -> None:
@@ -141,7 +179,7 @@ def test_daily_observations_are_partitioned_at_stable_504_session_boundaries() -
         {**original, "session": f"{index:06d}"} for index in range(505)
     ]
 
-    payloads = result_publication_payloads(result)
+    payloads = result_publication_payloads(result, research_kind="strategy_backtest")
 
     first = payloads[f"{RESULT_DAILY_PARTITION_PREFIX}000000"]
     second = payloads[f"{RESULT_DAILY_PARTITION_PREFIX}000001"]
@@ -163,7 +201,12 @@ def test_daily_observations_are_partitioned_at_stable_504_session_boundaries() -
             "last_session": "000504",
         },
     ]
-    assert read_result_bundle(_verified_bundle(payloads)) == result
+    assert (
+        read_result_bundle(
+            _verified_bundle(payloads), research_kind="strategy_backtest"
+        )
+        == result
+    )
 
 
 def _json_payload(value: object) -> VerifiedPayload:

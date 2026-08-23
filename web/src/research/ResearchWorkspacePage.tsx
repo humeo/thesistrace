@@ -25,6 +25,7 @@ import {
   persistResearchDraft,
   researchInputs,
   researchDraftKey,
+  selectResearchKind,
   type ResearchDraft,
 } from "./draft";
 import type { FormulaDiagnostic } from "./diagnostics";
@@ -451,6 +452,35 @@ export function ResearchDraftWorkspace({
       <section className="research-run-settings" id="research-parameters" aria-label="Research parameters">
           <header><h2>Research parameters</h2></header>
           <div className="run-configuration-grid">
+            <fieldset className="research-kind-control">
+              <legend>Research type</legend>
+              <label className="research-kind-option">
+                <input
+                  checked={draft.researchKind === "factor_evaluation"}
+                  name="research-kind"
+                  onChange={() => updateDraft((current) => selectResearchKind(current, "factor_evaluation"))}
+                  type="radio"
+                  value="factor_evaluation"
+                />
+                <span>
+                  <strong>Factor Evaluation</strong>
+                  <small>Measure predictive strength without constructing a portfolio.</small>
+                </span>
+              </label>
+              <label className="research-kind-option">
+                <input
+                  checked={draft.researchKind === "strategy_backtest"}
+                  name="research-kind"
+                  onChange={() => updateDraft((current) => selectResearchKind(current, "strategy_backtest"))}
+                  type="radio"
+                  value="strategy_backtest"
+                />
+                <span>
+                  <strong>Strategy Backtest</strong>
+                  <small>Evaluate the factor and its portfolio execution.</small>
+                </span>
+              </label>
+            </fieldset>
             <ResearchDateFields
               coverageEnd={coverage?.end ?? null}
               coverageStart={coverage?.start ?? null}
@@ -475,12 +505,16 @@ export function ResearchDraftWorkspace({
                 <option value="industry">Industry</option>
               </select>
             </label>
-            <label>Holdings count
-              <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, holdingsCount: event.target.value }))} value={draft.holdingsCount} />
-            </label>
-            <label>Rebalance sessions
-              <input inputMode="numeric" onChange={(event) => updateDraft((current) => ({ ...current, rebalanceEverySessions: event.target.value }))} value={draft.rebalanceEverySessions} />
-            </label>
+            {draft.researchKind === "strategy_backtest" ? (
+              <>
+                <label>Holdings count
+                  <input inputMode="numeric" max={100} min={1} onChange={(event) => updateDraft((current) => ({ ...current, holdingsCount: event.target.value }))} required type="number" value={draft.holdingsCount} />
+                </label>
+                <label>Rebalance sessions
+                  <input inputMode="numeric" max={20} min={1} onChange={(event) => updateDraft((current) => ({ ...current, rebalanceEverySessions: event.target.value }))} required type="number" value={draft.rebalanceEverySessions} />
+                </label>
+              </>
+            ) : null}
             <div className="research-notes">
               <label htmlFor="research-notes">Notes</label>
               <textarea

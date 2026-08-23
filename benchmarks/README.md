@@ -1,23 +1,45 @@
-# Financial I/O benchmark
+# Benchmarks
 
-Run the committed 2010-scale benchmark, including a real PostgreSQL-backed
-Tracking Advance, with:
+## Long Research qualification
 
-```sh
-./scripts/test-runtime benchmark
-```
-
-That verification run writes results only to its isolated evidence directory.
-To deliberately replace both the committed baseline and the repository budgets
-derived from it, run:
+Run the release-blocking final Production Image qualification with:
 
 ```sh
-THESISTRACE_UPDATE_BENCHMARK_BASELINE=1 ./scripts/test-runtime benchmark
+pnpm test:benchmark
 ```
 
-`THESISTRACE_BENCHMARK_OUTPUT` may override the result path for an ordinary
-verification run. It is rejected in baseline-update mode so the committed
-baseline and its derived budgets cannot be updated separately.
+The command builds the final image once and measures Factor Evaluation and
+Strategy Backtest separately against the same frozen 2010-to-latest Top 3000
+Generation. Each kind runs five cold and five warm fresh ResearchRuns in an
+isolated Product State, with one 2-vCPU/2-GiB Research Worker slot, a 1.5-GiB
+execution budget, and two calculation threads. Warm preload reads Canonical
+objects only; every measured sample begins after an ordinary Product State
+reset and proves the PostgreSQL and RustFS Product State is empty.
+
+The structured report is saved below the run's `.local/test-runs/<run-id>/`
+evidence directory. It records deterministic nearest-rank duration P95,
+per-phase timings, peak RSS, first durable Checkpoint, confirmed cancellation,
+child exit, exact Result object sets, and cross-kind Factor Summary identity.
+Duration and first-Checkpoint latency use an independent PostgreSQL observer's
+monotonic clock, starting when the committed running Attempt becomes visible
+and ending only when the committed Checkpoint or terminal state becomes visible
+to that connection. Transaction-start timestamps are diagnostic fields, not
+gate timers.
+Factor Evaluation fails if any Strategy phase, continuation, observation
+partition, or Result object appears. A failed sample fails the run; it is never
+replaced by a retry.
+
+## Financial I/O benchmark
+
+Run the deterministic market/financial I/O benchmark directly with:
+
+```sh
+uv run python scripts/benchmark_financial_io.py
+```
+
+Use `--output <path>` for an explicit result artifact. Updating repository
+budgets is a deliberate two-step operation using `--skip-budgets
+--update-budgets`; ordinary verification never mutates committed evidence.
 
 The profile fixes a 2010-to-current weekday calendar, 5,541 historical ordinary
 A-share identities, a dense Top300 execution slice across all 4,334 sessions

@@ -79,7 +79,22 @@ export type TerminalStrategyState = {
   } | null;
 };
 
-type ResearchResult = {
+type ResearchResultProvenance = {
+  schema_version: string;
+  research_run_id: string;
+  immutable_input_sha256: string;
+  calculation_contracts: Record<string, unknown>;
+  semantic_versions: Record<string, string>;
+};
+
+type FactorEvaluationResearchResult = {
+  factor: { horizons: Record<"1" | "5" | "20", FactorHorizon> };
+  provenance: ResearchResultProvenance & {
+    research_kind: "factor_evaluation";
+  };
+};
+
+type StrategyBacktestResearchResult = {
   factor: { horizons: Record<"1" | "5" | "20", FactorHorizon> };
   strategy: {
     summary: {
@@ -95,14 +110,12 @@ type ResearchResult = {
     observations: StrategyObservation[];
   };
   terminal_strategy_state: TerminalStrategyState;
-  provenance: {
-    schema_version: string;
-    research_run_id: string;
-    immutable_input_sha256: string;
-    calculation_contracts: Record<string, unknown>;
-    semantic_versions: Record<string, string>;
+  provenance: ResearchResultProvenance & {
+    research_kind: "strategy_backtest";
   };
 };
+
+type ResearchResult = FactorEvaluationResearchResult | StrategyBacktestResearchResult;
 
 export type ResearchRunProgress = {
   phase: "queued" | "warmup" | "research" | "finalizing" | "succeeded";
@@ -133,6 +146,7 @@ export type ResearchRun = {
   start_date: string;
   end_date: string;
   formula_summary: string;
+  research_kind: "factor_evaluation" | "strategy_backtest";
   input?: FrozenResearchAuthorableInput;
   failure_reason?: string;
   result?: ResearchResult;
@@ -441,7 +455,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
                 {canceling ? "Cancelling…" : "Cancel"}
               </button>
             ) : null}
-            {run.status === "succeeded" ? (
+            {run.status === "succeeded" && run.research_kind === "strategy_backtest" ? (
               <button
                 disabled={startingTracking || deleting}
                 onClick={() => void startTracking()}
@@ -465,6 +479,7 @@ export function ResearchRunsPage({ runId }: { runId?: string }) {
         <div className="research-run-facts">
           <p><strong>Status</strong> {run.status}</p>
           <p><strong>Name</strong> {run.name}</p>
+          <p><strong>Research type</strong> {researchKindLabel(run.research_kind)}</p>
           <p><strong>Formula</strong> <code>{run.input?.formula ?? run.formula_summary}</code></p>
           <p><strong>Research period</strong> {run.start_date} to {run.end_date}</p>
         </div>
@@ -773,6 +788,7 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
             <div><dt>Run ID</dt><dd><code>{item.id}</code></dd></div>
             <div><dt>Created</dt><dd><time dateTime={item.created_at}>{item.created_at}</time></dd></div>
             <div><dt>Status</dt><dd>{item.status}</dd></div>
+            <div><dt>Research type</dt><dd>{researchKindLabel(item.research_kind)}</dd></div>
             <div><dt>Formula</dt><dd><code>{item.formula_summary}</code></dd></div>
           </dl>
         </li>
@@ -782,7 +798,7 @@ export function ResearchRunHistory({ items }: { items: ResearchRun[] }) {
 }
 
 export function ResearchResultView({ result }: { result: ResearchResult }) {
-  const metrics = result.strategy.summary.metrics;
+  const strategyResult = "strategy" in result ? result : null;
   return (
     <div className="research-result">
       <section className="research-result-section">
@@ -796,35 +812,37 @@ export function ResearchResultView({ result }: { result: ResearchResult }) {
         </div>
       </section>
 
-      <section className="research-result-section">
+      {strategyResult !== null ? <section className="research-result-section">
         <div className="section-heading">
           <h2>Strategy Summary</h2>
-          <p>Selected universe {result.strategy.benchmark.universe}</p>
+          <p>Selected universe {strategyResult.strategy.benchmark.universe}</p>
         </div>
         <div className="strategy-metrics">
-          <Metric label="Net cumulative" value={formatPercent(metrics.net_cumulative_return)} />
+          <Metric label="Net cumulative" value={formatPercent(strategyResult.strategy.summary.metrics.net_cumulative_return)} />
           <Metric
             label="Benchmark cumulative"
-            value={formatPercent(metrics.benchmark_cumulative_return)}
+            value={formatPercent(strategyResult.strategy.summary.metrics.benchmark_cumulative_return)}
           />
           <Metric
             label="Annualized excess"
-            value={formatPercent(metrics.annualized_excess_return)}
+            value={formatPercent(strategyResult.strategy.summary.metrics.annualized_excess_return)}
           />
           <Metric
             label="Maximum drawdown"
-            value={formatPercent(metrics.maximum_drawdown.value)}
+            value={formatPercent(strategyResult.strategy.summary.metrics.maximum_drawdown.value)}
           />
-          <Metric label="Sharpe" value={formatDecimal(metrics.sharpe)} />
+          <Metric label="Sharpe" value={formatDecimal(strategyResult.strategy.summary.metrics.sharpe)} />
           <Metric
             label="Transaction costs"
-            value={formatCny(metrics.transaction_costs.cumulative_amount)}
+            value={formatCny(strategyResult.strategy.summary.metrics.transaction_costs.cumulative_amount)}
           />
         </div>
-        <StrategyPerformanceChart observations={result.strategy.observations} />
-      </section>
+        <StrategyPerformanceChart observations={strategyResult.strategy.observations} />
+      </section> : null}
 
-      <TerminalStrategyStateView state={result.terminal_strategy_state} />
+      {strategyResult !== null ? (
+        <TerminalStrategyStateView state={strategyResult.terminal_strategy_state} />
+      ) : null}
     </div>
   );
 }
@@ -885,6 +903,10 @@ function FactorHorizonView({ horizon }: { horizon: FactorHorizon }) {
         Rank IC coverage {horizon.coverage.rank_ic_valid_session_count}/
         {horizon.coverage.signal_session_count}
       </p>
+      <p className="factor-coverage">
+        IC coverage {horizon.coverage.ic_valid_session_count}/
+        {horizon.coverage.signal_session_count}
+      </p>
     </section>
   );
 }
@@ -912,4 +934,9 @@ function formatCny(value: number) {
     currency: "CNY",
     maximumFractionDigits: 0,
   }).format(value);
+}
+function researchKindLabel(
+  value: ResearchRun["research_kind"],
+): "Factor Evaluation" | "Strategy Backtest" {
+  return value === "factor_evaluation" ? "Factor Evaluation" : "Strategy Backtest";
 }

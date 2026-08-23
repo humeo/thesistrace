@@ -50,6 +50,7 @@ from thesistrace.research_kernel.numeric import (
     NumericContractError,
     require_current_numeric_contract,
 )
+from thesistrace.research_kernel.research_chunks import validated_research_continuation
 from thesistrace.research_run.execution import (
     ExecutionEvent,
     ResearchExecutionCancelled,
@@ -65,6 +66,7 @@ from thesistrace.research_run.execution import (
 from thesistrace.research_run.models import (
     AlphaAdmissionFacts,
     DataAdmissionFacts,
+    FactorEvaluationResearchRunResult,
     ImmutableRunInput,
     OrganizeResearchRunCommand,
     ResearchRunAdmissionCommand,
@@ -78,6 +80,8 @@ from thesistrace.research_run.models import (
     ResearchRunResult,
     ResearchRunSummary,
     StartTrackingCommand,
+    StrategyBacktestAdmissionCommand,
+    StrategyBacktestResearchRunResult,
 )
 from thesistrace.research_run.planning import (
     DEFAULT_RESEARCH_EXECUTION_MEMORY_BYTES,
@@ -339,7 +343,7 @@ class ResearchRunService:
                     name,
                     immutable_input.requested_start_date,
                     immutable_input.requested_end_date,
-                    Jsonb(immutable_input.model_dump(mode="json")),
+                    Jsonb(immutable_input.canonical_value()),
                 ),
             ).fetchone()
             transaction.execute(
@@ -413,6 +417,7 @@ class ResearchRunService:
                                 "resource_type": "ResearchRun",
                                 "resource_id": claim.run_id,
                                 "attempt_id": claim.attempt_id,
+                                "research_kind": claim.immutable_input.research_kind,
                                 "chunk_ordinal": int(chunk["ordinal"]),
                                 "boundary_session": str(chunk["boundary_session"]),
                                 "supervisor_commit_seconds": monotonic() - commit_started,
@@ -899,6 +904,11 @@ class ResearchRunService:
                     raise ResearchRunTrackingUnavailable(
                         "Start Tracking requires a succeeded ResearchRun"
                     )
+                immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+                if immutable_input.research_kind != "strategy_backtest":
+                    raise ResearchRunTrackingUnavailable(
+                        "Start Tracking requires a Strategy Backtest Result"
+                    )
                 try:
                     origin = self._tracking_origin(transaction, row)
                 except PublicationUnavailableError:
@@ -1005,8 +1015,12 @@ class ResearchRunService:
                     provenance=dict(provenance),
                 )
             )
-            stored_result = read_result_bundle(bundle)
-            result = _public_result(stored_result, dict(provenance))
+            stored_result = read_result_bundle(bundle, research_kind=summary.research_kind)
+            result = _public_result(
+                stored_result,
+                dict(provenance),
+                research_kind=summary.research_kind,
+            )
         except Exception as error:
             logger.error(
                 "ResearchRun Result read failed",
@@ -1029,6 +1043,8 @@ class ResearchRunService:
         if self._publication is None:
             raise ResearchRunTrackingUnavailable
         immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+        if immutable_input.research_kind != "strategy_backtest":
+            raise ResearchRunTrackingUnavailable
         try:
             require_current_numeric_contract(immutable_input.numeric_execution_contract)
         except NumericContractError as error:
@@ -1039,7 +1055,7 @@ class ResearchRunService:
             raise ResearchRunTrackingUnavailable
         selected_provenance = dict(provenance)
         expected_digest = hashlib.sha256(
-            canonical_json_bytes(immutable_input.model_dump(mode="json"))
+            canonical_json_bytes(immutable_input.canonical_value())
         ).hexdigest()
         if (
             selected_provenance.get("research_run_id") != row["id"]
@@ -1061,8 +1077,12 @@ class ResearchRunService:
                 provenance=selected_provenance,
             ),
         )
-        stored_result = read_result_bundle(bundle)
-        _public_result(stored_result, selected_provenance)
+        stored_result = read_result_bundle(bundle, research_kind=immutable_input.research_kind)
+        _public_result(
+            stored_result,
+            selected_provenance,
+            research_kind=immutable_input.research_kind,
+        )
         if not isinstance(stored_result, Mapping):
             raise ResearchRunTrackingUnavailable
         initial_strategy_state = stored_result.get("terminal_strategy_state")
@@ -1073,7 +1093,7 @@ class ResearchRunService:
             raise ResearchRunTrackingUnavailable
         return TrackingOrigin(
             seed_run_id=str(row["id"]),
-            immutable_input=immutable_input.model_dump(mode="json"),
+            immutable_input=immutable_input.canonical_value(),
             seed_data_generation_id=data_generation_id,
             seed_data_through_session=data_through_session,
             verified_result={
@@ -1361,7 +1381,7 @@ class ResearchRunService:
         }
         admission = immutable_input.alpha_admission
         strategy = immutable_input.strategy
-        if (
+        common_contract_mismatch = (
             immutable_input.semantic_versions != SEMANTIC_VERSIONS
             or compiled.expression != immutable_input.alpha_expression
             or current_bindings != immutable_input.field_bindings
@@ -1369,12 +1389,16 @@ class ResearchRunService:
             or compiled.node_count != admission.node_count
             or compiled.depth != admission.depth
             or compiled.estimated_work != admission.formula_work
+        )
+        strategy_contract_mismatch = immutable_input.research_kind == "strategy_backtest" and (
+            strategy is None
             or strategy.get("kind") != FIXED_STRATEGY_KIND
             or strategy.get("initial_cash_cny") != FIXED_INITIAL_CASH_CNY
             or strategy.get("execution") != FIXED_EXECUTION
             or immutable_input.costs != FIXED_COSTS
             or immutable_input.risk_free_rate != "0"
-        ):
+        )
+        if common_contract_mismatch or strategy_contract_mismatch:
             raise ResearchRunContractMismatch("frozen Research execution contract is obsolete")
 
     def _validated_resume_checkpoint(
@@ -1442,6 +1466,11 @@ class ResearchRunService:
                 chain_sha256 = hashlib.sha256(canonical_json_bytes(binding)).hexdigest()
                 is_final = expected_ordinal == len(claim.immutable_input.execution_plan.chunks)
                 expected_phase = "research" if plan_chunk.research_session_count else "warmup"
+                expected_observation_count = (
+                    plan_chunk.research_session_count
+                    if claim.immutable_input.research_kind == "strategy_backtest"
+                    else 0
+                )
                 if (
                     int(row["ordinal"]) != expected_ordinal
                     or str(row["chain_sha256"]) != chain_sha256
@@ -1450,7 +1479,7 @@ class ResearchRunService:
                     or str(row["phase"]) != expected_phase
                     or int(row["completed_warmup_sessions"]) != completed_warmup
                     or int(row["completed_research_sessions"]) != completed_research
-                    or int(row["observation_row_count"]) != plan_chunk.research_session_count
+                    or int(row["observation_row_count"]) != expected_observation_count
                     or (final_values_value is not None) != is_final
                 ):
                     raise ResearchCheckpointIntegrityError
@@ -1472,6 +1501,13 @@ class ResearchRunService:
                     bundle.payloads["continuation"],
                     subject="continuation",
                 )
+                try:
+                    continuation = validated_research_continuation(
+                        continuation,
+                        research_kind=claim.immutable_input.research_kind,
+                    )
+                except ValueError as error:
+                    raise ResearchCheckpointIntegrityError from error
                 final_values = (
                     _checkpoint_json_payload(
                         bundle.payloads["final_values"],
@@ -1508,7 +1544,7 @@ class ResearchRunService:
                         ]
                     ),
                     "last_completed_research_session": (
-                        None if completed_research == 0 else latest["observation_last_session"]
+                        None if completed_research == 0 else latest["boundary_session"]
                     ),
                 }
             ):
@@ -1579,6 +1615,7 @@ class ResearchRunService:
             payloads=result_publication_payloads_from_staged(
                 final_values,
                 partitions,
+                research_kind=claim.immutable_input.research_kind,
             ),
             provenance=provenance,
             staging_authority=lambda: self._authorize_result_staging(claim),
@@ -1617,6 +1654,11 @@ class ResearchRunService:
             item.research_session_count
             for item in claim.immutable_input.execution_plan.chunks[:ordinal]
         )
+        expected_observation_count = (
+            plan_chunk.research_session_count
+            if claim.immutable_input.research_kind == "strategy_backtest"
+            else 0
+        )
         if (
             ordinal < 1
             or phase not in {"warmup", "research"}
@@ -1628,11 +1670,18 @@ class ResearchRunService:
             or phase != ("research" if plan_chunk.research_session_count else "warmup")
             or completed_warmup != expected_warmup
             or completed_research != expected_research
-            or len(observations) != plan_chunk.research_session_count
+            or len(observations) != expected_observation_count
         ):
             raise ResearchResultError("Research Chunk boundary is invalid")
+        try:
+            continuation = validated_research_continuation(
+                continuation,
+                research_kind=claim.immutable_input.research_kind,
+            )
+        except ValueError as error:
+            raise ResearchResultError("Research Chunk continuation is invalid") from error
         continuation_payload = self._publication.stage(
-            JsonPayload(dict(continuation)),
+            JsonPayload(continuation),
             staging_authority=lambda: self._authorize_result_staging(claim),
         )
         observation_payload = (
@@ -1813,7 +1862,7 @@ class ResearchRunService:
                     completed_warmup,
                     last_warmup_session,
                     completed_research,
-                    observations[-1]["session"] if observations else None,
+                    plan_chunk.last_session,
                     remaining_estimate,
                     claim.run_id,
                 ),
@@ -2218,6 +2267,19 @@ def _admitted_input(
                 )
             ]
         ) from error
+    strategy_values: dict[str, object] = {}
+    if isinstance(command, StrategyBacktestAdmissionCommand):
+        strategy_values = {
+            "strategy": {
+                "kind": FIXED_STRATEGY_KIND,
+                "holdings_count": command.holdings_count,
+                "rebalance_every_sessions": command.rebalance_every_sessions,
+                "initial_cash_cny": FIXED_INITIAL_CASH_CNY,
+                "execution": FIXED_EXECUTION,
+            },
+            "costs": FIXED_COSTS,
+            "risk_free_rate": "0",
+        }
     return ImmutableRunInput(
         formula_source=command.formula,
         alpha_expression=compiled.expression,
@@ -2230,15 +2292,8 @@ def _admitted_input(
         },
         universe=command.universe,
         neutralization=command.neutralization,
-        strategy={
-            "kind": FIXED_STRATEGY_KIND,
-            "holdings_count": command.holdings_count,
-            "rebalance_every_sessions": command.rebalance_every_sessions,
-            "initial_cash_cny": FIXED_INITIAL_CASH_CNY,
-            "execution": FIXED_EXECUTION,
-        },
-        costs=FIXED_COSTS,
-        risk_free_rate="0",
+        research_kind=command.research_kind,
+        **strategy_values,
         numeric_execution_contract=NUMERIC_CONTRACT_ID,
         semantic_versions=SEMANTIC_VERSIONS,
         alpha_admission=AlphaAdmissionFacts(
@@ -2289,19 +2344,26 @@ def _generation_matches_frozen_facts(
 
 
 def _result_provenance(claim: _ExecutionClaim) -> dict[str, object]:
-    value = claim.immutable_input.model_dump(mode="json")
+    value = claim.immutable_input.canonical_value()
+    calculation_contracts: dict[str, object] = {
+        "numeric_execution_contract": value["numeric_execution_contract"],
+    }
+    if claim.immutable_input.research_kind == "strategy_backtest":
+        calculation_contracts.update(
+            {
+                "strategy": value["strategy"],
+                "costs": value["costs"],
+                "risk_free_rate": value["risk_free_rate"],
+            }
+        )
     return {
         "schema_version": "research-result-v1",
         "research_run_id": claim.run_id,
+        "research_kind": claim.immutable_input.research_kind,
         "immutable_input_sha256": hashlib.sha256(canonical_json_bytes(value)).hexdigest(),
         "data_generation_id": claim.data_generation_id,
         "data_through_session": claim.data_through_session,
-        "calculation_contracts": {
-            "strategy": value["strategy"],
-            "costs": value["costs"],
-            "risk_free_rate": value["risk_free_rate"],
-            "numeric_execution_contract": value["numeric_execution_contract"],
-        },
+        "calculation_contracts": calculation_contracts,
         "semantic_versions": value["semantic_versions"],
     }
 
@@ -2419,6 +2481,7 @@ def _summary(row: object) -> ResearchRunSummary:
             "start_date": row["requested_start_date"],
             "end_date": row["requested_end_date"],
             "formula_summary": formula_summary,
+            "research_kind": immutable_input.research_kind,
             "failure_reason": row.get("failure_reason"),
         }
     )
@@ -2427,6 +2490,15 @@ def _summary(row: object) -> ResearchRunSummary:
 def _authorable_input(row: object) -> ResearchRunAuthorableInput:
     assert isinstance(row, dict)
     immutable_input = ImmutableRunInput.model_validate(row["immutable_input"])
+    strategy_values: dict[str, object] = {}
+    if immutable_input.research_kind == "strategy_backtest":
+        assert immutable_input.strategy is not None
+        strategy_values = {
+            "holdings_count": int(immutable_input.strategy["holdings_count"]),
+            "rebalance_every_sessions": int(
+                immutable_input.strategy["rebalance_every_sessions"]
+            ),
+        }
     return ResearchRunAuthorableInput(
         formula=immutable_input.formula_source,
         hypothesis=immutable_input.hypothesis,
@@ -2434,8 +2506,8 @@ def _authorable_input(row: object) -> ResearchRunAuthorableInput:
         end_date=immutable_input.requested_end_date,
         universe=immutable_input.universe,
         neutralization=immutable_input.neutralization,
-        holdings_count=int(immutable_input.strategy["holdings_count"]),
-        rebalance_every_sessions=int(immutable_input.strategy["rebalance_every_sessions"]),
+        research_kind=immutable_input.research_kind,
+        **strategy_values,
     )
 
 
@@ -2518,9 +2590,22 @@ def _checkpoint_binding(
     final_values_payload: Mapping[str, object] | None,
     prior_chain_sha256: str | None,
 ) -> dict[str, object]:
-    immutable_value = immutable_input.model_dump(mode="json")
+    immutable_value = immutable_input.canonical_value()
+    calculation_contracts: dict[str, object] = {
+        "numeric_execution_contract": immutable_value["numeric_execution_contract"],
+        "semantic_versions": immutable_value["semantic_versions"],
+    }
+    if immutable_input.research_kind == "strategy_backtest":
+        calculation_contracts.update(
+            {
+                "strategy": immutable_value["strategy"],
+                "costs": immutable_value["costs"],
+                "risk_free_rate": immutable_value["risk_free_rate"],
+            }
+        )
     return {
         "schema_version": "research-execution-checkpoint-v1",
+        "research_kind": immutable_input.research_kind,
         "run_id": run_id,
         "creator_attempt_id": creator_attempt_id,
         "creator_fence": creator_fence,
@@ -2535,13 +2620,7 @@ def _checkpoint_binding(
             ).hexdigest(),
             "alpha_admission": immutable_value["alpha_admission"],
         },
-        "calculation_contracts": {
-            "numeric_execution_contract": immutable_value["numeric_execution_contract"],
-            "semantic_versions": immutable_value["semantic_versions"],
-            "strategy": immutable_value["strategy"],
-            "costs": immutable_value["costs"],
-            "risk_free_rate": immutable_value["risk_free_rate"],
-        },
+        "calculation_contracts": calculation_contracts,
         "execution_plan_sha256": hashlib.sha256(
             canonical_json_bytes(immutable_value["execution_plan"])
         ).hexdigest(),
@@ -2582,19 +2661,13 @@ def _checkpoint_json_payload(payload: object, *, subject: str) -> dict[str, obje
 def _public_result(
     stored: object,
     provenance: dict[str, object],
+    *,
+    research_kind: str,
 ) -> ResearchRunResult:
     if not isinstance(stored, Mapping):
         raise ResearchRunResultUnavailable
     factor = stored.get("factor_summary")
-    strategy_summary = stored.get("strategy_summary")
-    observations = stored.get("strategy_daily_observations")
-    terminal_strategy_state = stored.get("terminal_strategy_state")
-    if (
-        not isinstance(factor, Mapping)
-        or not isinstance(strategy_summary, Mapping)
-        or not isinstance(observations, list)
-        or not isinstance(terminal_strategy_state, Mapping)
-    ):
+    if not isinstance(factor, Mapping) or provenance.get("research_kind") != research_kind:
         raise ResearchRunResultUnavailable
     stored_horizons = factor.get("horizons")
     if not isinstance(stored_horizons, Mapping) or set(stored_horizons) != {
@@ -2613,13 +2686,38 @@ def _public_result(
             "summary": horizon.get("summary"),
             "coverage": horizon.get("coverage"),
         }
+    public: dict[str, object] = {
+        "factor": {"horizons": horizons},
+        "provenance": {
+            name: provenance[name]
+            for name in (
+                "schema_version",
+                "research_run_id",
+                "research_kind",
+                "immutable_input_sha256",
+                "calculation_contracts",
+                "semantic_versions",
+            )
+        },
+    }
+    if research_kind == "factor_evaluation":
+        return FactorEvaluationResearchRunResult.model_validate(public)
+    strategy_summary = stored.get("strategy_summary")
+    observations = stored.get("strategy_daily_observations")
+    terminal_strategy_state = stored.get("terminal_strategy_state")
+    if (
+        research_kind != "strategy_backtest"
+        or not isinstance(strategy_summary, Mapping)
+        or not isinstance(observations, list)
+        or not isinstance(terminal_strategy_state, Mapping)
+    ):
+        raise ResearchRunResultUnavailable
     benchmark = strategy_summary.get("benchmark")
     public_strategy_summary = {
         name: value for name, value in strategy_summary.items() if name != "benchmark"
     }
-    return ResearchRunResult.model_validate(
+    public.update(
         {
-            "factor": {"horizons": horizons},
             "strategy": {
                 "summary": public_strategy_summary,
                 "benchmark": benchmark,
@@ -2640,18 +2738,9 @@ def _public_result(
                     "pending_signal",
                 )
             },
-            "provenance": {
-                name: provenance[name]
-                for name in (
-                    "schema_version",
-                    "research_run_id",
-                    "immutable_input_sha256",
-                    "calculation_contracts",
-                    "semantic_versions",
-                )
-            },
         }
     )
+    return StrategyBacktestResearchRunResult.model_validate(public)
 
 
 def _collect_publication_deletions(publication: Publication) -> None:

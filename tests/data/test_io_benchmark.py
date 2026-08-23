@@ -15,24 +15,94 @@ from thesistrace.data.io_benchmark import (
     long_research_qualification_summary,
     summarize_samples,
 )
+from thesistrace.product_state import PRODUCT_STATE_COUNT_NAMES
 
 
 def _long_research_evidence() -> dict[str, object]:
-    sample = {
-        "duration_ms": 1_000,
-        "peak_rss_bytes": 512 * 1024 * 1024,
-        "first_checkpoint_latency_ms": 500,
-        "manifest_opens": 3,
-        "parquet_object_opens": 4,
-        "market_parquet_scans": 4,
-        "financial_parquet_scans": 0,
-        "raw_financial_batch_opens": 0,
-        "bytes_read": 1024,
-        "rows_scanned": 12_000,
-        "columns_scanned": 4,
-        "process_exit_code": 0,
-        "result_manifest_sha256": "a" * 64,
-    }
+    empty_state = {name: 0 for name in PRODUCT_STATE_COUNT_NAMES}
+
+    def sample(research_kind: str, phase: str, index: int) -> dict[str, object]:
+        strategy = research_kind == "strategy_backtest"
+        return {
+            "research_kind": research_kind,
+            "phase": phase,
+            "index": index,
+            "run_id": f"run-{research_kind}-{phase}-{index}",
+            "attempt_id": f"attempt-{research_kind}-{phase}-{index}",
+            "duration_ms": 1_000,
+            "admission_duration_ms": 10,
+            "attempt_duration_ms": 990,
+            "peak_rss_bytes": 512 * 1024 * 1024,
+            "first_checkpoint_latency_ms": 500,
+            "manifest_opens": 3,
+            "parquet_object_opens": 4,
+            "market_parquet_scans": 4,
+            "financial_parquet_scans": 0,
+            "raw_financial_batch_opens": 0,
+            "bytes_read": 1024,
+            "rows_scanned": 12_000,
+            "columns_scanned": 4,
+            "process_exit_code": 0,
+            "worker_exit_code": 0,
+            "result_manifest_sha256": "a" * 64,
+            "generation_manifest_sha256": "c" * 64,
+            "chunk_session_count": 21,
+            "chunk_count": 207,
+            "factor_summary_sha256": "f" * 64,
+            "result_object_names": (
+                [
+                    "factor_summary",
+                    "strategy_daily_observations",
+                    "strategy_summary",
+                    "terminal_strategy_state",
+                ]
+                if strategy
+                else ["factor_summary"]
+            ),
+            "result_payload_names": (
+                [
+                    "factor_summary",
+                    "strategy_daily_observations",
+                    "strategy_daily_observations.part-000000",
+                    "strategy_summary",
+                    "terminal_strategy_state",
+                ]
+                if strategy
+                else ["factor_summary"]
+            ),
+            "phase_timings_seconds": {
+                "data_read": 1.0,
+                "calculation": 2.0,
+                "input": 0.1,
+                "alpha_and_pending": 0.4,
+                "factor": 0.5,
+                "strategy": 0.5 if strategy else 0.0,
+                "finalize": 0.1,
+                "checkpoint_commit": 0.2,
+            },
+            "strategy_continuation_present": strategy,
+            "strategy_observation_count": 4_000 if strategy else 0,
+            "fresh_product_state_verified": True,
+            "fresh_product_state_counts": dict(empty_state),
+            "checkpoint_count_after_success": 0,
+            "active_pin_count_after_success": 0,
+        }
+
+    def cancellation(research_kind: str) -> dict[str, object]:
+        return {
+            "research_kind": research_kind,
+            "status": "cancelled",
+            "cancellation_latency_ms": 900,
+            "worker_exit_code": 0,
+            "child_exit_code": 0,
+            "child_acknowledged": False,
+            "result_manifest_sha256": None,
+            "checkpoint_count": 0,
+            "active_pin_count": 0,
+            "fresh_product_state_verified": True,
+            "fresh_product_state_counts": dict(empty_state),
+        }
+
     evidence = {
         "format": "thesistrace-long-research-qualification",
         "version": 1,
@@ -53,12 +123,46 @@ def _long_research_evidence() -> dict[str, object]:
             "chunk_session_count": 21,
             "chunk_count": 207,
         },
-        "cold": {"samples": [dict(sample) for _ in range(5)]},
-        "warm": {"samples": [dict(sample) for _ in range(5)]},
-        "cancellation_latency_ms": 900,
+        "warm_preload": {
+            "generation_manifest_sha256": "c" * 64,
+            "market_parquet_scans": 4,
+            "product_state_before": dict(empty_state),
+            "product_state_after": dict(empty_state),
+        },
+        "research_kinds": {
+            research_kind: {
+                "cold": {
+                    "samples": [sample(research_kind, "cold", index) for index in range(5)]
+                },
+                "warm": {
+                    "samples": [sample(research_kind, "warm", index) for index in range(5)]
+                },
+                "cancellation": cancellation(research_kind),
+            }
+            for research_kind in ("factor_evaluation", "strategy_backtest")
+        },
+        "scientific_equivalence": {
+            "factor_summary_sha256": "f" * 64,
+            "sample_count": 20,
+        },
     }
     evidence["summary"] = long_research_qualification_summary(evidence)
     return evidence
+
+
+def _qualification_sample(
+    evidence: dict[str, object],
+    research_kind: str,
+    phase: str,
+    index: int,
+) -> dict[str, object]:
+    return evidence["research_kinds"][research_kind][phase]["samples"][index]
+
+
+def _qualification_cancellation(
+    evidence: dict[str, object], research_kind: str
+) -> dict[str, object]:
+    return evidence["research_kinds"][research_kind]["cancellation"]
 
 
 def test_long_research_qualification_accepts_only_the_exact_release_workload() -> None:
@@ -66,10 +170,10 @@ def test_long_research_qualification_accepts_only_the_exact_release_workload() -
 
     qualified = assert_long_research_qualification(evidence)
 
-    assert qualified["cold_p95_duration_ms"] == 1_000
-    assert qualified["warm_p95_duration_ms"] == 1_000
-    assert qualified["peak_rss_bytes"] == 512 * 1024 * 1024
-    assert qualified["first_checkpoint_latency_ms"] == 500
+    assert qualified["factor_evaluation"]["cold_p95_duration_ms"] == 1_000
+    assert qualified["strategy_backtest"]["warm_p95_duration_ms"] == 1_000
+    assert qualified["factor_evaluation"]["peak_rss_bytes"] == 512 * 1024 * 1024
+    assert qualified["strategy_backtest"]["first_checkpoint_latency_ms"] == 500
     assert evidence["summary"] == qualified
 
 
@@ -77,29 +181,64 @@ def test_long_research_qualification_accepts_only_the_exact_release_workload() -
     ("mutation", "message"),
     [
         (lambda value: value["workload"].update(universe="top300"), "workload"),
-        (lambda value: value["cold"]["samples"].pop(), "five cold"),
         (
-            lambda value: value["cold"]["samples"][4].update(duration_ms=600_001),
+            lambda value: value["research_kinds"]["factor_evaluation"]["cold"][
+                "samples"
+            ].pop(),
+            "five cold",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "factor_evaluation", "cold", 4
+            ).update(duration_ms=600_001),
             "cold execution P95",
         ),
         (
-            lambda value: value["warm"]["samples"][4].update(duration_ms=300_001),
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "warm", 4
+            ).update(duration_ms=300_001),
             "warm execution P95",
         ),
         (
-            lambda value: value["warm"]["samples"][0].update(peak_rss_bytes=1536 * 1024 * 1024 + 1),
+            lambda value: _qualification_sample(
+                value, "factor_evaluation", "warm", 0
+            ).update(peak_rss_bytes=1536 * 1024 * 1024 + 1),
             "peak RSS",
         ),
         (
-            lambda value: value["cold"]["samples"][0].update(first_checkpoint_latency_ms=45_001),
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "cold", 0
+            ).update(first_checkpoint_latency_ms=45_001),
             "first Checkpoint",
         ),
-        (lambda value: value.update(cancellation_latency_ms=5_001), "cancellation"),
         (
-            lambda value: value["cold"]["samples"][0].update(financial_parquet_scans=1),
+            lambda value: _qualification_cancellation(
+                value, "factor_evaluation"
+            ).update(cancellation_latency_ms=5_001),
+            "cancellation",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "factor_evaluation", "cold", 0
+            ).update(financial_parquet_scans=1),
             "Financial Data",
         ),
-        (lambda value: value["summary"].update(cold_p95_duration_ms=0), "summary"),
+        (
+            lambda value: _qualification_sample(
+                value, "factor_evaluation", "warm", 0
+            ).update(strategy_continuation_present=True),
+            "performed or published Strategy work",
+        ),
+        (
+            lambda value: _qualification_sample(
+                value, "strategy_backtest", "cold", 0
+            ).update(factor_summary_sha256="e" * 64),
+            "Factor Summary equivalent",
+        ),
+        (
+            lambda value: value["summary"]["factor_evaluation"].update(cold_p95_duration_ms=0),
+            "summary",
+        ),
     ],
 )
 def test_long_research_qualification_rejects_incomplete_or_over_budget_evidence(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Literal
 
 from thesistrace.research_kernel.alpha import (
     alpha_matrix_checksum,
@@ -38,6 +39,17 @@ class InsufficientCalculationWarmupError(KernelRunError):
     pass
 
 
+@dataclass(frozen=True)
+class StrategyRunInput:
+    holdings_count: int
+    rebalance_interval: int
+    initial_cash_cny: str
+    commission_rate_all_in: str
+    commission_min_cny: str
+    stamp_duty_sell_rate: str
+    transfer_fee_rate: str
+
+
 @dataclass(frozen=True, init=False)
 class RunInput:
     _research_data: AlignedResearchData | ColumnarResearchSeries = field(repr=False)
@@ -46,13 +58,8 @@ class RunInput:
     _effective_alpha_lookback: int = field(repr=False)
     universe: str
     neutralization: str
-    holdings_count: int
-    rebalance_interval: int
-    initial_cash_cny: str
-    commission_rate_all_in: str
-    commission_min_cny: str
-    stamp_duty_sell_rate: str
-    transfer_fee_rate: str
+    research_kind: Literal["factor_evaluation", "strategy_backtest"]
+    strategy: StrategyRunInput | None
     research_start_session: str | None
     research_end_session: str | None
 
@@ -65,13 +72,8 @@ class RunInput:
         effective_alpha_lookback: int,
         universe: str,
         neutralization: str,
-        holdings_count: int,
-        rebalance_interval: int,
-        initial_cash_cny: str,
-        commission_rate_all_in: str,
-        commission_min_cny: str,
-        stamp_duty_sell_rate: str,
-        transfer_fee_rate: str,
+        research_kind: Literal["factor_evaluation", "strategy_backtest"],
+        strategy: StrategyRunInput | None,
         research_start_session: str | None = None,
         research_end_session: str | None = None,
     ) -> None:
@@ -79,6 +81,10 @@ class RunInput:
             raise KernelRunError("Alpha expression must be a normalized tree")
         if effective_alpha_lookback < 0 or effective_alpha_lookback > 252:
             raise KernelRunError("Effective Alpha Lookback is invalid")
+        if research_kind == "factor_evaluation" and strategy is not None:
+            raise KernelRunError("Factor Evaluation cannot contain Strategy input")
+        if research_kind == "strategy_backtest" and strategy is None:
+            raise KernelRunError("Strategy Backtest requires Strategy input")
         object.__setattr__(self, "_research_data", research_data.snapshot())
         object.__setattr__(
             self,
@@ -96,13 +102,8 @@ class RunInput:
             raise KernelRunError("Alpha expression and field bindings disagree")
         object.__setattr__(self, "universe", universe)
         object.__setattr__(self, "neutralization", neutralization)
-        object.__setattr__(self, "holdings_count", holdings_count)
-        object.__setattr__(self, "rebalance_interval", rebalance_interval)
-        object.__setattr__(self, "initial_cash_cny", initial_cash_cny)
-        object.__setattr__(self, "commission_rate_all_in", commission_rate_all_in)
-        object.__setattr__(self, "commission_min_cny", commission_min_cny)
-        object.__setattr__(self, "stamp_duty_sell_rate", stamp_duty_sell_rate)
-        object.__setattr__(self, "transfer_fee_rate", transfer_fee_rate)
+        object.__setattr__(self, "research_kind", research_kind)
+        object.__setattr__(self, "strategy", strategy)
         object.__setattr__(self, "research_start_session", research_start_session)
         object.__setattr__(self, "research_end_session", research_end_session)
 
@@ -144,13 +145,8 @@ class RunInput:
             effective_alpha_lookback=self._effective_alpha_lookback,
             universe=self.universe,
             neutralization=self.neutralization,
-            holdings_count=self.holdings_count,
-            rebalance_interval=self.rebalance_interval,
-            initial_cash_cny=self.initial_cash_cny,
-            commission_rate_all_in=self.commission_rate_all_in,
-            commission_min_cny=self.commission_min_cny,
-            stamp_duty_sell_rate=self.stamp_duty_sell_rate,
-            transfer_fee_rate=self.transfer_fee_rate,
+            research_kind=self.research_kind,
+            strategy=self.strategy,
             research_start_session=self.research_start_session,
             research_end_session=(
                 self.research_end_session if research_end_session is None else research_end_session
@@ -454,6 +450,9 @@ def calculation_definition(
     run_input: RunInput,
     alpha_expression: AlphaExpression | None = None,
 ) -> dict[str, object]:
+    strategy = run_input.strategy
+    if run_input.research_kind != "strategy_backtest" or strategy is None:
+        raise KernelRunError("Strategy calculation requires Strategy Backtest input")
     return {
         "alpha": {
             "expression": (
@@ -465,15 +464,15 @@ def calculation_definition(
         "universe": run_input.universe,
         "neutralization": run_input.neutralization,
         "strategy": {
-            "holdings_count": run_input.holdings_count,
-            "rebalance_interval": run_input.rebalance_interval,
-            "initial_cash_cny": run_input.initial_cash_cny,
+            "holdings_count": strategy.holdings_count,
+            "rebalance_interval": strategy.rebalance_interval,
+            "initial_cash_cny": strategy.initial_cash_cny,
         },
         "costs": {
-            "commission_rate_all_in": run_input.commission_rate_all_in,
-            "commission_min_cny": run_input.commission_min_cny,
-            "stamp_duty_sell_rate": run_input.stamp_duty_sell_rate,
-            "transfer_fee_rate": run_input.transfer_fee_rate,
+            "commission_rate_all_in": strategy.commission_rate_all_in,
+            "commission_min_cny": strategy.commission_min_cny,
+            "stamp_duty_sell_rate": strategy.stamp_duty_sell_rate,
+            "transfer_fee_rate": strategy.transfer_fee_rate,
         },
     }
 

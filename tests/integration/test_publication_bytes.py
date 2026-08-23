@@ -107,12 +107,16 @@ def test_research_result_preparation_uses_four_values_and_partitioned_objects(
     with open_core_runtime(core_settings) as runtime:
         first = runtime.publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads(result),
+            payloads=result_publication_payloads(
+                result, research_kind="strategy_backtest"
+            ),
             provenance={"research_run_id": "run-result-codec"},
         )
         second = runtime.publication.prepare(
             kind="research.result",
-            payloads=result_publication_payloads(result),
+            payloads=result_publication_payloads(
+                result, research_kind="strategy_backtest"
+            ),
             provenance={"research_run_id": "run-result-codec"},
         )
 
@@ -127,7 +131,13 @@ def test_research_result_preparation_uses_four_values_and_partitioned_objects(
             "terminal_strategy_state",
         }
         assert first.exact_bytes <= result_bundle_byte_budget(1)
-        assert read_result_bundle(runtime.publication.verify_prepared(second)) == result
+        assert (
+            read_result_bundle(
+                runtime.publication.verify_prepared(second),
+                research_kind="strategy_backtest",
+            )
+            == result
+        )
 
 
 def test_all_payloads_are_serialized_before_any_upload(
