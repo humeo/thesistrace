@@ -66,12 +66,12 @@ def test_catalog_declares_six_complete_financial_field_meanings() -> None:
         "financial.balance_sheet.equity_parent.latest_reported",
     ]
     assert [field.alpha.identifier for field in FINANCIAL_FIELDS if field.alpha is not None] == [
-        "total_revenue_latest_fy",
-        "net_profit_parent_latest_fy",
-        "operating_cash_flow_latest_fy",
-        "total_assets_latest_reported",
-        "total_liabilities_latest_reported",
-        "equity_parent_latest_reported",
+        "revenue",
+        "net_profit",
+        "operating_cash_flow",
+        "assets",
+        "liabilities",
+        "equity",
     ]
     assert all(field.family_id == "equity.financial_pit" for field in FINANCIAL_FIELDS)
     assert all(field.physical_type == "decimal" for field in FINANCIAL_FIELDS)

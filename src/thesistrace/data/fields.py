@@ -158,7 +158,7 @@ def _financial_field(
 FINANCIAL_FIELDS = (
     _financial_field(
         "financial.income.total_revenue.latest_fy",
-        "total_revenue_latest_fy",
+        "revenue",
         "latest visible full-year consolidated total revenue",
         endpoint="income",
         column="total_revenue",
@@ -166,7 +166,7 @@ FINANCIAL_FIELDS = (
     ),
     _financial_field(
         "financial.income.net_profit_parent.latest_fy",
-        "net_profit_parent_latest_fy",
+        "net_profit",
         "latest visible full-year consolidated net profit attributable to parent owners",
         endpoint="income",
         column="n_income_attr_p",
@@ -174,7 +174,7 @@ FINANCIAL_FIELDS = (
     ),
     _financial_field(
         "financial.cashflow.operating_cash_flow.latest_fy",
-        "operating_cash_flow_latest_fy",
+        "operating_cash_flow",
         "latest visible full-year consolidated net operating cash flow",
         endpoint="cashflow",
         column="n_cashflow_act",
@@ -182,7 +182,7 @@ FINANCIAL_FIELDS = (
     ),
     _financial_field(
         "financial.balance_sheet.total_assets.latest_reported",
-        "total_assets_latest_reported",
+        "assets",
         "latest visible quarterly or annual consolidated total assets",
         endpoint="balancesheet",
         column="total_assets",
@@ -190,7 +190,7 @@ FINANCIAL_FIELDS = (
     ),
     _financial_field(
         "financial.balance_sheet.total_liabilities.latest_reported",
-        "total_liabilities_latest_reported",
+        "liabilities",
         "latest visible quarterly or annual consolidated total liabilities",
         endpoint="balancesheet",
         column="total_liab",
@@ -198,7 +198,7 @@ FINANCIAL_FIELDS = (
     ),
     _financial_field(
         "financial.balance_sheet.equity_parent.latest_reported",
-        "equity_parent_latest_reported",
+        "equity",
         "latest visible quarterly or annual consolidated equity attributable to parent owners",
         endpoint="balancesheet",
         column="total_hldr_eqy_exc_min_int",

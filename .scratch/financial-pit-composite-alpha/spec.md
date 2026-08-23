@@ -47,12 +47,12 @@ Field References for the pinned Data Generation, selected instruments, and
 Research Sessions. The six initial Session-Aligned Financial Fields use
 namespaced stable Field References and expose these short Alpha Identifiers:
 
-- total_revenue_latest_fy;
-- net_profit_parent_latest_fy;
-- operating_cash_flow_latest_fy;
-- total_assets_latest_reported;
-- total_liabilities_latest_reported;
-- equity_parent_latest_reported.
+- revenue;
+- net_profit;
+- operating_cash_flow;
+- assets;
+- liabilities;
+- equity.
 
 The three flow fields use the latest available full-year consolidated
 statement. The three stock fields use the latest available quarterly or annual
@@ -447,12 +447,12 @@ ResearchRun path, DailyTrack path, and performance gates all pass together.
   `financial.balance_sheet.total_liabilities.latest_reported`, and
   `financial.balance_sheet.equity_parent.latest_reported`. Formulae use the
   corresponding short names below.
-- The first three flow Alpha Identifiers are total_revenue_latest_fy,
-  net_profit_parent_latest_fy, and operating_cash_flow_latest_fy. They select
+- The first three flow Alpha Identifiers are revenue,
+  net_profit, and operating_cash_flow. They select
   the latest visible full-year report_type 1 consolidated facts from income and
   cash-flow statements.
-- The first three stock Alpha Identifiers are total_assets_latest_reported,
-  total_liabilities_latest_reported, and equity_parent_latest_reported. They
+- The first three stock Alpha Identifiers are assets,
+  liabilities, and equity. They
   select the latest visible quarterly or annual report_type 1 consolidated
   balance-sheet facts.
 - The initial six fields apply to company types 1, 2, 3, and 4. Applicability

@@ -39,7 +39,7 @@ const catalog: AlphaCatalog = {
       example: "rank(close)",
     },
     {
-      identifier: "total_revenue_latest_fy",
+      identifier: "revenue",
       field_id: "financial.income.total_revenue.latest_fy",
       value_type: "numeric_series",
       description: "Latest visible full-year consolidated total revenue",
@@ -49,7 +49,7 @@ const catalog: AlphaCatalog = {
       report_period_selection: "latest_visible_full_year",
       applicable_company_types: ["1", "2", "3", "4"],
       missingness: "missing_when_no_visible_eligible_fact",
-      example: "rank(total_revenue_latest_fy)",
+      example: "rank(revenue)",
     },
   ],
   builtins: [],
@@ -82,11 +82,11 @@ describe("DataOverviewView", () => {
     expect(markup).toContain("Market data fields");
     expect(markup).toContain("Financial data fields");
     expect(markup).toContain("close");
-    expect(markup).toContain("total_revenue_latest_fy");
+    expect(markup).toContain("revenue");
     expect(markup).toContain("Latest full year visible on each Research Session");
     expect(markup).toContain("Company types 1, 2, 3, 4");
     expect(markup).toContain("Missing when no visible eligible fact");
-    expect(markup).toContain("rank(total_revenue_latest_fy)");
+    expect(markup).toContain("rank(revenue)");
     expect(markup).toContain("Reload");
     expect(markup).not.toContain("Current research data");
     expect(markup).not.toContain("Canonical data");

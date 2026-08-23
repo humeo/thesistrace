@@ -56,28 +56,28 @@ def test_alpha_catalog_exposes_financial_fields_and_cross_sectional_rank() -> No
         if field["family_id"] == "equity.financial_pit"
     }
     assert set(financial) == {
-        "total_revenue_latest_fy",
-        "net_profit_parent_latest_fy",
-        "operating_cash_flow_latest_fy",
-        "total_assets_latest_reported",
-        "total_liabilities_latest_reported",
-        "equity_parent_latest_reported",
+        "revenue",
+        "net_profit",
+        "operating_cash_flow",
+        "assets",
+        "liabilities",
+        "equity",
     }
     assert {
         identifier: field["field_id"] for identifier, field in financial.items()
     } == {
-        "total_revenue_latest_fy": "financial.income.total_revenue.latest_fy",
-        "net_profit_parent_latest_fy": "financial.income.net_profit_parent.latest_fy",
-        "operating_cash_flow_latest_fy": (
+        "revenue": "financial.income.total_revenue.latest_fy",
+        "net_profit": "financial.income.net_profit_parent.latest_fy",
+        "operating_cash_flow": (
             "financial.cashflow.operating_cash_flow.latest_fy"
         ),
-        "total_assets_latest_reported": (
+        "assets": (
             "financial.balance_sheet.total_assets.latest_reported"
         ),
-        "total_liabilities_latest_reported": (
+        "liabilities": (
             "financial.balance_sheet.total_liabilities.latest_reported"
         ),
-        "equity_parent_latest_reported": (
+        "equity": (
             "financial.balance_sheet.equity_parent.latest_reported"
         ),
     }

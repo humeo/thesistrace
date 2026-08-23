@@ -730,7 +730,7 @@ def _financial_value(store: MountedGenerationStore, generation: str) -> str:
         universe_name="top300",
         neutralization="none",
         field_bindings={
-            "financial.income.total_revenue.latest_fy": "total_revenue_latest_fy"
+            "financial.income.total_revenue.latest_fy": "revenue"
         },
     ).research_data
     return str(

@@ -116,7 +116,7 @@ def _run(mount_root: Path, profile: dict[str, object]) -> dict[str, object]:
                 neutralization="none",
                 field_bindings={
                     "financial.balance_sheet.total_assets.latest_reported": (
-                        "total_assets_latest_reported"
+                        "assets"
                     )
                 },
             )
@@ -129,7 +129,7 @@ def _run(mount_root: Path, profile: dict[str, object]) -> dict[str, object]:
                 field_bindings={
                     "price.close.adjusted": "close",
                     "financial.balance_sheet.total_assets.latest_reported": (
-                        "total_assets_latest_reported"
+                        "assets"
                     ),
                 },
             )
@@ -244,7 +244,7 @@ def _activate_benchmark_track(runtime: object, sessions: tuple[str, ...], suffix
             request_id=f"financial-io-benchmark-run-{suffix}",
             folder_id="folder_default",
             name=f"Financial I/O benchmark {suffix}",
-            formula="close + total_assets_latest_reported",
+            formula="close + assets",
             universe="top300",
             neutralization="none",
             holdings_count=10,

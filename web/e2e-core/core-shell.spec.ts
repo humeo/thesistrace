@@ -237,12 +237,12 @@ test("Financial catalog composes one Formula and starts its DailyTrack", async (
     workerPaused = true;
     await page.goto("/data");
     await expect(page.getByRole("heading", { name: "Research fields" })).toBeVisible();
-    await expect(page.getByText("total_revenue_latest_fy", { exact: true })).toBeVisible();
+    await expect(page.getByText("revenue", { exact: true })).toBeVisible();
     await expect(page.getByText("Latest full year visible on each Research Session").first()).toBeVisible();
     await page.goto("/research?new");
     await fillCompleteDraft(page, {
       name: "Composite financial browser run",
-      formula: "rank(close) + rank(total_revenue_latest_fy)",
+      formula: "rank(close) + rank(revenue)",
     });
     let captureRun: ((value: { id: string; status: number }) => void) | undefined;
     const runCapture = new Promise<{ id: string; status: number }>((resolve) => {

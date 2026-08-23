@@ -231,14 +231,39 @@ def test_market_identifiers_map_without_legacy_storage_aliases() -> None:
         assert diagnostic.code == "UNKNOWN_IDENTIFIER"
 
 
+def test_financial_identifiers_hide_selection_policy_and_reject_obsolete_names() -> None:
+    current = {
+        "revenue": "financial.income.total_revenue.latest_fy",
+        "net_profit": "financial.income.net_profit_parent.latest_fy",
+        "operating_cash_flow": "financial.cashflow.operating_cash_flow.latest_fy",
+        "assets": "financial.balance_sheet.total_assets.latest_reported",
+        "liabilities": "financial.balance_sheet.total_liabilities.latest_reported",
+        "equity": "financial.balance_sheet.equity_parent.latest_reported",
+    }
+    for identifier, field_id in current.items():
+        compiled = alpha_language.compile(identifier)
+        assert compiled.field_ids_by_identifier == {identifier: field_id}
+
+    for obsolete in (
+        "total_revenue_latest_fy",
+        "net_profit_parent_latest_fy",
+        "operating_cash_flow_latest_fy",
+        "total_assets_latest_reported",
+        "total_liabilities_latest_reported",
+        "equity_parent_latest_reported",
+    ):
+        diagnostic = alpha_language.diagnose(obsolete).diagnostics[0]
+        assert diagnostic.code == "UNKNOWN_IDENTIFIER"
+
+
 def test_compile_maps_financial_identifier_to_namespaced_field_reference() -> None:
     compiled = alpha_language.compile(
-        "rank(close) + rank(total_revenue_latest_fy)"
+        "rank(close) + rank(revenue)"
     )
 
     assert compiled.field_ids_by_identifier == {
         "close": "price.close.adjusted",
-        "total_revenue_latest_fy": "financial.income.total_revenue.latest_fy",
+        "revenue": "financial.income.total_revenue.latest_fy",
     }
     assert compiled.expression == {
         "kind": "binary",

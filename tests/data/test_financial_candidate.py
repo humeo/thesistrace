@@ -360,7 +360,7 @@ def test_only_a_complete_six_field_candidate_can_form_a_composite_generation(
         universe_name="top300",
         neutralization="none",
         field_bindings={
-            "financial.income.total_revenue.latest_fy": "total_revenue_latest_fy"
+            "financial.income.total_revenue.latest_fy": "revenue"
         },
     )
     assert resolved.research_data.fields == {

@@ -100,7 +100,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "/api/research-runs",
             json=_run_command(
                 "composite-formula",
-                formula="rank(close) + rank(total_revenue_latest_fy)",
+                formula="rank(close) + rank(revenue)",
             ),
         )
         assert accepted.status_code == 202
@@ -182,7 +182,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "/api/research-runs",
             json=_run_command(
                 "composite-factor-evaluation",
-                formula="rank(close) + rank(total_revenue_latest_fy)",
+                formula="rank(close) + rank(revenue)",
                 research_kind="factor_evaluation",
             ),
         )
@@ -244,7 +244,7 @@ def test_composite_formula_runs_and_starts_a_daily_track(tmp_path: Path) -> None
             "/api/research-runs",
             json=_run_command(
                 "financial-only-formula",
-                formula="total_revenue_latest_fy",
+                formula="revenue",
             ),
         ).json()["id"]
         assert runtime.research_runs.process_next() is True
@@ -413,8 +413,8 @@ def test_2010_to_latest_market_financial_and_composite_runs_commit_multiple_chun
         for index, formula in enumerate(
             (
                 "close",
-                "total_revenue_latest_fy",
-                "rank(close) + rank(total_revenue_latest_fy)",
+                "revenue",
+                "rank(close) + rank(revenue)",
             )
         ):
             execution_events: list[dict[str, object]] = []
@@ -535,7 +535,7 @@ def test_financial_track_blocks_at_cutoff_then_catches_up(tmp_path: Path) -> Non
         "2026-08-05",
     )
     seed_head = _publish_composite_head(settings, sessions=seed_sessions)
-    formula = "rank(close) + rank(total_revenue_latest_fy)"
+    formula = "rank(close) + rank(revenue)"
     with TestClient(create_app(settings)) as client:
         accepted = client.post(
             "/api/research-runs",
@@ -1284,7 +1284,7 @@ def test_financial_admission_explains_coverage_without_blocking_market_only_form
             "/api/research-runs",
             json=_run_command(
                 "financial-outside-coverage",
-                formula="total_revenue_latest_fy",
+                formula="revenue",
                 start_date="2026-08-07",
                 end_date="2026-08-07",
             ),

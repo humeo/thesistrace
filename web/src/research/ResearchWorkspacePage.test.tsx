@@ -50,7 +50,7 @@ const catalog = {
       example: "rank(close)",
     },
     {
-      identifier: "total_revenue_latest_fy",
+      identifier: "revenue",
       field_id: "financial.income.total_revenue.latest_fy",
       value_type: "numeric_series" as const,
       description: "Latest visible full-year consolidated total revenue",
@@ -60,7 +60,7 @@ const catalog = {
       report_period_selection: "latest_visible_full_year",
       applicable_company_types: ["1", "2", "3", "4"],
       missingness: "missing_when_no_visible_eligible_fact",
-      example: "rank(total_revenue_latest_fy)",
+      example: "rank(revenue)",
     },
   ],
   builtins: [{
@@ -424,7 +424,7 @@ describe("browser Research Draft", () => {
     expect(markup).not.toContain(">Cancel<");
     expect(markup).not.toContain("Saved in this browser");
     expect(markup).not.toContain("Financial fields");
-    expect(markup).not.toContain("total_revenue_latest_fy");
+    expect(markup).not.toContain("revenue");
     for (const removed of ["Save Research", "Refresh", "Revision", "Definition", "Add Alpha"]) expect(markup).not.toContain(removed);
   });
 

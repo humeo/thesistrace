@@ -11,10 +11,10 @@ Materialize the 2010 Point-in-Time Financial candidate.
 
 **Status:** complete
 
-- [x] The Field Catalog exposes total_revenue_latest_fy,
-  net_profit_parent_latest_fy, operating_cash_flow_latest_fy,
-  total_assets_latest_reported, total_liabilities_latest_reported, and
-  equity_parent_latest_reported as stable Alpha Identifiers, each bound to a
+- [x] The Field Catalog exposes revenue,
+  net_profit, operating_cash_flow,
+  assets, liabilities, and
+  equity as stable Alpha Identifiers, each bound to a
   namespaced `financial.<statement>...` Field Reference.
 - [x] Each field declares its family, numeric type, monetary unit, information
   time, reporting scope, report-period selection, missingness, source lineage,
