@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.data import DatasetLifecycle, GenerationStoreError, MountedGenerationStore
+from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.runtime import CoreSettings, core_environment_is_configured
 from thesistrace.entrypoints.schema import initialize_core
 from thesistrace.fixture import build_minimal_canonical_fixture
@@ -116,6 +117,13 @@ def _canonical(sessions: tuple[str, ...], *, price_offset: int) -> dict[str, obj
     universe = {"instrument_ids": [instrument_id], "status": "available"}
     return {
         **template,
+        "field_catalog": [
+            next(
+                row
+                for row in field_catalog(sessions[0])
+                if row["field_id"] == "price.close.adjusted"
+            )
+        ],
         "research_calendar": list(sessions),
         "prices": [{**price, "session": session} for session in sessions],
         "trading_states": [{**state, "session": session} for session in sessions],

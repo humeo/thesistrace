@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -14,6 +15,7 @@ from threading import Event, Thread
 import boto3
 
 from thesistrace._postgres import PostgresDatabase
+from thesistrace.adapters.tushare_data import normalize_tushare_snapshot
 from thesistrace.data import MountedDatasetHeadStore
 from thesistrace.entrypoints.runtime import CoreSettings, open_core_runtime
 from thesistrace.product_state import product_state_counts
@@ -36,9 +38,13 @@ EXPECTED_OVERVIEW = {
         "sparse_facts": True,
     },
     "data_through_session": "2026-08-05",
-    "last_market_refresh_at": None,
     "market_research_readiness": True,
     "financial_research_readiness": True,
+}
+READY_DEPENDENCIES = {
+    "postgresql": {"status": "ready", "code": "POSTGRESQL_READY"},
+    "rustfs": {"status": "ready", "code": "RUSTFS_READY"},
+    "dataset_store": {"status": "ready", "code": "DATASET_STORE_READY"},
 }
 
 
@@ -53,6 +59,9 @@ def main() -> None:
         "after",
         "reset-ready",
         "worker-events",
+        "health",
+        "readiness-outage",
+        "observability",
         "reset",
     }
     if len(sys.argv) != 2 or sys.argv[1] not in phases:
@@ -62,14 +71,28 @@ def main() -> None:
     state_path = Path(_required_environment("THESISTRACE_TEST_SMOKE_STATE"))
     settings = CoreSettings.from_environment()
     assert "THESISTRACE_TUSHARE_TOKEN" not in os.environ
-    _assert_web_image(web_origin)
     phase = sys.argv[1]
-    if phase == "before":
+    _assert_web_image(web_origin)
+    if phase == "health":
+        result = _verify_health(api_origin)
+    elif phase == "readiness-outage":
+        result = _verify_readiness_outage(
+            api_origin,
+            _required_environment("THESISTRACE_TEST_UNAVAILABLE_DEPENDENCY"),
+        )
+    elif phase == "observability":
+        result = _verify_observability_evidence(
+            state_path.parent,
+            api_events=Path(_required_environment("THESISTRACE_TEST_API_EVENTS")),
+            worker_events=Path(_required_environment("THESISTRACE_TEST_WORKER_EVENTS")),
+        )
+    elif phase == "before":
         result = _before_restart(
             api_origin,
             settings,
             image_identity=_required_environment("THESISTRACE_TEST_IMAGE_ID"),
             mounted_data_sha256=_directory_sha256(settings.data_mount),
+            evidence_dir=state_path.parent,
         )
         state_path.write_text(json.dumps(result, sort_keys=True))
     else:
@@ -105,9 +128,12 @@ def _before_restart(
     *,
     image_identity: str,
     mounted_data_sha256: str,
+    evidence_dir: Path,
 ) -> dict[str, object]:
+    refresh_evidence = _verify_data_refresh_events(evidence_dir)
     overview = _request_json(api_origin, "GET", "/api/data")
     _assert_expected_overview(overview)
+    _request_with_secret_canary(api_origin)
     catalog = _request_json(api_origin, "GET", "/api/alpha/catalog")
     identifiers = {field["identifier"] for field in catalog["fields"]}
     assert identifiers >= {
@@ -233,6 +259,11 @@ def _before_restart(
         {"request_id": "production-image-smoke-track"},
     )
     assert track["status"] == "active"
+    diagnostic_evidence = _verify_packaged_diagnostics(
+        factor_run_id,
+        str(track["id"]),
+        evidence_dir,
+    )
     market_run = _request_json(
         api_origin,
         "POST",
@@ -360,6 +391,8 @@ def _before_restart(
         "execution_snapshot": durable["execution_snapshot"],
         "overview": overview,
         "mounted_data_sha256": mounted_data_sha256,
+        **diagnostic_evidence,
+        **refresh_evidence,
     }
 
 
@@ -824,6 +857,7 @@ def _after_product_state_reset(
 ) -> dict[str, object]:
     overview = _request_json(api_origin, "GET", "/api/data")
     expected_overview = dict(expected["reset_overview"])
+    expected_overview["last_market_refresh_at"] = None
     expected_overview["last_financial_refresh_at"] = None
     assert overview == expected_overview
     assert _directory_sha256(settings.data_mount) == expected["reset_mounted_data_sha256"]
@@ -967,6 +1001,298 @@ def _verify_worker_events(path: Path) -> dict[str, object]:
         + len(tracking_lifecycle),
         "tracking_lifecycle_event_count": len(tracking_lifecycle),
     }
+
+
+def _verify_health(api_origin: str) -> dict[str, object]:
+    status, payload, elapsed = _wait_for_readiness(api_origin, unavailable=None)
+    assert status == 200
+    assert payload == {"status": "ready", "dependencies": READY_DEPENDENCIES}
+    liveness_status, liveness, liveness_elapsed = _request_health(
+        api_origin,
+        "/health/live",
+    )
+    assert liveness_status == 200
+    assert liveness == {"status": "ok"}
+    assert elapsed < 3
+    assert liveness_elapsed < 3
+    overview = _wait_for_data_overview(api_origin)
+    assert overview["data_through_session"] == EXPECTED_OVERVIEW["data_through_session"]
+    return {"api_data": "ready", "liveness": "ok", "readiness": "ready"}
+
+
+def _wait_for_data_overview(api_origin: str) -> dict[str, object]:
+    deadline = time.monotonic() + 20
+    interval = Event()
+    last_error: AssertionError | None = None
+    while time.monotonic() < deadline:
+        try:
+            return _request_json(api_origin, "GET", "/api/data")
+        except AssertionError as error:
+            last_error = error
+            interval.wait(0.05)
+    raise AssertionError({"api_data_recovery_timeout": repr(last_error)})
+
+
+def _verify_readiness_outage(
+    api_origin: str,
+    unavailable: str,
+) -> dict[str, object]:
+    assert unavailable in READY_DEPENDENCIES
+    status, payload, elapsed = _wait_for_readiness(api_origin, unavailable=unavailable)
+    expected_dependencies = json.loads(json.dumps(READY_DEPENDENCIES))
+    expected_dependencies[unavailable] = {
+        "status": "unavailable",
+        "code": {
+            "postgresql": "POSTGRESQL_UNAVAILABLE",
+            "rustfs": "RUSTFS_UNAVAILABLE",
+            "dataset_store": "DATASET_STORE_UNAVAILABLE",
+        }[unavailable],
+    }
+    assert status == 503
+    assert payload == {"status": "unavailable", "dependencies": expected_dependencies}
+    liveness_status, liveness, liveness_elapsed = _request_health(
+        api_origin,
+        "/health/live",
+    )
+    assert liveness_status == 200
+    assert liveness == {"status": "ok"}
+    assert elapsed < 3
+    assert liveness_elapsed < 3
+    return {"liveness": "ok", "unavailable_dependency": unavailable}
+
+
+def _wait_for_readiness(
+    api_origin: str,
+    *,
+    unavailable: str | None,
+) -> tuple[int, dict[str, object], float]:
+    deadline = time.monotonic() + 20
+    interval = Event()
+    last: tuple[int, dict[str, object], float] | None = None
+    expected_status = 200 if unavailable is None else 503
+    while time.monotonic() < deadline:
+        last = _request_health(api_origin, "/health/ready")
+        if last[0] == expected_status:
+            if unavailable is None:
+                if last[1].get("status") == "ready":
+                    return last
+            else:
+                dependencies = last[1].get("dependencies")
+                if (
+                    isinstance(dependencies, dict)
+                    and isinstance(dependencies.get(unavailable), dict)
+                    and dependencies[unavailable].get("status") == "unavailable"
+                ):
+                    return last
+        interval.wait(0.05)
+    raise AssertionError({"readiness_timeout": unavailable, "last": last})
+
+
+def _request_health(
+    api_origin: str,
+    path: str,
+) -> tuple[int, dict[str, object], float]:
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(f"{api_origin}{path}", timeout=4) as response:
+            status = response.status
+            payload = json.loads(response.read())
+    except urllib.error.HTTPError as error:
+        status = error.code
+        payload = json.loads(error.read())
+    elapsed = time.monotonic() - started
+    assert isinstance(payload, dict)
+    return status, payload, elapsed
+
+
+def _verify_data_refresh_events(evidence_dir: Path) -> dict[str, object]:
+    fixture = Path("/smoke/fixtures/tushare-financial-product-replay.json")
+    replay = json.loads(fixture.read_text())
+    replay.pop("financial")
+    _source, canonical = normalize_tushare_snapshot(replay["snapshot"])
+    calendar = canonical["research_calendar"]
+    request_start = calendar[-20]
+    request_end = calendar[-1]
+    compact_start = request_start.replace("-", "")
+    compact_end = request_end.replace("-", "")
+    for table in ("calendar_sse", "calendar_szse"):
+        replay["snapshot"][table] = [
+            row
+            for row in replay["snapshot"][table]
+            if compact_start <= str(row["cal_date"]) <= compact_end
+        ]
+    for table in (
+        "daily",
+        "adjustments",
+        "suspensions",
+        "price_limits",
+        "industry_membership",
+    ):
+        replay["snapshot"][table] = []
+    for instrument in replay["snapshot"]["stock_basic"]:
+        instrument["list_date"] = EXPECTED_OVERVIEW["market_coverage"]["start"].replace(
+            "-", ""
+        )
+    replay.update(
+        {
+            "format": "thesistrace-tushare-refresh-replay",
+            "version": 2,
+            "request_start": request_start,
+            "request_end": request_end,
+        }
+    )
+    with tempfile.TemporaryDirectory(prefix="thesistrace-image-refresh-") as directory:
+        replay_path = Path(directory) / "refresh-replay.json"
+        replay_path.write_text(json.dumps(replay, sort_keys=True, separators=(",", ":")))
+        submitted = subprocess.run(
+            [
+                "thesistrace-data-operator",
+                "refresh",
+                "--idempotency-key",
+                "image-smoke-observability-refresh",
+                "--as-of",
+                "2026-08-06T15:00:00+08:00",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        processed = subprocess.run(
+            [
+                "thesistrace-data-operator",
+                "work-refresh",
+                "--replay",
+                str(replay_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+    (evidence_dir / "data-refresh-submit.stdout.json").write_text(submitted.stdout)
+    (evidence_dir / "data-refresh-submit.stderr.log").write_text(submitted.stderr)
+    (evidence_dir / "data-refresh.stdout.json").write_text(processed.stdout)
+    (evidence_dir / "data-refresh.events.jsonl").write_text(processed.stderr)
+    assert submitted.returncode == 0, submitted.stderr
+    assert processed.returncode == 0, processed.stderr
+    assert json.loads(submitted.stdout)["status"] == "accepted"
+    assert submitted.stderr == ""
+    assert json.loads(processed.stdout) == {"status": "processed"}
+    events = [json.loads(line) for line in processed.stderr.splitlines()]
+    assert [event["event"] for event in events] == [
+        "data_refresh_started",
+        "data_refresh_phase_completed",
+        "data_refresh_phase_completed",
+        "data_refresh_phase_completed",
+        "data_refresh_succeeded",
+    ]
+    assert {
+        event["phase"]
+        for event in events
+        if event["event"] == "data_refresh_phase_completed"
+    } == {"current_head", "market", "validation"}
+    return {"data_refresh_event_count": len(events), "data_refresh_stdout_verified": True}
+
+
+def _verify_packaged_diagnostics(
+    run_id: str,
+    track_id: str,
+    evidence_dir: Path,
+) -> dict[str, object]:
+    for resource, resource_id in (("research-run", run_id), ("daily-track", track_id)):
+        completed = subprocess.run(
+            ["thesistrace-core-diagnose", resource, resource_id],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+        snapshot = json.loads(completed.stdout)
+        (evidence_dir / f"diagnose-{resource}.stdout.json").write_text(completed.stdout)
+        (evidence_dir / f"diagnose-{resource}.stderr.log").write_text(completed.stderr)
+        assert completed.stdout == json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
+        assert completed.stderr == ""
+        identity_key = "run" if resource == "research-run" else "track"
+        assert snapshot[identity_key]["id"] == resource_id
+    return {
+        "daily_track_diagnostic_verified": True,
+        "research_run_diagnostic_verified": True,
+    }
+
+
+def _request_with_secret_canary(api_origin: str) -> None:
+    request = urllib.request.Request(
+        f"{api_origin}/api/data?token=observability-request-canary",
+        headers={
+            "Authorization": "Bearer observability-request-canary",
+            "Cookie": "session=observability-request-canary",
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=5) as response:
+        assert response.status == 200
+        assert isinstance(json.loads(response.read()), dict)
+
+
+def _verify_observability_evidence(
+    evidence_dir: Path,
+    *,
+    api_events: Path,
+    worker_events: Path,
+) -> dict[str, object]:
+    api = _container_events(api_events)
+    workers = _container_events(worker_events)
+    completions = [event for event in api if event.get("event") == "http_request_completed"]
+    assert completions
+    assert any(
+        event.get("component") == "core_api"
+        and event.get("method") == "GET"
+        and event.get("route") == "/api/data"
+        and event.get("status_code") == 200
+        and isinstance(event.get("http_request_id"), str)
+        for event in completions
+    )
+    assert any(event.get("event") == "research_run_succeeded" for event in workers)
+    assert any(event.get("event") == "tracking_checkpoint_published" for event in workers)
+    refresh_events = [
+        json.loads(line)
+        for line in (evidence_dir / "data-refresh.events.jsonl").read_text().splitlines()
+    ]
+    assert any(event.get("event") == "data_refresh_phase_completed" for event in refresh_events)
+    for path in (
+        evidence_dir / "diagnose-research-run.stdout.json",
+        evidence_dir / "diagnose-daily-track.stdout.json",
+        evidence_dir / "data-refresh.stdout.json",
+    ):
+        assert isinstance(json.loads(path.read_text()), dict)
+    canaries = {
+        "observability-access-canary",
+        "observability-secret-canary",
+        "observability-request-canary",
+    }
+    for path in evidence_dir.rglob("*"):
+        if not path.is_file():
+            continue
+        content = path.read_text(errors="replace")
+        for canary in canaries:
+            assert canary not in content, {"secret_canary_detected_in": path.name}
+    return {
+        "api_completion_event_verified": True,
+        "secret_canaries_absent": True,
+    }
+
+
+def _container_events(path: Path) -> list[dict[str, object]]:
+    events: list[dict[str, object]] = []
+    for line in path.read_text().splitlines():
+        payload = line.partition("|")[2].strip()
+        if not payload.startswith("{"):
+            continue
+        value = json.loads(payload)
+        if isinstance(value, dict):
+            events.append(value)
+    return events
 
 
 def _wait_for_run(
@@ -1122,9 +1448,10 @@ def _assert_private_operator_installed() -> None:
 
 def _assert_expected_overview(overview: dict[str, object]) -> None:
     assert {key: overview[key] for key in EXPECTED_OVERVIEW} == EXPECTED_OVERVIEW
-    refreshed_at = overview.get("last_financial_refresh_at")
-    assert isinstance(refreshed_at, str)
-    assert refreshed_at.endswith(("+00:00", "Z"))
+    for field in ("last_market_refresh_at", "last_financial_refresh_at"):
+        refreshed_at = overview.get(field)
+        assert isinstance(refreshed_at, str)
+        assert refreshed_at.endswith(("+00:00", "Z"))
 
 
 def _durable_result(

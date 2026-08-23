@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
-import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -11,12 +9,13 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from thesistrace.operational_events import emit_operational_event_data
+from thesistrace.operational_events import (
+    emit_operational_event_data,
+    non_blocking_operational_event_sink,
+)
 
 if TYPE_CHECKING:
     from thesistrace.entrypoints.runtime import CoreRuntime
-
-logger = logging.getLogger(__name__)
 
 DEVELOPMENT_CPU_COUNT = 2
 DEVELOPMENT_MEMORY_BYTES = 2 * 1024**3
@@ -160,7 +159,13 @@ def process_one_poll(
             )
         product_worked = _process_tracking(runtime, claim, emit)
     if configuration.role is WorkerRole.TRACKING:
-        removed_caches = runtime.daily_tracks.reconcile_working_cache()
+        removed_caches = runtime.daily_tracks.reconcile_working_cache(
+            lifecycle_event=non_blocking_operational_event_sink(
+                emit,
+                component="tracking_worker",
+                worker_role="tracking",
+            )
+        )
         if removed_caches:
             emit(
                 {
@@ -172,7 +177,7 @@ def process_one_poll(
             )
     if product_worked:
         return
-    _collect_one_publication(runtime)
+    _collect_one_publication(runtime, emit=emit, role=configuration.role)
 
 
 def main(arguments: Sequence[str] | None = None) -> None:
@@ -181,7 +186,14 @@ def main(arguments: Sequence[str] | None = None) -> None:
     try:
         actual = validate_worker_capacity(configuration)
     except WorkerCapacityError as error:
-        print(f"Worker startup failed: {error}", file=sys.stderr)
+        _emit_event(
+            {
+                "event": "worker_startup_failed",
+                "level": "ERROR",
+                "role": configuration.role.value,
+                "failure_code": "WORKER_CAPACITY_INVALID",
+            }
+        )
         raise SystemExit(2) from error
     _configure_calculation_threads(configuration.capacity.calculation_threads)
     _emit_event(
@@ -301,7 +313,12 @@ def _process_tracking(
         return True
 
 
-def _collect_one_publication(runtime: CoreRuntime) -> None:
+def _collect_one_publication(
+    runtime: CoreRuntime,
+    *,
+    emit: WorkerEventSink,
+    role: WorkerRole,
+) -> None:
     from thesistrace.publication import (
         PublicationPreparationError,
         PublicationUnavailableError,
@@ -309,14 +326,18 @@ def _collect_one_publication(runtime: CoreRuntime) -> None:
 
     try:
         removed = runtime.publication.collect_one_pending_deletion()
-    except (PublicationPreparationError, PublicationUnavailableError) as error:
-        logger.warning(
-            "Worker retained a pending Publication deletion for retry",
-            extra={"error_type": type(error).__name__},
+    except (PublicationPreparationError, PublicationUnavailableError):
+        emit(
+            {
+                "event": "publication_deletion_deferred",
+                "level": "WARNING",
+                "role": role.value,
+                "failure_code": "PUBLICATION_UNAVAILABLE",
+            }
         )
         return
     if removed:
-        logger.info("Worker removed one unreferenced Publication object")
+        emit({"event": "publication_object_deleted", "role": role.value})
 
 
 def _emit_event(event: dict[str, object]) -> None:

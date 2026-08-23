@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import errno
 import json
 import os
@@ -137,7 +138,7 @@ elif "logs" in arguments:
         print('{"event":"worker_claim","role":"research"}')
         print('{"event":"worker_claim","role":"tracking"}')
     else:
-        print("test logs")
+        print(os.environ.get("FAKE_COMPOSE_LOGS", "test logs"))
 elif "images" in arguments:
     print('{"ID":"sha256:test-image"}')
 smoke_script = next(
@@ -153,15 +154,16 @@ if "run" in arguments and smoke_script is not None:
 if "run" in arguments and "--cpu-count" in arguments:
     role = arguments[arguments.index("--role") + 1]
     print(
-        f"Worker startup failed: {role} Worker requires 3 CPU; cgroup provides 2",
+        '{"component":"' + role + '_worker","event":"worker_startup_failed",'
+        '"failure_code":"WORKER_CAPACITY_INVALID","level":"ERROR"}',
         file=sys.stderr,
     )
     raise SystemExit(2)
 if "run" in arguments and "--memory-bytes" in arguments:
     role = arguments[arguments.index("--role") + 1]
     print(
-        f"Worker startup failed: {role} Worker requires 3221225472 memory bytes; "
-        "cgroup provides 2147483648",
+        '{"component":"' + role + '_worker","event":"worker_startup_failed",'
+        '"failure_code":"WORKER_CAPACITY_INVALID","level":"ERROR"}',
         file=sys.stderr,
     )
     raise SystemExit(2)
@@ -394,6 +396,81 @@ def test_development_topology_declares_every_core_service_and_pinned_infrastruct
     )[0]
     assert "/health/live" in api_service
     assert "/api/data" not in api_service
+
+
+def test_every_compose_service_uses_bounded_docker_json_logs() -> None:
+    compose = (ROOT / "deploy" / "core" / "compose.yaml").read_text()
+
+    assert "x-bounded-logging: &bounded-logging" in compose
+    assert "driver: json-file" in compose
+    assert 'max-size: "10m"' in compose
+    assert 'max-file: "3"' in compose
+    for service in (
+        "postgres",
+        "rustfs",
+        "initialize",
+        "api",
+        "research-worker",
+        "tracking-worker",
+        "web",
+    ):
+        remaining = compose.split(f"  {service}:\n", maxsplit=1)[1]
+        section_lines: list[str] = []
+        for line in remaining.splitlines():
+            if line.startswith("  ") and not line.startswith("    "):
+                break
+            section_lines.append(line)
+        assert "    logging: *bounded-logging" in section_lines
+
+
+def test_core_has_one_operational_output_schema_and_no_log_files() -> None:
+    source_root = ROOT / "src" / "thesistrace"
+    sources = {path: path.read_text() for path in source_root.rglob("*.py")}
+    direct_print_files = {
+        path.relative_to(source_root).as_posix()
+        for path, source in sources.items()
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "print"
+            for node in ast.walk(ast.parse(source))
+        )
+    }
+
+    assert direct_print_files == {
+        "entrypoints/data_operator.py",
+        "entrypoints/diagnose.py",
+        "entrypoints/live_tushare.py",
+        "entrypoints/research_child.py",
+        "entrypoints/tracking_child.py",
+    }
+    assert not [
+        path.relative_to(source_root).as_posix()
+        for path, source in sources.items()
+        if "logger.info(" in source
+        or "logger.warning(" in source
+        or "logger.error(" in source
+        or "logger.exception(" in source
+    ]
+    combined = "\n".join(sources.values())
+    for obsolete in (
+        "FileHandler(",
+        "RotatingFileHandler(",
+        "TimedRotatingFileHandler(",
+        "FallbackEvent",
+        "CompatibilityFormatter",
+    ):
+        assert obsolete not in combined
+    assert not (ROOT / "logs").exists()
+    assert not (ROOT / "log").exists()
+    schemas = "\n".join(path.read_text() for path in source_root.rglob("schema.sql"))
+    assert "telemetry" not in schemas.lower()
+
+
+def test_development_api_disables_duplicate_uvicorn_access_logs() -> None:
+    development = (ROOT / "deploy" / "core" / "compose.dev.yaml").read_text()
+
+    assert "      - --no-access-log\n" in development
 
 
 def test_container_builds_exclude_host_dependency_directories() -> None:
@@ -827,7 +904,11 @@ def test_production_image_smoke_builds_once_and_reuses_the_images(
     assert "wait initialize\n" in commands
     assert (
         "up --detach --no-build --wait --wait-timeout 300 "
-        "api research-worker tracking-worker web\n" in commands
+        "api web\n" in commands
+    )
+    assert (
+        "up --detach --no-build --wait --wait-timeout 120 "
+        "research-worker tracking-worker\n" in commands
     )
     assert (
         "up --detach --no-build --wait --wait-timeout 120 "
@@ -960,6 +1041,30 @@ def test_failed_integration_captures_evidence_before_default_cleanup(
     assert "container inspection" in (evidence / "container-inspect.txt").read_text()
     commands = command_log.read_text()
     assert commands.index("ps --all") < commands.index("down --volumes")
+
+
+def test_failed_runtime_scans_new_failure_evidence_for_secret_canaries(
+    tmp_path: Path,
+) -> None:
+    _, environment = _fake_test_runtime_commands(tmp_path)
+    environment["FAKE_PYTEST_STATUS"] = "7"
+    environment["FAKE_COMPOSE_LOGS"] = "observability-secret-canary"
+
+    completed = subprocess.run(
+        [ROOT / "scripts" / "test-runtime", "integration"],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 7
+    assert "secret canary detected in failure evidence" in completed.stderr
+    run_id = completed.stdout.splitlines()[0].removeprefix("Test run: ")
+    run_root = tmp_path / "runs" / run_id
+    assert (run_root / "evidence" / "secret-canary-scan.txt").read_text() == "failed\n"
+    assert "failure_canary_scan_status=1\n" in (run_root / "run.txt").read_text()
 
 
 def test_cleanup_failure_is_reported_without_masking_the_test_failure(

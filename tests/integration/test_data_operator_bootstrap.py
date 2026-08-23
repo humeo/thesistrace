@@ -580,17 +580,25 @@ def test_real_private_command_bootstraps_from_tushare_replay(
     outcome = json.loads(first.stdout)
     assert outcome["status"] == "succeeded"
     progress = [json.loads(line) for line in first.stderr.splitlines()]
-    assert progress[0] == {
+    claimed = dict(progress[0])
+    claimed_timestamp = datetime.fromisoformat(claimed.pop("timestamp").replace("Z", "+00:00"))
+    assert claimed_timestamp.tzinfo is not None
+    assert claimed == {
+        "component": "data_operator",
         "event": "bootstrap_progress",
-        "idempotency_key": "cli-replay",
+        "level": "INFO",
         "phase": "claimed",
-        "request_end": "2026-08-03",
-        "request_start": "2026-07-03",
         "status": "completed",
     }
-    assert progress[-1] == {
-        "data_through_session": "2026-08-03",
+    published = dict(progress[-1])
+    published_timestamp = datetime.fromisoformat(
+        published.pop("timestamp").replace("Z", "+00:00")
+    )
+    assert published_timestamp.tzinfo is not None
+    assert published == {
+        "component": "data_operator",
         "event": "bootstrap_progress",
+        "level": "INFO",
         "phase": "publication",
         "status": "completed",
     }

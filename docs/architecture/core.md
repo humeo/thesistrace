@@ -56,6 +56,42 @@ ResearchRun and DailyTrack publication bytes. The mounted Canonical Data Store
 contains the current Dataset Head and immutable-while-referenced Data Generation
 files. No runtime downloads data during API or Worker startup.
 
+## Operational observability
+
+Every first-party Core operational event uses one JSONL envelope on process
+stderr: `timestamp`, `level`, `component`, and stable lower-snake-case `event`.
+The only optional correlation identities are `operation_id`, `run_id`,
+`track_id`, `attempt_id`, and `http_request_id`; event-specific context comes
+from the closed allowlist in `operational_events.py`. Request URLs, query
+strings, headers, bodies, responses, Formulae, Hypotheses, credentials, object
+keys, exception messages, local variables, and physical paths are not event
+fields.
+
+`INFO` records normal completion and lifecycle progress, `WARNING` records
+retryable degradation or an operator-actionable blocked state, and `ERROR`
+records unexpected or terminal internal failure. `DEBUG` is disabled by
+default. Health requests, idle queue polls, no-work polls, successful lease
+heartbeats, and unchanged readiness results do not produce routine events.
+
+Supervisor-child stdout remains a machine-readable protocol. Data Operator
+stdout remains its one command result, and diagnostic stdout remains its one
+pretty JSON snapshot; their operational events use stderr. No Core process
+owns a log file. Docker Compose collects all container output with bounded
+local rotation.
+
+`GET /health/live` is a dependency-free process check and remains the API
+restart probe. `GET /health/ready` independently probes PostgreSQL, RustFS, and
+the mounted Dataset root under one hard deadline; it excludes Workers, queues,
+Dataset coverage, and Result or Checkpoint presence. The private
+`thesistrace-core-diagnose` command reads either one ResearchRun or one
+DailyTrack from PostgreSQL only.
+
+PostgreSQL Product State is authoritative. Events, readiness responses, and
+diagnostic snapshots are disposable evidence and are never replayed or read to
+decide ownership, lease validity, retry, recovery, cancellation, Stop, or
+publication. This layer provides no dashboard, alerting, hosted collector, or
+permanent retention.
+
 ## Modules and dependency direction
 
 ```text

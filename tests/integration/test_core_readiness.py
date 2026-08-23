@@ -104,13 +104,13 @@ def _assert_dependency_outage(
     name: str,
     code: str,
 ) -> None:
-    subprocess.run(["docker", "stop", container], check=True, capture_output=True)
+    subprocess.run(["docker", "pause", container], check=True, capture_output=True)
     try:
         response = _await_readiness(client, expected_status=503)
         assert response.json() == _unavailable(name, code)
         assert client.get("/health/live").status_code == 200
     finally:
-        subprocess.run(["docker", "start", container], check=True, capture_output=True)
+        subprocess.run(["docker", "unpause", container], check=True, capture_output=True)
     assert _await_readiness(client, expected_status=200, timeout_seconds=15).json() == READY
 
 

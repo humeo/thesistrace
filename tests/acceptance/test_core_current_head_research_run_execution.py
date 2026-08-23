@@ -41,6 +41,7 @@ from thesistrace.daily_track.checkpoint import (
     terminal_strategy_state,
 )
 from thesistrace.data import DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.financial_candidate import FinancialCandidateStore
 from thesistrace.data.financial_collection import (
     CompletedFinancialCollection,
@@ -4706,6 +4707,13 @@ def _two_instrument_canonical(
     }
     return {
         **template,
+        "field_catalog": [
+            next(
+                row
+                for row in field_catalog(sessions[0])
+                if row["field_id"] == "price.close.adjusted"
+            )
+        ],
         "instruments": instruments,
         "industry_membership": industries,
         "research_calendar": list(sessions),

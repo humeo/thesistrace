@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import math
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64DecodeError
@@ -106,7 +105,6 @@ from thesistrace.research_run.result import (
     result_publication_payloads_from_staged,
 )
 
-logger = logging.getLogger(__name__)
 ATTEMPT_LEASE_SECONDS = 15 * 60
 ATTEMPT_HEARTBEAT_SECONDS = 30
 INFRASTRUCTURE_FAILURE = "InfrastructureUnavailable"
@@ -804,7 +802,11 @@ class ResearchRunService:
                     manifest_sha256,
                     still_referenced=still_referenced,
                 )
-        _collect_publication_deletions(self._publication)
+        _collect_publication_deletions(
+            self._publication,
+            lifecycle_event=self._lifecycle_event,
+            run_id=run_id,
+        )
         return True
 
     def cancel(
@@ -1121,10 +1123,6 @@ class ResearchRunService:
                     ResearchRunResultUnavailable,
                     ValidationError,
                 ) as error:
-                    logger.info(
-                        "ResearchRun is not eligible for Tracking",
-                        extra={"run_id": run_id, "error_type": type(error).__name__},
-                    )
                     raise ResearchRunTrackingUnavailable(
                         "Start Tracking requires a complete verified Result"
                     ) from error
@@ -1146,10 +1144,6 @@ class ResearchRunService:
                 )
                 return outcome
         except (OperationalError, PoolTimeout, PublicationUnavailableError) as error:
-            logger.warning(
-                "Start Tracking infrastructure is temporarily unavailable",
-                extra={"run_id": run_id, "error_type": type(error).__name__},
-            )
             raise ResearchRunTrackingTemporarilyUnavailable(
                 "Start Tracking is temporarily unavailable"
             ) from error
@@ -1221,10 +1215,6 @@ class ResearchRunService:
                 research_kind=summary.research_kind,
             )
         except Exception as error:
-            logger.error(
-                "ResearchRun Result read failed",
-                extra={"run_id": run_id, "error_type": type(error).__name__},
-            )
             raise ResearchRunResultUnavailable from error
         return ResearchRunDetail(
             **summary.model_dump(),
@@ -3059,14 +3049,23 @@ def _public_result(
     return StrategyBacktestResearchRunResult.model_validate(public)
 
 
-def _collect_publication_deletions(publication: Publication) -> None:
+def _collect_publication_deletions(
+    publication: Publication,
+    *,
+    lifecycle_event: Callable[[dict[str, object]], None],
+    run_id: str,
+) -> None:
     try:
         while publication.collect_one_pending_deletion():
             pass
-    except (PublicationPreparationError, PublicationUnavailableError) as error:
-        logger.warning(
-            "ResearchRun publication cleanup remains pending",
-            extra={"error_type": type(error).__name__},
+    except (PublicationPreparationError, PublicationUnavailableError):
+        lifecycle_event(
+            {
+                "event": "research_publication_cleanup_deferred",
+                "level": "WARNING",
+                "run_id": run_id,
+                "failure_code": "PUBLICATION_UNAVAILABLE",
+            }
         )
 
 

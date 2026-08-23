@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -76,8 +75,6 @@ from thesistrace.research_series import (
     research_sessions,
     slice_research_sessions,
 )
-
-logger = logging.getLogger(__name__)
 
 Progress = Callable[[str, str, str], None]
 ResultBundleReader = Callable[[VerifiedBundle], dict[str, object]]
@@ -1019,10 +1016,18 @@ class DailyTrackService:
             )
         if self._working_cache is not None:
             self._working_cache.delete(track_id)
-        _collect_publication_deletions(self._publication)
+        _collect_publication_deletions(
+            self._publication,
+            lifecycle_event=self._lifecycle_event,
+            track_id=track_id,
+        )
         return True
 
-    def reconcile_working_cache(self) -> int:
+    def reconcile_working_cache(
+        self,
+        *,
+        lifecycle_event: ExecutionEvent | None = None,
+    ) -> int:
         if self._working_cache is None:
             return 0
         with self._database.transaction() as transaction:
@@ -1035,9 +1040,12 @@ class DailyTrackService:
             ).fetchall()
         removed, pending = self._working_cache.reconcile(str(row["id"]) for row in rows)
         if pending:
-            logger.warning(
-                "DailyTrack Working Cache cleanup remains pending",
-                extra={"pending_cache_count": pending},
+            (lifecycle_event or self._lifecycle_event)(
+                {
+                    "event": "tracking_cache_cleanup_deferred",
+                    "level": "WARNING",
+                    "failure_code": "WORKING_CACHE_CLEANUP_DEFERRED",
+                }
             )
         return removed
 
@@ -1254,10 +1262,6 @@ class DailyTrackService:
                 }
             )
         except Exception as error:
-            logger.error(
-                "current-data DailyTrack detail read failed",
-                extra={"track_id": track_id, "error_type": type(error).__name__},
-            )
             raise DailyTrackDetailUnavailable("DailyTrack detail is unavailable") from error
 
     def verify_persisted_equivalence(
@@ -2599,14 +2603,23 @@ def _seed_result_provenance(origin: TrackingOrigin) -> dict[str, object]:
     }
 
 
-def _collect_publication_deletions(publication: Publication) -> None:
+def _collect_publication_deletions(
+    publication: Publication,
+    *,
+    lifecycle_event: Callable[[dict[str, object]], None],
+    track_id: str,
+) -> None:
     try:
         while publication.collect_one_pending_deletion():
             pass
-    except (PublicationPreparationError, PublicationUnavailableError) as error:
-        logger.warning(
-            "DailyTrack publication cleanup remains pending",
-            extra={"error_type": type(error).__name__},
+    except (PublicationPreparationError, PublicationUnavailableError):
+        lifecycle_event(
+            {
+                "event": "tracking_publication_cleanup_deferred",
+                "level": "WARNING",
+                "track_id": track_id,
+                "failure_code": "PUBLICATION_UNAVAILABLE",
+            }
         )
 
 

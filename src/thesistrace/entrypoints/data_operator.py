@@ -48,7 +48,6 @@ from thesistrace.operational_events import (
     non_blocking_operational_event_sink,
 )
 
-logger = logging.getLogger(__name__)
 _emit_data_operator_event = non_blocking_operational_event_sink(
     emit_operational_event_data,
     component="data_operator",
@@ -239,10 +238,13 @@ def _run(
             if live_provider is not None:
                 try:
                     live_provider.clear_bootstrap_checkpoint()
-                except TushareSourceError as error:
-                    logger.warning(
-                        "Published bootstrap checkpoint cleanup failed",
-                        extra={"reason_code": error.reason_code},
+                except TushareSourceError:
+                    _progress(
+                        {
+                            "event": "bootstrap_checkpoint_cleanup_deferred",
+                            "level": "WARNING",
+                            "failure_code": "BOOTSTRAP_CHECKPOINT_CLEANUP_FAILED",
+                        }
                     )
                 else:
                     _progress(

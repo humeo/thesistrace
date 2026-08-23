@@ -19,6 +19,7 @@ from pydantic import TypeAdapter
 from thesistrace._postgres import PostgresDatabase
 from thesistrace.alpha_language import alpha_language
 from thesistrace.data import DatasetAdmissionSnapshot, DatasetLifecycle, MountedGenerationStore
+from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.entrypoints.runtime import (
     CoreSettings,
     core_environment_is_configured,
@@ -771,6 +772,13 @@ def _publish_current_data(
     universe = {"instrument_ids": [instrument_id], "status": "available"}
     canonical = {
         **template,
+        "field_catalog": [
+            next(
+                row
+                for row in field_catalog(sessions[0])
+                if row["field_id"] == "price.close.adjusted"
+            )
+        ],
         "research_calendar": list(sessions),
         "prices": [{**price, "session": session} for session in sessions],
         "trading_states": [{**state, "session": session} for session in sessions],

@@ -44,9 +44,18 @@ class _PublicationMaintenance:
 @dataclass
 class _TrackingQueue(_ProductQueue):
     cache_calls: int = 0
+    cache_warning: bool = False
 
-    def reconcile_working_cache(self) -> int:
+    def reconcile_working_cache(self, *, lifecycle_event=None) -> int:
         self.cache_calls += 1
+        if self.cache_warning and lifecycle_event is not None:
+            lifecycle_event(
+                {
+                    "event": "tracking_cache_cleanup_deferred",
+                    "level": "WARNING",
+                    "failure_code": "WORKING_CACHE_CLEANUP_DEFERRED",
+                }
+            )
         return 1
 
 
@@ -153,6 +162,25 @@ def test_tracking_worker_claims_one_advance_and_reconciles_terminal_caches() -> 
     }
 
 
+def test_tracking_cache_warning_keeps_worker_component_and_role() -> None:
+    events: list[dict[str, object]] = []
+    runtime = SimpleNamespace(
+        research_runs=_ProductQueue("run-1", False),
+        daily_tracks=_TrackingQueue("track-1", False, cache_warning=True),
+        publication=_PublicationMaintenance(),
+    )
+
+    process_one_poll(runtime, _configuration(WorkerRole.TRACKING), emit=events.append)
+
+    assert events[0] == {
+        "component": "tracking_worker",
+        "event": "tracking_cache_cleanup_deferred",
+        "failure_code": "WORKING_CACHE_CLEANUP_DEFERRED",
+        "level": "WARNING",
+        "worker_role": "tracking",
+    }
+
+
 @pytest.mark.parametrize(
     ("role", "expected_cache_calls"),
     ((WorkerRole.RESEARCH, 0), (WorkerRole.TRACKING, 1)),
@@ -176,7 +204,7 @@ def test_idle_worker_reclaims_at_most_one_publication_and_only_tracking_caches(
     assert publication.calls == 1
     assert tracking.cache_calls == expected_cache_calls
     if role is WorkerRole.RESEARCH:
-        assert events == []
+        assert events == [{"event": "publication_object_deleted", "role": "research"}]
 
 
 def test_worker_capacity_rejects_smaller_cgroup_limits(tmp_path: Path) -> None:

@@ -1,3 +1,9 @@
+x-bounded-logging: &bounded-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-core-environment: &core-environment
   THESISTRACE_DATABASE_URL: postgresql://thesistrace:thesistrace-local@postgres:5432/thesistrace
   THESISTRACE_S3_ENDPOINT_URL: http://rustfs:9000
@@ -20,6 +26,7 @@ x-backend: &backend
 
 services:
   postgres:
+    logging: *bounded-logging
     image: postgres:16.10-alpine
     environment:
       POSTGRES_DB: thesistrace
@@ -34,6 +41,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   rustfs:
+    logging: *bounded-logging
     image: rustfs/rustfs:1.0.0-beta.12
     environment:
       RUSTFS_ACCESS_KEY: rustfsadmin
@@ -48,6 +56,7 @@ services:
 
   initialize:
     <<: *backend
+    logging: *bounded-logging
     command: ["thesistrace-initialize"]
     depends_on:
       postgres:
@@ -56,6 +65,7 @@ services:
 
   api:
     <<: *backend
+    logging: *bounded-logging
     depends_on:
       initialize:
         condition: service_completed_successfully
@@ -73,6 +83,7 @@ services:
 
   research-worker:
     <<: *backend
+    logging: *bounded-logging
     volumes:
       - canonical-data:/var/lib/thesistrace/canonical-data:ro
     command:
@@ -103,6 +114,7 @@ services:
 
   tracking-worker:
     <<: *backend
+    logging: *bounded-logging
     command:
       - thesistrace-core-worker
       - --role
@@ -130,6 +142,7 @@ services:
       NUMEXPR_NUM_THREADS: ${THESISTRACE_TRACKING_WORKER_CALCULATION_THREADS:-2}
 
   web:
+    logging: *bounded-logging
     build:
       context: ../..
       dockerfile: deploy/core/Dockerfile.web

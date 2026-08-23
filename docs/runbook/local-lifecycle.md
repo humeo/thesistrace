@@ -56,6 +56,64 @@ terminal with:
 mise exec -- pnpm dev:logs
 ```
 
+This streams current API, Research Worker, Tracking Worker, schema initializer,
+PostgreSQL, RustFS, and Web container output. A Data Operator invocation writes
+its machine-readable result to that command's stdout and operational JSONL to
+its stderr, so its current output is visible in the invoking terminal without
+mixing the two streams.
+
+Compose uses Docker's `json-file` driver for every managed service with
+`max-size=10m` and `max-file=3`. The bytes live in Docker-managed container
+storage, not in this repository; no application log directory exists. Ordinary
+`dev:stop` preserves the current containers and their available log history.
+Rotation discards older files, while container recreation/deletion,
+`dev:reset`, and `dev:erase` can remove the associated history. These logs are
+short-lived diagnostic evidence, not an audit trail or permanent archive.
+
+Each event is one JSON object with `timestamp`, `level`, `component`, and
+`event`. Depending on the boundary it may also carry `operation_id`, `run_id`,
+`track_id`, `attempt_id`, or `http_request_id`. `INFO` is normal progress,
+`WARNING` is retryable degradation or an actionable blocked state, and `ERROR`
+is an unexpected or terminal internal failure. Health traffic and idle Worker
+polls are intentionally quiet.
+
+Check process liveness and dependency readiness separately:
+
+```sh
+curl -fsS http://127.0.0.1:8100/health/live
+curl -fsS http://127.0.0.1:8100/health/ready
+```
+
+Liveness checks only that the API can serve. Readiness checks PostgreSQL,
+RustFS, and readability of the mounted Dataset root under a bounded deadline.
+It does not inspect Worker capacity, queue depth, Dataset coverage, bootstrap
+completion, Results, or Tracking Checkpoints. Compose continues to restart the
+API from liveness rather than dependency readiness.
+
+Inspect authoritative Product State without RustFS or the Dataset Store:
+
+```sh
+mise exec -- docker compose --project-name thesistrace-dev \
+  --env-file deploy/core/dev.env \
+  --file deploy/core/compose.yaml \
+  --file deploy/core/compose.dev.yaml \
+  run --rm --no-deps -T initialize \
+  thesistrace-core-diagnose research-run RUN_ID
+
+mise exec -- docker compose --project-name thesistrace-dev \
+  --env-file deploy/core/dev.env \
+  --file deploy/core/compose.yaml \
+  --file deploy/core/compose.dev.yaml \
+  run --rm --no-deps -T initialize \
+  thesistrace-core-diagnose daily-track TRACK_ID
+```
+
+Both commands print one stable JSON snapshot to stdout. Exit code 3 means not
+found and 4 means PostgreSQL/query unavailable. The snapshot is read-only;
+PostgreSQL remains the sole authority for lifecycle, leases, retry, recovery,
+publication, and Checkpoints. There is no local dashboard, alert, or log search
+service in this capability.
+
 Stop the services while preserving PostgreSQL and RustFS data:
 
 ```sh
@@ -119,10 +177,14 @@ mise exec -- pnpm test:image-smoke
 The image smoke initializes a fresh database, prepares deterministic mounted data,
 executes short Research and Tracking work through the real fixed-role Workers,
 restarts API and both Workers, and verifies the same Head, Result manifest,
-readiness, and single Attempts remain authoritative. It also rejects capacity
-declarations above the actual cgroup limits and records structured startup/claim
-events, image identities, health/exit state, network isolation, and before/after
-results under the run evidence directory.
+readiness, and single Attempts remain authoritative. It also fails and recovers
+PostgreSQL, RustFS, and the mounted Dataset root at their real boundaries,
+executes both packaged PostgreSQL-only diagnostic commands, validates API,
+ResearchRun, DailyTrack, and Data Refresh events, and scans collected evidence
+for secret canaries. It rejects capacity declarations above the actual cgroup
+limits and records structured startup/claim events, image identities,
+health/exit state, network isolation, and before/after results under the run
+evidence directory.
 
 Before merge, run the standard fail-fast gate:
 

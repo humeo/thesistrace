@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pyarrow as pa
 
+from thesistrace.data.canonical_mapping import field_catalog
 from thesistrace.data.financial_candidate import FinancialCandidateStore
 from thesistrace.data.financial_collection import (
     FINANCIAL_ENDPOINTS,
@@ -368,7 +369,11 @@ def _market_fixture(
             ),
             *universes[name],
         ]
-    field = dict(template["field_catalog"][0])
+    field = next(
+        row
+        for row in field_catalog(sessions[0])
+        if row["field_id"] == "price.close.adjusted"
+    )
     field["release_available_from"] = sessions[0]
     return {
         "schema_version": "canonical-eod",
@@ -406,7 +411,11 @@ def build_market_benchmark_stream(
     dense_start = len(sessions) - dense_count
     price_template = dict(template["prices"][0])
     limit_template = dict(template["price_limits"][0])
-    field = dict(template["field_catalog"][0])
+    field = next(
+        row
+        for row in field_catalog(sessions[0])
+        if row["field_id"] == "price.close.adjusted"
+    )
     field["release_available_from"] = sessions[0]
     static = {
         "schema_version": "canonical-eod",

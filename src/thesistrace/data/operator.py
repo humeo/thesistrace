@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import logging
 import secrets
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -56,7 +55,6 @@ class _BootstrapClaim:
 
 _BOOTSTRAP_LEASE_SECONDS = 900
 _BOOTSTRAP_HEARTBEAT_SECONDS = 30
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -330,10 +328,14 @@ class DataOperator:
                             _operation_id(key, owner_token),
                         ),
                     )
-            except Exception as error:
-                logger.error(
-                    "Bootstrap operation heartbeat failed",
-                    extra={"error_type": type(error).__name__},
+            except Exception:
+                self._progress(
+                    {
+                        "event": "bootstrap_heartbeat_failed",
+                        "level": "ERROR",
+                        "operation_id": _operation_id(key, owner_token),
+                        "failure_code": "BOOTSTRAP_HEARTBEAT_FAILED",
+                    }
                 )
                 failed.set()
                 return
